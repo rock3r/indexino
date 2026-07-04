@@ -136,15 +136,33 @@ object BuildFileParser {
         if (!packageDir.exists()) {
             return emptyList()
         }
-        val matcher = packageDir.fileSystem.getPathMatcher("glob:$pattern")
+        val patterns = bazelGlobPatternVariants(pattern)
+        val matchers = patterns.map { packageDir.fileSystem.getPathMatcher("glob:$it") }
         return Files.walk(packageDir, FileVisitOption.FOLLOW_LINKS).use { stream ->
             stream.filter { it.isRegularFile() }
-                .filterNot { isInSubpackage(packageDir, it) }
+                .filter { !isInSubpackage(packageDir, it) }
                 .map { packageDir.relativize(it).toString().replace('\\', '/') }
-                .filter { matcher.matches(Path.of(it)) }
+                .filter { relative -> matchers.any { it.matches(Path.of(relative)) } }
                 .sorted()
                 .toList()
         }
+    }
+
+    private fun bazelGlobPatternVariants(pattern: String): List<String> {
+        if (!pattern.contains("**/")) {
+            return listOf(pattern)
+        }
+        val variants = linkedSetOf(pattern)
+        var searchFrom = 0
+        while (true) {
+            val start = pattern.indexOf("**/", searchFrom)
+            if (start < 0) {
+                break
+            }
+            variants += pattern.removeRange(start, start + 3)
+            searchFrom = start + 1
+        }
+        return variants.toList()
     }
 
     private fun isInSubpackage(packageDir: Path, file: Path): Boolean {
