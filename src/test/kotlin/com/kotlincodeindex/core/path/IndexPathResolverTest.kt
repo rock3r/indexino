@@ -20,5 +20,9 @@ class IndexPathResolverTest {
             Path("/workspace/.kotlin-index/index/deadbeef/manifest.json"),
             resolver.resolveManifest("deadbeef"),
         )
+        assertEquals(
+            Path("/workspace/.kotlin-index/sessions/s1/delta.xodus"),
+            resolver.resolveSessionDeltaStore("s1"),
+        )
     }
 }

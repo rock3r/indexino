@@ -10,6 +10,8 @@ object CodeIndexRecordCodec {
         polymorphic(CodeIndexRecord::class) {
             subclass(MetaIndexerVersionRecord::class)
             subclass(FileHashRecord::class)
+            subclass(SymbolRecord::class)
+            subclass(ReferenceRecord::class)
             subclass(ComposeSelectionSiteRecord::class)
         }
     }

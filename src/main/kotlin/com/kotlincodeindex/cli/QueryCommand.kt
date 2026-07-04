@@ -13,7 +13,7 @@ import com.kotlincodeindex.core.manifest.ManifestIO
 import com.kotlincodeindex.core.path.IndexPathResolver
 import kotlin.io.path.exists
 import com.kotlincodeindex.core.store.CodeIndexStore
-import com.kotlincodeindex.core.xodus.XodusCodeIndexStore
+import com.kotlincodeindex.core.store.IndexStoreOpener
 import java.nio.file.Path
 
 class QueryCommand : CliktCommand(name = "query") {
@@ -26,6 +26,7 @@ class QueryCommand : CliktCommand(name = "query") {
     private val file by option("--file")
     private val line by option("--line").int()
     private val column by option("--column").int()
+    private val sessionId by option("--session-id")
 
     override fun run() {
         runQuery(
@@ -35,6 +36,7 @@ class QueryCommand : CliktCommand(name = "query") {
             file = file,
             line = line,
             column = column,
+            sessionId = sessionId,
             format = format,
             output = { echo(it) },
         )
@@ -47,6 +49,7 @@ class QueryCommand : CliktCommand(name = "query") {
         file: String? = null,
         line: Int? = null,
         column: Int? = null,
+        sessionId: String? = null,
         format: String = "jsonl",
         output: (String) -> Unit = {},
     ): Int {
@@ -58,7 +61,7 @@ class QueryCommand : CliktCommand(name = "query") {
             error("No index found for commit $commit; run 'index' first")
         }
         val manifest = ManifestIO.read(manifestPath)
-        val store = XodusCodeIndexStore.open(resolver.resolveBaseStore(commit), readOnly = true)
+        val store = IndexStoreOpener.openForQuery(project, commit, sessionId)
         try {
             when (application) {
                 "selection-context" -> {

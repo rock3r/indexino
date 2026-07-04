@@ -20,7 +20,11 @@ query (with `labels(srcs, …)` fallback when `deps()` fails on partial checkout
 parse when `bazel` is unavailable, opens `<project>/.kotlin-index/index/<commit>/base.xodus`,
 runs core `FileHashProducer` plus any requested application producers, and writes `manifest.json`.
 
-Progress lines (producer names) go to stderr.
+Progress lines (producer names and `[N/M] file` per source file) go to stderr.
+
+When the manifest matches the current commit, scope, indexer version, source hash, and
+applications list, the command prints `index fresh … — skip rebuild` and exits without
+re-running producers.
 
 ### PSI bootstrap (fat JAR)
 
@@ -42,7 +46,13 @@ First run on a large repo may take minutes; subsequent queries read Xodus.
 kotlin-code-index status --project /path/to/monorepo [--bazel-target //pkg:ui]
 ```
 
-Reports: commit hash, manifest age, file count, stale?, indexer version.
+Reports JSON: commit hash, manifest age, file count, `fresh` boolean, indexer version.
+When `--bazel-target` is omitted, freshness is checked against the scope stored in the manifest.
+
+### Session overlay
+
+Query with `--session-id <id>` reads base index plus session delta at
+`.kotlin-index/sessions/<id>/delta.xodus` (delta overrides base keys).
 
 ### `query`
 
@@ -83,6 +93,7 @@ current git commit. When multiple call sites share a line, pass `--column` to di
 | `--file` | Point query: relative source path |
 | `--line` | Point query: 1-based line number |
 | `--column` | Point query: optional 1-based column disambiguator |
+| `--session-id` | Optional session delta overlay for query |
 
 ## JSONL Row Schema
 

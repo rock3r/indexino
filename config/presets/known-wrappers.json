@@ -1,0 +1,7 @@
+[
+  {
+    "callee": "Markdown",
+    "providesSelectionWhenNamedArgument": "selectable",
+    "providesSelectionWhenValue": "true"
+  }
+]

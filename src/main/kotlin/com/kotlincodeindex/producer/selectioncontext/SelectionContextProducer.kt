@@ -25,10 +25,9 @@ class SelectionContextProducer(
     override fun produce(context: IndexBuildContext, store: CodeIndexStore) {
         deleteAllSelectionSiteKeys(store)
         KotlinPsiParser().use { parser ->
-            for (relativePath in context.sourceFiles) {
-                if (!relativePath.endsWith(".kt")) {
-                    continue
-                }
+            val ktFiles = context.sourceFiles.filter { it.endsWith(".kt") }
+            ktFiles.forEachIndexed { index, relativePath ->
+                context.reportFileProgress(index + 1, ktFiles.size, relativePath)
                 deleteStaleKeys(store, relativePath)
                 val content = context.readSource(relativePath)
                 val file = parser.parseFile(relativePath, content)

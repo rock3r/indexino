@@ -16,4 +16,8 @@ class IndexPathResolver(
 
     fun resolveManifest(commitHash: String): Path =
         resolveIndexDirectory(commitHash).resolve(IndexPaths.MANIFEST_FILE_NAME)
+
+    fun resolveSessionDeltaStore(sessionId: String): Path =
+        storeRoot().resolve(IndexPaths.SESSIONS_DIR_NAME).resolve(sessionId)
+            .resolve(IndexPaths.DELTA_STORE_DIR_NAME)
 }

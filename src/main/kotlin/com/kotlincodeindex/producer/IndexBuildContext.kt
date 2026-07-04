@@ -12,10 +12,15 @@ data class IndexBuildContext(
     val sourceFiles: List<String>,
     val workspaceRoot: Path = Path("."),
     val sourceContentOverrides: Map<String, String> = emptyMap(),
+    val progress: ((String) -> Unit)? = null,
 ) {
     fun readSource(relativePath: String): String =
         sourceContentOverrides[relativePath]
             ?: workspaceRoot.resolve(relativePath).readText()
+
+    fun reportFileProgress(index: Int, total: Int, relativePath: String) {
+        progress?.invoke("[$index/$total] $relativePath")
+    }
 
     companion object {
         fun forInlineSources(
