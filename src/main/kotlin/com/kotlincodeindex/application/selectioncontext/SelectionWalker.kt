@@ -15,6 +15,7 @@ class SelectionWalker(
     private val selectionContainerNames: Set<String> = DEFAULT_SELECTION_CONTAINER_NAMES,
     private val disableSelectionNames: Set<String> = DEFAULT_DISABLE_SELECTION_NAMES,
     private val composableAnnotation: String = COMPOSABLE_ANNOTATION,
+    private val knownWrapperRules: List<KnownWrapperRule> = KnownWrapperConfig.load(),
 ) {
     fun analyzeCallSite(call: KtCallExpression, relativeFile: String): SelectionContext {
         val callee = extractCalleeName(call)
@@ -27,11 +28,19 @@ class SelectionWalker(
         val containers = mutableListOf<SelectionContainerInfo>()
         var disableSelection: DisableSelectionInfo? = null
         var excluded = false
+        var lambdaOrigin = false
 
         var node = call.parent
         while (node != null && node != enclosingComposable) {
             val callExpr = node as? KtCallExpression
             if (callExpr == null) {
+                if (node is org.jetbrains.kotlin.psi.KtLambdaExpression) {
+                    val wrapper = findKnownSelectionWrapper(node, relativeFile, enclosingComposable)
+                    if (wrapper != null) {
+                        containers += wrapper
+                        lambdaOrigin = true
+                    }
+                }
                 node = node.parent
             } else {
                 val callName = extractCalleeName(callExpr)
@@ -56,10 +65,22 @@ class SelectionWalker(
                                 function = enclosingComposable.name ?: "<anonymous>",
                             )
                         }
+                        matchesKnownWrapper(callExpr, callName) -> {
+                            containers += SelectionContainerInfo(
+                                file = relativeFile,
+                                line = callExpr.getLineNumber(),
+                                function = enclosingComposable.name ?: "<anonymous>",
+                            )
+                        }
                     }
                     node = node.parent
                 }
             }
+        }
+
+        val confidence = when {
+            lambdaOrigin && containers.isNotEmpty() -> "caller-chain"
+            else -> "lexical"
         }
 
         return SelectionContext(
@@ -69,6 +90,32 @@ class SelectionWalker(
             excludedByDisableSelection = excluded,
             selectionContainers = containers,
             disableSelection = disableSelection,
+            confidence = confidence,
+        )
+    }
+
+    private fun matchesKnownWrapper(call: KtCallExpression, callName: String): Boolean {
+        val rule = knownWrapperRules.firstOrNull { it.callee == callName } ?: return false
+        return call.valueArguments.any { arg ->
+            arg.getArgumentName()?.text == rule.providesSelectionWhenNamedArgument &&
+                arg.getArgumentExpression()?.text == rule.providesSelectionWhenValue
+        }
+    }
+
+    private fun findKnownSelectionWrapper(
+        lambda: org.jetbrains.kotlin.psi.KtLambdaExpression,
+        relativeFile: String,
+        enclosingComposable: KtNamedFunction,
+    ): SelectionContainerInfo? {
+        val parentCall = lambda.parent.parent as? KtCallExpression ?: return null
+        val callName = extractCalleeName(parentCall) ?: return null
+        if (!matchesKnownWrapper(parentCall, callName)) {
+            return null
+        }
+        return SelectionContainerInfo(
+            file = relativeFile,
+            line = parentCall.getLineNumber(),
+            function = enclosingComposable.name ?: "<anonymous>",
         )
     }
 

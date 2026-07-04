@@ -5,6 +5,7 @@ object ProducerRegistry {
 
     init {
         register(FileHashProducer())
+        register(com.kotlincodeindex.producer.kotlinpsi.KotlinPsiSymbolProducer())
         register(com.kotlincodeindex.producer.selectioncontext.SelectionContextProducer())
     }
 
@@ -19,6 +20,7 @@ object ProducerRegistry {
     fun forApplications(applicationIds: List<String>): List<IndexProducer> =
         buildList {
             add(FileHashProducer())
+            add(com.kotlincodeindex.producer.kotlinpsi.KotlinPsiSymbolProducer())
             for (id in applicationIds) {
                 producers[id]?.let { add(it) }
             }

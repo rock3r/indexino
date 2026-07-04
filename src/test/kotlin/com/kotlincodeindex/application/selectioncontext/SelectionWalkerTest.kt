@@ -84,6 +84,17 @@ class SelectionWalkerTest {
         assertFalse(context.excludedByDisableSelection)
     }
 
+    @Test
+    fun `known wrapper markdown selectable provides selection via lambda origin`() {
+        val content = fixture("markdown-selectable.kt")
+        val file = parser.parseFile("markdown-selectable.kt", content)
+        val context = walker.findCallAtLine(file, "markdown-selectable.kt", line = 7)
+
+        assertEquals("Text", context.callee)
+        assertTrue(context.inSelectionContainer)
+        assertEquals("caller-chain", context.confidence)
+    }
+
     private fun fixture(name: String): String =
         checkNotNull(javaClass.classLoader.getResourceAsStream("fixtures/selection-context/$name")) {
             "Missing fixture: $name"

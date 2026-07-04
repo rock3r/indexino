@@ -9,7 +9,7 @@ import com.kotlincodeindex.parse.IdeaHomeBootstrap
 /** Entry point for the kotlin-code-index CLI. */
 class MainCommand : CliktCommand(name = "kotlin-code-index") {
     init {
-        subcommands(IndexCommand(), QueryCommand())
+        subcommands(IndexCommand(), QueryCommand(), StatusCommand())
     }
 
     override fun run() {

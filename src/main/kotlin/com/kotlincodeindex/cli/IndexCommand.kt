@@ -2,6 +2,7 @@ package com.kotlincodeindex.cli
 
 import com.kotlincodeindex.core.git.GitHeadResolver
 import com.kotlincodeindex.core.manifest.IndexManifest
+import com.kotlincodeindex.core.manifest.ManifestFreshness
 import com.kotlincodeindex.core.manifest.ManifestIO
 import com.kotlincodeindex.core.path.IndexPathResolver
 import com.kotlincodeindex.core.xodus.XodusCodeIndexStore
@@ -20,6 +21,7 @@ import com.github.ajalt.clikt.parameters.types.file
 import com.kotlincodeindex.core.Version
 import java.nio.file.Path
 import java.time.Instant
+import kotlin.io.path.exists
 
 class IndexCommand : CliktCommand(name = "index") {
     private val project by option("--project")
@@ -37,7 +39,7 @@ class IndexCommand : CliktCommand(name = "index") {
             applications = applications.filter { it.isNotBlank() },
             progress = { echo(it, err = true) },
         )
-        if (exitCode != 0) {
+        if (exitCode != CliExitCodes.SUCCESS) {
             throw RuntimeException("index failed with exit code $exitCode")
         }
     }
@@ -57,9 +59,32 @@ class IndexCommand : CliktCommand(name = "index") {
             processRunner,
             onStderr = progress,
         )
+        if (topologyResult.sourceFiles.isEmpty()) {
+            progress("topology discovery failed: no source files")
+            return CliExitCodes.TOPOLOGY_FAILED
+        }
+
         val sourceFiles = topologyResult.sourceFiles
         val commit = GitHeadResolver.resolve(project)
         val resolver = IndexPathResolver(project)
+        val manifestPath = resolver.resolveManifest(commit)
+
+        val previewHash = FileHashProducer.combinedSourcesHash(project, sourceFiles)
+        val criteria = ManifestFreshness.criteriaFrom(
+            commit = commit,
+            scope = bazelTarget,
+            sourcesContentHash = previewHash,
+            applications = applications,
+        )
+
+        if (manifestPath.exists()) {
+            val existing = ManifestIO.read(manifestPath)
+            if (ManifestFreshness.isFresh(existing, criteria)) {
+                progress("index fresh for $bazelTarget @ $commit — skip rebuild")
+                return CliExitCodes.SUCCESS
+            }
+        }
+
         val storePath = resolver.resolveBaseStore(commit)
         val store = XodusCodeIndexStore.open(storePath)
         try {
@@ -69,15 +94,15 @@ class IndexCommand : CliktCommand(name = "index") {
                 scope = bazelTarget,
                 sourceFiles = sourceFiles,
                 workspaceRoot = project,
+                progress = progress,
             )
             for (producer in ProducerRegistry.forApplications(applications)) {
                 progress(producer.displayName)
                 producer.produce(context, store)
             }
 
-            val contentHash = combinedContentHash(context, sourceFiles)
             ManifestIO.write(
-                resolver.resolveManifest(commit),
+                manifestPath,
                 IndexManifest(
                     commit = commit,
                     indexerVersion = Version.NAME,
@@ -85,7 +110,7 @@ class IndexCommand : CliktCommand(name = "index") {
                     topology = topologyResult.topology,
                     includeDeps = topologyResult.includeDeps,
                     sourceFileCount = sourceFiles.size,
-                    sourcesContentHash = contentHash,
+                    sourcesContentHash = previewHash,
                     builtAt = Instant.now().toString(),
                     applications = applications,
                 ),
@@ -93,13 +118,6 @@ class IndexCommand : CliktCommand(name = "index") {
         } finally {
             store.close()
         }
-        return 0
-    }
-
-    private fun combinedContentHash(context: IndexBuildContext, sourceFiles: List<String>): String {
-        val combined = sourceFiles.sorted().joinToString("\n") { path ->
-            "$path:${FileHashProducer.contentHash(context.readSource(path))}"
-        }
-        return FileHashProducer.contentHash(combined)
+        return CliExitCodes.SUCCESS
     }
 }

@@ -20,6 +20,26 @@ data class FileHashRecord(
 ) : CodeIndexRecord
 
 @Serializable
+@SerialName("symbol")
+data class SymbolRecord(
+    val fqn: String,
+    val relativeFile: String,
+    val line: Int,
+    val kind: String,
+    val name: String,
+) : CodeIndexRecord
+
+@Serializable
+@SerialName("reference")
+data class ReferenceRecord(
+    val symbolFqn: String,
+    val relativeFile: String,
+    val line: Int,
+    val column: Int,
+    val context: String = "call",
+) : CodeIndexRecord
+
+@Serializable
 data class SelectionContainerRef(
     val file: String,
     val line: Int,
