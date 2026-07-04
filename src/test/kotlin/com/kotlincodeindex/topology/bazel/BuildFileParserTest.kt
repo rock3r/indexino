@@ -67,6 +67,27 @@ class BuildFileParserTest {
     }
 
     @Test
+    fun `named include argument in glob srcs is indexed`() {
+        val workspace = createTempDirectory("build-file-parser-named-include-")
+        val packageDir = workspace.resolve("pkg")
+        packageDir.toFile().mkdirs()
+        packageDir.resolve("Main.kt").toFile().writeText("class Main")
+        packageDir.resolve("BUILD.bazel").writeText(
+            """
+            kt_jvm_library(
+                name = "lib",
+                srcs = glob(
+                    include = ["**/*.kt"],
+                ),
+            )
+            """.trimIndent(),
+        )
+
+        val result = BuildFileParser.parseKotlinSources(packageDir.resolve("BUILD.bazel"), workspace)
+        assertEquals(listOf("pkg/Main.kt"), result.paths)
+    }
+
+    @Test
     fun `hash in srcs path does not comment out later entries`() {
         val workspace = createTempDirectory("build-file-parser-hash-in-path-")
         val packageDir = workspace.resolve("pkg")

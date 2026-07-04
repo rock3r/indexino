@@ -17,6 +17,7 @@ object BuildFileParser {
     private val SRCS_GLOB_START = Regex("""srcs\s*=\s*glob\s*\(""")
     private val QUOTED_STRING = Regex(""""([^"]+)"""")
     private val SRCS_LIST_START = Regex("""srcs\s*=\s*\[""")
+    private val INCLUDE_NAMED = Regex("""include\s*=\s*\[([\s\S]*?)]""")
     private val INCLUDE_LIST = Regex("""^\s*\[([\s\S]*?)]""")
     private val EXCLUDE_LIST = Regex("""exclude\s*=\s*\[([\s\S]*?)]""")
     private val EXCLUDE_GLOB = Regex("""exclude\s*=\s*glob\s*\(\s*\[([\s\S]*?)]""")
@@ -69,9 +70,7 @@ object BuildFileParser {
             .mapNotNull { match ->
                 val openParen = match.range.last
                 val body = extractBalancedParenBody(content, openParen) ?: return@mapNotNull null
-                val includes = INCLUDE_LIST.find(body)
-                    ?.let { list -> QUOTED_STRING.findAll(list.groupValues[1]).map { it.groupValues[1] }.toList() }
-                    .orEmpty()
+                val includes = extractIncludePatterns(body)
                 val excludes = buildList {
                     EXCLUDE_LIST.findAll(body).forEach { exclude ->
                         addAll(QUOTED_STRING.findAll(exclude.groupValues[1]).map { it.groupValues[1] })
@@ -83,6 +82,13 @@ object BuildFileParser {
                 GlobSpec(includes, excludes)
             }
             .toList()
+
+    private fun extractIncludePatterns(body: String): List<String> {
+        val includeBody = INCLUDE_NAMED.find(body)?.groupValues?.get(1)
+            ?: INCLUDE_LIST.find(body)?.groupValues?.get(1)
+            ?: return emptyList()
+        return QUOTED_STRING.findAll(includeBody).map { it.groupValues[1] }.toList()
+    }
 
     private fun extractBalancedParenBody(content: String, openParenIndex: Int): String? {
         val endIndex = findBalancedParenEnd(content, openParenIndex) ?: return null
