@@ -1,33 +1,76 @@
 # kotlin-code-index
 
-Portable **persistent** local code index (Xodus + `.kotlin-index/`).  
-**selection-context** is the first application: SelectionContainer / DisableSelection facts for Compose/Jewel UI audits.
+[![check](https://github.com/rock3r/kotlin-index/actions/workflows/check.yml/badge.svg)](https://github.com/rock3r/kotlin-index/actions/workflows/check.yml)
 
-Repo folder: `compose-selection-index` (rename optional).  
-Upstream alignment: storage contracts compatible with in-app code-index epic #812 (#814, #818).
+> **Experimental** — APIs, index layout, and CLI contracts may change without notice.
 
-## New session?
+Standalone Kotlin CLI that builds a **persistent** local code index (Xodus under
+`<workspace>/.kotlin-index/index/<commit>/`) for agent audit tools. Detekt-independent,
+Bazel-first (Gradle secondary), ships as a fat JAR with no target-repo build coupling.
 
-Start at **[.plans/HANDOFF.md](.plans/HANDOFF.md)**.
+**selection-context** is the first application plugin: precomputed SelectionContainer /
+DisableSelection facts at composable call sites for Compose/Jewel UI audits.
+
+Licensed under the [Universal Ethical License (UEL) v1.0](https://uelicense.eu/) — see
+[LICENSE](LICENSE).
+
+## Quick start
+
+Build the fat JAR:
+
+```bash
+./gradlew shadowJar
+# → build/libs/kotlin-code-index-0.1.0-SNAPSHOT-all.jar
+```
+
+Run via Gradle during development, or invoke the JAR directly:
+
+```bash
+JAR=build/libs/kotlin-code-index-0.1.0-SNAPSHOT-all.jar
+
+# Build or refresh the index for a Bazel target
+java -jar "$JAR" index \
+  --project /path/to/monorepo \
+  --bazel-target //plugins/foo/ui:ui \
+  --applications selection-context
+
+# Query precomputed selection-context facts
+java -jar "$JAR" query \
+  --project /path/to/monorepo \
+  --application selection-context \
+  --preset interactive-in-sc \
+  --format jsonl
+```
+
+Equivalent Gradle invocations:
+
+```bash
+./gradlew run --args="index --project /path/to/monorepo --bazel-target //pkg:ui --applications selection-context"
+./gradlew run --args="query --project /path/to/monorepo --application selection-context --preset interactive-in-sc --format jsonl"
+```
+
+Run tests:
+
+```bash
+./gradlew check
+```
 
 ## Docs
 
 | Doc | Topic |
 |-----|--------|
-| [.plans/kotlin-code-index-core.md](.plans/kotlin-code-index-core.md) | Core platform |
-| [.plans/application-selection-context.md](.plans/application-selection-context.md) | App #1 |
-| [AGENTS.md](AGENTS.md) | Agent rules |
+| [docs/CLI.md](docs/CLI.md) | Commands, flags, JSONL schema |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layers |
 | [docs/INDEX-STORAGE.md](docs/INDEX-STORAGE.md) | `.kotlin-index/` + keys |
-| [docs/CLI.md](docs/CLI.md) | Commands |
+| [AGENTS.md](AGENTS.md) | Agent rules |
 
-## Build
+## Contributing
 
-```bash
-./gradlew check
-./gradlew shadowJar   # build/libs/*-all.jar
-```
+After the initial GitHub import, all changes go through **pull request → CI babysit →
+squash merge** cycles. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow,
+local checks, and agent conventions.
 
 ## Status
 
-Scaffolding only — implement **Core C0** + **App A1** per master plan.
+Core **C0–C1** and application **A1–A3** milestones implemented. See
+[docs/CLI.md](docs/CLI.md) for full command reference.

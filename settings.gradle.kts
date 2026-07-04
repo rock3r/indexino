@@ -1,1 +1,1 @@
-rootProject.name = "compose-selection-index"
+rootProject.name = "kotlin-code-index"
