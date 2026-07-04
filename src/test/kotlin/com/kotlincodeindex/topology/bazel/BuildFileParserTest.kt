@@ -208,6 +208,94 @@ class BuildFileParserTest {
     }
 
     @Test
+    fun `positional include wins over nested exclude glob include`() {
+        val workspace = createTempDirectory("build-file-parser-nested-include-")
+        val packageDir = workspace.resolve("pkg")
+        packageDir.toFile().mkdirs()
+        packageDir.resolve("Main.kt").toFile().writeText("class Main")
+        packageDir.resolve("MainTest.kt").toFile().writeText("class MainTest")
+        packageDir.resolve("BUILD.bazel").writeText(
+            """
+            kt_jvm_library(
+                name = "lib",
+                srcs = glob(
+                    ["**/*.kt"],
+                    exclude = glob(include = ["**/*Test.kt"]),
+                ),
+            )
+            """.trimIndent(),
+        )
+
+        val result = BuildFileParser.parseKotlinSources(packageDir.resolve("BUILD.bazel"), workspace)
+        assertEquals(listOf("pkg/Main.kt"), result.paths)
+    }
+
+    @Test
+    fun `commented include line does not override positional include`() {
+        val workspace = createTempDirectory("build-file-parser-commented-include-")
+        val packageDir = workspace.resolve("pkg")
+        packageDir.toFile().mkdirs()
+        packageDir.resolve("Active.kt").toFile().writeText("class Active")
+        packageDir.resolve("Legacy.kt").toFile().writeText("class Legacy")
+        packageDir.resolve("BUILD.bazel").writeText(
+            """
+            kt_jvm_library(
+                name = "lib",
+                srcs = glob(
+                    # include = ["**/*.kt"],
+                    ["Active.kt"],
+                ),
+            )
+            """.trimIndent(),
+        )
+
+        val result = BuildFileParser.parseKotlinSources(packageDir.resolve("BUILD.bazel"), workspace)
+        assertEquals(listOf("pkg/Active.kt"), result.paths)
+    }
+
+    @Test
+    fun `single-quoted glob patterns are indexed`() {
+        val workspace = createTempDirectory("build-file-parser-single-quote-")
+        val packageDir = workspace.resolve("pkg")
+        packageDir.toFile().mkdirs()
+        packageDir.resolve("Main.kt").toFile().writeText("class Main")
+        packageDir.resolve("BUILD.bazel").writeText(
+            """
+            kt_jvm_library(
+                name = "lib",
+                srcs = glob(['**/*.kt']),
+            )
+            """.trimIndent(),
+        )
+
+        val result = BuildFileParser.parseKotlinSources(packageDir.resolve("BUILD.bazel"), workspace)
+        assertEquals(listOf("pkg/Main.kt"), result.paths)
+    }
+
+    @Test
+    fun `glob in concatenated srcs expression is indexed`() {
+        val workspace = createTempDirectory("build-file-parser-concat-srcs-")
+        val packageDir = workspace.resolve("pkg")
+        packageDir.toFile().mkdirs()
+        packageDir.resolve("Main.kt").toFile().writeText("class Main")
+        packageDir.resolve("src/Extra.kt").toFile().apply {
+            parentFile.mkdirs()
+            writeText("class Extra")
+        }
+        packageDir.resolve("BUILD.bazel").writeText(
+            """
+            kt_jvm_library(
+                name = "lib",
+                srcs = ["Main.kt"] + glob(["src/**/*.kt"]),
+            )
+            """.trimIndent(),
+        )
+
+        val result = BuildFileParser.parseKotlinSources(packageDir.resolve("BUILD.bazel"), workspace)
+        assertEquals(listOf("pkg/Main.kt", "pkg/src/Extra.kt").sorted(), result.paths.sorted())
+    }
+
+    @Test
     fun `literal srcs are kept when bracket body mentions glob`() {
         val workspace = createTempDirectory("build-file-parser-literal-with-glob-")
         val packageDir = workspace.resolve("pkg")

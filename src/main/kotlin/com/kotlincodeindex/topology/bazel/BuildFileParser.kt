@@ -16,11 +16,14 @@ object BuildFileParser {
     private val GLOB_CALL = Regex("""glob\s*\(""")
     private val SRCS_GLOB_START = Regex("""srcs\s*=\s*glob\s*\(""")
     private val QUOTED_STRING = Regex(""""([^"]+)"""")
-    private val SRCS_LIST_START = Regex("""srcs\s*=\s*\[""")
+    private val SINGLE_QUOTED_STRING = Regex("""'([^']+)'""")
+    private val SRCS_CONCAT_GLOB = Regex("""\+\s*glob\s*\(""")
+    private val EXCLUDE_GLOB_START = Regex("""exclude\s*=\s*glob\s*\(""")
     private val INCLUDE_NAMED = Regex("""include\s*=\s*\[([\s\S]*?)]""")
-    private val INCLUDE_LIST = Regex("""^\s*\[([\s\S]*?)]""")
+    private val TOP_LEVEL_EXCLUDE = Regex("""\bexclude\s*=""")
+    private val INCLUDE_LIST = Regex("""\[\s*([\s\S]*?)]""")
     private val EXCLUDE_LIST = Regex("""exclude\s*=\s*\[([\s\S]*?)]""")
-    private val EXCLUDE_GLOB = Regex("""exclude\s*=\s*glob\s*\(\s*\[([\s\S]*?)]""")
+    private val SRCS_LIST_START = Regex("""srcs\s*=\s*\[""")
 
     fun parseKotlinSources(buildFile: Path, workspaceRoot: Path): BuildParseResult {
         val packageDir = checkNotNull(buildFile.parent) { "BUILD file has no parent: $buildFile" }
@@ -66,30 +69,58 @@ object BuildFileParser {
     )
 
     private fun extractGlobSpecs(content: String): List<GlobSpec> =
-        SRCS_GLOB_START.findAll(content)
-            .filterNot { match -> isCommentedOutInBlock(content, match.range.first) }
-            .mapNotNull { match ->
-                val openParen = match.range.last
+        findSrcsGlobOpenParens(content)
+            .mapNotNull { openParen ->
                 val body = extractBalancedParenBody(content, openParen) ?: return@mapNotNull null
                 val includes = extractIncludePatterns(body)
-                val excludes = buildList {
-                    EXCLUDE_LIST.findAll(body).forEach { exclude ->
-                        addAll(QUOTED_STRING.findAll(exclude.groupValues[1]).map { it.groupValues[1] })
-                    }
-                    EXCLUDE_GLOB.findAll(body).forEach { exclude ->
-                        addAll(QUOTED_STRING.findAll(exclude.groupValues[1]).map { it.groupValues[1] })
-                    }
-                }
+                val excludes = extractExcludePatterns(body)
                 GlobSpec(includes, excludes)
             }
             .toList()
 
-    private fun extractIncludePatterns(body: String): List<String> {
-        val includeBody = INCLUDE_NAMED.find(body)?.groupValues?.get(1)
-            ?: INCLUDE_LIST.find(body)?.groupValues?.get(1)
-            ?: return emptyList()
-        return QUOTED_STRING.findAll(includeBody).map { it.groupValues[1] }.toList()
+    private fun findSrcsGlobOpenParens(content: String): List<Int> {
+        val openParens = linkedSetOf<Int>()
+        SRCS_GLOB_START.findAll(content)
+            .filterNot { match -> isCommentedOutInBlock(content, match.range.first) }
+            .forEach { openParens += it.range.last }
+        SRCS_CONCAT_GLOB.findAll(content)
+            .filterNot { match -> isCommentedOutInBlock(content, match.range.first) }
+            .forEach { openParens += it.range.last }
+        return openParens.toList()
     }
+
+    private fun extractExcludePatterns(body: String): List<String> =
+        buildList {
+            EXCLUDE_LIST.findAll(body).forEach { exclude ->
+                addAll(extractQuotedPatterns(exclude.groupValues[1]))
+            }
+            EXCLUDE_GLOB_START.findAll(body).forEach { match ->
+                val openParen = match.range.last
+                val excludeBody = extractBalancedParenBody(body, openParen) ?: return@forEach
+                addAll(extractIncludePatterns(excludeBody))
+            }
+        }
+
+    private fun extractIncludePatterns(body: String): List<String> {
+        val topLevel = TOP_LEVEL_EXCLUDE.find(body)?.range?.first?.let { body.substring(0, it) } ?: body
+        INCLUDE_LIST.findAll(topLevel)
+            .firstOrNull { match -> !isCommentedOutInBlock(topLevel, match.range.first) }
+            ?.let { match ->
+                return extractQuotedPatterns(match.groupValues[1])
+            }
+        INCLUDE_NAMED.findAll(topLevel)
+            .firstOrNull { match -> !isCommentedOutInBlock(topLevel, match.range.first) }
+            ?.let { match ->
+                return extractQuotedPatterns(match.groupValues[1])
+            }
+        return emptyList()
+    }
+
+    private fun extractQuotedPatterns(text: String): List<String> =
+        buildList {
+            QUOTED_STRING.findAll(text).forEach { add(it.groupValues[1]) }
+            SINGLE_QUOTED_STRING.findAll(text).forEach { add(it.groupValues[1]) }
+        }
 
     private fun extractBalancedParenBody(content: String, openParenIndex: Int): String? {
         val endIndex = findBalancedParenEnd(content, openParenIndex) ?: return null

@@ -8,6 +8,10 @@ import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtPsiFactory
 
 class KotlinPsiParser : AutoCloseable {
+    init {
+        IdeaHomeBootstrap.ensure()
+    }
+
     private val disposable = Disposer.newDisposable("KotlinPsiParser")
     private val environment =
         KotlinCoreEnvironment.createForTests(
