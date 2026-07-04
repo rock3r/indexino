@@ -45,7 +45,7 @@ java -jar "$JAR" query \
 Equivalent Gradle invocations:
 
 ```bash
-./gradlew run --args="index --project /path/to/monorepo --bazel-target //pkg:ui"
+./gradlew run --args="index --project /path/to/monorepo --bazel-target //pkg:ui --applications selection-context"
 ./gradlew run --args="query --project /path/to/monorepo --application selection-context --preset interactive-in-sc --format jsonl"
 ```
 
