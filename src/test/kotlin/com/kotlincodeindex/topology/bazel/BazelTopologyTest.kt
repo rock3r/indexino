@@ -19,6 +19,7 @@ class BazelTopologyTest {
             ),
         )
         assertEquals("bazel-query", result.topology)
+        assertEquals(true, result.includeDeps)
         assertEquals(
             listOf(
                 "plugins/foo/ui/src/main/kotlin/Panel.kt",

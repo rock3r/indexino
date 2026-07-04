@@ -61,10 +61,13 @@ When Bazel is unavailable (default CI path uses mock query fixtures instead):
 
 1. Parse `BUILD` / `BUILD.bazel` under the target package directory
 2. Recognize `kt_jvm_library`, `kt_android_library`, `android_library` with `.kt` in `srcs`
-3. Expand literal `srcs` entries into workspace-relative paths
+3. Expand literal `srcs` entries and `glob([...])` patterns into workspace-relative paths
 4. Set manifest `topology` to `build-parse`
 
-Document imprecision in CLI stderr when degraded (future C2).
+When `bazel` is available but the dependency closure is incomplete (partial checkout), the CLI
+retries with `labels(srcs, $target)` after `kind('source file', deps($target))` fails. Progress
+and BUILD-parse warnings go to stderr. Manifest `includeDeps` is `false` for that fallback and
+for `build-parse` degraded mode.
 
 ## Test fixtures
 

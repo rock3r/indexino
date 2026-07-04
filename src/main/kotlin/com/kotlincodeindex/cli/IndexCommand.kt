@@ -8,6 +8,7 @@ import com.kotlincodeindex.core.xodus.XodusCodeIndexStore
 import com.kotlincodeindex.producer.FileHashProducer
 import com.kotlincodeindex.producer.IndexBuildContext
 import com.kotlincodeindex.producer.ProducerRegistry
+import com.kotlincodeindex.topology.bazel.BazelProcessRunner
 import com.kotlincodeindex.topology.bazel.BazelQueryExecutor
 import com.kotlincodeindex.topology.bazel.BazelTopology
 import com.github.ajalt.clikt.core.CliktCommand
@@ -45,10 +46,17 @@ class IndexCommand : CliktCommand(name = "index") {
         project: Path,
         bazelTarget: String,
         applications: List<String>,
-        queryExecutor: BazelQueryExecutor = BazelTopology.defaultExecutor(),
+        queryExecutor: BazelQueryExecutor? = null,
+        processRunner: BazelProcessRunner? = null,
         progress: (String) -> Unit = {},
     ): Int {
-        val topologyResult = BazelTopology.resolveSources(bazelTarget, project, queryExecutor)
+        val topologyResult = BazelTopology.resolveSources(
+            bazelTarget,
+            project,
+            queryExecutor,
+            processRunner,
+            onStderr = progress,
+        )
         val sourceFiles = topologyResult.sourceFiles
         val commit = GitHeadResolver.resolve(project)
         val resolver = IndexPathResolver(project)
@@ -75,7 +83,7 @@ class IndexCommand : CliktCommand(name = "index") {
                     indexerVersion = Version.NAME,
                     scope = bazelTarget,
                     topology = topologyResult.topology,
-                    includeDeps = true,
+                    includeDeps = topologyResult.includeDeps,
                     sourceFileCount = sourceFiles.size,
                     sourcesContentHash = contentHash,
                     builtAt = Instant.now().toString(),

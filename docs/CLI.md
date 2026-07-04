@@ -16,11 +16,23 @@ kotlin-code-index index \
 ```
 
 On first run, resolves `git rev-parse HEAD` in `--project`, discovers Kotlin sources via Bazel
-query (or BUILD-file parse when `bazel` is unavailable), opens
-`<project>/.kotlin-index/index/<commit>/base.xodus`, runs core `FileHashProducer` plus any
-requested application producers, and writes `manifest.json`.
+query (with `labels(srcs, …)` fallback when `deps()` fails on partial checkouts), BUILD-file
+parse when `bazel` is unavailable, opens `<project>/.kotlin-index/index/<commit>/base.xodus`,
+runs core `FileHashProducer` plus any requested application producers, and writes `manifest.json`.
 
 Progress lines (producer names) go to stderr.
+
+### PSI bootstrap (fat JAR)
+
+Kotlin PSI (`SelectionContextProducer` and future producers) requires IntelliJ Platform home
+paths. The shadow JAR bundles a minimal `idea-home/` under `src/main/resources/` and sets
+`-Didea.home.path`, `-Didea.config.path`, `-Didea.system.path`, and `-Didea.plugins.path`
+automatically on first run (extracted to `~/.kotlin-index/idea-home/`). Override by passing JVM
+flags before `-jar`:
+
+```bash
+java -Didea.home.path=/path/to/idea/home -jar kotlin-code-index-all.jar index ...
+```
 
 First run on a large repo may take minutes; subsequent queries read Xodus.
 

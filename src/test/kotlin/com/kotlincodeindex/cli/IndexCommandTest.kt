@@ -4,6 +4,8 @@ import com.kotlincodeindex.core.manifest.ManifestIO
 import com.kotlincodeindex.core.path.IndexPathResolver
 import com.kotlincodeindex.core.record.FileHashRecord
 import com.kotlincodeindex.core.xodus.XodusCodeIndexStore
+import com.kotlincodeindex.topology.bazel.BazelProcessRunner
+import com.kotlincodeindex.topology.bazel.BazelQueryOutcome
 import com.kotlincodeindex.topology.bazel.MockBazelQueryExecutor
 import kotlin.io.path.Path
 import kotlin.io.path.createTempDirectory
@@ -73,6 +75,47 @@ class IndexCommandTest {
         }
 
         assertTrue(stderr.toString().contains("FileHashProducer"))
+    }
+
+    @Test
+    fun `manifest includeDeps false when bazel query falls back to labels srcs`() {
+        val workspace = createGitWorkspace()
+        val fallbackRunner = object : BazelProcessRunner {
+            override fun run(query: String, workspace: java.nio.file.Path): BazelQueryOutcome {
+                return when {
+                    query.contains("deps(") -> BazelQueryOutcome(1, listOf("ERROR: partial checkout"))
+                    query.contains("labels(srcs,") -> BazelQueryOutcome(
+                        0,
+                        listOf(
+                            "//plugins/foo/ui:src/main/kotlin/Panel.kt",
+                            "//plugins/foo/ui:src/main/kotlin/Other.kt",
+                        ),
+                    )
+                    else -> error("unexpected query: $query")
+                }
+            }
+        }
+
+        val exitCode = IndexCommand().runIndexedBuild(
+            project = workspace,
+            bazelTarget = "//plugins/foo/ui:ui",
+            applications = emptyList(),
+            queryExecutor = null,
+            processRunner = fallbackRunner,
+        )
+        assertEquals(0, exitCode)
+
+        val commit = ProcessBuilder("git", "-C", workspace.toString(), "rev-parse", "HEAD")
+            .redirectErrorStream(true)
+            .start()
+            .inputStream
+            .bufferedReader()
+            .readText()
+            .trim()
+
+        val manifest = ManifestIO.read(IndexPathResolver(workspace).resolveManifest(commit))
+        assertEquals("bazel-query", manifest.topology)
+        assertEquals(false, manifest.includeDeps)
     }
 
     private fun createGitWorkspace(): java.nio.file.Path {
