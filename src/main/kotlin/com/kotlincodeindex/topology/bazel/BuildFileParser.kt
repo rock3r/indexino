@@ -67,6 +67,7 @@ object BuildFileParser {
 
     private fun extractGlobSpecs(content: String): List<GlobSpec> =
         SRCS_GLOB_START.findAll(content)
+            .filterNot { match -> isCommentedOutInBlock(content, match.range.first) }
             .mapNotNull { match ->
                 val openParen = match.range.last
                 val body = extractBalancedParenBody(content, openParen) ?: return@mapNotNull null

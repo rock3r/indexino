@@ -187,6 +187,27 @@ class BuildFileParserTest {
     }
 
     @Test
+    fun `commented srcs glob assignment is not indexed as sources`() {
+        val workspace = createTempDirectory("build-file-parser-commented-glob-")
+        val packageDir = workspace.resolve("pkg")
+        packageDir.toFile().mkdirs()
+        packageDir.resolve("Active.kt").toFile().writeText("class Active")
+        packageDir.resolve("Legacy.kt").toFile().writeText("class Legacy")
+        packageDir.resolve("BUILD.bazel").writeText(
+            """
+            kt_jvm_library(
+                name = "lib",
+                srcs = ["Active.kt"],
+                # srcs = glob(["legacy/**/*.kt"]),
+            )
+            """.trimIndent(),
+        )
+
+        val result = BuildFileParser.parseKotlinSources(packageDir.resolve("BUILD.bazel"), workspace)
+        assertEquals(listOf("pkg/Active.kt"), result.paths)
+    }
+
+    @Test
     fun `literal srcs are kept when bracket body mentions glob`() {
         val workspace = createTempDirectory("build-file-parser-literal-with-glob-")
         val packageDir = workspace.resolve("pkg")
