@@ -16,10 +16,10 @@ the index supplies **facts** from `.kotlin-index/index/<commit>/` (persistent �
 ## Prerequisites
 
 - Built fat JAR: `./gradlew shadowJar` → `build/libs/kotlin-code-index-*-all.jar`
-- Target repo path (Bazel monorepo root)
-- Explicit `--bazel-target` (required)
+- Target repo path (Bazel monorepo root or Gradle project root)
+- Scope: `--bazel-target` (Bazel) or `--gradle-module` (Gradle)
 
-## Quick workflow
+## Quick workflow (Bazel)
 
 1. **Scope** — leaf UI Bazel target (e.g. `//plugins/foo/ui:ui`).
 
@@ -73,6 +73,26 @@ the index supplies **facts** from `.kotlin-index/index/<commit>/` (persistent �
      --session-id my-session \
      --format jsonl
    ```
+
+## Quick workflow (Gradle)
+
+For Gradle-only plugin repos (no Bazel at root):
+
+1. **Scope** — Gradle module path (e.g. `:plugin:ui`).
+
+2. **Index**:
+
+   ```bash
+   java -jar /path/to/kotlin-code-index-*-all.jar index \
+     --project /path/to/gradle-repo \
+     --build-system gradle \
+     --gradle-module :plugin:ui \
+     --include-deps \
+     --applications selection-context
+   ```
+
+3. **Query** — same `query` commands as Bazel; JSONL rows include `"module"` when topology is
+   `gradle-parse`.
 
 ## Policy table
 

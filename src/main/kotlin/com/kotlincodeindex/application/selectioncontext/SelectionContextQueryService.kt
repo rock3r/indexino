@@ -19,6 +19,7 @@ data class SelectionContextQueryRow(
     val disableSelection: com.kotlincodeindex.core.record.DisableSelectionRef? = null,
     val confidence: String,
     val target: String? = null,
+    val module: String? = null,
     val topology: String? = null,
 )
 
@@ -82,7 +83,8 @@ class SelectionContextQueryService(
             selectionContainers = compose.selectionContainers,
             disableSelection = compose.disableSelection,
             confidence = compose.confidence,
-            target = scopeTarget,
+            target = if (scopeTopology?.startsWith("gradle") == true) null else scopeTarget,
+            module = if (scopeTopology?.startsWith("gradle") == true) scopeTarget else null,
             topology = scopeTopology,
         )
     }

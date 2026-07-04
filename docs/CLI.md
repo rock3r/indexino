@@ -15,6 +15,21 @@ kotlin-code-index index \
   [--applications selection-context]
 ```
 
+Gradle-backed repos (no Bazel at project root):
+
+```bash
+kotlin-code-index index \
+  --project /path/to/gradle-repo \
+  --build-system gradle \
+  --gradle-module :plugin:ui \
+  [--include-deps] \
+  [--applications selection-context]
+```
+
+When `--build-system auto` (default), Bazel is chosen if `MODULE.bazel` / `WORKSPACE` exists;
+otherwise Gradle when `settings.gradle(.kts)` is present. Pass `--bazel-target` or
+`--gradle-module` for the scope.
+
 On first run, resolves `git rev-parse HEAD` in `--project`, discovers Kotlin sources via Bazel
 query (with `labels(srcs, …)` fallback when `deps()` fails on partial checkouts), BUILD-file
 parse when `bazel` is unavailable, opens `<project>/.kotlin-index/index/<commit>/base.xodus`,
@@ -44,10 +59,11 @@ First run on a large repo may take minutes; subsequent queries read Xodus.
 
 ```bash
 kotlin-code-index status --project /path/to/monorepo [--bazel-target //pkg:ui]
+kotlin-code-index status --project /path/to/gradle-repo --gradle-module :ui
 ```
 
-Reports JSON: commit hash, manifest age, file count, `fresh` boolean, indexer version.
-When `--bazel-target` is omitted, freshness is checked against the scope stored in the manifest.
+When scope flags are omitted, freshness is checked against the scope stored in the manifest
+(Bazel target or Gradle module path).
 
 ### Session overlay
 
@@ -118,13 +134,15 @@ One JSON object per line:
 }
 ```
 
+Gradle-scoped indexes add `"module": ":plugin:ui"` when `topology` starts with `gradle`.
+
 Field notes:
 
 - `selectionContainers` — innermost first
 - `excludedByDisableSelection` — `true` when `DisableSelection` sits between the call site and
   the nearest ancestor SC
 - `confidence` — `lexical` | `caller-chain` (future)
-- `topology` — `bazel-query` | `build-parse` | `gradle` | `idea`
+- `topology` — `bazel-query` | `build-parse` | `gradle-parse` | `idea`
 
 ## Presets (initial)
 

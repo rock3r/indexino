@@ -1,5 +1,6 @@
 package com.kotlincodeindex.topology.bazel
 
+import com.kotlincodeindex.topology.TopologyResult
 import java.nio.file.Path
 import kotlin.io.path.exists
 import kotlin.io.path.isDirectory
@@ -28,6 +29,7 @@ object BazelTopology {
                 sourceFiles = BazelQueryResultParser.parseKotlinSourcePaths(lines),
                 topology = resolveTopology(executor),
                 includeDeps = true,
+                scope = target,
             )
         }
 
@@ -38,6 +40,7 @@ object BazelTopology {
                 sourceFiles = BazelQueryResultParser.parseKotlinSourcePaths(queryResult.lines),
                 topology = "bazel-query",
                 includeDeps = queryResult.includeDeps,
+                scope = target,
             )
         }
 
@@ -46,6 +49,7 @@ object BazelTopology {
             sourceFiles = BazelQueryResultParser.parseKotlinSourcePaths(lines),
             topology = "build-parse",
             includeDeps = false,
+            scope = target,
         )
     }
 
@@ -115,9 +119,3 @@ object BazelTopology {
         }
     }
 }
-
-data class TopologyResult(
-    val sourceFiles: List<String>,
-    val topology: String,
-    val includeDeps: Boolean,
-)
