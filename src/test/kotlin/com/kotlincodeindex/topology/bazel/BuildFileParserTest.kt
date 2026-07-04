@@ -296,6 +296,29 @@ class BuildFileParserTest {
     }
 
     @Test
+    fun `include after exclude in glob srcs is indexed`() {
+        val workspace = createTempDirectory("build-file-parser-exclude-before-include-")
+        val packageDir = workspace.resolve("pkg")
+        packageDir.toFile().mkdirs()
+        packageDir.resolve("Main.kt").toFile().writeText("class Main")
+        packageDir.resolve("MainTest.kt").toFile().writeText("class MainTest")
+        packageDir.resolve("BUILD.bazel").writeText(
+            """
+            kt_jvm_library(
+                name = "lib",
+                srcs = glob(
+                    exclude = ["**/*Test.kt"],
+                    include = ["**/*.kt"],
+                ),
+            )
+            """.trimIndent(),
+        )
+
+        val result = BuildFileParser.parseKotlinSources(packageDir.resolve("BUILD.bazel"), workspace)
+        assertEquals(listOf("pkg/Main.kt"), result.paths)
+    }
+
+    @Test
     fun `literal srcs are kept when bracket body mentions glob`() {
         val workspace = createTempDirectory("build-file-parser-literal-with-glob-")
         val packageDir = workspace.resolve("pkg")
