@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: UEL-1.0
+
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.serialization)
