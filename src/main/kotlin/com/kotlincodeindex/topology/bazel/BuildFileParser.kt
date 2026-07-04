@@ -19,8 +19,8 @@ object BuildFileParser {
     private val SINGLE_QUOTED_STRING = Regex("""'([^']+)'""")
     private val SRCS_CONCAT_GLOB = Regex("""\+\s*glob\s*\(""")
     private val EXCLUDE_GLOB_START = Regex("""exclude\s*=\s*glob\s*\(""")
+    private val POSITIONAL_INCLUDE = Regex("""^\[\s*([\s\S]*?)]""")
     private val INCLUDE_NAMED = Regex("""include\s*=\s*\[([\s\S]*?)]""")
-    private val TOP_LEVEL_EXCLUDE = Regex("""\bexclude\s*=""")
     private val INCLUDE_LIST = Regex("""\[\s*([\s\S]*?)]""")
     private val EXCLUDE_LIST = Regex("""exclude\s*=\s*\[([\s\S]*?)]""")
     private val SRCS_LIST_START = Regex("""srcs\s*=\s*\[""")
@@ -102,19 +102,44 @@ object BuildFileParser {
         }
 
     private fun extractIncludePatterns(body: String): List<String> {
-        val topLevel = TOP_LEVEL_EXCLUDE.find(body)?.range?.first?.let { body.substring(0, it) } ?: body
-        INCLUDE_LIST.findAll(topLevel)
-            .firstOrNull { match -> !isCommentedOutInBlock(topLevel, match.range.first) }
+        val excludeGlobRanges = findExcludeGlobBodyRanges(body)
+        fun isInExcludeGlob(index: Int) = excludeGlobRanges.any { index in it }
+
+        POSITIONAL_INCLUDE.find(body.trimStart())?.let { match ->
+            if (!isCommentedOutInBlock(body.trimStart(), match.range.first)) {
+                return extractQuotedPatterns(match.groupValues[1])
+            }
+        }
+        INCLUDE_NAMED.findAll(body)
+            .firstOrNull { match ->
+                !isCommentedOutInBlock(body, match.range.first) && !isInExcludeGlob(match.range.first)
+            }
             ?.let { match ->
                 return extractQuotedPatterns(match.groupValues[1])
             }
-        INCLUDE_NAMED.findAll(topLevel)
-            .firstOrNull { match -> !isCommentedOutInBlock(topLevel, match.range.first) }
+        INCLUDE_LIST.findAll(body)
+            .firstOrNull { match ->
+                !isCommentedOutInBlock(body, match.range.first) &&
+                    !isInExcludeGlob(match.range.first) &&
+                    !isExcludeListBracket(body, match.range.first)
+            }
             ?.let { match ->
                 return extractQuotedPatterns(match.groupValues[1])
             }
         return emptyList()
     }
+
+    private fun isExcludeListBracket(body: String, index: Int): Boolean {
+        val prefix = body.substring(0, index).trimEnd()
+        return prefix.endsWith("exclude =") || prefix.endsWith("exclude=")
+    }
+
+    private fun findExcludeGlobBodyRanges(body: String): List<IntRange> =
+        EXCLUDE_GLOB_START.findAll(body).mapNotNull { match ->
+            val openParen = match.range.last
+            val endIndex = findBalancedParenEnd(body, openParen) ?: return@mapNotNull null
+            (openParen + 1) until endIndex
+        }.toList()
 
     private fun extractQuotedPatterns(text: String): List<String> =
         buildList {
