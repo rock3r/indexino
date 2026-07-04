@@ -67,6 +67,29 @@ class BuildFileParserTest {
     }
 
     @Test
+    fun `commented srcs entries are not indexed as sources`() {
+        val workspace = createTempDirectory("build-file-parser-commented-srcs-")
+        val packageDir = workspace.resolve("pkg")
+        packageDir.toFile().mkdirs()
+        packageDir.resolve("Active.kt").toFile().writeText("class Active")
+        packageDir.resolve("Legacy.kt").toFile().writeText("class Legacy")
+        packageDir.resolve("BUILD.bazel").writeText(
+            """
+            kt_jvm_library(
+                name = "lib",
+                srcs = [
+                    "Active.kt",
+                    # "Legacy.kt",
+                ],
+            )
+            """.trimIndent(),
+        )
+
+        val result = BuildFileParser.parseKotlinSources(packageDir.resolve("BUILD.bazel"), workspace)
+        assertEquals(listOf("pkg/Active.kt"), result.paths)
+    }
+
+    @Test
     fun `non-srcs globs are not indexed as sources`() {
         val workspace = createTempDirectory("build-file-parser-non-srcs-glob-")
         val packageDir = workspace.resolve("pkg")

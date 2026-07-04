@@ -118,9 +118,17 @@ object BuildFileParser {
                 globMatch.range.first..endIndex
             }
             QUOTED_STRING.findAll(blockBody)
-                .filter { quoted -> globRangesInBlock.none { quoted.range.first in it } }
+                .filter { quoted ->
+                    globRangesInBlock.none { quoted.range.first in it } &&
+                        !isCommentedOutInBlock(blockBody, quoted.range.first)
+                }
                 .map { it.groupValues[1] }
         }.toList()
+
+    private fun isCommentedOutInBlock(blockBody: String, index: Int): Boolean {
+        val lineStart = blockBody.lastIndexOf('\n', index - 1) + 1
+        return blockBody.substring(lineStart, index).contains('#')
+    }
 
     private fun extractBalancedBracketBody(content: String, openBracketIndex: Int): String? {
         val endIndex = findBalancedBracketEnd(content, openBracketIndex) ?: return null
