@@ -220,7 +220,8 @@ object BuildFileParser {
                 val endIndex = findBalancedParenEnd(blockBody, openParen) ?: return@mapNotNull null
                 globMatch.range.first..endIndex
             }
-            QUOTED_STRING.findAll(blockBody)
+            val quotedLiterals = QUOTED_STRING.findAll(blockBody) + SINGLE_QUOTED_STRING.findAll(blockBody)
+            quotedLiterals
                 .filter { quoted ->
                     globRangesInBlock.none { quoted.range.first in it } &&
                         !isCommentedOutInBlock(blockBody, quoted.range.first)
@@ -234,12 +235,15 @@ object BuildFileParser {
         val line = blockBody.substring(lineStart, lineEnd)
         val relativeIndex = index - lineStart
 
-        var inString = false
+        var inString: Char? = null
         var cursor = 0
         while (cursor < relativeIndex) {
-            when (line[cursor]) {
-                '"' -> inString = !inString
-                '#' -> if (!inString) {
+            when (val ch = line[cursor]) {
+                '"', '\'' -> when {
+                    inString == null -> inString = ch
+                    inString == ch -> inString = null
+                }
+                '#' -> if (inString == null) {
                     return true
                 }
             }

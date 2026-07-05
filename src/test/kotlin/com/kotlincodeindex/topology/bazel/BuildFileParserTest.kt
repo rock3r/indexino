@@ -111,6 +111,48 @@ class BuildFileParserTest {
     }
 
     @Test
+    fun `hash in single-quoted srcs path does not comment out entry`() {
+        val workspace = createTempDirectory("build-file-parser-single-quote-hash-")
+        val packageDir = workspace.resolve("pkg")
+        packageDir.toFile().mkdirs()
+        packageDir.resolve("foo#bar.kt").toFile().writeText("class FooBar")
+        packageDir.resolve("Other.kt").toFile().writeText("class Other")
+        packageDir.resolve("BUILD.bazel").writeText(
+            """
+            kt_jvm_library(
+                name = "lib",
+                srcs = ['foo#bar.kt', 'Other.kt'],
+            )
+            """.trimIndent(),
+        )
+
+        val result = BuildFileParser.parseKotlinSources(packageDir.resolve("BUILD.bazel"), workspace)
+        assertEquals(
+            listOf("pkg/Other.kt", "pkg/foo#bar.kt").sorted(),
+            result.paths.sorted(),
+        )
+    }
+
+    @Test
+    fun `hash in single-quoted glob pattern is indexed`() {
+        val workspace = createTempDirectory("build-file-parser-single-quote-glob-hash-")
+        val packageDir = workspace.resolve("pkg")
+        packageDir.toFile().mkdirs()
+        packageDir.resolve("foo#bar.kt").toFile().writeText("class FooBar")
+        packageDir.resolve("BUILD.bazel").writeText(
+            """
+            kt_jvm_library(
+                name = "lib",
+                srcs = glob(['foo#bar.kt']),
+            )
+            """.trimIndent(),
+        )
+
+        val result = BuildFileParser.parseKotlinSources(packageDir.resolve("BUILD.bazel"), workspace)
+        assertEquals(listOf("pkg/foo#bar.kt"), result.paths)
+    }
+
+    @Test
     fun `commented srcs entries are not indexed as sources`() {
         val workspace = createTempDirectory("build-file-parser-commented-srcs-")
         val packageDir = workspace.resolve("pkg")
