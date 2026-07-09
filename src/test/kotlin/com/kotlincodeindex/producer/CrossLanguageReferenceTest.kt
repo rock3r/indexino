@@ -160,6 +160,7 @@ class CrossLanguageReferenceTest {
             """
             package sample
             import api.render
+            class LocalRenderer { fun render() {} }
             fun callImported() { render() }
             """
                 .trimIndent()
@@ -180,6 +181,40 @@ class CrossLanguageReferenceTest {
                     .filterIsInstance<ReferenceRecord>()
                     .toList()
             assertTrue(refs.any { it.symbolFqn == "api.render" && it.context == "call" })
+        } finally {
+            store.close()
+        }
+    }
+
+    @Test
+    fun `Kotlin self qualified properties resolve through their declared type`() {
+        val source =
+            """
+            package sample
+            class Renderer { fun render() {} }
+            class Holder(val renderer: Renderer) {
+                fun call() { this.renderer.render() }
+            }
+            """
+                .trimIndent()
+        val store = XodusCodeIndexStore.open(createTempDirectory("self-property-").resolve("index"))
+        try {
+            val context =
+                IndexBuildContext.forInlineSources(
+                    store,
+                    "abc",
+                    mapOf("src/main/kotlin/sample/Holder.kt" to source),
+                )
+            ProducerRegistry.forApplications(emptyList()).forEach { it.produce(context, store) }
+
+            val refs =
+                store
+                    .prefixScan("ref:")
+                    .map { it.second }
+                    .filterIsInstance<ReferenceRecord>()
+                    .toList()
+            assertTrue(refs.any { it.symbolFqn == "sample.Renderer#render" })
+            assertTrue(refs.none { it.symbolFqn == "this.renderer#render" })
         } finally {
             store.close()
         }

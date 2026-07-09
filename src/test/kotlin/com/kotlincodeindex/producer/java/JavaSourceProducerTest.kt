@@ -213,6 +213,7 @@ class JavaSourceProducerTest {
                 void call() {
                     { Second model = null; model.render(); }
                     model.render();
+                    this.model.render();
                 }
             }
             """
@@ -235,7 +236,8 @@ class JavaSourceProducerTest {
                     .filterIsInstance<ReferenceRecord>()
                     .toList()
             assertEquals(1, references.count { it.symbolFqn == "sample.Second#render" })
-            assertEquals(1, references.count { it.symbolFqn == "sample.First#render" })
+            assertEquals(2, references.count { it.symbolFqn == "sample.First#render" })
+            assertTrue(references.none { it.symbolFqn == "this.model#render" })
         }
     }
 

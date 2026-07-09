@@ -240,7 +240,21 @@ class JavaSourceProducer : IndexProducer {
                     }
                 }
                 is NewClassTree -> qualifyType(receiver.identifier.toString())
-                is MemberSelectTree -> qualifyType(receiver.toString())
+                is MemberSelectTree -> {
+                    val selfReceiver = receiver.expression as? IdentifierTree
+                    if (
+                        selfReceiver?.name?.toString() == "this" ||
+                            selfReceiver?.name?.toString() == "super"
+                    ) {
+                        val fieldName = receiver.identifier.toString()
+                        variableScopes
+                            .reversed()
+                            .firstNotNullOfOrNull { it[fieldName] }
+                            ?.let(::qualifyType)
+                    } else {
+                        qualifyType(receiver.toString())
+                    }
+                }
                 else -> null
             }
 

@@ -13,7 +13,9 @@ import org.jetbrains.kotlin.psi.KtCallExpression
 import org.jetbrains.kotlin.psi.KtCatchClause
 import org.jetbrains.kotlin.psi.KtClass
 import org.jetbrains.kotlin.psi.KtClassOrObject
+import org.jetbrains.kotlin.psi.KtDotQualifiedExpression
 import org.jetbrains.kotlin.psi.KtElement
+import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtForExpression
 import org.jetbrains.kotlin.psi.KtFunctionLiteral
@@ -185,34 +187,32 @@ class KotlinPsiSymbolProducer : IndexProducer {
         imports: Map<String, String>,
     ) {
         val names = KotlinSourceNames(file, imports)
-        file
-            .collectDescendantsOfType<org.jetbrains.kotlin.psi.KtDotQualifiedExpression>()
-            .forEach { expression ->
-                val selector =
-                    expression.selectorExpression as? KtNameReferenceExpression ?: return@forEach
-                val receiver =
-                    expression.receiverExpression as? KtNameReferenceExpression ?: return@forEach
-                val receiverType =
-                    resolveVariableType(receiver, receiver.getReferencedName()) ?: return@forEach
-                val name = selector.getReferencedName()
-                val target = "${names.qualifyType(receiverType)}#$name"
-                val line = selector.lineNumber()
-                val column = selector.columnNumber()
-                store.put(
-                    CodeIndexKey.ref(target, relativePath, line, column),
-                    ReferenceRecord(
-                        symbolFqn = target,
-                        relativeFile = relativePath,
-                        line = line,
-                        column = column,
-                        context = "member",
-                        language = LANGUAGE,
-                        referencedName = name,
-                        qualifier = receiver.text,
-                        candidateSymbolFqns = listOf(target),
-                    ),
-                )
-            }
+        file.collectDescendantsOfType<KtDotQualifiedExpression>().forEach { expression ->
+            val selector =
+                expression.selectorExpression as? KtNameReferenceExpression ?: return@forEach
+            val receiver =
+                expression.receiverExpression as? KtNameReferenceExpression ?: return@forEach
+            val receiverType =
+                resolveVariableType(receiver, receiver.getReferencedName()) ?: return@forEach
+            val name = selector.getReferencedName()
+            val target = "${names.qualifyType(receiverType)}#$name"
+            val line = selector.lineNumber()
+            val column = selector.columnNumber()
+            store.put(
+                CodeIndexKey.ref(target, relativePath, line, column),
+                ReferenceRecord(
+                    symbolFqn = target,
+                    relativeFile = relativePath,
+                    line = line,
+                    column = column,
+                    context = "member",
+                    language = LANGUAGE,
+                    referencedName = name,
+                    qualifier = receiver.text,
+                    candidateSymbolFqns = listOf(target),
+                ),
+            )
+        }
     }
 
     private fun resolveCall(
@@ -224,22 +224,10 @@ class KotlinPsiSymbolProducer : IndexProducer {
         val names = KotlinSourceNames(file, imports)
         val name =
             (call.calleeExpression as? KtSimpleNameExpression)?.getReferencedName() ?: return null
-        val qualifiedParent = call.parent as? org.jetbrains.kotlin.psi.KtDotQualifiedExpression
+        val qualifiedParent = call.parent as? KtDotQualifiedExpression
         val receiver = qualifiedParent?.takeIf { it.selectorExpression == call }?.receiverExpression
         if (receiver != null) {
-            val owner =
-                when (receiver) {
-                    is KtThisExpression,
-                    is KtSuperExpression -> names.classOwner(call)?.let(names::classFqn)
-                    is KtNameReferenceExpression ->
-                        resolveVariableType(receiver, receiver.getReferencedName())
-                            ?.let(names::qualifyType)
-                    is KtCallExpression ->
-                        (receiver.calleeExpression as? KtSimpleNameExpression)
-                            ?.getReferencedName()
-                            ?.let(names::qualifyType)
-                    else -> names.qualifyType(receiver.text)
-                }
+            val owner = resolveReceiverOwner(call, receiver, names)
             if (owner != null) {
                 return InvocationTarget("$owner#$name", name, receiver.text)
             }
@@ -251,7 +239,7 @@ class KotlinPsiSymbolProducer : IndexProducer {
                 return InvocationTarget(it.fqn, name, null)
             }
         symbols
-            .firstOrNull { it.name == name }
+            .firstOrNull { it.name == name && it.ownerFqn == null }
             ?.let {
                 return InvocationTarget(it.fqn, name, null)
             }
@@ -260,6 +248,35 @@ class KotlinPsiSymbolProducer : IndexProducer {
         }
         return null
     }
+
+    private fun resolveReceiverOwner(
+        call: KtCallExpression,
+        receiver: KtExpression,
+        names: KotlinSourceNames,
+    ): String? =
+        when (receiver) {
+            is KtThisExpression,
+            is KtSuperExpression -> names.classOwner(call)?.let(names::classFqn)
+            is KtNameReferenceExpression ->
+                resolveVariableType(receiver, receiver.getReferencedName())?.let(names::qualifyType)
+            is KtCallExpression ->
+                (receiver.calleeExpression as? KtSimpleNameExpression)
+                    ?.getReferencedName()
+                    ?.let(names::qualifyType)
+            is KtDotQualifiedExpression -> {
+                val selfReceiver = receiver.receiverExpression
+                val field = receiver.selectorExpression as? KtNameReferenceExpression
+                if (
+                    (selfReceiver is KtThisExpression || selfReceiver is KtSuperExpression) &&
+                        field != null
+                ) {
+                    resolveVariableType(field, field.getReferencedName())?.let(names::qualifyType)
+                } else {
+                    names.qualifyType(receiver.text)
+                }
+            }
+            else -> names.qualifyType(receiver.text)
+        }
 
     private fun resolveVariableType(useSite: KtElement, name: String): String? {
         var scope = useSite.parent
