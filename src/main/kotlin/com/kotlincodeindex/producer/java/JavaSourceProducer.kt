@@ -204,10 +204,10 @@ class JavaSourceProducer : IndexProducer {
                     val classOwner = classOwners.lastOrNull() ?: return null
                     val explicitStaticOwner = staticImports[name]
                     when {
-                        explicitStaticOwner != null ->
-                            invocationTarget(explicitStaticOwner, name, null)
                         name in classMethodNames.lastOrNull().orEmpty() ->
                             invocationTarget(classOwner, name, null)
+                        explicitStaticOwner != null ->
+                            invocationTarget(explicitStaticOwner, name, null)
                         staticWildcardImports.isNotEmpty() ->
                             invocationTarget(
                                 staticWildcardImports.first(),

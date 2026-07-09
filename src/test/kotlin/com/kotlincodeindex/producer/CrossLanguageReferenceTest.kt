@@ -154,6 +154,37 @@ class CrossLanguageReferenceTest {
         }
     }
 
+    @Test
+    fun `Kotlin imported top level calls use the imported symbol id`() {
+        val source =
+            """
+            package sample
+            import api.render
+            fun callImported() { render() }
+            """
+                .trimIndent()
+        val store = XodusCodeIndexStore.open(createTempDirectory("imported-call-").resolve("index"))
+        try {
+            val context =
+                IndexBuildContext.forInlineSources(
+                    store,
+                    "abc",
+                    mapOf("src/main/kotlin/sample/Caller.kt" to source),
+                )
+            ProducerRegistry.forApplications(emptyList()).forEach { it.produce(context, store) }
+
+            val refs =
+                store
+                    .prefixScan("ref:")
+                    .map { it.second }
+                    .filterIsInstance<ReferenceRecord>()
+                    .toList()
+            assertTrue(refs.any { it.symbolFqn == "api.render" && it.context == "call" })
+        } finally {
+            store.close()
+        }
+    }
+
     private fun crossLanguageSources(): Map<String, String> =
         mapOf(
             "src/main/java/sample/JavaGreeter.java" to

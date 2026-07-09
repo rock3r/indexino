@@ -255,6 +255,9 @@ class KotlinPsiSymbolProducer : IndexProducer {
             ?.let {
                 return InvocationTarget(it.fqn, name, null)
             }
+        imports[name]?.let { imported ->
+            return InvocationTarget(imported, name, null)
+        }
         return null
     }
 

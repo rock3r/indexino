@@ -167,6 +167,41 @@ class JavaSourceProducerTest {
     }
 
     @Test
+    fun `prefers local methods over explicit static imports`() {
+        val source =
+            """
+            package sample;
+            import static sample.Util.render;
+            class Caller {
+                void render() {}
+                void call() { render(); }
+            }
+            """
+                .trimIndent()
+
+        withStore { store ->
+            val producer = assertNotNull(ProducerRegistry.get("java-source"))
+            producer.produce(
+                IndexBuildContext.forInlineSources(
+                    store = store,
+                    commitHash = "abc",
+                    sourceFiles = mapOf("Caller.java" to source),
+                )
+            )
+
+            val calls =
+                store
+                    .prefixScan("ref:")
+                    .map { it.second }
+                    .filterIsInstance<ReferenceRecord>()
+                    .filter { it.context == "call" }
+                    .toList()
+            assertTrue(calls.any { it.symbolFqn == "sample.Caller#render" })
+            assertTrue(calls.none { it.symbolFqn == "sample.Util#render" })
+        }
+    }
+
+    @Test
     fun `Java local receiver types expire at block boundaries`() {
         val source =
             """
