@@ -163,8 +163,9 @@ object BuildFileParser {
             .toList()
 
     private fun extractQuotedPatterns(text: String): List<String> = buildList {
-        QUOTED_STRING.findAll(text).forEach { add(it.groupValues[1]) }
-        SINGLE_QUOTED_STRING.findAll(text).forEach { add(it.groupValues[1]) }
+        (QUOTED_STRING.findAll(text) + SINGLE_QUOTED_STRING.findAll(text))
+            .filterNot { BuildFileComments.isCommentedOutInBlock(text, it.range.first) }
+            .forEach { add(it.groupValues[1]) }
     }
 
     private fun extractBalancedParenBody(content: String, openParenIndex: Int): String? {

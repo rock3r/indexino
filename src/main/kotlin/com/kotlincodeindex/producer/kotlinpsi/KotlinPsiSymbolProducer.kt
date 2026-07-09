@@ -8,6 +8,7 @@ import com.kotlincodeindex.parse.KotlinPsiParser
 import com.kotlincodeindex.producer.IndexBuildContext
 import com.kotlincodeindex.producer.IndexProducer
 import com.kotlincodeindex.producer.SourceRecordCleanup
+import org.jetbrains.kotlin.psi.KtBlockExpression
 import org.jetbrains.kotlin.psi.KtCallExpression
 import org.jetbrains.kotlin.psi.KtClass
 import org.jetbrains.kotlin.psi.KtClassOrObject
@@ -15,7 +16,6 @@ import org.jetbrains.kotlin.psi.KtElement
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
 import org.jetbrains.kotlin.psi.KtNamedFunction
-import org.jetbrains.kotlin.psi.KtParameter
 import org.jetbrains.kotlin.psi.KtProperty
 import org.jetbrains.kotlin.psi.KtSimpleNameExpression
 import org.jetbrains.kotlin.psi.KtSuperExpression
@@ -73,9 +73,8 @@ class KotlinPsiSymbolProducer : IndexProducer {
                 .mapNotNull { it.importPath?.pathStr }
                 .filterNot { it.endsWith(".*") }
                 .associateBy { it.substringAfterLast('.') }
-        val variableTypes = collectVariableTypes(file)
         for (call in file.collectDescendantsOfType<KtCallExpression>()) {
-            val target = resolveCall(file, call, symbols, imports, variableTypes) ?: continue
+            val target = resolveCall(file, call, symbols, imports) ?: continue
             val line = call.lineNumber()
             val column = call.columnNumber()
             store.put(
@@ -94,7 +93,7 @@ class KotlinPsiSymbolProducer : IndexProducer {
                 ),
             )
         }
-        indexMemberReferences(file, relativePath, store, imports, variableTypes)
+        indexMemberReferences(file, relativePath, store, imports)
     }
 
     private fun collectSymbols(file: KtFile): List<ResolvedSymbol> {
@@ -176,29 +175,11 @@ class KotlinPsiSymbolProducer : IndexProducer {
         }
     }
 
-    private fun collectVariableTypes(file: KtFile): Map<String, String> = buildMap {
-        file.collectDescendantsOfType<KtParameter>().forEach { parameter ->
-            val name = parameter.name
-            val type = parameter.typeReference?.text
-            if (name != null && type != null) {
-                put(name, type)
-            }
-        }
-        file.collectDescendantsOfType<KtProperty>().forEach { property ->
-            val name = property.name
-            val type = property.typeReference?.text
-            if (name != null && type != null) {
-                put(name, type)
-            }
-        }
-    }
-
     private fun indexMemberReferences(
         file: KtFile,
         relativePath: String,
         store: CodeIndexStore,
         imports: Map<String, String>,
-        variableTypes: Map<String, String>,
     ) {
         val names = KotlinSourceNames(file, imports)
         file
@@ -208,7 +189,8 @@ class KotlinPsiSymbolProducer : IndexProducer {
                     expression.selectorExpression as? KtNameReferenceExpression ?: return@forEach
                 val receiver =
                     expression.receiverExpression as? KtNameReferenceExpression ?: return@forEach
-                val receiverType = variableTypes[receiver.getReferencedName()] ?: return@forEach
+                val receiverType =
+                    resolveVariableType(receiver, receiver.getReferencedName()) ?: return@forEach
                 val name = selector.getReferencedName()
                 val target = "${names.qualifyType(receiverType)}#$name"
                 val line = selector.lineNumber()
@@ -235,7 +217,6 @@ class KotlinPsiSymbolProducer : IndexProducer {
         call: KtCallExpression,
         symbols: List<ResolvedSymbol>,
         imports: Map<String, String>,
-        variableTypes: Map<String, String>,
     ): InvocationTarget? {
         val names = KotlinSourceNames(file, imports)
         val name =
@@ -248,7 +229,8 @@ class KotlinPsiSymbolProducer : IndexProducer {
                     is KtThisExpression,
                     is KtSuperExpression -> names.classOwner(call)?.let(names::classFqn)
                     is KtNameReferenceExpression ->
-                        variableTypes[receiver.getReferencedName()]?.let(names::qualifyType)
+                        resolveVariableType(receiver, receiver.getReferencedName())
+                            ?.let(names::qualifyType)
                     is KtCallExpression ->
                         (receiver.calleeExpression as? KtSimpleNameExpression)
                             ?.getReferencedName()
@@ -270,6 +252,51 @@ class KotlinPsiSymbolProducer : IndexProducer {
             ?.let {
                 return InvocationTarget(it.fqn, name, null)
             }
+        return null
+    }
+
+    private fun resolveVariableType(useSite: KtElement, name: String): String? {
+        var scope = useSite.parent
+        while (scope != null) {
+            val type =
+                when (scope) {
+                    is KtNamedFunction ->
+                        scope.valueParameters.firstOrNull { it.name == name }?.typeReference?.text
+                    is KtBlockExpression ->
+                        scope.statements
+                            .filterIsInstance<KtProperty>()
+                            .lastOrNull { it.name == name && it.textOffset < useSite.textOffset }
+                            ?.typeReference
+                            ?.text
+                    is KtClass ->
+                        scope.primaryConstructorParameters
+                            .firstOrNull { it.name == name }
+                            ?.typeReference
+                            ?.text
+                            ?: scope.declarations
+                                .filterIsInstance<KtProperty>()
+                                .firstOrNull { it.name == name }
+                                ?.typeReference
+                                ?.text
+                    is KtClassOrObject ->
+                        scope.declarations
+                            .filterIsInstance<KtProperty>()
+                            .firstOrNull { it.name == name }
+                            ?.typeReference
+                            ?.text
+                    is KtFile ->
+                        scope.declarations
+                            .filterIsInstance<KtProperty>()
+                            .firstOrNull { it.name == name }
+                            ?.typeReference
+                            ?.text
+                    else -> null
+                }
+            if (type != null) {
+                return type
+            }
+            scope = scope.parent
+        }
         return null
     }
 

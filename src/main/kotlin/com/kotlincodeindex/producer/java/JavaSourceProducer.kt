@@ -82,12 +82,18 @@ class JavaSourceProducer : IndexProducer {
     ) : TreePathScanner<Unit, Unit>() {
         private val packageName = unit.packageName?.toString().orEmpty()
         private val imports = mutableMapOf<String, String>()
+        private val staticImports = mutableMapOf<String, String>()
+        private val staticWildcardImports = mutableListOf<String>()
         private val classOwners = ArrayDeque<String>()
         private val variableScopes = ArrayDeque<MutableMap<String, String>>()
 
         override fun visitImport(node: ImportTree, data: Unit?) {
             val imported = node.qualifiedIdentifier.toString()
-            if (!imported.endsWith(".*")) {
+            if (node.isStatic && imported.endsWith(".*")) {
+                staticWildcardImports += imported.removeSuffix(".*")
+            } else if (node.isStatic) {
+                staticImports[imported.substringAfterLast('.')] = imported.substringBeforeLast('.')
+            } else if (!imported.endsWith(".*")) {
                 imports[imported.substringAfterLast('.')] = imported
             }
             reference(imported, imported.substringAfterLast('.'), null, node, "import")
@@ -169,8 +175,13 @@ class JavaSourceProducer : IndexProducer {
         private fun resolveInvocation(select: Tree): InvocationTarget? =
             when (select) {
                 is IdentifierTree -> {
-                    val owner = classOwners.lastOrNull() ?: return null
-                    invocationTarget(owner, select.name.toString(), null)
+                    val name = select.name.toString()
+                    val owner =
+                        staticImports[name]
+                            ?: staticWildcardImports.singleOrNull()
+                            ?: classOwners.lastOrNull()
+                            ?: return null
+                    invocationTarget(owner, name, null)
                 }
                 is MemberSelectTree -> {
                     val name = select.identifier.toString()

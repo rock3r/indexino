@@ -82,6 +82,41 @@ class CrossLanguageReferenceTest {
         }
     }
 
+    @Test
+    fun `Kotlin receiver types are resolved in their declaration scope`() {
+        val source =
+            """
+            package sample
+            class FirstRenderer { fun render() {} }
+            class SecondRenderer { fun render() {} }
+            fun renderFirst(model: FirstRenderer) { model.render() }
+            fun renderSecond(model: SecondRenderer) { model.render() }
+            """
+                .trimIndent()
+        val store =
+            XodusCodeIndexStore.open(createTempDirectory("receiver-scope-").resolve("index"))
+        try {
+            val context =
+                IndexBuildContext.forInlineSources(
+                    store,
+                    "abc",
+                    mapOf("src/main/kotlin/sample/Renderers.kt" to source),
+                )
+            ProducerRegistry.forApplications(emptyList()).forEach { it.produce(context, store) }
+
+            val refs =
+                store
+                    .prefixScan("ref:")
+                    .map { it.second }
+                    .filterIsInstance<ReferenceRecord>()
+                    .toList()
+            assertTrue(refs.any { it.symbolFqn == "sample.FirstRenderer#render" })
+            assertTrue(refs.any { it.symbolFqn == "sample.SecondRenderer#render" })
+        } finally {
+            store.close()
+        }
+    }
+
     private fun crossLanguageSources(): Map<String, String> =
         mapOf(
             "src/main/java/sample/JavaGreeter.java" to

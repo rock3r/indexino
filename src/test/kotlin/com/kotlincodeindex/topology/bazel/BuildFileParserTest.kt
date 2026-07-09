@@ -43,6 +43,35 @@ class BuildFileParserTest {
     }
 
     @Test
+    fun `commented resource file entries are not indexed`() {
+        val workspace = createTempDirectory("build-file-parser-commented-resources-")
+        val packageDir = workspace.resolve("app")
+        packageDir.resolve("res/layout/active.xml").toFile().apply {
+            parentFile.mkdirs()
+            writeText("<FrameLayout />")
+        }
+        packageDir
+            .resolve("BUILD.bazel")
+            .toFile()
+            .writeText(
+                """
+                android_library(
+                    name = "app",
+                    resource_files = [
+                        "res/layout/active.xml",
+                        # "res/layout/deleted.xml",
+                    ],
+                )
+                """
+                    .trimIndent()
+            )
+
+        val result =
+            BuildFileParser.parseKotlinSources(packageDir.resolve("BUILD.bazel"), workspace)
+        assertEquals(listOf("app/res/layout/active.xml"), result.paths)
+    }
+
+    @Test
     fun `parses kt_jvm_library srcs from BUILD snippet`() {
         val workspace = Path("src/test/resources/fixtures/bazel")
         val buildFile = workspace.resolve("plugins/foo/ui/BUILD.bazel")

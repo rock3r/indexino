@@ -54,7 +54,9 @@ res:<type>:<name>:<relative-file>:<line>
 ```
 
 `SymbolRecord.fqn` is the stable lookup identity. Types use `package.Type`; members use
-`package.Type#member`; Android resources use `res:type:name`. Callable records retain source
+`package.Type#member`; local Android resources use `res:type:name`. References to resources from
+another package retain that namespace as `res:package:type:name` (for example,
+`res:android:color:white`) so they cannot be mistaken for same-named local resources. Callable records retain source
 signature and arity metadata while their persisted key preserves every overload.
 
 `ReferenceRecord` stores the source language, referenced name, source qualifier, call arity, and

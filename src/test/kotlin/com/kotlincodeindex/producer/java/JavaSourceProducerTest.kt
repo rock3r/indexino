@@ -100,6 +100,37 @@ class JavaSourceProducerTest {
         }
     }
 
+    @Test
+    fun `resolves unqualified calls through static imports`() {
+        val source =
+            """
+            package sample;
+            import static sample.Util.render;
+            class Caller { void call() { render(); } }
+            """
+                .trimIndent()
+
+        withStore { store ->
+            val producer = assertNotNull(ProducerRegistry.get("java-source"))
+            producer.produce(
+                IndexBuildContext.forInlineSources(
+                    store = store,
+                    commitHash = "abc",
+                    sourceFiles = mapOf("Caller.java" to source),
+                )
+            )
+
+            val references =
+                store
+                    .prefixScan("ref:")
+                    .map { it.second }
+                    .filterIsInstance<ReferenceRecord>()
+                    .toList()
+            assertTrue(references.any { it.symbolFqn == "sample.Util#render" })
+            assertTrue(references.none { it.symbolFqn == "sample.Caller#render" })
+        }
+    }
+
     private fun withStore(block: (XodusCodeIndexStore) -> Unit) {
         val store =
             XodusCodeIndexStore.open(createTempDirectory("java-source-producer-").resolve("index"))

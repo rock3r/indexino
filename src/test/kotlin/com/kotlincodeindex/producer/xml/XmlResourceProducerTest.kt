@@ -29,6 +29,7 @@ class XmlResourceProducerTest {
                 <TextView
                     android:id="@+id/title_view"
                     android:text="@string/title"
+                    android:textColor="@android:color/white"
                     android:entries="@array/items" />
             </LinearLayout>
             """
@@ -71,6 +72,8 @@ class XmlResourceProducerTest {
             assertTrue(
                 references.any { it.symbolFqn == "res:array:items" && it.context == "resource" }
             )
+            assertTrue(references.any { it.symbolFqn == "res:android:color:white" })
+            assertTrue(references.none { it.symbolFqn == "res:color:white" })
         }
     }
 

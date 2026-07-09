@@ -90,12 +90,13 @@ class XmlResourceProducer : IndexProducer {
     ) {
         RESOURCE_REFERENCE.findAll(value).forEach { match ->
             val createsId = match.groupValues[CREATE_MARKER_GROUP] == "+"
+            val packageName = match.groupValues[RESOURCE_PACKAGE_GROUP].ifBlank { null }
             val type = match.groupValues[RESOURCE_TYPE_GROUP]
             val name = match.groupValues[RESOURCE_NAME_GROUP]
-            if (createsId && type == "id") {
+            if (createsId && packageName == null && type == "id") {
                 putResource(store, relativePath, type, name, line)
             } else {
-                val target = resourceFqn(type, name)
+                val target = resourceFqn(packageName, type, name)
                 store.put(
                     CodeIndexKey.ref(target, relativePath, line, column),
                     ReferenceRecord(
@@ -106,7 +107,7 @@ class XmlResourceProducer : IndexProducer {
                         context = "resource",
                         language = LANGUAGE,
                         referencedName = name,
-                        qualifier = type,
+                        qualifier = listOfNotNull(packageName, type).joinToString(":"),
                         candidateSymbolFqns = listOf(target),
                     ),
                 )
@@ -164,16 +165,20 @@ class XmlResourceProducer : IndexProducer {
 
     private fun resourceFqn(type: String, name: String): String = "res:$type:$name"
 
+    private fun resourceFqn(packageName: String?, type: String, name: String): String =
+        listOfNotNull("res", packageName, type, name).joinToString(":")
+
     private data class ResourceName(val type: String, val name: String)
 
     private companion object {
         const val LANGUAGE = "xml"
         const val RESOURCE_CHILD_DEPTH = 2
         const val CREATE_MARKER_GROUP = 1
-        const val RESOURCE_TYPE_GROUP = 2
-        const val RESOURCE_NAME_GROUP = 3
+        const val RESOURCE_PACKAGE_GROUP = 2
+        const val RESOURCE_TYPE_GROUP = 3
+        const val RESOURCE_NAME_GROUP = 4
         val RESOURCE_PATH = Regex("(?:^|/)(?:src/[^/]+/)?res/([^/]+)/([^/]+)\\.xml$")
         val RESOURCE_REFERENCE =
-            Regex("[@?](\\+)?(?:[A-Za-z0-9_.]+:)?([A-Za-z0-9_]+)/([A-Za-z0-9_.]+)")
+            Regex("[@?](\\+)?(?:([A-Za-z0-9_.]+):)?([A-Za-z0-9_]+)/([A-Za-z0-9_.]+)")
     }
 }
