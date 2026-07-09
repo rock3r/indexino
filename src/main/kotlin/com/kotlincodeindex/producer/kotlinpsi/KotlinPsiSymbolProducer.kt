@@ -106,6 +106,7 @@ class KotlinPsiSymbolProducer : IndexProducer {
         results += collectClassSymbols(file)
         results += collectFunctionSymbols(file)
         results += collectPropertySymbols(file)
+        results += collectConstructorPropertySymbols(file)
         return results
     }
 
@@ -180,6 +181,35 @@ class KotlinPsiSymbolProducer : IndexProducer {
         }
     }
 
+    private fun collectConstructorPropertySymbols(file: KtFile): List<ResolvedSymbol> = buildList {
+        val names = KotlinSourceNames(file)
+        for (declaration in file.collectDescendantsOfType<KtClass>()) {
+            val owner = names.classFqn(declaration)
+            for (parameter in
+                declaration.primaryConstructorParameters.filter { it.hasValOrVar() }) {
+                val name = parameter.name ?: continue
+                add(
+                    ResolvedSymbol(
+                        fqn = "$owner#$name",
+                        name = name,
+                        line = parameter.lineNumber(),
+                        column = parameter.columnNumber(),
+                        kind = "property",
+                        ownerFqn = owner,
+                        signature = parameter.typeReference?.text,
+                        aliases =
+                            names.propertyAliases(
+                                owner = owner,
+                                name = name,
+                                isVar = parameter.valOrVarKeyword?.text == "var",
+                                declaredType = parameter.typeReference?.text,
+                            ),
+                    )
+                )
+            }
+        }
+    }
+
     private fun indexMemberReferences(
         file: KtFile,
         relativePath: String,
@@ -227,10 +257,8 @@ class KotlinPsiSymbolProducer : IndexProducer {
         val qualifiedParent = call.parent as? KtDotQualifiedExpression
         val receiver = qualifiedParent?.takeIf { it.selectorExpression == call }?.receiverExpression
         if (receiver != null) {
-            val owner = resolveReceiverOwner(call, receiver, names)
-            if (owner != null) {
-                return InvocationTarget("$owner#$name", name, receiver.text)
-            }
+            val owner = resolveReceiverOwner(call, receiver, names) ?: return null
+            return InvocationTarget("$owner#$name", name, receiver.text)
         }
         val classOwner = names.classOwner(call)?.let(names::classFqn)
         symbols
@@ -266,17 +294,35 @@ class KotlinPsiSymbolProducer : IndexProducer {
             is KtDotQualifiedExpression -> {
                 val selfReceiver = receiver.receiverExpression
                 val field = receiver.selectorExpression as? KtNameReferenceExpression
-                if (
-                    (selfReceiver is KtThisExpression || selfReceiver is KtSuperExpression) &&
-                        field != null
-                ) {
-                    resolveVariableType(field, field.getReferencedName())?.let(names::qualifyType)
-                } else {
-                    names.qualifyType(receiver.text)
+                when {
+                    selfReceiver is KtThisExpression && field != null ->
+                        resolveClassPropertyType(field, field.getReferencedName())
+                            ?.let(names::qualifyType)
+                    selfReceiver is KtSuperExpression -> null
+                    else -> names.qualifyType(receiver.text)
                 }
             }
             else -> names.qualifyType(receiver.text)
         }
+
+    private fun resolveClassPropertyType(useSite: KtElement, name: String): String? {
+        var scope = useSite.parent
+        while (scope != null) {
+            if (scope is KtClass) {
+                return scope.primaryConstructorParameters
+                    .firstOrNull { it.hasValOrVar() && it.name == name }
+                    ?.typeReference
+                    ?.text
+                    ?: scope.declarations
+                        .filterIsInstance<KtProperty>()
+                        .firstOrNull { it.name == name }
+                        ?.typeReference
+                        ?.text
+            }
+            scope = scope.parent
+        }
+        return null
+    }
 
     private fun resolveVariableType(useSite: KtElement, name: String): String? {
         var scope = useSite.parent
@@ -406,21 +452,30 @@ private class KotlinSourceNames(
 
     fun propertyAliases(owner: String?, property: KtProperty): List<String> {
         val name = property.name ?: return emptyList()
+        return propertyAliases(owner, name, property.isVar, property.typeReference?.text)
+    }
+
+    fun propertyAliases(
+        owner: String?,
+        name: String,
+        isVar: Boolean,
+        declaredType: String?,
+    ): List<String> {
         val accessorOwner = owner ?: fileFacadeFqn()
         val capitalized = name.replaceFirstChar { it.uppercaseChar() }
-        val declaredType = property.typeReference?.text?.removeSuffix("?")
+        val normalizedType = declaredType?.removeSuffix("?")
         val isBooleanIsProperty =
             name.startsWith("is") &&
                 name.length > IS_PREFIX_LENGTH &&
                 name[IS_PREFIX_LENGTH].isUpperCase() &&
-                (declaredType == null || declaredType in BOOLEAN_TYPE_NAMES)
+                (normalizedType == null || normalizedType in BOOLEAN_TYPE_NAMES)
         return buildList {
             if (isBooleanIsProperty) {
                 add("$accessorOwner#$name")
             } else {
                 add("$accessorOwner#get$capitalized")
             }
-            if (property.isVar) {
+            if (isVar) {
                 val setterName = if (isBooleanIsProperty) name.removePrefix("is") else capitalized
                 add("$accessorOwner#set$setterName")
             }

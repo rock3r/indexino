@@ -209,12 +209,11 @@ class JavaSourceProducerTest {
             class First { void render() {} }
             class Second { void render() {} }
             class Caller {
-                First model;
                 void call() {
-                    { Second model = null; model.render(); }
+                    { Second model = null; model.render(); this.model.render(); }
                     model.render();
-                    this.model.render();
                 }
+                First model;
             }
             """
                 .trimIndent()

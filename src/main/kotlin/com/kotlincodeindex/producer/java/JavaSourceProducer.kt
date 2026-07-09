@@ -87,6 +87,7 @@ class JavaSourceProducer : IndexProducer {
         private val staticWildcardImports = mutableListOf<String>()
         private val classOwners = ArrayDeque<String>()
         private val classMethodNames = ArrayDeque<Set<String>>()
+        private val classFieldTypes = ArrayDeque<Map<String, String>>()
         private val variableScopes = ArrayDeque<MutableMap<String, String>>()
 
         override fun visitImport(node: ImportTree, data: Unit?) {
@@ -124,11 +125,20 @@ class JavaSourceProducer : IndexProducer {
                     .filterNot { it == "<init>" }
                     .toSet()
             )
-            variableScopes.addLast(mutableMapOf())
+            val fields =
+                node.members
+                    .filterIsInstance<VariableTree>()
+                    .mapNotNull { field ->
+                        field.type?.toString()?.let { field.name.toString() to it }
+                    }
+                    .toMap()
+            classFieldTypes.addLast(fields)
+            variableScopes.addLast(fields.toMutableMap())
             try {
                 super.visitClass(node, data)
             } finally {
                 variableScopes.removeLast()
+                classFieldTypes.removeLast()
                 classMethodNames.removeLast()
                 classOwners.removeLast()
             }
@@ -242,15 +252,11 @@ class JavaSourceProducer : IndexProducer {
                 is NewClassTree -> qualifyType(receiver.identifier.toString())
                 is MemberSelectTree -> {
                     val selfReceiver = receiver.expression as? IdentifierTree
-                    if (
-                        selfReceiver?.name?.toString() == "this" ||
-                            selfReceiver?.name?.toString() == "super"
-                    ) {
+                    if (selfReceiver?.name?.toString() == "this") {
                         val fieldName = receiver.identifier.toString()
-                        variableScopes
-                            .reversed()
-                            .firstNotNullOfOrNull { it[fieldName] }
-                            ?.let(::qualifyType)
+                        classFieldTypes.lastOrNull()?.get(fieldName)?.let(::qualifyType)
+                    } else if (selfReceiver?.name?.toString() == "super") {
+                        null
                     } else {
                         qualifyType(receiver.toString())
                     }

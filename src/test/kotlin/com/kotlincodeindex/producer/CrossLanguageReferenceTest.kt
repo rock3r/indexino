@@ -192,8 +192,9 @@ class CrossLanguageReferenceTest {
             """
             package sample
             class Renderer { fun render() {} }
+            class OtherRenderer { fun render() {} }
             class Holder(val renderer: Renderer) {
-                fun call() { this.renderer.render() }
+                fun call(renderer: OtherRenderer) { this.renderer.render() }
             }
             """
                 .trimIndent()
@@ -214,7 +215,53 @@ class CrossLanguageReferenceTest {
                     .filterIsInstance<ReferenceRecord>()
                     .toList()
             assertTrue(refs.any { it.symbolFqn == "sample.Renderer#render" })
+            assertTrue(refs.none { it.symbolFqn == "sample.OtherRenderer#render" })
             assertTrue(refs.none { it.symbolFqn == "this.renderer#render" })
+
+            val symbols =
+                store.prefixScan("sym:").map { it.second }.filterIsInstance<SymbolRecord>().toList()
+            assertTrue(
+                symbols.any {
+                    it.fqn == "sample.Holder#renderer" &&
+                        it.kind == "property" &&
+                        "sample.Holder#getRenderer" in it.aliases
+                }
+            )
+        } finally {
+            store.close()
+        }
+    }
+
+    @Test
+    fun `unresolved Kotlin qualified calls do not fall back to unqualified members`() {
+        val source =
+            """
+            package sample
+            class Holder {
+                val renderer = createRenderer()
+                fun render() {}
+                fun call() { this.renderer.render() }
+            }
+            """
+                .trimIndent()
+        val store =
+            XodusCodeIndexStore.open(createTempDirectory("unresolved-qualified-").resolve("index"))
+        try {
+            val context =
+                IndexBuildContext.forInlineSources(
+                    store,
+                    "abc",
+                    mapOf("src/main/kotlin/sample/Holder.kt" to source),
+                )
+            ProducerRegistry.forApplications(emptyList()).forEach { it.produce(context, store) }
+
+            val refs =
+                store
+                    .prefixScan("ref:")
+                    .map { it.second }
+                    .filterIsInstance<ReferenceRecord>()
+                    .toList()
+            assertTrue(refs.none { it.symbolFqn == "sample.Holder#render" })
         } finally {
             store.close()
         }
