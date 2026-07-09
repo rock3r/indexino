@@ -72,6 +72,30 @@ class BuildFileParserTest {
     }
 
     @Test
+    fun `root BUILD resource paths remain workspace relative`() {
+        val workspace = createTempDirectory("build-file-parser-root-resources-")
+        workspace.resolve("res/layout/main.xml").toFile().apply {
+            parentFile.mkdirs()
+            writeText("<FrameLayout />")
+        }
+        workspace
+            .resolve("BUILD.bazel")
+            .toFile()
+            .writeText(
+                """
+                android_library(
+                    name = "app",
+                    resource_files = ["res/layout/main.xml"],
+                )
+                """
+                    .trimIndent()
+            )
+
+        val result = BuildFileParser.parseKotlinSources(workspace.resolve("BUILD.bazel"), workspace)
+        assertEquals(listOf("res/layout/main.xml"), result.paths)
+    }
+
+    @Test
     fun `parses kt_jvm_library srcs from BUILD snippet`() {
         val workspace = Path("src/test/resources/fixtures/bazel")
         val buildFile = workspace.resolve("plugins/foo/ui/BUILD.bazel")

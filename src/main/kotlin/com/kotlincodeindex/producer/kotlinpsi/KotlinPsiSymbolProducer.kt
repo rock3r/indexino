@@ -12,6 +12,7 @@ import org.jetbrains.kotlin.psi.KtBlockExpression
 import org.jetbrains.kotlin.psi.KtCallExpression
 import org.jetbrains.kotlin.psi.KtCatchClause
 import org.jetbrains.kotlin.psi.KtClass
+import org.jetbrains.kotlin.psi.KtClassBody
 import org.jetbrains.kotlin.psi.KtClassOrObject
 import org.jetbrains.kotlin.psi.KtDotQualifiedExpression
 import org.jetbrains.kotlin.psi.KtElement
@@ -93,7 +94,7 @@ class KotlinPsiSymbolProducer : IndexProducer {
                     language = LANGUAGE,
                     referencedName = target.name,
                     qualifier = target.qualifier,
-                    candidateSymbolFqns = listOf(target.symbolFqn),
+                    candidateSymbolFqns = target.candidates,
                     arity = call.valueArguments.size,
                 ),
             )
@@ -162,7 +163,11 @@ class KotlinPsiSymbolProducer : IndexProducer {
 
     private fun collectPropertySymbols(file: KtFile): List<ResolvedSymbol> = buildList {
         val names = KotlinSourceNames(file)
-        for (property in file.collectDescendantsOfType<KtProperty>()) {
+        val declarations =
+            file.collectDescendantsOfType<KtProperty>().filter {
+                it.parent is KtFile || it.parent is KtClassBody
+            }
+        for (property in declarations) {
             val name = property.name ?: continue
             val owner = names.classOwner(property)?.let(names::classFqn)
             val fqn = owner?.let { "$it#$name" } ?: names.qualify(name)
@@ -272,7 +277,9 @@ class KotlinPsiSymbolProducer : IndexProducer {
                 return InvocationTarget(it.fqn, name, null)
             }
         imports[name]?.let { imported ->
-            return InvocationTarget(imported, name, null)
+            val memberId =
+                "${imported.substringBeforeLast('.')}#${imported.substringAfterLast('.')}"
+            return InvocationTarget(imported, name, null, listOf(imported, memberId))
         }
         return null
     }
@@ -308,11 +315,14 @@ class KotlinPsiSymbolProducer : IndexProducer {
     private fun resolveClassPropertyType(useSite: KtElement, name: String): String? {
         var scope = useSite.parent
         while (scope != null) {
-            if (scope is KtClass) {
-                return scope.primaryConstructorParameters
-                    .firstOrNull { it.hasValOrVar() && it.name == name }
-                    ?.typeReference
-                    ?.text
+            if (scope is KtClassOrObject) {
+                val constructorType =
+                    (scope as? KtClass)
+                        ?.primaryConstructorParameters
+                        ?.firstOrNull { it.hasValOrVar() && it.name == name }
+                        ?.typeReference
+                        ?.text
+                return constructorType
                     ?: scope.declarations
                         .filterIsInstance<KtProperty>()
                         .firstOrNull { it.name == name }
@@ -402,6 +412,7 @@ class KotlinPsiSymbolProducer : IndexProducer {
         val symbolFqn: String,
         val name: String,
         val qualifier: String?,
+        val candidates: List<String> = listOf(symbolFqn),
     )
 
     private companion object {

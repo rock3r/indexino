@@ -159,7 +159,7 @@ class CrossLanguageReferenceTest {
         val source =
             """
             package sample
-            import api.render
+            import sample.Util.render
             class LocalRenderer { fun render() {} }
             fun callImported() { render() }
             """
@@ -180,7 +180,13 @@ class CrossLanguageReferenceTest {
                     .map { it.second }
                     .filterIsInstance<ReferenceRecord>()
                     .toList()
-            assertTrue(refs.any { it.symbolFqn == "api.render" && it.context == "call" })
+            assertTrue(
+                refs.any {
+                    it.symbolFqn == "sample.Util.render" &&
+                        "sample.Util#render" in it.candidateSymbolFqns &&
+                        it.context == "call"
+                }
+            )
         } finally {
             store.close()
         }
@@ -262,6 +268,75 @@ class CrossLanguageReferenceTest {
                     .filterIsInstance<ReferenceRecord>()
                     .toList()
             assertTrue(refs.none { it.symbolFqn == "sample.Holder#render" })
+        } finally {
+            store.close()
+        }
+    }
+
+    @Test
+    fun `Kotlin object properties resolve before enclosing class properties`() {
+        val source =
+            """
+            package sample
+            class Renderer { fun render() {} }
+            class OtherRenderer { fun render() {} }
+            class Holder(val renderer: OtherRenderer) {
+                companion object {
+                    val renderer: Renderer = Renderer()
+                    fun call() { this.renderer.render() }
+                }
+            }
+            """
+                .trimIndent()
+        val store =
+            XodusCodeIndexStore.open(createTempDirectory("object-property-").resolve("index"))
+        try {
+            val context =
+                IndexBuildContext.forInlineSources(
+                    store,
+                    "abc",
+                    mapOf("src/main/kotlin/sample/Holder.kt" to source),
+                )
+            ProducerRegistry.forApplications(emptyList()).forEach { it.produce(context, store) }
+
+            val refs =
+                store
+                    .prefixScan("ref:")
+                    .map { it.second }
+                    .filterIsInstance<ReferenceRecord>()
+                    .toList()
+            assertTrue(refs.any { it.symbolFqn == "sample.Renderer#render" })
+            assertTrue(refs.none { it.symbolFqn == "sample.OtherRenderer#render" })
+        } finally {
+            store.close()
+        }
+    }
+
+    @Test
+    fun `Kotlin local properties are not persisted as member symbols`() {
+        val source =
+            """
+            package sample
+            class Renderer
+            class Holder {
+                fun call() { val model: Renderer = Renderer() }
+            }
+            """
+                .trimIndent()
+        val store =
+            XodusCodeIndexStore.open(createTempDirectory("local-property-").resolve("index"))
+        try {
+            val context =
+                IndexBuildContext.forInlineSources(
+                    store,
+                    "abc",
+                    mapOf("src/main/kotlin/sample/Holder.kt" to source),
+                )
+            ProducerRegistry.forApplications(emptyList()).forEach { it.produce(context, store) }
+
+            val symbols =
+                store.prefixScan("sym:").map { it.second }.filterIsInstance<SymbolRecord>().toList()
+            assertTrue(symbols.none { it.fqn == "sample.Holder#model" })
         } finally {
             store.close()
         }

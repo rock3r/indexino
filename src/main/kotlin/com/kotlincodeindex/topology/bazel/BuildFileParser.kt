@@ -25,6 +25,7 @@ object BuildFileParser {
     fun parseKotlinSources(buildFile: Path, workspaceRoot: Path): BuildParseResult {
         val packageDir = checkNotNull(buildFile.parent) { "BUILD file has no parent: $buildFile" }
         val packageRelative = workspaceRoot.relativize(packageDir).toString().replace('\\', '/')
+        val packagePrefix = packageRelative.takeIf { it.isNotBlank() }?.plus('/').orEmpty()
         val content = buildFile.readText()
         val paths = linkedSetOf<String>()
         val warnings = mutableListOf<String>()
@@ -53,18 +54,18 @@ object BuildFileParser {
             }
 
             included.filter(::isIndexablePath).forEach { relative ->
-                paths += "$packageRelative/$relative"
+                paths += "$packagePrefix$relative"
             }
         }
 
         for (literal in extractLiteralSrcs(content)) {
             if (isIndexablePath(literal) && !literal.contains('*')) {
-                paths += "$packageRelative/$literal"
+                paths += "$packagePrefix$literal"
             }
         }
 
         for (relative in extractResourceFiles(content, packageDir)) {
-            paths += "$packageRelative/$relative"
+            paths += "$packagePrefix$relative"
         }
 
         return BuildParseResult(paths.toList(), warnings)
