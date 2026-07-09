@@ -129,6 +129,37 @@ class BuildFileParserTest {
     }
 
     @Test
+    fun `resource assignment without trailing comma stops at rule boundary`() {
+        val workspace = createTempDirectory("build-file-parser-resource-boundary-")
+        val packageDir = workspace.resolve("app")
+        packageDir.resolve("res/layout/main.xml").toFile().apply {
+            parentFile.mkdirs()
+            writeText("<FrameLayout />")
+        }
+        packageDir.resolve("other/later.xml").toFile().apply {
+            parentFile.mkdirs()
+            writeText("<ignored />")
+        }
+        packageDir
+            .resolve("BUILD.bazel")
+            .toFile()
+            .writeText(
+                """
+                android_library(
+                    name = "app",
+                    resource_files = ["res/layout/main.xml"]
+                )
+                LATER_XML = "other/later.xml"
+                """
+                    .trimIndent()
+            )
+
+        val result =
+            BuildFileParser.parseKotlinSources(packageDir.resolve("BUILD.bazel"), workspace)
+        assertEquals(listOf("app/res/layout/main.xml"), result.paths)
+    }
+
+    @Test
     fun `parses kt_jvm_library srcs from BUILD snippet`() {
         val workspace = Path("src/test/resources/fixtures/bazel")
         val buildFile = workspace.resolve("plugins/foo/ui/BUILD.bazel")

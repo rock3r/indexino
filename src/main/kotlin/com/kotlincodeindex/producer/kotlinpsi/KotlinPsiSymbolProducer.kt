@@ -139,7 +139,11 @@ class KotlinPsiSymbolProducer : IndexProducer {
 
     private fun collectFunctionSymbols(file: KtFile): List<ResolvedSymbol> = buildList {
         val names = KotlinSourceNames(file)
-        for (function in file.collectDescendantsOfType<KtNamedFunction>()) {
+        val declarations =
+            file.collectDescendantsOfType<KtNamedFunction>().filter {
+                it.parent is KtFile || it.parent is KtClassBody
+            }
+        for (function in declarations) {
             val name = function.name ?: continue
             val owner = names.classOwner(function)?.let(names::classFqn)
             val fqn = owner?.let { "$it#$name" } ?: names.qualify(name)

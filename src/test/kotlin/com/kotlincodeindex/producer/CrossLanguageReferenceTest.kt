@@ -324,7 +324,11 @@ class CrossLanguageReferenceTest {
             package sample
             class Renderer
             class Holder {
-                fun call() { val model: Renderer = Renderer() }
+                fun call() {
+                    fun helper() {}
+                    helper()
+                    val model: Renderer = Renderer()
+                }
             }
             """
                 .trimIndent()
@@ -342,6 +346,14 @@ class CrossLanguageReferenceTest {
             val symbols =
                 store.prefixScan("sym:").map { it.second }.filterIsInstance<SymbolRecord>().toList()
             assertTrue(symbols.none { it.fqn == "sample.Holder#model" })
+            assertTrue(symbols.none { it.fqn == "sample.Holder#helper" })
+            val refs =
+                store
+                    .prefixScan("ref:")
+                    .map { it.second }
+                    .filterIsInstance<ReferenceRecord>()
+                    .toList()
+            assertTrue(refs.none { it.symbolFqn == "sample.Holder#helper" })
         } finally {
             store.close()
         }

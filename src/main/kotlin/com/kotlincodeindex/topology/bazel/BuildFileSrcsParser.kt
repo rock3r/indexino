@@ -41,6 +41,9 @@ internal object BuildFileSrcsParser {
                 continue
             }
             if (inString == null) {
+                if (ch == ')' && depth == 0) {
+                    return index
+                }
                 depth = adjustSrcsDepth(ch, depth)
                 if (ch == ',' && depth == 0) {
                     return index
