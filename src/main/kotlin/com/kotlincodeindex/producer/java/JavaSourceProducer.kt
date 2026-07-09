@@ -7,6 +7,7 @@ import com.kotlincodeindex.core.store.CodeIndexStore
 import com.kotlincodeindex.producer.IndexBuildContext
 import com.kotlincodeindex.producer.IndexProducer
 import com.kotlincodeindex.producer.SourceRecordCleanup
+import com.sun.source.tree.BlockTree
 import com.sun.source.tree.ClassTree
 import com.sun.source.tree.CompilationUnitTree
 import com.sun.source.tree.IdentifierTree
@@ -85,10 +86,17 @@ class JavaSourceProducer : IndexProducer {
         private val staticImports = mutableMapOf<String, String>()
         private val staticWildcardImports = mutableListOf<String>()
         private val classOwners = ArrayDeque<String>()
+        private val classMethodNames = ArrayDeque<Set<String>>()
         private val variableScopes = ArrayDeque<MutableMap<String, String>>()
 
         override fun visitImport(node: ImportTree, data: Unit?) {
             val imported = node.qualifiedIdentifier.toString()
+            val target =
+                if (node.isStatic && !imported.endsWith(".*")) {
+                    "${imported.substringBeforeLast('.')}#${imported.substringAfterLast('.')}"
+                } else {
+                    imported
+                }
             if (node.isStatic && imported.endsWith(".*")) {
                 staticWildcardImports += imported.removeSuffix(".*")
             } else if (node.isStatic) {
@@ -96,7 +104,7 @@ class JavaSourceProducer : IndexProducer {
             } else if (!imported.endsWith(".*")) {
                 imports[imported.substringAfterLast('.')] = imported
             }
-            reference(imported, imported.substringAfterLast('.'), null, node, "import")
+            reference(target, imported.substringAfterLast('.'), null, node, "import")
             super.visitImport(node, data)
         }
 
@@ -109,11 +117,19 @@ class JavaSourceProducer : IndexProducer {
             val fqn = if (owner == null) qualify(name) else "$owner.$name"
             symbol(fqn, name, classKind(node.kind), node, ownerFqn = owner)
             classOwners.addLast(fqn)
+            classMethodNames.addLast(
+                node.members
+                    .filterIsInstance<MethodTree>()
+                    .map { it.name.toString() }
+                    .filterNot { it == "<init>" }
+                    .toSet()
+            )
             variableScopes.addLast(mutableMapOf())
             try {
                 super.visitClass(node, data)
             } finally {
                 variableScopes.removeLast()
+                classMethodNames.removeLast()
                 classOwners.removeLast()
             }
         }
@@ -156,6 +172,15 @@ class JavaSourceProducer : IndexProducer {
             super.visitVariable(node, data)
         }
 
+        override fun visitBlock(node: BlockTree, data: Unit?) {
+            variableScopes.addLast(mutableMapOf())
+            try {
+                super.visitBlock(node, data)
+            } finally {
+                variableScopes.removeLast()
+            }
+        }
+
         override fun visitMethodInvocation(node: MethodInvocationTree, data: Unit?) {
             val target = resolveInvocation(node.methodSelect)
             if (target != null) {
@@ -176,12 +201,22 @@ class JavaSourceProducer : IndexProducer {
             when (select) {
                 is IdentifierTree -> {
                     val name = select.name.toString()
-                    val owner =
-                        staticImports[name]
-                            ?: staticWildcardImports.singleOrNull()
-                            ?: classOwners.lastOrNull()
-                            ?: return null
-                    invocationTarget(owner, name, null)
+                    val classOwner = classOwners.lastOrNull() ?: return null
+                    val explicitStaticOwner = staticImports[name]
+                    when {
+                        explicitStaticOwner != null ->
+                            invocationTarget(explicitStaticOwner, name, null)
+                        name in classMethodNames.lastOrNull().orEmpty() ->
+                            invocationTarget(classOwner, name, null)
+                        staticWildcardImports.isNotEmpty() ->
+                            invocationTarget(
+                                staticWildcardImports.first(),
+                                name,
+                                null,
+                                staticWildcardImports,
+                            )
+                        else -> invocationTarget(classOwner, name, null)
+                    }
                 }
                 is MemberSelectTree -> {
                     val name = select.identifier.toString()
@@ -221,29 +256,23 @@ class JavaSourceProducer : IndexProducer {
             owner: String,
             name: String,
             qualifier: String?,
+            candidateOwners: List<String> = listOf(owner),
         ): InvocationTarget {
             val direct = "$owner#$name"
-            val property = javaBeanPropertyName(name)?.let { "$owner#$it" }
+            val propertyName = javaBeanPropertyName(name)
             return InvocationTarget(
                 direct,
                 name,
                 qualifier,
-                listOfNotNull(direct, property).distinct(),
+                candidateOwners
+                    .flatMap { candidateOwner ->
+                        listOfNotNull(
+                            "$candidateOwner#$name",
+                            propertyName?.let { "$candidateOwner#$it" },
+                        )
+                    }
+                    .distinct(),
             )
-        }
-
-        private fun javaBeanPropertyName(name: String): String? {
-            val stem =
-                when {
-                    name.startsWith("get") && name.length > GETTER_PREFIX_LENGTH ->
-                        name.removePrefix("get")
-                    name.startsWith("set") && name.length > SETTER_PREFIX_LENGTH ->
-                        name.removePrefix("set")
-                    name.startsWith("is") && name.length > BOOLEAN_PREFIX_LENGTH ->
-                        name.removePrefix("is")
-                    else -> return null
-                }
-            return stem.replaceFirstChar { it.lowercaseChar() }
         }
 
         private fun symbol(
@@ -331,8 +360,20 @@ class JavaSourceProducer : IndexProducer {
 
     private companion object {
         const val LANGUAGE = "java"
-        const val GETTER_PREFIX_LENGTH = 3
-        const val SETTER_PREFIX_LENGTH = 3
-        const val BOOLEAN_PREFIX_LENGTH = 2
     }
 }
+
+private fun javaBeanPropertyName(name: String): String? {
+    val stem =
+        when {
+            name.startsWith("get") && name.length > GETTER_PREFIX_LENGTH -> name.removePrefix("get")
+            name.startsWith("set") && name.length > SETTER_PREFIX_LENGTH -> name.removePrefix("set")
+            name.startsWith("is") && name.length > BOOLEAN_PREFIX_LENGTH -> name.removePrefix("is")
+            else -> return null
+        }
+    return stem.replaceFirstChar { it.lowercaseChar() }
+}
+
+private const val GETTER_PREFIX_LENGTH = 3
+private const val SETTER_PREFIX_LENGTH = 3
+private const val BOOLEAN_PREFIX_LENGTH = 2

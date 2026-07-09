@@ -117,6 +117,43 @@ class CrossLanguageReferenceTest {
         }
     }
 
+    @Test
+    fun `Kotlin lambda and catch receiver types use their lexical bindings`() {
+        val source =
+            """
+            package sample
+            class Item { fun render() {} }
+            class RenderFailure : Exception() { fun render() {} }
+            fun render(items: List<Item>) {
+                items.forEach { item: Item -> item.render() }
+                try { error("failed") } catch (failure: RenderFailure) { failure.render() }
+            }
+            """
+                .trimIndent()
+        val store =
+            XodusCodeIndexStore.open(createTempDirectory("lexical-bindings-").resolve("index"))
+        try {
+            val context =
+                IndexBuildContext.forInlineSources(
+                    store,
+                    "abc",
+                    mapOf("src/main/kotlin/sample/Bindings.kt" to source),
+                )
+            ProducerRegistry.forApplications(emptyList()).forEach { it.produce(context, store) }
+
+            val refs =
+                store
+                    .prefixScan("ref:")
+                    .map { it.second }
+                    .filterIsInstance<ReferenceRecord>()
+                    .toList()
+            assertTrue(refs.any { it.symbolFqn == "sample.Item#render" })
+            assertTrue(refs.any { it.symbolFqn == "sample.RenderFailure#render" })
+        } finally {
+            store.close()
+        }
+    }
+
     private fun crossLanguageSources(): Map<String, String> =
         mapOf(
             "src/main/java/sample/JavaGreeter.java" to

@@ -10,10 +10,13 @@ import com.kotlincodeindex.producer.IndexProducer
 import com.kotlincodeindex.producer.SourceRecordCleanup
 import org.jetbrains.kotlin.psi.KtBlockExpression
 import org.jetbrains.kotlin.psi.KtCallExpression
+import org.jetbrains.kotlin.psi.KtCatchClause
 import org.jetbrains.kotlin.psi.KtClass
 import org.jetbrains.kotlin.psi.KtClassOrObject
 import org.jetbrains.kotlin.psi.KtElement
 import org.jetbrains.kotlin.psi.KtFile
+import org.jetbrains.kotlin.psi.KtForExpression
+import org.jetbrains.kotlin.psi.KtFunctionLiteral
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
 import org.jetbrains.kotlin.psi.KtNamedFunction
 import org.jetbrains.kotlin.psi.KtProperty
@@ -262,6 +265,12 @@ class KotlinPsiSymbolProducer : IndexProducer {
                 when (scope) {
                     is KtNamedFunction ->
                         scope.valueParameters.firstOrNull { it.name == name }?.typeReference?.text
+                    is KtFunctionLiteral ->
+                        scope.valueParameters.firstOrNull { it.name == name }?.typeReference?.text
+                    is KtCatchClause ->
+                        scope.catchParameter?.takeIf { it.name == name }?.typeReference?.text
+                    is KtForExpression ->
+                        scope.loopParameter?.takeIf { it.name == name }?.typeReference?.text
                     is KtBlockExpression ->
                         scope.statements
                             .filterIsInstance<KtProperty>()

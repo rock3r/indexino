@@ -126,8 +126,81 @@ class JavaSourceProducerTest {
                     .map { it.second }
                     .filterIsInstance<ReferenceRecord>()
                     .toList()
-            assertTrue(references.any { it.symbolFqn == "sample.Util#render" })
+            assertEquals(2, references.count { it.symbolFqn == "sample.Util#render" })
+            assertTrue(references.none { it.symbolFqn == "sample.Util.render" })
             assertTrue(references.none { it.symbolFqn == "sample.Caller#render" })
+        }
+    }
+
+    @Test
+    fun `prefers local methods over static wildcard imports`() {
+        val source =
+            """
+            package sample;
+            import static sample.Util.*;
+            class Caller {
+                void render() {}
+                void call() { render(); }
+            }
+            """
+                .trimIndent()
+
+        withStore { store ->
+            val producer = assertNotNull(ProducerRegistry.get("java-source"))
+            producer.produce(
+                IndexBuildContext.forInlineSources(
+                    store = store,
+                    commitHash = "abc",
+                    sourceFiles = mapOf("Caller.java" to source),
+                )
+            )
+
+            val references =
+                store
+                    .prefixScan("ref:")
+                    .map { it.second }
+                    .filterIsInstance<ReferenceRecord>()
+                    .toList()
+            assertTrue(references.any { it.symbolFqn == "sample.Caller#render" })
+            assertTrue(references.none { it.symbolFqn == "sample.Util#render" })
+        }
+    }
+
+    @Test
+    fun `Java local receiver types expire at block boundaries`() {
+        val source =
+            """
+            package sample;
+            class First { void render() {} }
+            class Second { void render() {} }
+            class Caller {
+                First model;
+                void call() {
+                    { Second model = null; model.render(); }
+                    model.render();
+                }
+            }
+            """
+                .trimIndent()
+
+        withStore { store ->
+            val producer = assertNotNull(ProducerRegistry.get("java-source"))
+            producer.produce(
+                IndexBuildContext.forInlineSources(
+                    store = store,
+                    commitHash = "abc",
+                    sourceFiles = mapOf("Caller.java" to source),
+                )
+            )
+
+            val references =
+                store
+                    .prefixScan("ref:")
+                    .map { it.second }
+                    .filterIsInstance<ReferenceRecord>()
+                    .toList()
+            assertEquals(1, references.count { it.symbolFqn == "sample.Second#render" })
+            assertEquals(1, references.count { it.symbolFqn == "sample.First#render" })
         }
     }
 
