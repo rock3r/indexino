@@ -159,9 +159,13 @@ class CrossLanguageReferenceTest {
         val source =
             """
             package sample
-            import sample.Util.render
+            import sample.Util.render as draw
+            import api.Renderer as UiRenderer
             class LocalRenderer { fun render() {} }
-            fun callImported() { render() }
+            fun callImported(renderer: UiRenderer) {
+                draw()
+                renderer.render()
+            }
             """
                 .trimIndent()
         val store = XodusCodeIndexStore.open(createTempDirectory("imported-call-").resolve("index"))
@@ -187,6 +191,7 @@ class CrossLanguageReferenceTest {
                         it.context == "call"
                 }
             )
+            assertTrue(refs.any { it.symbolFqn == "api.Renderer#render" })
         } finally {
             store.close()
         }
@@ -374,6 +379,41 @@ class CrossLanguageReferenceTest {
                     .toList()
             assertTrue(refs.any { it.symbolFqn == "sample.SecondRenderer#render" })
             assertTrue(refs.none { it.symbolFqn == "sample.FirstRenderer#render" })
+        } finally {
+            store.close()
+        }
+    }
+
+    @Test
+    fun `Kotlin constructor parameters resolve in initializers and init blocks`() {
+        val source =
+            """
+            package sample
+            class Renderer { fun render() {} }
+            class Holder(renderer: Renderer) {
+                val rendered = renderer.render()
+                init { renderer.render() }
+            }
+            """
+                .trimIndent()
+        val store =
+            XodusCodeIndexStore.open(createTempDirectory("constructor-init-").resolve("index"))
+        try {
+            val context =
+                IndexBuildContext.forInlineSources(
+                    store,
+                    "abc",
+                    mapOf("src/main/kotlin/sample/Holder.kt" to source),
+                )
+            ProducerRegistry.forApplications(emptyList()).forEach { it.produce(context, store) }
+
+            val refs =
+                store
+                    .prefixScan("ref:")
+                    .map { it.second }
+                    .filterIsInstance<ReferenceRecord>()
+                    .toList()
+            assertTrue(refs.count { it.symbolFqn == "sample.Renderer#render" } == 2)
         } finally {
             store.close()
         }

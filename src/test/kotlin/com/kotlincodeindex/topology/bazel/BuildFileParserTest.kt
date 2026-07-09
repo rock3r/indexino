@@ -96,6 +96,39 @@ class BuildFileParserTest {
     }
 
     @Test
+    fun `concatenated resource globs are indexed`() {
+        val workspace = createTempDirectory("build-file-parser-concat-resources-")
+        val packageDir = workspace.resolve("app")
+        packageDir.resolve("res/layout/main.xml").toFile().apply {
+            parentFile.mkdirs()
+            writeText("<FrameLayout />")
+        }
+        packageDir.resolve("feature_res/layout/feature.xml").toFile().apply {
+            parentFile.mkdirs()
+            writeText("<FrameLayout />")
+        }
+        packageDir
+            .resolve("BUILD.bazel")
+            .toFile()
+            .writeText(
+                """
+                android_library(
+                    name = "app",
+                    resource_files = glob(["res/**/*.xml"]) + glob(["feature_res/**/*.xml"]),
+                )
+                """
+                    .trimIndent()
+            )
+
+        val result =
+            BuildFileParser.parseKotlinSources(packageDir.resolve("BUILD.bazel"), workspace)
+        assertEquals(
+            listOf("app/feature_res/layout/feature.xml", "app/res/layout/main.xml"),
+            result.paths.sorted(),
+        )
+    }
+
+    @Test
     fun `parses kt_jvm_library srcs from BUILD snippet`() {
         val workspace = Path("src/test/resources/fixtures/bazel")
         val buildFile = workspace.resolve("plugins/foo/ui/BUILD.bazel")

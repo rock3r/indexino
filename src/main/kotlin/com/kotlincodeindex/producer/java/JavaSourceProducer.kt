@@ -180,7 +180,9 @@ class JavaSourceProducer : IndexProducer {
         }
 
         override fun visitVariable(node: VariableTree, data: Unit?) {
-            variableScopes.lastOrNull()?.put(node.name.toString(), node.type.toString())
+            node.type?.toString()?.let { type ->
+                variableScopes.lastOrNull()?.put(node.name.toString(), type)
+            }
             if (currentPath.parentPath?.leaf is ClassTree) {
                 val owner = classOwners.lastOrNull()
                 if (owner != null) {

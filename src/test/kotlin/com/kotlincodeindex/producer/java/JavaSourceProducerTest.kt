@@ -285,6 +285,37 @@ class JavaSourceProducerTest {
         }
     }
 
+    @Test
+    fun `implicit Java lambda parameters do not abort indexing`() {
+        val source =
+            """
+            package sample;
+            import java.util.List;
+            class Item { void render() {} }
+            class Caller {
+                void call(List<Item> items) {
+                    items.forEach(item -> item.render());
+                }
+            }
+            """
+                .trimIndent()
+
+        withStore { store ->
+            val producer = assertNotNull(ProducerRegistry.get("java-source"))
+            producer.produce(
+                IndexBuildContext.forInlineSources(
+                    store = store,
+                    commitHash = "abc",
+                    sourceFiles = mapOf("Caller.java" to source),
+                )
+            )
+
+            val symbols =
+                store.prefixScan("sym:").map { it.second }.filterIsInstance<SymbolRecord>().toList()
+            assertTrue(symbols.any { it.fqn == "sample.Caller#call" })
+        }
+    }
+
     private fun withStore(block: (XodusCodeIndexStore) -> Unit) {
         val store =
             XodusCodeIndexStore.open(createTempDirectory("java-source-producer-").resolve("index"))

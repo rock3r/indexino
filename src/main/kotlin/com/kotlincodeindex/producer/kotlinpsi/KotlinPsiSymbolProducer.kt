@@ -8,6 +8,7 @@ import com.kotlincodeindex.parse.KotlinPsiParser
 import com.kotlincodeindex.producer.IndexBuildContext
 import com.kotlincodeindex.producer.IndexProducer
 import com.kotlincodeindex.producer.SourceRecordCleanup
+import org.jetbrains.kotlin.com.intellij.psi.PsiElement
 import org.jetbrains.kotlin.psi.KtBlockExpression
 import org.jetbrains.kotlin.psi.KtCallExpression
 import org.jetbrains.kotlin.psi.KtCatchClause
@@ -76,9 +77,15 @@ class KotlinPsiSymbolProducer : IndexProducer {
 
         val imports =
             file.importDirectives
-                .mapNotNull { it.importPath?.pathStr }
-                .filterNot { it.endsWith(".*") }
-                .associateBy { it.substringAfterLast('.') }
+                .mapNotNull { directive ->
+                    val path = directive.importPath?.pathStr ?: return@mapNotNull null
+                    if (path.endsWith(".*")) {
+                        null
+                    } else {
+                        (directive.aliasName ?: path.substringAfterLast('.')) to path
+                    }
+                }
+                .toMap()
         for (call in file.collectDescendantsOfType<KtCallExpression>()) {
             val target = resolveCall(file, call, symbols, imports) ?: continue
             val line = call.lineNumber()
@@ -336,47 +343,12 @@ class KotlinPsiSymbolProducer : IndexProducer {
 
     private fun resolveVariableType(useSite: KtElement, name: String): String? {
         var scope = useSite.parent
+        var insideMemberFunction = false
         while (scope != null) {
-            val type =
-                when (scope) {
-                    is KtNamedFunction ->
-                        scope.valueParameters.firstOrNull { it.name == name }?.typeReference?.text
-                    is KtFunctionLiteral ->
-                        scope.valueParameters.firstOrNull { it.name == name }?.typeReference?.text
-                    is KtCatchClause ->
-                        scope.catchParameter?.takeIf { it.name == name }?.typeReference?.text
-                    is KtForExpression ->
-                        scope.loopParameter?.takeIf { it.name == name }?.typeReference?.text
-                    is KtBlockExpression ->
-                        scope.statements
-                            .filterIsInstance<KtProperty>()
-                            .lastOrNull { it.name == name && it.textOffset < useSite.textOffset }
-                            ?.typeReference
-                            ?.text
-                    is KtClass ->
-                        scope.declarations
-                            .filterIsInstance<KtProperty>()
-                            .firstOrNull { it.name == name }
-                            ?.typeReference
-                            ?.text
-                            ?: scope.primaryConstructorParameters
-                                .firstOrNull { it.hasValOrVar() && it.name == name }
-                                ?.typeReference
-                                ?.text
-                    is KtClassOrObject ->
-                        scope.declarations
-                            .filterIsInstance<KtProperty>()
-                            .firstOrNull { it.name == name }
-                            ?.typeReference
-                            ?.text
-                    is KtFile ->
-                        scope.declarations
-                            .filterIsInstance<KtProperty>()
-                            .firstOrNull { it.name == name }
-                            ?.typeReference
-                            ?.text
-                    else -> null
-                }
+            if (scope is KtNamedFunction && scope.parent is KtClassBody) {
+                insideMemberFunction = true
+            }
+            val type = variableTypeInScope(scope, useSite, name, insideMemberFunction)
             if (type != null) {
                 return type
             }
@@ -384,6 +356,54 @@ class KotlinPsiSymbolProducer : IndexProducer {
         }
         return null
     }
+
+    private fun variableTypeInScope(
+        scope: PsiElement,
+        useSite: KtElement,
+        name: String,
+        insideMemberFunction: Boolean,
+    ): String? =
+        when (scope) {
+            is KtNamedFunction ->
+                scope.valueParameters.firstOrNull { it.name == name }?.typeReference?.text
+            is KtFunctionLiteral ->
+                scope.valueParameters.firstOrNull { it.name == name }?.typeReference?.text
+            is KtCatchClause ->
+                scope.catchParameter?.takeIf { it.name == name }?.typeReference?.text
+            is KtForExpression ->
+                scope.loopParameter?.takeIf { it.name == name }?.typeReference?.text
+            is KtBlockExpression ->
+                scope.statements
+                    .filterIsInstance<KtProperty>()
+                    .lastOrNull { it.name == name && it.textOffset < useSite.textOffset }
+                    ?.typeReference
+                    ?.text
+            is KtClass ->
+                scope.declarations
+                    .filterIsInstance<KtProperty>()
+                    .firstOrNull { it.name == name }
+                    ?.typeReference
+                    ?.text
+                    ?: scope.primaryConstructorParameters
+                        .firstOrNull {
+                            it.name == name && (it.hasValOrVar() || !insideMemberFunction)
+                        }
+                        ?.typeReference
+                        ?.text
+            is KtClassOrObject ->
+                scope.declarations
+                    .filterIsInstance<KtProperty>()
+                    .firstOrNull { it.name == name }
+                    ?.typeReference
+                    ?.text
+            is KtFile ->
+                scope.declarations
+                    .filterIsInstance<KtProperty>()
+                    .firstOrNull { it.name == name }
+                    ?.typeReference
+                    ?.text
+            else -> null
+        }
 
     private fun KtElement.lineNumber(): Int {
         val document = containingFile.viewProvider.document ?: return 1
