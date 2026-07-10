@@ -4,6 +4,7 @@ import com.kotlincodeindex.core.key.CodeIndexKey
 import com.kotlincodeindex.core.record.ReferenceRecord
 import com.kotlincodeindex.core.record.SymbolRecord
 import com.kotlincodeindex.core.store.CodeIndexStore
+import com.kotlincodeindex.core.store.hasSymbol
 import com.kotlincodeindex.parse.KotlinPsiParser
 import com.kotlincodeindex.producer.IndexBuildContext
 import com.kotlincodeindex.producer.IndexProducer
@@ -485,9 +486,6 @@ class KotlinPsiSymbolProducer : IndexProducer {
         const val BOOLEAN_PREFIX_LENGTH = 2
     }
 }
-
-private fun CodeIndexStore.hasSymbol(fqn: String): Boolean =
-    prefixScan("sym:$fqn:").any { (_, record) -> record is SymbolRecord && record.fqn == fqn }
 
 private class KotlinSourceNames(
     private val file: KtFile,

@@ -4,6 +4,7 @@ import com.kotlincodeindex.core.key.CodeIndexKey
 import com.kotlincodeindex.core.record.ReferenceRecord
 import com.kotlincodeindex.core.record.SymbolRecord
 import com.kotlincodeindex.core.store.CodeIndexStore
+import com.kotlincodeindex.core.store.hasSymbol
 import com.kotlincodeindex.producer.IndexBuildContext
 import com.kotlincodeindex.producer.IndexProducer
 import com.kotlincodeindex.producer.SourceRecordCleanup
@@ -467,9 +468,6 @@ class JavaSourceProducer : IndexProducer {
         const val LANGUAGE = "java"
     }
 }
-
-private fun CodeIndexStore.hasSymbol(fqn: String): Boolean =
-    prefixScan("sym:$fqn:").any { (_, record) -> record is SymbolRecord && record.fqn == fqn }
 
 private fun javaBeanPropertyName(name: String): String? {
     val stem =
