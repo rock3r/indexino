@@ -49,25 +49,33 @@ class KotlinPsiSymbolProducer : IndexProducer {
                 context.sourceFiles.filter {
                     it.endsWith(".kt") && it in context.changedSourceFiles
                 }
-            ktFiles.forEachIndexed { index, relativePath ->
+            val indexedFiles = ktFiles.mapIndexed { index, relativePath ->
                 context.reportFileProgress(index + 1, ktFiles.size, relativePath)
-                indexFile(
-                    parser.parseFile(relativePath, context.readSource(relativePath)),
-                    relativePath,
-                    store,
-                )
+                val file = parser.parseFile(relativePath, context.readSource(relativePath))
+                IndexedKotlinFile(relativePath, file, collectSymbols(file))
             }
+            val projectSymbols = indexedFiles.flatMap { it.symbols }
+            indexedFiles.forEach { indexedFile -> indexFile(indexedFile, projectSymbols, store) }
         }
     }
 
-    private fun indexFile(file: KtFile, relativePath: String, store: CodeIndexStore) {
-        val symbols = collectSymbols(file)
-        symbols.forEach { symbol ->
+    private fun indexFile(
+        indexedFile: IndexedKotlinFile,
+        projectSymbols: List<ResolvedSymbol>,
+        store: CodeIndexStore,
+    ) {
+        val file = indexedFile.file
+        indexedFile.symbols.forEach { symbol ->
             store.put(
-                CodeIndexKey.symbolDefinition(symbol.fqn, relativePath, symbol.line, symbol.column),
+                CodeIndexKey.symbolDefinition(
+                    symbol.fqn,
+                    indexedFile.relativePath,
+                    symbol.line,
+                    symbol.column,
+                ),
                 SymbolRecord(
                     fqn = symbol.fqn,
-                    relativeFile = relativePath,
+                    relativeFile = indexedFile.relativePath,
                     line = symbol.line,
                     kind = symbol.kind,
                     name = symbol.name,
@@ -92,14 +100,14 @@ class KotlinPsiSymbolProducer : IndexProducer {
                 }
                 .toMap()
         for (call in file.collectDescendantsOfType<KtCallExpression>()) {
-            val target = resolveCall(file, call, symbols, imports) ?: continue
+            val target = resolveCall(file, call, projectSymbols, imports, store) ?: continue
             val line = call.lineNumber()
             val column = call.columnNumber()
             store.put(
-                CodeIndexKey.ref(target.symbolFqn, relativePath, line, column),
+                CodeIndexKey.ref(target.symbolFqn, indexedFile.relativePath, line, column),
                 ReferenceRecord(
                     symbolFqn = target.symbolFqn,
-                    relativeFile = relativePath,
+                    relativeFile = indexedFile.relativePath,
                     line = line,
                     column = column,
                     context = "call",
@@ -111,7 +119,7 @@ class KotlinPsiSymbolProducer : IndexProducer {
                 ),
             )
         }
-        indexMemberReferences(file, relativePath, store, imports)
+        indexMemberReferences(file, indexedFile.relativePath, store, imports)
     }
 
     private fun collectSymbols(file: KtFile): List<ResolvedSymbol> {
@@ -168,7 +176,9 @@ class KotlinPsiSymbolProducer : IndexProducer {
                     arity = function.valueParameters.size,
                     aliases =
                         if (owner == null) {
-                            listOf("${names.fileFacadeFqn()}#$name")
+                            listOf(
+                                "${names.fileFacadeFqn()}#${names.functionJvmName(function) ?: name}"
+                            )
                         } else {
                             emptyList()
                         },
@@ -309,6 +319,7 @@ class KotlinPsiSymbolProducer : IndexProducer {
         call: KtCallExpression,
         symbols: List<ResolvedSymbol>,
         imports: Map<String, String>,
+        store: CodeIndexStore,
     ): InvocationTarget? {
         val names = KotlinSourceNames(file, imports)
         val name =
@@ -325,6 +336,13 @@ class KotlinPsiSymbolProducer : IndexProducer {
             ?.let {
                 return InvocationTarget(it.fqn, name, null)
             }
+        val inheritedTarget = names.superClassFqn(call)?.let { "$it#$name" }
+        if (
+            inheritedTarget != null &&
+                (symbols.any { it.fqn == inheritedTarget } || store.hasSymbol(inheritedTarget))
+        ) {
+            return InvocationTarget(inheritedTarget, name, null)
+        }
         symbols
             .firstOrNull { it.name == name && it.ownerFqn == null }
             ?.let {
@@ -448,6 +466,12 @@ class KotlinPsiSymbolProducer : IndexProducer {
         val aliases: List<String> = emptyList(),
     )
 
+    private data class IndexedKotlinFile(
+        val relativePath: String,
+        val file: KtFile,
+        val symbols: List<ResolvedSymbol>,
+    )
+
     private data class InvocationTarget(
         val symbolFqn: String,
         val name: String,
@@ -460,6 +484,9 @@ class KotlinPsiSymbolProducer : IndexProducer {
         const val BOOLEAN_PREFIX_LENGTH = 2
     }
 }
+
+private fun CodeIndexStore.hasSymbol(fqn: String): Boolean =
+    prefixScan("sym:$fqn:").any { (_, record) -> record is SymbolRecord && record.fqn == fqn }
 
 private class KotlinSourceNames(
     private val file: KtFile,
@@ -631,6 +658,16 @@ private class KotlinSourceNames(
                     .substringAfterLast('\\')
                     .substringBeforeLast('.') + "Kt")
         )
+
+    fun functionJvmName(function: KtNamedFunction): String? =
+        function.annotationEntries
+            .firstOrNull { it.shortName?.asString() == "JvmName" }
+            ?.valueArguments
+            ?.singleOrNull()
+            ?.getArgumentExpression()
+            ?.text
+            ?.removeSurrounding("\"")
+            ?.takeIf { it.isNotBlank() }
 
     fun propertyAliases(owner: String?, property: KtProperty): List<String> {
         val name = property.name ?: return emptyList()

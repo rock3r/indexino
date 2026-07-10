@@ -289,7 +289,13 @@ class JavaSourceProducer : IndexProducer {
                                 null,
                                 staticWildcardImports,
                             )
-                        else -> invocationTarget(classOwner, name, null)
+                        else ->
+                            invocationTarget(
+                                classSuperTypes.lastOrNull()?.takeIf(String::isNotBlank)
+                                    ?: classOwner,
+                                name,
+                                null,
+                            )
                     }
                 }
                 is MemberSelectTree -> {

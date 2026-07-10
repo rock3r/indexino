@@ -99,6 +99,58 @@ class CrossLanguageReferenceTest {
                         "sample.GreeterApi#topLevelGreeting" in it.aliases
                 }
             )
+            assertTrue(
+                symbols.any {
+                    it.fqn == "sample.compatibleGreeting" &&
+                        "sample.GreeterApi#drawGreeting" in it.aliases
+                }
+            )
+        } finally {
+            store.close()
+        }
+    }
+
+    @Test
+    fun `unqualified inherited calls resolve across Java and Kotlin`() {
+        val sources =
+            mapOf(
+                "src/main/java/sample/JavaHierarchy.java" to
+                    """
+                    package sample;
+                    class JavaBase { void inheritedJava() {} }
+                    class JavaChild extends KotlinBase {
+                        void call() { inheritedKotlin(); }
+                    }
+                    """
+                        .trimIndent(),
+                "src/main/kotlin/sample/KotlinHierarchy.kt" to
+                    """
+                    package sample
+                    open class KotlinBase { fun inheritedKotlin() {} }
+                    class KotlinChild : JavaBase() {
+                        fun call() { inheritedJava() }
+                    }
+                    """
+                        .trimIndent(),
+            )
+        val store =
+            XodusCodeIndexStore.open(
+                createTempDirectory("inherited-cross-language-").resolve("index")
+            )
+        try {
+            val context = IndexBuildContext.forInlineSources(store, "abc", sources)
+            ProducerRegistry.forApplications(emptyList()).forEach { it.produce(context, store) }
+
+            val refs =
+                store
+                    .prefixScan("ref:")
+                    .map { it.second }
+                    .filterIsInstance<ReferenceRecord>()
+                    .toList()
+            assertTrue(refs.any { it.symbolFqn == "sample.KotlinBase#inheritedKotlin" })
+            assertTrue(refs.any { it.symbolFqn == "sample.JavaBase#inheritedJava" })
+            assertTrue(refs.none { it.symbolFqn == "sample.JavaChild#inheritedKotlin" })
+            assertTrue(refs.none { it.symbolFqn == "sample.KotlinChild#inheritedJava" })
         } finally {
             store.close()
         }
@@ -572,6 +624,7 @@ class CrossLanguageReferenceTest {
                         greeter.greet();
                         greeter.getTitle();
                         GreeterApi.topLevelGreeting();
+                        GreeterApi.drawGreeting();
                     }
                 }
                 """
@@ -598,6 +651,8 @@ class CrossLanguageReferenceTest {
                     }
                 }
                 fun topLevelGreeting() {}
+                @JvmName("drawGreeting")
+                fun compatibleGreeting() {}
                 """
                     .trimIndent(),
         )
