@@ -457,7 +457,22 @@ class CrossLanguageReferenceTest {
                     package sample
                     class Renderer { fun render() {} }
                     fun createRenderer(): Renderer = Renderer()
-                    fun callFactory() { createRenderer().render() }
+                    fun inferredFactory(): Renderer = Renderer()
+                    fun callFactory() {
+                        createRenderer().render()
+                        Renderer().render()
+                        fun inferredFactory() = Renderer()
+                        inferredFactory().render()
+                    }
+                    class NullableHolder(val renderer: Renderer?) {
+                        fun render() {}
+                        fun callSafe() { renderer?.render() }
+                    }
+                    object Util { fun render() {} }
+                    fun callObject() {
+                        Util.render()
+                        JavaUtil.render()
+                    }
                     class Holder {
                         class Renderer { fun render() {} }
                         val renderer: Renderer = Renderer()
@@ -473,6 +488,7 @@ class CrossLanguageReferenceTest {
                         Inner model;
                         void callNested() { model.render(); }
                     }
+                    class JavaUtil { static void render() {} }
                     """
                         .trimIndent(),
             )
@@ -495,6 +511,22 @@ class CrossLanguageReferenceTest {
             )
             assertTrue(
                 refs.any {
+                    it.symbolFqn == "sample.Renderer#render" && it.qualifier == "Renderer()"
+                }
+            )
+            assertTrue(
+                refs.any { it.symbolFqn == "sample.Renderer#render" && it.qualifier == "renderer" }
+            )
+            assertTrue(refs.none { it.qualifier == "inferredFactory()" })
+            assertTrue(
+                refs.none { it.symbolFqn == "sample.NullableHolder#render" && it.qualifier == null }
+            )
+            assertTrue(refs.any { it.symbolFqn == "sample.Util#render" && it.qualifier == "Util" })
+            assertTrue(
+                refs.any { it.symbolFqn == "sample.JavaUtil#render" && it.qualifier == "JavaUtil" }
+            )
+            assertTrue(
+                refs.any {
                     it.symbolFqn == "sample.Holder.Renderer#render" && it.qualifier == "renderer"
                 }
             )
@@ -502,9 +534,6 @@ class CrossLanguageReferenceTest {
                 refs.any { it.symbolFqn == "sample.Outer.Inner#render" && it.qualifier == "model" }
             )
             assertTrue(refs.none { it.symbolFqn == "sample.createRenderer#render" })
-            assertTrue(
-                refs.none { it.symbolFqn == "sample.Renderer#render" && it.qualifier == "renderer" }
-            )
             assertTrue(refs.none { it.symbolFqn == "sample.Inner#render" })
         } finally {
             store.close()
