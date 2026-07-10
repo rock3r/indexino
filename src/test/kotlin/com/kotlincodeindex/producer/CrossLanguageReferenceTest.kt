@@ -63,6 +63,16 @@ class CrossLanguageReferenceTest {
                         "sample.JavaGreeter#getName" in it.candidateSymbolFqns
                 }
             )
+            val booleanPropertyReference = refs.first {
+                it.relativeFile.endsWith("KotlinGreeter.kt") &&
+                    it.symbolFqn == "sample.KotlinGreeter#isEnabled"
+            }
+            assertTrue(
+                "sample.KotlinGreeter#setEnabled" in booleanPropertyReference.candidateSymbolFqns
+            )
+            assertTrue(
+                "sample.KotlinGreeter#setIsEnabled" !in booleanPropertyReference.candidateSymbolFqns
+            )
 
             val symbols =
                 store.prefixScan("sym:").map { it.second }.filterIsInstance<SymbolRecord>().toList()
@@ -438,6 +448,69 @@ class CrossLanguageReferenceTest {
         }
     }
 
+    @Test
+    fun `receiver owners resolve through call returns and enclosing nested types`() {
+        val sources =
+            mapOf(
+                "src/main/kotlin/sample/Nested.kt" to
+                    """
+                    package sample
+                    class Renderer { fun render() {} }
+                    fun createRenderer(): Renderer = Renderer()
+                    fun callFactory() { createRenderer().render() }
+                    class Holder {
+                        class Renderer { fun render() {} }
+                        val renderer: Renderer = Renderer()
+                        fun callNested() { renderer.render() }
+                    }
+                    """
+                        .trimIndent(),
+                "src/main/java/sample/Outer.java" to
+                    """
+                    package sample;
+                    class Outer {
+                        static class Inner { void render() {} }
+                        Inner model;
+                        void callNested() { model.render(); }
+                    }
+                    """
+                        .trimIndent(),
+            )
+        val store =
+            XodusCodeIndexStore.open(createTempDirectory("nested-receivers-").resolve("index"))
+        try {
+            val context = IndexBuildContext.forInlineSources(store, "abc", sources)
+            ProducerRegistry.forApplications(emptyList()).forEach { it.produce(context, store) }
+
+            val refs =
+                store
+                    .prefixScan("ref:")
+                    .map { it.second }
+                    .filterIsInstance<ReferenceRecord>()
+                    .toList()
+            assertTrue(
+                refs.any {
+                    it.symbolFqn == "sample.Renderer#render" && it.qualifier == "createRenderer()"
+                }
+            )
+            assertTrue(
+                refs.any {
+                    it.symbolFqn == "sample.Holder.Renderer#render" && it.qualifier == "renderer"
+                }
+            )
+            assertTrue(
+                refs.any { it.symbolFqn == "sample.Outer.Inner#render" && it.qualifier == "model" }
+            )
+            assertTrue(refs.none { it.symbolFqn == "sample.createRenderer#render" })
+            assertTrue(
+                refs.none { it.symbolFqn == "sample.Renderer#render" && it.qualifier == "renderer" }
+            )
+            assertTrue(refs.none { it.symbolFqn == "sample.Inner#render" })
+        } finally {
+            store.close()
+        }
+    }
+
     private fun crossLanguageSources(): Map<String, String> =
         mapOf(
             "src/main/java/sample/JavaGreeter.java" to
@@ -461,7 +534,7 @@ class CrossLanguageReferenceTest {
                 package sample
                 class KotlinGreeter {
                     val title: String = "hello"
-                    val isEnabled = true
+                    var isEnabled: Boolean = true
                     fun greet() {}
                     fun callJava(greeter: JavaGreeter) {
                         this.greet()
@@ -469,6 +542,7 @@ class CrossLanguageReferenceTest {
                         println(greeter.title)
                         println(greeter.name)
                     }
+                    fun callKotlin(other: KotlinGreeter) { println(other.isEnabled) }
                 }
                 fun topLevelGreeting() {}
                 """

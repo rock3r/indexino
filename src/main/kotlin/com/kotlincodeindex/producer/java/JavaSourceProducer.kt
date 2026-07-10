@@ -91,6 +91,7 @@ class JavaSourceProducer : IndexProducer {
         private val classOwners = ArrayDeque<String>()
         private val classMethodNames = ArrayDeque<Set<String>>()
         private val classFieldTypes = ArrayDeque<Map<String, String>>()
+        private val classNestedTypes = ArrayDeque<Map<String, String>>()
         private val variableScopes = ArrayDeque<MutableMap<String, String>>()
 
         override fun visitImport(node: ImportTree, data: Unit?) {
@@ -141,12 +142,23 @@ class JavaSourceProducer : IndexProducer {
                         field.type?.toString()?.let { field.name.toString() to it }
                     }
                     .toMap()
+            val nestedTypes =
+                node.members
+                    .filterIsInstance<ClassTree>()
+                    .mapNotNull { nested ->
+                        nested.simpleName.toString().takeIf(String::isNotBlank)?.let {
+                            it to "$fqn.$it"
+                        }
+                    }
+                    .toMap()
             classFieldTypes.addLast(fields)
+            classNestedTypes.addLast(nestedTypes)
             variableScopes.addLast(fields.toMutableMap())
             try {
                 super.visitClass(node, data)
             } finally {
                 variableScopes.removeLast()
+                classNestedTypes.removeLast()
                 classFieldTypes.removeLast()
                 classMethodNames.removeLast()
                 classOwners.removeLast()
@@ -298,7 +310,13 @@ class JavaSourceProducer : IndexProducer {
 
         private fun qualifyType(raw: String): String {
             val type = raw.substringBefore('<').removeSuffix("[]").trim()
-            return imports[type] ?: if ('.' in type) type else qualify(type)
+            imports[type]?.let {
+                return it
+            }
+            if ('.' in type) {
+                return type
+            }
+            return classNestedTypes.reversed().firstNotNullOfOrNull { it[type] } ?: qualify(type)
         }
 
         private fun qualify(name: String): String =

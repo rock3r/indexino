@@ -241,21 +241,22 @@ class KotlinPsiSymbolProducer : IndexProducer {
             val receiverType =
                 resolveVariableType(receiver, receiver.getReferencedName()) ?: return@forEach
             val name = selector.getReferencedName()
-            val owner = names.qualifyType(receiverType)
+            val owner = names.qualifyType(receiverType, expression)
             val target = "$owner#$name"
             val capitalized = name.replaceFirstChar { it.uppercaseChar() }
+            val isBooleanStyleName =
+                name.startsWith("is") &&
+                    name.length > BOOLEAN_PREFIX_LENGTH &&
+                    name[BOOLEAN_PREFIX_LENGTH].isUpperCase()
             val booleanGetter =
-                if (
-                    name.startsWith("is") &&
-                        name.length > BOOLEAN_PREFIX_LENGTH &&
-                        name[BOOLEAN_PREFIX_LENGTH].isUpperCase()
-                ) {
+                if (isBooleanStyleName) {
                     "$owner#$name"
                 } else {
                     "$owner#is$capitalized"
                 }
+            val setterName = if (isBooleanStyleName) name.removePrefix("is") else capitalized
             val candidates =
-                listOf(target, "$owner#get$capitalized", booleanGetter, "$owner#set$capitalized")
+                listOf(target, "$owner#get$capitalized", booleanGetter, "$owner#set$setterName")
                     .distinct()
             val line = selector.lineNumber()
             val column = selector.columnNumber()
@@ -319,23 +320,27 @@ class KotlinPsiSymbolProducer : IndexProducer {
             is KtThisExpression,
             is KtSuperExpression -> names.classOwner(call)?.let(names::classFqn)
             is KtNameReferenceExpression ->
-                resolveVariableType(receiver, receiver.getReferencedName())?.let(names::qualifyType)
+                resolveVariableType(receiver, receiver.getReferencedName())?.let {
+                    names.qualifyType(it, call)
+                }
             is KtCallExpression ->
                 (receiver.calleeExpression as? KtSimpleNameExpression)
                     ?.getReferencedName()
-                    ?.let(names::qualifyType)
+                    ?.let { names.resolveFunctionReturnType(receiver, it) }
+                    ?.let { names.qualifyType(it, call) }
             is KtDotQualifiedExpression -> {
                 val selfReceiver = receiver.receiverExpression
                 val field = receiver.selectorExpression as? KtNameReferenceExpression
                 when {
                     selfReceiver is KtThisExpression && field != null ->
-                        resolveClassPropertyType(field, field.getReferencedName())
-                            ?.let(names::qualifyType)
+                        resolveClassPropertyType(field, field.getReferencedName())?.let {
+                            names.qualifyType(it, call)
+                        }
                     selfReceiver is KtSuperExpression -> null
-                    else -> names.qualifyType(receiver.text)
+                    else -> names.qualifyType(receiver.text, call)
                 }
             }
-            else -> names.qualifyType(receiver.text)
+            else -> names.qualifyType(receiver.text, call)
         }
 
     private fun resolveClassPropertyType(useSite: KtElement, name: String): String? {
@@ -464,9 +469,52 @@ private class KotlinSourceNames(
     private val file: KtFile,
     private val imports: Map<String, String> = emptyMap(),
 ) {
-    fun qualifyType(raw: String): String {
+    fun resolveFunctionReturnType(useSite: KtElement, name: String): String? {
+        var scope = useSite.parent
+        while (scope != null) {
+            val function =
+                when (scope) {
+                    is KtBlockExpression ->
+                        scope.statements.filterIsInstance<KtNamedFunction>().lastOrNull {
+                            it.name == name && it.textOffset < useSite.textOffset
+                        }
+                    is KtClassOrObject ->
+                        scope.declarations.filterIsInstance<KtNamedFunction>().firstOrNull {
+                            it.name == name
+                        }
+                    is KtFile ->
+                        scope.declarations.filterIsInstance<KtNamedFunction>().firstOrNull {
+                            it.name == name
+                        }
+                    else -> null
+                }
+            function?.typeReference?.text?.let {
+                return it
+            }
+            scope = scope.parent
+        }
+        return null
+    }
+
+    fun qualifyType(raw: String, useSite: KtElement? = null): String {
         val type = raw.substringBefore('<').removeSuffix("?").trim()
-        return imports[type] ?: if ('.' in type) type else qualify(type)
+        imports[type]?.let {
+            return it
+        }
+        if ('.' in type) {
+            return type
+        }
+        var owner = useSite?.let(::classOwner)
+        while (owner != null) {
+            owner.declarations
+                .filterIsInstance<KtClassOrObject>()
+                .firstOrNull { it.name == type }
+                ?.let {
+                    return classFqn(it)
+                }
+            owner = classOwner(owner)
+        }
+        return qualify(type)
     }
 
     fun classFqn(declaration: KtClassOrObject): String {
