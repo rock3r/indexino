@@ -257,9 +257,13 @@ class JavaSourceProducerTest {
             class Base { void render() {} }
             class Caller extends Base {
                 First model;
+                First resource;
                 void call() {
                     try (Second model = new Second()) { model.render(); }
                     try { throw new Second(); } catch (Second model) { model.render(); }
+                    try (Second resource = new Second()) { resource.render(); }
+                    catch (RuntimeException ignored) { resource.render(); }
+                    finally { resource.render(); }
                     model.render();
                     super.render();
                 }
@@ -283,8 +287,8 @@ class JavaSourceProducerTest {
                     .map { it.second }
                     .filterIsInstance<ReferenceRecord>()
                     .toList()
-            assertEquals(2, references.count { it.symbolFqn == "sample.Second#render" })
-            assertEquals(1, references.count { it.symbolFqn == "sample.First#render" })
+            assertEquals(3, references.count { it.symbolFqn == "sample.Second#render" })
+            assertEquals(3, references.count { it.symbolFqn == "sample.First#render" })
             assertEquals(1, references.count { it.symbolFqn == "sample.Base#render" })
             assertTrue(references.none { it.symbolFqn == "sample.Caller#render" })
         }

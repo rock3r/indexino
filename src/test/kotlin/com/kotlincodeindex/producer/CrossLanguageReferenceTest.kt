@@ -30,6 +30,8 @@ class CrossLanguageReferenceTest {
                         it.symbolFqn == "sample.KotlinGreeter#greet"
                 }
             )
+            refs.reference("sample.KotlinGreeter#title", "member", "this")
+            refs.reference("sample.KotlinGreeter#isEnabled", "member-write", "this")
             assertTrue(
                 refs.any {
                     it.relativeFile.endsWith("KotlinGreeter.kt") &&
@@ -348,6 +350,7 @@ class CrossLanguageReferenceTest {
                     fun helper() {}
                     helper()
                     val model: Renderer = Renderer()
+                    val task = object : Runnable { override fun run() {} }
                 }
             }
             """
@@ -367,6 +370,12 @@ class CrossLanguageReferenceTest {
                 store.prefixScan("sym:").map { it.second }.filterIsInstance<SymbolRecord>().toList()
             assertTrue(symbols.none { it.fqn == "sample.Holder#model" })
             assertTrue(symbols.none { it.fqn == "sample.Holder#helper" })
+            assertTrue(symbols.none { it.fqn == "sample.Holder#run" })
+            assertTrue(
+                symbols.any {
+                    it.name == "run" && it.ownerFqn?.startsWith("sample.Holder.<anonymous@") == true
+                }
+            )
             val refs =
                 store
                     .prefixScan("ref:")
@@ -472,8 +481,9 @@ class CrossLanguageReferenceTest {
                         fun callSafe() { renderer?.render() }
                     }
                     object Util { fun render() {} }
+                    interface Marker
                     open class Base { open fun render() {} }
-                    class Child : Base() { fun callSuper() { super.render() } }
+                    class Child : Marker, Base() { fun callSuper() { super.render() } }
                     fun callObject() {
                         Util.render()
                         JavaUtil.render()
@@ -576,6 +586,8 @@ class CrossLanguageReferenceTest {
                     fun greet() {}
                     fun callJava(greeter: JavaGreeter) {
                         this.greet()
+                        println(this.title)
+                        this.isEnabled = false
                         greeter.greet()
                         println(greeter.title)
                         println(greeter.name)
@@ -591,7 +603,12 @@ class CrossLanguageReferenceTest {
         )
 }
 
-private fun List<ReferenceRecord>.reference(symbolFqn: String, context: String): ReferenceRecord =
-    first {
-        it.symbolFqn == symbolFqn && it.context == context
-    }
+private fun List<ReferenceRecord>.reference(
+    symbolFqn: String,
+    context: String,
+    qualifier: String? = null,
+): ReferenceRecord = first {
+    it.symbolFqn == symbolFqn &&
+        it.context == context &&
+        (qualifier == null || it.qualifier == qualifier)
+}

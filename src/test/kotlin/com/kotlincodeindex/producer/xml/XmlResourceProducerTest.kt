@@ -113,13 +113,18 @@ class XmlResourceProducerTest {
                 IndexBuildContext.forInlineSources(
                     store = store,
                     commitHash = "abc",
-                    sourceFiles = mapOf("app/res/layout/bazel_screen.xml" to "<FrameLayout />"),
+                    sourceFiles =
+                        mapOf(
+                            "app/res/layout/bazel_screen.xml" to "<FrameLayout />",
+                            "app/feature_res/drawable/feature_icon.xml" to "<shape />",
+                        ),
                 )
             )
 
             val resources =
                 store.prefixScan("res:").map { it.second }.filterIsInstance<SymbolRecord>().toList()
             assertTrue(resources.any { it.fqn == "res:layout:bazel_screen" })
+            assertTrue(resources.any { it.fqn == "res:drawable:feature_icon" })
         }
     }
 

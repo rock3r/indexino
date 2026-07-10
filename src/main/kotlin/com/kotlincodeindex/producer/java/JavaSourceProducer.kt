@@ -219,13 +219,24 @@ class JavaSourceProducer : IndexProducer {
             }
         }
 
+        override fun visitTry(node: TryTree, data: Unit?) {
+            variableScopes.addLast(mutableMapOf())
+            try {
+                node.resources.forEach { scan(it, data) }
+                scan(node.block, data)
+            } finally {
+                variableScopes.removeLast()
+            }
+            node.catches.forEach { scan(it, data) }
+            scan(node.finallyBlock, data)
+        }
+
         override fun scan(tree: Tree?, data: Unit?) {
             val transientScope =
                 tree is ForLoopTree ||
                     tree is EnhancedForLoopTree ||
                     tree is LambdaExpressionTree ||
-                    tree is CatchTree ||
-                    tree is TryTree
+                    tree is CatchTree
             if (transientScope) {
                 variableScopes.addLast(mutableMapOf())
             }
@@ -330,8 +341,9 @@ class JavaSourceProducer : IndexProducer {
             return classNestedTypes.reversed().firstNotNullOfOrNull { it[type] } ?: qualify(type)
         }
 
-        private fun qualify(name: String): String =
+        private val qualify: (String) -> String = { name ->
             if (packageName.isBlank()) name else "$packageName.$name"
+        }
 
         private fun invocationTarget(
             owner: String,

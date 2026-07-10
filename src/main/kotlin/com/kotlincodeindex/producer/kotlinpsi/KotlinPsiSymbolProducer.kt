@@ -29,6 +29,7 @@ import org.jetbrains.kotlin.psi.KtProperty
 import org.jetbrains.kotlin.psi.KtQualifiedExpression
 import org.jetbrains.kotlin.psi.KtSimpleNameExpression
 import org.jetbrains.kotlin.psi.KtSuperExpression
+import org.jetbrains.kotlin.psi.KtSuperTypeCallEntry
 import org.jetbrains.kotlin.psi.KtThisExpression
 import org.jetbrains.kotlin.psi.KtUnaryExpression
 
@@ -240,14 +241,9 @@ class KotlinPsiSymbolProducer : IndexProducer {
         file.collectDescendantsOfType<KtQualifiedExpression>().forEach { expression ->
             val selector =
                 expression.selectorExpression as? KtNameReferenceExpression ?: return@forEach
-            val receiver =
-                expression.receiverExpression as? KtNameReferenceExpression ?: return@forEach
-            val receiverType =
-                resolveVariableType(receiver, receiver.getReferencedName())
-                    ?: names.resolveTypeOrObject(receiver, receiver.getReferencedName())
-                    ?: return@forEach
+            val receiver = expression.receiverExpression
             val name = selector.getReferencedName()
-            val owner = names.qualifyType(receiverType, expression)
+            val owner = resolveMemberReceiverOwner(receiver, expression, names) ?: return@forEach
             val target = "$owner#$name"
             val capitalized = name.replaceFirstChar { it.uppercaseChar() }
             val isBooleanStyleName =
@@ -290,6 +286,23 @@ class KotlinPsiSymbolProducer : IndexProducer {
             )
         }
     }
+
+    private fun resolveMemberReceiverOwner(
+        receiver: KtExpression,
+        useSite: KtElement,
+        names: KotlinSourceNames,
+    ): String? =
+        when (receiver) {
+            is KtThisExpression -> names.classOwner(useSite)?.let(names::classFqn)
+            is KtSuperExpression -> names.superClassFqn(useSite)
+            is KtNameReferenceExpression -> {
+                val name = receiver.getReferencedName()
+                val type =
+                    resolveVariableType(receiver, name) ?: names.resolveTypeOrObject(receiver, name)
+                type?.let { names.qualifyType(it, useSite) }
+            }
+            else -> null
+        }
 
     private fun resolveCall(
         file: KtFile,
@@ -509,7 +522,11 @@ private class KotlinSourceNames(
 
     fun superClassFqn(useSite: KtElement): String? {
         val owner = classOwner(useSite) ?: return null
-        val superType = owner.superTypeListEntries.firstOrNull()?.typeReference?.text ?: return null
+        val superType =
+            (owner.superTypeListEntries.firstOrNull { it is KtSuperTypeCallEntry }
+                    ?: owner.superTypeListEntries.firstOrNull())
+                ?.typeReference
+                ?.text ?: return null
         return qualifyType(superType, useSite)
     }
 
@@ -576,7 +593,7 @@ private class KotlinSourceNames(
         val names = mutableListOf<String>()
         var current: KtClassOrObject? = declaration
         while (current != null) {
-            current.name?.let(names::add)
+            names += current.name ?: "<anonymous@${current.textOffset}>"
             current = classOwner(current)
         }
         return qualify(names.asReversed().joinToString("."))

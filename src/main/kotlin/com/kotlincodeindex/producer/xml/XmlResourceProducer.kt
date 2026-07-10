@@ -177,7 +177,8 @@ class XmlResourceProducer : IndexProducer {
         const val RESOURCE_PACKAGE_GROUP = 2
         const val RESOURCE_TYPE_GROUP = 3
         const val RESOURCE_NAME_GROUP = 4
-        val RESOURCE_PATH = Regex("(?:^|/)(?:src/[^/]+/)?res/([^/]+)/([^/]+)\\.xml$")
+        val RESOURCE_PATH =
+            Regex("(?:^|/)(?:src/[^/]+/)?(?:res|[^/]*res[^/]*)/([^/]+)/([^/]+)\\.xml$")
         val RESOURCE_REFERENCE =
             Regex("[@?](\\+)?(?:([A-Za-z0-9_.]+):)?([A-Za-z0-9_]+)/([A-Za-z0-9_.]+)")
     }
