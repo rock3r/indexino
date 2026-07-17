@@ -9,5 +9,8 @@ interface IndexProducer {
 
     val displayName: String
 
+    val progressTotal: ((IndexBuildContext) -> Int?)?
+        get() = null
+
     fun produce(context: IndexBuildContext, store: CodeIndexStore = context.store)
 }

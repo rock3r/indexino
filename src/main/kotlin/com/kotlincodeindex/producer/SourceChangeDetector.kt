@@ -12,6 +12,7 @@ object SourceChangeDetector {
         store: CodeIndexStore,
         workspaceRoot: Path,
         sourceFiles: List<String>,
+        onFileProcessed: ((index: Int, total: Int, relativePath: String) -> Unit)? = null,
     ): SourceChangeSet {
         val previousHashes =
             store
@@ -21,7 +22,8 @@ object SourceChangeDetector {
                 .associate { it.relativePath to it.contentHash }
         val currentFiles = sourceFiles.toSet()
         val changedFiles =
-            sourceFiles.filterTo(linkedSetOf()) { relativePath ->
+            sourceFiles.filterIndexedTo(linkedSetOf()) { index, relativePath ->
+                onFileProcessed?.invoke(index + 1, sourceFiles.size, relativePath)
                 val currentHash =
                     FileHashProducer.contentHash(workspaceRoot.resolve(relativePath).readText())
                 previousHashes[relativePath] != currentHash

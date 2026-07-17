@@ -17,6 +17,10 @@ class XmlResourceProducer : IndexProducer {
     override val namespace: String = "res"
     override val displayName: String = "XmlResourceProducer"
 
+    override val progressTotal: (IndexBuildContext) -> Int = { context ->
+        context.sourceFiles.count { it.endsWith(".xml") && it in context.changedSourceFiles }
+    }
+
     override fun produce(context: IndexBuildContext, store: CodeIndexStore) {
         val affectedFiles =
             (context.changedSourceFiles + context.deletedSourceFiles).filterTo(linkedSetOf()) {

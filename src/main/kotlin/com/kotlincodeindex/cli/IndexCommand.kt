@@ -2,32 +2,20 @@ package com.kotlincodeindex.cli
 
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.ProgramResult
+import com.github.ajalt.clikt.core.UsageError
 import com.github.ajalt.clikt.parameters.options.default
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import com.github.ajalt.clikt.parameters.options.split
 import com.github.ajalt.clikt.parameters.types.file
-import com.kotlincodeindex.core.Version
-import com.kotlincodeindex.core.git.GitHeadResolver
-import com.kotlincodeindex.core.manifest.IndexManifest
-import com.kotlincodeindex.core.manifest.ManifestFreshness
-import com.kotlincodeindex.core.manifest.ManifestIO
-import com.kotlincodeindex.core.path.IndexPathResolver
-import com.kotlincodeindex.core.xodus.XodusCodeIndexStore
-import com.kotlincodeindex.producer.FileHashProducer
-import com.kotlincodeindex.producer.IndexBuildContext
-import com.kotlincodeindex.producer.ProducerRegistry
-import com.kotlincodeindex.producer.SourceChangeDetector
-import com.kotlincodeindex.producer.SourceChangeSet
+import com.kotlincodeindex.producer.IndexBuildProgressReporter
+import com.kotlincodeindex.producer.JsonlIndexBuildProgressReporter
 import com.kotlincodeindex.topology.BuildSystem
 import com.kotlincodeindex.topology.TopologyRequest
-import com.kotlincodeindex.topology.TopologyResolver
 import com.kotlincodeindex.topology.bazel.BazelProcessRunner
 import com.kotlincodeindex.topology.bazel.BazelQueryExecutor
 import java.nio.file.Path
-import java.time.Instant
-import kotlin.io.path.exists
 
 class IndexCommand : CliktCommand(name = "index") {
     private val project by
@@ -37,6 +25,7 @@ class IndexCommand : CliktCommand(name = "index") {
     private val gradleModule by option("--gradle-module")
     private val includeDeps by option("--include-deps").flag(default = false)
     private val applications by option("--applications").split(",").default(emptyList())
+    private val progressFormat by option("--progress-format").default("text")
 
     override fun run() {
         val exitCode =
@@ -51,6 +40,17 @@ class IndexCommand : CliktCommand(name = "index") {
                     ),
                 applications = applications.filter { it.isNotBlank() },
                 progress = { echo(it, err = true) },
+                machineProgress =
+                    when (progressFormat) {
+                        "text" -> null
+                        "jsonl" -> JsonlIndexBuildProgressReporter { echo(it) }
+                        else ->
+                            throw UsageError(
+                                "Unknown --progress-format: $progressFormat (expected text or jsonl)",
+                                "--progress-format",
+                                CliExitCodes.INVALID_ARGUMENTS,
+                            )
+                    },
             )
         if (exitCode != CliExitCodes.SUCCESS) {
             throw ProgramResult(exitCode)
@@ -64,6 +64,7 @@ class IndexCommand : CliktCommand(name = "index") {
         queryExecutor: BazelQueryExecutor? = null,
         processRunner: BazelProcessRunner? = null,
         progress: (String) -> Unit = {},
+        machineProgress: IndexBuildProgressReporter? = null,
     ): Int =
         runIndexedBuild(
             project = project,
@@ -73,8 +74,10 @@ class IndexCommand : CliktCommand(name = "index") {
             bazelQueryExecutor = queryExecutor,
             bazelProcessRunner = processRunner,
             progress = progress,
+            machineProgress = machineProgress,
         )
 
+    @Suppress("TooGenericExceptionCaught")
     fun runIndexedBuild(
         project: Path,
         topologyRequest: TopologyRequest,
@@ -82,88 +85,27 @@ class IndexCommand : CliktCommand(name = "index") {
         bazelQueryExecutor: BazelQueryExecutor? = null,
         bazelProcessRunner: BazelProcessRunner? = null,
         progress: (String) -> Unit = {},
+        machineProgress: IndexBuildProgressReporter? = null,
     ): Int {
-        val topologyResult =
-            TopologyResolver.resolve(
-                project = project,
-                request = topologyRequest,
-                bazelQueryExecutor = bazelQueryExecutor,
-                bazelProcessRunner = bazelProcessRunner,
-                onStderr = progress,
-            )
-        if (topologyResult.sourceFiles.isEmpty()) {
-            progress("topology discovery failed: no source files")
-            return CliExitCodes.TOPOLOGY_FAILED
-        }
-
-        val scope = topologyResult.scope
-        val sourceFiles = topologyResult.sourceFiles
-        val commit = GitHeadResolver.resolve(project)
-        val resolver = IndexPathResolver(project)
-        val manifestPath = resolver.resolveManifest(commit)
-
-        val previewHash = FileHashProducer.combinedSourcesHash(project, sourceFiles)
-        val criteria =
-            ManifestFreshness.criteriaFrom(
-                commit = commit,
-                scope = scope,
-                sourcesContentHash = previewHash,
-                applications = applications,
-            )
-
-        val existingManifest = manifestPath.takeIf { it.exists() }?.let(ManifestIO::read)
-        if (existingManifest != null) {
-            if (ManifestFreshness.isFresh(existingManifest, criteria)) {
-                progress("index fresh for $scope @ $commit — skip rebuild")
-                return CliExitCodes.SUCCESS
-            }
-        }
-        val forceFullRebuild =
-            existingManifest == null || existingManifest.indexerVersion != Version.NAME
-
-        val store = XodusCodeIndexStore.open(resolver.resolveBaseStore(commit))
-        try {
-            val detectedChanges = SourceChangeDetector.detect(store, project, sourceFiles)
-            val changes =
-                if (forceFullRebuild) {
-                    SourceChangeSet(sourceFiles.toSet(), detectedChanges.deletedFiles)
-                } else {
-                    detectedChanges
-                }
-            val context =
-                IndexBuildContext(
-                    store = store,
-                    commitHash = commit,
-                    scope = scope,
-                    sourceFiles = sourceFiles,
-                    workspaceRoot = project,
-                    progress = progress,
-                    changedSourceFiles = changes.changedFiles,
-                    deletedSourceFiles = changes.deletedFiles,
-                )
-            for (producer in ProducerRegistry.forApplications(applications)) {
-                progress(producer.displayName)
-                producer.produce(context, store)
-            }
-
-            ManifestIO.write(
-                manifestPath,
-                IndexManifest(
-                    commit = commit,
-                    indexerVersion = Version.NAME,
-                    scope = scope,
-                    topology = topologyResult.topology,
-                    includeDeps = topologyResult.includeDeps,
-                    sourceFileCount = sourceFiles.size,
-                    sourcesContentHash = previewHash,
-                    builtAt = Instant.now().toString(),
+        machineProgress?.discoveryStarted()
+        return try {
+            IndexBuildRunner(
+                    project = project,
+                    topologyRequest = topologyRequest,
                     applications = applications,
-                ),
+                    bazelQueryExecutor = bazelQueryExecutor,
+                    bazelProcessRunner = bazelProcessRunner,
+                    progress = progress,
+                    machineProgress = machineProgress,
+                )
+                .run()
+        } catch (exception: Exception) {
+            machineProgress?.failed(
+                CliExitCodes.ANALYSIS_ERROR,
+                exception.message ?: exception.javaClass.name,
             )
-        } finally {
-            store.close()
+            throw exception
         }
-        return CliExitCodes.SUCCESS
     }
 
     private fun parseBuildSystem(raw: String): BuildSystem =

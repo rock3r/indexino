@@ -13,6 +13,8 @@ data class IndexBuildContext(
     val workspaceRoot: Path = Path("."),
     val sourceContentOverrides: Map<String, String> = emptyMap(),
     val progress: ((String) -> Unit)? = null,
+    val machineProgress: IndexBuildProgressReporter? = null,
+    val activePhase: String? = null,
     val changedSourceFiles: Set<String> = sourceFiles.toSet(),
     val deletedSourceFiles: Set<String> = emptySet(),
 ) {
@@ -21,6 +23,7 @@ data class IndexBuildContext(
 
     fun reportFileProgress(index: Int, total: Int, relativePath: String) {
         progress?.invoke("[$index/$total] $relativePath")
+        activePhase?.let { machineProgress?.fileProgress(it, index, total, relativePath) }
     }
 
     companion object {

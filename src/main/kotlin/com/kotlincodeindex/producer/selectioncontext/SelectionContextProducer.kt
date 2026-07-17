@@ -21,6 +21,10 @@ class SelectionContextProducer(private val walker: SelectionWalker = SelectionWa
     override val id: String = "selection-context"
     override val displayName: String = "SelectionContextProducer"
 
+    override val progressTotal: (IndexBuildContext) -> Int = { context ->
+        context.sourceFiles.count { it.endsWith(".kt") }
+    }
+
     override fun produce(context: IndexBuildContext, store: CodeIndexStore) {
         deleteAllSelectionSiteKeys(store)
         KotlinPsiParser().use { parser ->

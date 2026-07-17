@@ -13,6 +13,10 @@ class FileHashProducer : IndexProducer {
     override val namespace: String = "file"
     override val displayName: String = "FileHashProducer"
 
+    override val progressTotal: (IndexBuildContext) -> Int = { context ->
+        context.sourceFiles.count { it in context.changedSourceFiles }
+    }
+
     override fun produce(context: IndexBuildContext, store: CodeIndexStore) {
         val currentFiles = context.sourceFiles.toSet()
         store
@@ -54,13 +58,18 @@ class FileHashProducer : IndexProducer {
             workspaceRoot: Path,
             sourceFiles: List<String>,
             sourceContentOverrides: Map<String, String> = emptyMap(),
+            onFileProcessed: ((index: Int, total: Int, relativePath: String) -> Unit)? = null,
         ): String {
+            val sortedSourceFiles = sourceFiles.sorted()
             val combined =
-                sourceFiles.sorted().joinToString("\n") { path ->
-                    val content =
-                        sourceContentOverrides[path] ?: workspaceRoot.resolve(path).readText()
-                    "$path:${contentHash(content)}"
-                }
+                sortedSourceFiles
+                    .mapIndexed { index, path ->
+                        onFileProcessed?.invoke(index + 1, sortedSourceFiles.size, path)
+                        val content =
+                            sourceContentOverrides[path] ?: workspaceRoot.resolve(path).readText()
+                        "$path:${contentHash(content)}"
+                    }
+                    .joinToString("\n")
             return contentHash(combined)
         }
     }

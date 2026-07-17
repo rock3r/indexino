@@ -39,6 +39,10 @@ class JavaSourceProducer : IndexProducer {
     override val namespace: String = "sym"
     override val displayName: String = "JavaSourceProducer"
 
+    override val progressTotal: (IndexBuildContext) -> Int = { context ->
+        context.sourceFiles.count { it.endsWith(".java") && it in context.changedSourceFiles }
+    }
+
     override fun produce(context: IndexBuildContext, store: CodeIndexStore) {
         val affectedFiles =
             (context.changedSourceFiles + context.deletedSourceFiles).filterTo(linkedSetOf()) {

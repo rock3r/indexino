@@ -39,6 +39,10 @@ class KotlinPsiSymbolProducer : IndexProducer {
     override val namespace: String = "sym"
     override val displayName: String = "KotlinPsiSymbolProducer"
 
+    override val progressTotal: (IndexBuildContext) -> Int = { context ->
+        context.sourceFiles.count { it.endsWith(".kt") && it in context.changedSourceFiles }
+    }
+
     override fun produce(context: IndexBuildContext, store: CodeIndexStore) {
         val affectedFiles =
             (context.changedSourceFiles + context.deletedSourceFiles).filterTo(linkedSetOf()) {
