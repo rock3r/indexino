@@ -24,7 +24,8 @@ Auto-select Gradle when no `MODULE.bazel` / `WORKSPACE` at `--project` root and
 
 - Parse `build.gradle.kts` / `build.gradle` for `project(":…")` dependencies (in-repo only)
 - `--include-deps` walks transitive project deps; Maven coordinates are ignored
-- Root module `:` indexes all included modules
+- Root module `:` indexes its own conventional `src/main/kotlin`, `src/main/java`, and
+  `src/main/res` sources, plus all settings-included modules
 
 ## CLI
 

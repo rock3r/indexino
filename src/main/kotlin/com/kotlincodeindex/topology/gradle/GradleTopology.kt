@@ -30,7 +30,7 @@ object GradleTopology {
         val graph = GradleModuleGraph(workspace, includes)
         val modules =
             if (normalizedModule == ":") {
-                includes
+                listOf(":") + includes
             } else {
                 graph.closure(normalizedModule, includeDeps)
             }

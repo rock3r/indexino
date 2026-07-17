@@ -50,4 +50,21 @@ class GradleTopologyTest {
             result.sourceFiles,
         )
     }
+
+    @Test
+    fun `root scope includes root project and included module sources`() {
+        val result = GradleTopology.resolveSources(":", fixtureRoot)
+        assertEquals(
+            listOf(
+                "core/src/main/kotlin/Core.kt",
+                "src/main/java/RootLegacy.java",
+                "src/main/kotlin/RootPanel.kt",
+                "src/main/res/layout/root.xml",
+                "ui/src/main/java/LegacyPanel.java",
+                "ui/src/main/kotlin/Panel.kt",
+                "ui/src/main/res/layout/main.xml",
+            ),
+            result.sourceFiles,
+        )
+    }
 }
