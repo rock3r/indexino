@@ -23,6 +23,7 @@ manual file reading.
 | [docs/BAZEL-TOPOLOGY.md](docs/BAZEL-TOPOLOGY.md) | Bazel target closure, `.bazelproject` |
 | [docs/GRADLE-TOPOLOGY.md](docs/GRADLE-TOPOLOGY.md) | Gradle backend (phase G) |
 | [docs/CLI.md](docs/CLI.md) | Commands, flags, JSONL output schema |
+| [docs/PUBLISHING.md](docs/PUBLISHING.md) | Maven Central coordinates and release flow |
 | [docs/TESTING.md](docs/TESTING.md) | TDD flow, fixture layout |
 | [docs/CONVENTIONS.md](docs/CONVENTIONS.md) | File placement, style, git workflow |
 

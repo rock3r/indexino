@@ -1,12 +1,15 @@
 package com.kotlincodeindex.parse
 
+import org.jetbrains.kotlin.K1Deprecation
 import org.jetbrains.kotlin.cli.jvm.compiler.EnvironmentConfigFiles
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment
+import org.jetbrains.kotlin.com.intellij.openapi.application.ApplicationManager
 import org.jetbrains.kotlin.com.intellij.openapi.util.Disposer
 import org.jetbrains.kotlin.config.CompilerConfiguration
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtPsiFactory
 
+@OptIn(K1Deprecation::class, CompilerConfiguration.Internals::class)
 class KotlinPsiParser : AutoCloseable {
     init {
         IdeaHomeBootstrap.ensure()
@@ -24,6 +27,6 @@ class KotlinPsiParser : AutoCloseable {
     fun parseFile(name: String, content: String): KtFile = psiFactory.createFile(name, content)
 
     override fun close() {
-        Disposer.dispose(disposable)
+        ApplicationManager.getApplication().runWriteAction { Disposer.dispose(disposable) }
     }
 }

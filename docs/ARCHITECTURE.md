@@ -2,7 +2,9 @@
 
 ## Product shape
 
-**kotlin-code-index** is a portable, **persistent** local code index shipped as a fat JAR. It is not a SelectionContainer one-off — **selection-context** is the first **application plugin** on top of shared storage and topology.
+**kotlin-code-index** is a portable, **persistent** local code index shipped as a standalone fat
+CLI JAR and as a thin Maven artifact. It is not a SelectionContainer one-off —
+**selection-context** is the first **application plugin** on top of shared storage and topology.
 
 ```
 ┌──────────────────┐     ┌─────────────────────────────┐
