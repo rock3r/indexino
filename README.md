@@ -7,6 +7,7 @@
 Standalone Kotlin CLI that builds a **persistent** local code index (Xodus under
 `<workspace>/.kotlin-index/index/<commit>/`) for agent audit tools. Detekt-independent,
 Bazel-first (Gradle secondary), ships as a fat JAR with no target-repo build coupling.
+The same code is published as a thin Maven artifact for dependency-based consumers.
 
 **selection-context** is the first application plugin: precomputed SelectionContainer /
 DisableSelection facts at composable call sites for Compose/Jewel UI audits.
@@ -66,6 +67,20 @@ Run tests:
 ./gradlew check
 ```
 
+## Maven dependency
+
+Consumers need no custom Gradle plugin. Use the normal Maven Central coordinates; the thin JAR's
+runtime dependencies are declared transitively in its POM:
+
+```kotlin
+dependencies {
+    implementation("dev.sebastiano.kotlinindex:kotlin-code-index:<version>")
+}
+```
+
+The Shadow `*-all.jar` remains the standalone distribution for direct `java -jar` use. See
+[docs/PUBLISHING.md](docs/PUBLISHING.md) for local publication verification and the release flow.
+
 ## Docs
 
 | Doc | Topic |
@@ -73,6 +88,7 @@ Run tests:
 | [docs/CLI.md](docs/CLI.md) | Commands, flags, JSONL schema |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layers |
 | [docs/INDEX-STORAGE.md](docs/INDEX-STORAGE.md) | `.kotlin-index/` + keys |
+| [docs/PUBLISHING.md](docs/PUBLISHING.md) | Maven coordinates and release flow |
 | [AGENTS.md](AGENTS.md) | Agent rules |
 
 ## Contributing
