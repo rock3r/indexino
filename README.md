@@ -1,7 +1,5 @@
 ![Indexino animated banner](docs/assets/indexino-banner.webp)
 
-# indexino
-
 [![check](https://github.com/rock3r/indexino/actions/workflows/check.yml/badge.svg)](https://github.com/rock3r/indexino/actions/workflows/check.yml)
 
 > **Pre-release** — there is no supported embedded API yet. Index layout and CLI contracts may
