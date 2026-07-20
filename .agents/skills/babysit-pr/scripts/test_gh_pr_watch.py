@@ -296,7 +296,7 @@ class RetryEligibilityTests(unittest.TestCase):
 
     def test_fetch_new_review_items_excludes_resolved_blocking_comments(self):
         pr = {
-            "repo": "rock3r/kotlin-index",
+            "repo": "rock3r/indexino",
             "number": 716,
             "head_sha": "abc123",
         }
@@ -342,7 +342,7 @@ class RetryEligibilityTests(unittest.TestCase):
 
     def test_fetch_new_review_items_blocks_unresolved_comment_even_if_stale(self):
         pr = {
-            "repo": "rock3r/kotlin-index",
+            "repo": "rock3r/indexino",
             "number": 716,
             "head_sha": "abc123",
         }
@@ -389,7 +389,7 @@ class RetryEligibilityTests(unittest.TestCase):
     def test_fetch_new_review_items_blocks_unresolved_comment_on_old_commit(self):
         """Unresolved threads block regardless of which commit they were posted on."""
         pr = {
-            "repo": "rock3r/kotlin-index",
+            "repo": "rock3r/indexino",
             "number": 716,
             "head_sha": "abc123",
         }
@@ -436,7 +436,7 @@ class RetryEligibilityTests(unittest.TestCase):
 
     def test_fetch_new_review_items_resurfaces_edited_issue_comment(self):
         pr = {
-            "repo": "rock3r/kotlin-index",
+            "repo": "rock3r/indexino",
             "number": 716,
             "head_sha": "abc123",
         }
@@ -479,7 +479,7 @@ class RetryEligibilityTests(unittest.TestCase):
 
     def test_fetch_new_review_items_ignores_self_authored_comments(self):
         pr = {
-            "repo": "rock3r/kotlin-index",
+            "repo": "rock3r/indexino",
             "number": 716,
             "head_sha": "abc123",
         }
@@ -521,7 +521,7 @@ class RetryEligibilityTests(unittest.TestCase):
 
     def test_fetch_new_review_items_does_not_block_on_seen_issue_comment_without_edits(self):
         pr = {
-            "repo": "rock3r/kotlin-index",
+            "repo": "rock3r/indexino",
             "number": 716,
             "head_sha": "abc123",
         }
@@ -564,7 +564,7 @@ class RetryEligibilityTests(unittest.TestCase):
 
     def test_fetch_new_review_items_resurfaces_edited_old_issue_comment(self):
         pr = {
-            "repo": "rock3r/kotlin-index",
+            "repo": "rock3r/indexino",
             "number": 716,
             "head_sha": "abc123",
         }
@@ -607,7 +607,7 @@ class RetryEligibilityTests(unittest.TestCase):
 
     def test_fetch_new_review_items_ignores_approved_reviews(self):
         pr = {
-            "repo": "rock3r/kotlin-index",
+            "repo": "rock3r/indexino",
             "number": 716,
             "head_sha": "abc123",
         }
@@ -665,7 +665,7 @@ class RetryEligibilityTests(unittest.TestCase):
 
     def test_fetch_new_review_items_fallback_heuristic_when_unresolved_lookup_errors(self):
         pr = {
-            "repo": "rock3r/kotlin-index",
+            "repo": "rock3r/indexino",
             "number": 716,
             "head_sha": "abc123",
         }
@@ -911,7 +911,7 @@ class RetryEligibilityTests(unittest.TestCase):
             "pr": {
                 "closed": False,
                 "merged": False,
-                "repo": "rock3r/kotlin-index",
+                "repo": "rock3r/indexino",
                 "head_sha": "abc123",
             },
             "checks": {
@@ -1297,7 +1297,7 @@ class CodeRabbitReviewSurfacingTests(unittest.TestCase):
 
     def test_fetch_new_review_items_surfaces_coderabbit_comments(self):
         pr = {
-            "repo": "rock3r/kotlin-index",
+            "repo": "rock3r/indexino",
             "number": 1175,
             "head_sha": "abc123",
         }

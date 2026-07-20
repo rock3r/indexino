@@ -19,7 +19,7 @@ out/
 
 # Project-specific
 local.properties
-.kotlin-index/
+.indexino/
 
 # Worktrees
 /.worktrees

@@ -1,19 +1,30 @@
 # Publishing
 
-`kotlin-code-index` publishes a thin JVM artifact to the Sonatype Central Portal with the
+`indexino` is configured to publish a thin JVM artifact to the Sonatype Central Portal with the
 [`com.vanniktech.maven.publish`](https://github.com/vanniktech/gradle-maven-publish-plugin)
 plugin. The Shadow `*-all.jar` remains the standalone CLI distribution and the `*-shrunk.jar`
 remains an internal native-packaging input. Both are deliberately excluded from the Maven
 publication.
 
-## Consumer coordinates
+## API publication state
 
-Consumers need no publishing or kotlin-code-index-specific Gradle plugin. Add the artifact as a
-normal dependency:
+No version has been published and the current snapshot deliberately has no supported embedded API.
+All implementation declarations are Kotlin `internal`, strict explicit API mode is enabled, and
+`api/indexino.api` is an empty ABI baseline. `checkKotlinAbi`, which is part of `check`, fails if a
+public declaration is added without an explicit baseline review.
+
+The CLI remains executable from the Shadow and R8 artifacts. Presence of implementation bytecode
+in the thin JAR does not make packages outside the future `dev.sebastiano.indexino.api` namespace a
+supported API. See [API-STABILITY.md](API-STABILITY.md).
+
+## Future consumer coordinates
+
+Consumers will need no publishing or Indexino-specific Gradle plugin. Add the artifact as a normal
+dependency after the first embedded API is defined:
 
 ```kotlin
 dependencies {
-    implementation("dev.sebastiano.kotlinindex:kotlin-code-index:<version>")
+    implementation("dev.sebastiano.indexino:indexino:<version>")
 }
 ```
 
@@ -21,13 +32,13 @@ Maven consumers use the equivalent coordinates:
 
 ```xml
 <dependency>
-  <groupId>dev.sebastiano.kotlinindex</groupId>
-  <artifactId>kotlin-code-index</artifactId>
+  <groupId>dev.sebastiano.indexino</groupId>
+  <artifactId>indexino</artifactId>
   <version>VERSION</version>
 </dependency>
 ```
 
-The published POM supplies Kotlin, Clikt, kotlinx.serialization, Xodus, and SLF4J runtime
+The generated POM supplies Kotlin, Clikt, kotlinx.serialization, Xodus, and SLF4J runtime
 dependencies transitively. Consumers do not need to assemble a fat JAR or duplicate that list.
 
 ## Local verification
@@ -42,7 +53,7 @@ verify the publication locally:
 The task publishes to an isolated repository under `build/test-maven-repository/` and checks:
 
 - the main, sources, javadoc, POM, and Gradle module metadata artifacts exist
-- the main artifact contains kotlin-code-index classes but no bundled dependency classes
+- the main artifact contains indexino classes but no bundled dependency classes
 - the Shadow `*-all.jar`, R8 `*-shrunk.jar`, and optional Shadow runtime variant are absent from
   both artifacts and publication metadata
 - the POM contains Central-required name, description, URL, license, SCM, developer, and

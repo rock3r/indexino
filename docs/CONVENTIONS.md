@@ -13,14 +13,14 @@
 
 | What | Where |
 |------|--------|
-| CLI entry + subcommands | `src/main/kotlin/com/kotlincodeindex/cli/` |
-| Selection PSI walk | `src/main/kotlin/com/kotlincodeindex/application/selectioncontext/` |
-| Topology (Bazel, Gradle) | `src/main/kotlin/com/kotlincodeindex/topology/` (future) |
-| Index + cache | `src/main/kotlin/com/kotlincodeindex/core/` |
-| DTOs / report models | `src/main/kotlin/com/kotlincodeindex/application/selectioncontext/model/` |
-| Kotlin PSI bootstrap | `src/main/kotlin/com/kotlincodeindex/parse/` |
+| CLI entry + subcommands | `src/main/kotlin/dev/sebastiano/indexino/cli/` |
+| Selection PSI walk | `src/main/kotlin/dev/sebastiano/indexino/application/selectioncontext/` |
+| Topology (Bazel, Gradle) | `src/main/kotlin/dev/sebastiano/indexino/topology/` (future) |
+| Index + cache | `src/main/kotlin/dev/sebastiano/indexino/core/` |
+| DTOs / report models | `src/main/kotlin/dev/sebastiano/indexino/application/selectioncontext/model/` |
+| Kotlin PSI bootstrap | `src/main/kotlin/dev/sebastiano/indexino/parse/` |
 | Fixture snippets | `src/test/resources/fixtures/` |
-| Fixture-driven tests | `src/test/kotlin/com/kotlincodeindex/` |
+| Fixture-driven tests | `src/test/kotlin/dev/sebastiano/indexino/` |
 
 ## Git Workflow
 

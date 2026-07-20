@@ -48,7 +48,7 @@ Lightweight, low-overhead profiler. Good for flame graphs without heavy tooling.
 
 ```bash
 # Download from https://github.com/jvm-profiling-tools/async-profiler
-./profiler.sh -d 30 -f flame.html $(pgrep -f "kotlin-code-index")
+./profiler.sh -d 30 -f flame.html $(pgrep -f "indexino")
 ```
 
 Open `flame.html` in a browser. Look for wide Compose runtime bars.

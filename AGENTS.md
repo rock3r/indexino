@@ -2,8 +2,8 @@
 
 ## Project Overview
 
-**kotlin-code-index** is a standalone Kotlin CLI that builds a **persistent** local code index
-(Xodus under `<workspace>/.kotlin-index/index/<commit>/`) for agent audit tools. It is
+**indexino** is a standalone Kotlin CLI that builds a **persistent** local code index
+(Xodus under `<workspace>/.indexino/index/<commit>/`) for agent audit tools. It is
 Detekt-independent, Bazel-first (Gradle secondary), and ships as a fat compatibility JAR with no
 target-repo build coupling. A separate R8 JAR is the internal native-distribution input.
 
@@ -20,11 +20,12 @@ manual file reading.
 | [.plans/application-selection-context.md](.plans/application-selection-context.md) | First application (SelectionContainer) |
 | [.plans/master-plan.md](.plans/master-plan.md) | Phased delivery (Core C* / App A*) |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layer map, dependency direction |
-| [docs/INDEX-STORAGE.md](docs/INDEX-STORAGE.md) | `.kotlin-index/` layout, key namespaces |
+| [docs/INDEX-STORAGE.md](docs/INDEX-STORAGE.md) | `.indexino/` layout, key namespaces |
 | [docs/BAZEL-TOPOLOGY.md](docs/BAZEL-TOPOLOGY.md) | Bazel target closure, `.bazelproject` |
 | [docs/GRADLE-TOPOLOGY.md](docs/GRADLE-TOPOLOGY.md) | Gradle backend (phase G) |
 | [docs/CLI.md](docs/CLI.md) | Commands, flags, JSONL output schema |
 | [docs/PUBLISHING.md](docs/PUBLISHING.md) | Maven Central coordinates and release flow |
+| [docs/API-STABILITY.md](docs/API-STABILITY.md) | Public API boundary, ABI baseline, SemVer policy |
 | [docs/TESTING.md](docs/TESTING.md) | TDD flow, fixture layout |
 | [docs/CONVENTIONS.md](docs/CONVENTIONS.md) | File placement, style, git workflow |
 
@@ -81,6 +82,13 @@ Plans always go in the root checkout, in `.plans` (gitignored).
 ### Documentation
 
 When a change touches a surface a doc describes, update the doc in the same session.
+
+### Public API
+
+The committed ABI baseline is intentionally empty until the first embedded API is designed. Keep
+implementation declarations `internal` and strict explicit API mode enabled. Any public declaration
+requires an intentional `api/indexino.api` review and the compatibility analysis described in
+[docs/API-STABILITY.md](docs/API-STABILITY.md).
 
 ## Actions Requiring Explicit User Approval
 

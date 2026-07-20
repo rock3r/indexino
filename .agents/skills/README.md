@@ -1,6 +1,6 @@
 # Project-local skills
 
-Agent-facing playbooks for developing and using `compose-selection-index`. Each skill has a
+Agent-facing playbooks for developing and using Indexino. Each skill has a
 `SKILL.md` with full instructions.
 
 ## Skills
@@ -28,7 +28,7 @@ selection-container findings.
 
 ### `compose-selection-audit`
 
-**Purpose:** Run kotlin-code-index `--application selection-context` against a persistent `.kotlin-index/` store.
+**Purpose:** Run indexino `--application selection-context` against a persistent `.indexino/` store.
 **Use when:** Auditing SC/DisableSelection in Compose/Jewel UI on Bazel monorepos.
 
 ### `skill-creator`

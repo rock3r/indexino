@@ -1,1 +1,1 @@
-rootProject.name = "kotlin-code-index"
+rootProject.name = "indexino"

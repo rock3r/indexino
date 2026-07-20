@@ -9,12 +9,12 @@ Auto-select Bazel when `MODULE.bazel` or `WORKSPACE` exists at `--project` root.
 
 ## Manifest fields
 
-Written to `<project>/.kotlin-index/index/<commit>/manifest.json`:
+Written to `<project>/.indexino/index/<commit>/manifest.json`:
 
 | Field | Description |
 |-------|-------------|
 | `commit` | Git HEAD at index time |
-| `indexerVersion` | kotlin-code-index version string |
+| `indexerVersion` | indexino version string |
 | `topology` | `bazel-query` or `build-parse` |
 | `scope` | Bazel target label |
 | `includeDeps` | Whether dependency closure was included |
@@ -81,7 +81,7 @@ No live monorepo or `bazel` binary required in default `./gradlew test`.
 
 ## Cache
 
-Store under `.kotlin-index/` (gitignored):
+Store under `.indexino/` (gitignored):
 
 - Key: `(bazel-target, include-deps, hash of BUILD files in closure, per-file content hash)`
 - Invalidate when BUILD subtree hash changes or indexed `.kt` content changes

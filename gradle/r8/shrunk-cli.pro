@@ -1,6 +1,6 @@
 # Preserve metadata consumed by Kotlin reflection, PSI, and diagnostics.
 -keepattributes SourceFile,LineNumberTable,Signature,*Annotation*,InnerClasses,EnclosingMethod
--keep class com.kotlincodeindex.cli.MainCommandKt {
+-keep class dev.sebastiano.indexino.cli.MainCommandKt {
     public static void main(java.lang.String[]);
 }
 

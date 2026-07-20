@@ -1,12 +1,12 @@
 # Index storage
 
-Persistent on-disk layout for **kotlin-code-index**.
+Persistent on-disk layout for **indexino**.
 
-## Why `.kotlin-index/` (not `.agent/` or `.agents/`)
+## Why `.indexino/` (not `.agent/` or `.agents/`)
 
 | Path | Purpose |
 |------|---------|
-| **`.kotlin-index/`** | This tool's index store in a workspace being indexed |
+| **`.indexino/`** | This tool's index store in a workspace being indexed |
 | **`.agents/`** | Agent skills in the **tool repo** (unrelated) |
 
 Upstream in-app code-index (#814) uses `.agent/` — we deliberately use a **distinct directory** to avoid confusion. Key schema and record shapes stay compatible; only the root folder name differs. Optional future: `--store-dir` override or import from `.agent/` if both exist.
@@ -15,7 +15,7 @@ Upstream in-app code-index (#814) uses `.agent/` — we deliberately use a **dis
 
 ```
 <project-root>/
-  .kotlin-index/
+  .indexino/
     index/
       <git-commit-hash>/
         base.xodus/       # immutable after seal
@@ -25,11 +25,12 @@ Upstream in-app code-index (#814) uses `.agent/` — we deliberately use a **dis
         delta.xodus/      # optional overlay (future)
 ```
 
-**Gitignore:** add `.kotlin-index/` to audited monorepos (CLI prints a hint on first `index`).
+**Gitignore:** add `.indexino/` to audited monorepos (CLI prints a hint on first `index`).
 
 ## Manifest
 
-See [kotlin-code-index-core.md](../.plans/kotlin-code-index-core.md). Skip rebuild when commit, scope, sources hash, and indexer version match.
+See [kotlin-code-index-core.md](../.plans/kotlin-code-index-core.md). Skip rebuild when commit,
+scope, sources hash, and indexer version match.
 
 ## Key namespaces
 
@@ -84,7 +85,7 @@ query the same base index at once.
 
 ```kotlin
 object IndexPaths {
-    const val STORE_DIR_NAME = ".kotlin-index"
+    const val STORE_DIR_NAME = ".indexino"
 }
 ```
 
