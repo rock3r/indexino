@@ -1,6 +1,6 @@
 # CLI
 
-Commands for **kotlin-code-index**. Persistent store lives at `<project>/.kotlin-index/index/<commit>/`.
+Commands for **indexino**. Persistent store lives at `<project>/.indexino/index/<commit>/`.
 
 ## Commands
 
@@ -9,7 +9,7 @@ Commands for **kotlin-code-index**. Persistent store lives at `<project>/.kotlin
 Build or refresh the persistent base index for a scope.
 
 ```bash
-kotlin-code-index index \
+indexino index \
   --project /path/to/monorepo \
   --bazel-target //plugins/foo/ui:ui \
   [--applications selection-context]
@@ -18,7 +18,7 @@ kotlin-code-index index \
 Gradle-backed repos (no Bazel at project root):
 
 ```bash
-kotlin-code-index index \
+indexino index \
   --project /path/to/gradle-repo \
   --build-system gradle \
   --gradle-module :plugin:ui \
@@ -32,7 +32,7 @@ otherwise Gradle when `settings.gradle(.kts)` is present. Pass `--bazel-target` 
 
 On first run, resolves `git rev-parse HEAD` in `--project`, discovers Kotlin, Java, and Android XML sources via Bazel
 query (with `labels(srcs, …)` fallback when `deps()` fails on partial checkouts), BUILD-file
-parse when `bazel` is unavailable, opens `<project>/.kotlin-index/index/<commit>/base.xodus`,
+parse when `bazel` is unavailable, opens `<project>/.indexino/index/<commit>/base.xodus`,
 runs core `FileHashProducer` plus any requested application producers, and writes `manifest.json`.
 Core producers always build Kotlin/Java symbols, cross-language references, and XML resources;
 `--applications` selects additional application facts such as `selection-context`.
@@ -105,11 +105,11 @@ re-running producers.
 Kotlin PSI (`SelectionContextProducer` and future producers) requires IntelliJ Platform home
 paths. The shadow JAR bundles a minimal `idea-home/` under `src/main/resources/` and sets
 `-Didea.home.path`, `-Didea.config.path`, `-Didea.system.path`, and `-Didea.plugins.path`
-automatically on first run (extracted to `~/.kotlin-index/idea-home/`). Override by passing JVM
+automatically on first run (extracted to `~/.indexino/idea-home/`). Override by passing JVM
 flags before `-jar`:
 
 ```bash
-java -Didea.home.path=/path/to/idea/home -jar kotlin-code-index-all.jar index ...
+java -Didea.home.path=/path/to/idea/home -jar indexino-all.jar index ...
 ```
 
 First run on a large repo may take minutes; subsequent queries read Xodus.
@@ -117,8 +117,8 @@ First run on a large repo may take minutes; subsequent queries read Xodus.
 ### `status`
 
 ```bash
-kotlin-code-index status --project /path/to/monorepo [--bazel-target //pkg:ui]
-kotlin-code-index status --project /path/to/gradle-repo --gradle-module :ui
+indexino status --project /path/to/monorepo [--bazel-target //pkg:ui]
+indexino status --project /path/to/gradle-repo --gradle-module :ui
 ```
 
 When scope flags are omitted, freshness is checked against the scope stored in the manifest
@@ -127,7 +127,7 @@ When scope flags are omitted, freshness is checked against the scope stored in t
 ### Session overlay
 
 Query with `--session-id <id>` reads base index plus session delta at
-`.kotlin-index/sessions/<id>/delta.xodus` (delta overrides base keys).
+`.indexino/sessions/<id>/delta.xodus` (delta overrides base keys).
 
 ### `find-symbol`
 
@@ -135,8 +135,8 @@ Find definitions by exact short name, language-neutral ID, or alias. Results are
 JSONL rows and retain language, owner, signature, arity, and source location.
 
 ```bash
-kotlin-code-index find-symbol --project /path/to/repo --name Panel
-kotlin-code-index find-symbol --project /path/to/repo --name 'sample.Panel#render' --language java
+indexino find-symbol --project /path/to/repo --name Panel
+indexino find-symbol --project /path/to/repo --name 'sample.Panel#render' --language java
 ```
 
 Optional filters: `--kind`, `--language`, `--session-id`, and `--format jsonl`.
@@ -146,7 +146,7 @@ Optional filters: `--kind`, `--language`, `--session-id`, and `--format jsonl`.
 Find references whose resolved or candidate target matches a language-neutral symbol ID.
 
 ```bash
-kotlin-code-index find-references \
+indexino find-references \
   --project /path/to/repo \
   --symbol 'sample.Panel#render'
 ```
@@ -196,7 +196,7 @@ Resolve Android resources by disambiguated type and name. Multiple configuration
 definitions (for example `values/` and `values-night/`) are returned as separate rows.
 
 ```bash
-kotlin-code-index resolve-resource \
+indexino resolve-resource \
   --project /path/to/repo \
   --type string \
   --name title
@@ -208,14 +208,14 @@ Read precomputed facts from the store (fast).
 
 ```bash
 # Application: selection-context
-kotlin-code-index query \
+indexino query \
   --project /path/to/monorepo \
   --application selection-context \
   --preset interactive-in-sc \
   --format jsonl
 
 # Point query (single site)
-kotlin-code-index query \
+indexino query \
   --project /path/to/monorepo \
   --application selection-context \
   --file plugins/foo/ui/src/.../Panel.kt \

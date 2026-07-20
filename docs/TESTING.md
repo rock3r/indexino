@@ -18,6 +18,17 @@ ordinary unit-test task:
 ./gradlew verifyMavenPublication # thin artifact and distribution-variant non-leakage
 ```
 
+Kotlin ABI validation is part of `./gradlew check`. Until the first embedded API is defined,
+`api/indexino.api` is intentionally empty and `checkKotlinAbi` fails on any accidental public
+declaration:
+
+```bash
+./gradlew checkKotlinAbi
+```
+
+Run `updateKotlinAbi` only when intentionally accepting a reviewed public API change; never use it
+as an automatic CI repair.
+
 `verifyShrunkCli` runs only CLI behavior through `shrunkCliJar`; the unshrunk JAR is retained as a
 size baseline and diagnostic fallback. The fixture must exercise Kotlin, Java, Android XML, Xodus,
 selection-context, status/freshness, deterministic symbol/reference queries, and resource lookup.

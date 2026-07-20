@@ -16,7 +16,7 @@ read/evidence workflow, not a visual design review.
 
 For **selection-container context** (interactive composables inside `SelectionContainer` without
 `DisableSelection`, nested SC), use **`compose-selection-audit`** first — it invokes
-`compose-selection-index` for conclusive lexical facts.
+Indexino for conclusive lexical facts.
 
 Keep the audit proportional. A focused request on one file should get a focused file review; a
 broad request should map the surface, sample representative files, and report systemic patterns.

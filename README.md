@@ -1,14 +1,15 @@
-# kotlin-code-index
+# indexino
 
-[![check](https://github.com/rock3r/kotlin-index/actions/workflows/check.yml/badge.svg)](https://github.com/rock3r/kotlin-index/actions/workflows/check.yml)
+[![check](https://github.com/rock3r/indexino/actions/workflows/check.yml/badge.svg)](https://github.com/rock3r/indexino/actions/workflows/check.yml)
 
-> **Experimental** — APIs, index layout, and CLI contracts may change without notice.
+> **Pre-release** — there is no supported embedded API yet. Index layout and CLI contracts may
+> change until the first release.
 
 Standalone Kotlin CLI that builds a **persistent** local code index (Xodus under
-`<workspace>/.kotlin-index/index/<commit>/`) for agent audit tools. Detekt-independent,
+`<workspace>/.indexino/index/<commit>/`) for agent audit tools. Detekt-independent,
 Bazel-first (Gradle secondary), and ships as a fat compatibility JAR with no target-repo build
 coupling. A separate R8-shrunk JAR is the internal native-distribution input. The same code is
-published as a thin Maven artifact for dependency-based consumers.
+prepared as a thin Maven artifact for the forthcoming embedded API.
 
 **selection-context** is the first application plugin: precomputed SelectionContainer /
 DisableSelection facts at composable call sites for Compose/Jewel UI audits.
@@ -26,20 +27,20 @@ Build the fat JAR:
 
 ```bash
 ./gradlew shadowJar
-# → build/libs/kotlin-code-index-0.2.0-SNAPSHOT-all.jar
+# → build/libs/indexino-0.2.0-SNAPSHOT-all.jar
 ```
 
 Build and verify the internal R8 native-packaging input:
 
 ```bash
 ./gradlew shrunkCliJar verifyShrunkCli
-# → build/libs/kotlin-code-index-0.2.0-SNAPSHOT-shrunk.jar
+# → build/libs/indexino-0.2.0-SNAPSHOT-shrunk.jar
 ```
 
 Run via Gradle during development, or invoke the JAR directly:
 
 ```bash
-JAR=build/libs/kotlin-code-index-0.2.0-SNAPSHOT-all.jar
+JAR=build/libs/indexino-0.2.0-SNAPSHOT-all.jar
 
 # Build or refresh the index for a Bazel target
 java -jar "$JAR" index \
@@ -75,14 +76,18 @@ Run tests:
 ./gradlew check
 ```
 
-## Maven dependency
+## Maven publication
 
-Consumers need no custom Gradle plugin. Use the normal Maven Central coordinates; the thin JAR's
-runtime dependencies are declared transitively in its POM:
+The future embedded API will use normal Maven Central coordinates with no custom Gradle plugin.
+The current snapshot deliberately exports no supported Kotlin declarations: every implementation
+symbol is `internal`, strict explicit API mode is enabled, and the committed Kotlin ABI baseline is
+empty. See [docs/API-STABILITY.md](docs/API-STABILITY.md) before adding a public declaration.
+
+Once an API is defined, consumers will use:
 
 ```kotlin
 dependencies {
-    implementation("dev.sebastiano.kotlinindex:kotlin-code-index:<version>")
+    implementation("dev.sebastiano.indexino:indexino:<version>")
 }
 ```
 
@@ -96,7 +101,8 @@ publication verification and the release flow.
 |-----|--------|
 | [docs/CLI.md](docs/CLI.md) | Commands, flags, JSONL schema |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layers |
-| [docs/INDEX-STORAGE.md](docs/INDEX-STORAGE.md) | `.kotlin-index/` + keys |
+| [docs/INDEX-STORAGE.md](docs/INDEX-STORAGE.md) | `.indexino/` + keys |
+| [docs/API-STABILITY.md](docs/API-STABILITY.md) | Public API boundary and compatibility gates |
 | [docs/PUBLISHING.md](docs/PUBLISHING.md) | Maven coordinates and release flow |
 | [AGENTS.md](AGENTS.md) | Agent rules |
 

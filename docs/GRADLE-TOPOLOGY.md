@@ -30,21 +30,21 @@ Auto-select Gradle when no `MODULE.bazel` / `WORKSPACE` at `--project` root and
 ## CLI
 
 ```bash
-kotlin-code-index index \
+indexino index \
   --project . \
   --build-system gradle \
   --gradle-module :plugin:ui \
   [--include-deps] \
   [--applications selection-context]
 
-kotlin-code-index status \
+indexino status \
   --project . \
   --gradle-module :plugin:ui
 ```
 
 ## Cache
 
-Same `.kotlin-index/` layout as Bazel; manifest `scope` holds the Gradle module path (e.g.
+Same `.indexino/` layout as Bazel; manifest `scope` holds the Gradle module path (e.g.
 `:ui`); `topology` is `gradle-parse`.
 
 ## Limits

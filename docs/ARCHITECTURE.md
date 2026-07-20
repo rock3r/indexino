@@ -2,7 +2,7 @@
 
 ## Product shape
 
-**kotlin-code-index** is a portable, **persistent** local code index shipped as a standalone fat
+**indexino** is a portable, **persistent** local code index shipped as a standalone fat
 CLI JAR and as a thin Maven artifact. The build also produces a separate R8-shrunk CLI JAR as the
 input to native packaging; it does not replace either public artifact. It is not a
 SelectionContainer one-off — **selection-context** is the first **application plugin** on top of
@@ -25,7 +25,7 @@ shared storage and topology.
                                       ▼
                          ┌────────────────────────┐
                          │  Xodus store           │
-                         │  .kotlin-index/index/<commit>/│
+                         │  .indexino/index/<commit>/│
                          └────────────────────────┘
 ```
 
@@ -41,15 +41,23 @@ shared storage and topology.
 
 Dependency direction: `cli` → `application` + `producer` → `topology` + `core`.
 
+## Embedded API boundary
+
+There is no supported embedded API yet. All current layers are implementation details and their
+Kotlin declarations are `internal`; the committed ABI baseline is empty. The first supported API
+will be introduced deliberately under `dev.sebastiano.indexino.api`. See
+[API-STABILITY.md](API-STABILITY.md).
+
 ## Persistence (why it exists)
 
-Large Bazel monorepos may take **minutes** to index. The store under `.kotlin-index/index/<commit>/` amortizes that cost:
+Large Bazel monorepos may take **minutes** to index. The store under `.indexino/index/<commit>/` amortizes that cost:
 
 - First `index`: build base.xodus
 - Subsequent `query`: read keys only
 - New commit: new base directory; old bases can be garbage-collected
 
-See [INDEX-STORAGE.md](INDEX-STORAGE.md) and [.plans/kotlin-code-index-core.md](../.plans/kotlin-code-index-core.md).
+See [INDEX-STORAGE.md](INDEX-STORAGE.md) and
+[.plans/kotlin-code-index-core.md](../.plans/kotlin-code-index-core.md).
 
 ## selection-context application
 

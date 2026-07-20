@@ -25,7 +25,11 @@ group = providers.gradleProperty("GROUP").get()
 
 version = providers.gradleProperty("VERSION_NAME").get()
 
-kotlin { jvmToolchain(21) }
+kotlin {
+    jvmToolchain(21)
+    explicitApi()
+    @OptIn(org.jetbrains.kotlin.gradle.dsl.abi.ExperimentalAbiValidation::class) abiValidation {}
+}
 
 ktfmt { kotlinLangStyle() }
 
@@ -65,7 +69,7 @@ dependencies {
     testImplementation(kotlin("test"))
 }
 
-val cliMainClass = "com.kotlincodeindex.cli.MainCommandKt"
+val cliMainClass = "dev.sebastiano.indexino.cli.MainCommandKt"
 
 application { mainClass.set(cliMainClass) }
 
@@ -147,7 +151,7 @@ tasks.register<JavaExec>("smokeSelectionWalker") {
     group = "verification"
     description = "Run SelectionWalker against intellij-community (pass path as first arg)"
     classpath = sourceSets["main"].runtimeClasspath
-    mainClass.set("com.kotlincodeindex.smoke.SelectionWalkerSmokeKt")
+    mainClass.set("dev.sebastiano.indexino.smoke.SelectionWalkerSmokeKt")
     systemProperty("idea.home.path", ideaHomeDir.absolutePath)
     systemProperty("idea.config.path", ideaHomeDir.resolve("config").absolutePath)
     systemProperty("idea.system.path", ideaHomeDir.resolve("system").absolutePath)
@@ -193,11 +197,11 @@ val verifyShrunkCli by
             .withPropertyName("unshrunkCliJar")
         useJUnitPlatform { includeTags("distribution") }
         systemProperty(
-            "kotlinCodeIndex.shrunkJar",
+            "indexino.shrunkJar",
             shrunkCliJar.flatMap(ShadowJar::getArchiveFile).get().asFile.absolutePath,
         )
         systemProperty(
-            "kotlinCodeIndex.unshrunkJar",
+            "indexino.unshrunkJar",
             tasks.shadowJar.flatMap(ShadowJar::getArchiveFile).get().asFile.absolutePath,
         )
     }
@@ -212,7 +216,7 @@ val verifyMavenPublication by
         inputs.dir(testMavenRepository).withPropertyName("testMavenRepository")
         useJUnitPlatform { includeTags("publication") }
         systemProperty(
-            "kotlinCodeIndex.publicationDirectory",
+            "indexino.publicationDirectory",
             testMavenRepository
                 .get()
                 .dir(
@@ -222,9 +226,9 @@ val verifyMavenPublication by
                 .asFile
                 .absolutePath,
         )
-        systemProperty("kotlinCodeIndex.publicationGroup", publicationGroupId)
-        systemProperty("kotlinCodeIndex.publicationArtifact", publicationArtifactId.get())
-        systemProperty("kotlinCodeIndex.publicationVersion", publicationVersion)
+        systemProperty("indexino.publicationGroup", publicationGroupId)
+        systemProperty("indexino.publicationArtifact", publicationArtifactId.get())
+        systemProperty("indexino.publicationVersion", publicationVersion)
     }
 
 tasks.check {
