@@ -7,6 +7,7 @@ import java.nio.file.Path
 import java.nio.file.attribute.FileTime
 import java.util.Properties
 import java.util.jar.JarFile
+import java.util.zip.ZipFile
 import kotlin.io.path.createDirectories
 import kotlin.io.path.writeText
 import kotlin.test.Test
@@ -96,7 +97,12 @@ class ConstruoContractTest {
         assertEquals(493, entries.getValue("runtime/lib/jspawnhelper").unixMode)
         assertEquals(420, entries.getValue("indexino-cli.jar").unixMode)
         assertEquals(420, entries.getValue("licenses/generated.txt").unixMode)
-        assertEquals(0, entries.getValue("indexino-cli.jar").dosSecond % 2)
+        val expectedDosSecond = (oddTimestamp.toMillis() / 1_000L % 60L / 2L * 2L).toInt()
+        assertEquals(expectedDosSecond, entries.getValue("indexino-cli.jar").dosSecond)
+        ZipFile(projectDirectory.resolve("build/contract/synthetic.zip").toFile()).use { zip ->
+            val applicationJar = requireNotNull(zip.getEntry("indexino-cli.jar"))
+            assertEquals(oddTimestamp.toMillis(), applicationJar.time)
+        }
     }
 
     @Test

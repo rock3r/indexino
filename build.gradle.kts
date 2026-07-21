@@ -228,6 +228,9 @@ val verifyShrunkCli by
         )
     }
 
+val nativeDistributionPinsFile =
+    layout.projectDirectory.file("gradle/native-distributions.properties")
+
 val verifyConstruoContract by
     tasks.registering(Test::class) {
         group = "verification"
@@ -236,14 +239,15 @@ val verifyConstruoContract by
         testClassesDirs = sourceSets.test.get().output.classesDirs
         classpath = sourceSets.test.get().runtimeClasspath
         dependsOn(normalizedCliJar)
+        inputs.file(nativeDistributionPinsFile).withPropertyName("nativeDistributionPins")
+        inputs
+            .file(normalizedCliJar.flatMap(NormalizedJar::getArchiveFile))
+            .withPropertyName("normalizedCliJar")
         useJUnitPlatform { includeTags("construo-contract") }
         systemProperty("indexino.construoVersion", libs.versions.construo.get())
         systemProperty(
             "indexino.nativeDistributionPins",
-            layout.projectDirectory
-                .file("gradle/native-distributions.properties")
-                .asFile
-                .absolutePath,
+            nativeDistributionPinsFile.asFile.absolutePath,
         )
         systemProperty(
             "indexino.normalizedCliJar",
