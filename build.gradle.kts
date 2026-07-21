@@ -307,7 +307,9 @@ val verifyConstruoContract by
         inputs
             .file(normalizedCliJar.flatMap(NormalizedJar::getArchiveFile))
             .withPropertyName("normalizedCliJar")
-        inputs.file(shrunkCliJar.flatMap(ShadowJar::getArchiveFile)).withPropertyName("shrunkCliJar")
+        inputs
+            .file(shrunkCliJar.flatMap(ShadowJar::getArchiveFile))
+            .withPropertyName("shrunkCliJar")
         useJUnitPlatform { includeTags("construo-contract") }
         systemProperty("indexino.construoVersion", libs.versions.construo.get())
         systemProperty(
@@ -334,7 +336,6 @@ fun registerNativeDistributionVerification(
         description = "Verify the $artifactSuffix native distribution"
         testClassesDirs = sourceSets.test.get().output.classesDirs
         classpath = sourceSets.test.get().runtimeClasspath
-        dependsOn("package$taskSuffix")
         val archive = tasks.named<PackageTask>("package$taskSuffix").flatMap { it.archiveFile }
         val targetJdkRoot =
             tasks.named<CreateRuntimeImageTask>("createRuntimeImage$taskSuffix").flatMap {
@@ -361,12 +362,11 @@ fun registerNativeDistributionVerification(
         )
     }
 
-val verifyNativeDistributionLinuxX64 =
-    registerNativeDistributionVerification("linuxX64", "LinuxX64", "linux-x64")
-val verifyNativeDistributionMacArm64 =
-    registerNativeDistributionVerification("macArm64", "MacArm64", "macos-arm64")
-val verifyNativeDistributionWindowsX64 =
-    registerNativeDistributionVerification("windowsX64", "WindowsX64", "windows-x64")
+registerNativeDistributionVerification("linuxX64", "LinuxX64", "linux-x64")
+
+registerNativeDistributionVerification("macArm64", "MacArm64", "macos-arm64")
+
+registerNativeDistributionVerification("windowsX64", "WindowsX64", "windows-x64")
 
 val verifyMavenPublication by
     tasks.registering(Test::class) {

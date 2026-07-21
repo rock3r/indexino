@@ -518,13 +518,7 @@ class NativeDistributionTest {
                 """
                     .trimIndent()
             )
-        runCommand(workspace, "git", "init")
-        runCommand(workspace, "git", "config", "user.email", "distribution-test@example.invalid")
-        runCommand(workspace, "git", "config", "user.name", "Distribution Test")
-        runCommand(workspace, "git", "add", ".")
-        val commit =
-            runCommand(workspace, "git", "-c", "commit.gpgSign=false", "commit", "-m", "fixture")
-        assertEquals(0, commit.exitCode, commit.diagnostic())
+        initializeGitFixture(workspace)
         return workspace
     }
 
@@ -539,6 +533,11 @@ class NativeDistributionTest {
                 .resolve("Generated$index.kt")
                 .writeText("package sample\nclass Generated$index { fun value() = $index }\n")
         }
+        initializeGitFixture(workspace)
+        return workspace
+    }
+
+    private fun initializeGitFixture(workspace: Path) {
         runCommand(workspace, "git", "init")
         runCommand(workspace, "git", "config", "user.email", "distribution-test@example.invalid")
         runCommand(workspace, "git", "config", "user.name", "Distribution Test")
@@ -546,7 +545,6 @@ class NativeDistributionTest {
         val commit =
             runCommand(workspace, "git", "-c", "commit.gpgSign=false", "commit", "-m", "fixture")
         assertEquals(0, commit.exitCode, commit.diagnostic())
-        return workspace
     }
 
     private fun ctrlCVerificationScript(launcher: Path, workspace: Path): String {
