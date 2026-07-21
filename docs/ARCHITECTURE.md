@@ -3,8 +3,9 @@
 ## Product shape
 
 **indexino** is a portable, **persistent** local code index shipped as a standalone fat
-CLI JAR and as a thin Maven artifact. The build also produces a separate R8-shrunk CLI JAR as the
-input to native packaging; it does not replace either public artifact. It is not a
+CLI JAR, as a thin Maven artifact, and in self-contained native CLI ZIPs. The build also produces a
+separate R8-shrunk CLI JAR as the input to native packaging; it does not replace either public
+artifact. It is not a
 SelectionContainer one-off — **selection-context** is the first **application plugin** on top of
 shared storage and topology.
 
@@ -95,6 +96,9 @@ for these languages. ASM dependency producers remain a later core milestone.
 | `*-all.jar` | Unshrunk compatibility/debug CLI for direct `java -jar` use | No |
 | `*-shrunk.jar` | Verified native-packaging input | No |
 | `native-distributions/application/indexino-cli.jar` | Metadata-normalized native/AOT application JAR | No |
+| `indexino-*-linux-x64.zip` | Linux x64 launcher, stripped JBR 25 runtime, application JAR, and licenses | No |
+| `indexino-*-macos-arm64.zip` | Flat macOS arm64 CLI with the same installation layout | No |
+| `indexino-*-windows-x64.zip` | Windows x64 console launcher with the same installation layout | No |
 | ordinary JVM JAR | Thin dependency artifact with transitive runtime dependencies | Yes |
 
 `shadowJar` and `shrunkCliJar` share explicit main output, runtime classpath, manifest, service
@@ -102,6 +106,13 @@ merge, duplicate handling, and reproducibility settings. The shrunk task adds on
 rules under `gradle/r8/`. `normalizedCliJar` repackages that R8 output with a deterministic
 even-second filesystem mtime. Its build cache is disabled because AOT validates that metadata, and
 Construo is configured to consume this exact normalized output.
+
+Each native target uses checked-in JBR and Roast digests. Construo verifies those archives before
+extraction, runs `jlink`, `jdeps`, and `javap` from the matching target JBRSDK 25, and emits one
+target-specific archive. The shipped jlink image intentionally omits `runtime/bin/java` while
+retaining process helpers such as `jspawnhelper`; the application still launches external Git and
+topology tools when a command needs them. AOT caches are added by the later D3 packaging layer, not
+by the baseline D2 distributions.
 
 ## Phased delivery
 

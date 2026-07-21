@@ -17,6 +17,9 @@ ordinary unit-test task:
 ./gradlew verifyShrunkCli       # manifest launch, full fixture workload, services, size ceiling
 ./gradlew verifyMavenPublication # thin artifact and distribution-variant non-leakage
 ./gradlew verifyConstruoContract # released native-packaging API, checksums, modes, normalized JAR
+./gradlew verifyNativeDistributionLinuxX64   # native Linux x64 host only
+./gradlew verifyNativeDistributionMacArm64   # native macOS arm64 host only
+./gradlew verifyNativeDistributionWindowsX64 # native Windows x64 host only
 ```
 
 Kotlin ABI validation is part of `./gradlew check`. Until the first embedded API is defined,
@@ -38,6 +41,15 @@ selection-context, status/freshness, deterministic symbol/reference queries, and
 checks provider-inferred overlays and preparation tasks, per-target archive outputs and target-JDK
 tool selection, raw macOS layout, Windows console options, checksum rejection, Unix ZIP modes, and
 the deterministic metadata of the non-cacheable normalized application JAR.
+
+Each `verifyNativeDistribution<Target>` task packages with the matching verified target JBRSDK 25,
+extracts the ZIP with the platform's standard tool, and drives the actual Roast executable from an
+arbitrary caller directory. The suite checks the flat layout, normalized JAR timestamp, explicit
+jlink modules, legal files, launcher configuration, target-JBR packaging tools, POSIX modes,
+missing-Git diagnostics, the full Kotlin/Java/XML index/query workload, and relocation. The Windows
+task additionally checks PowerShell and `cmd.exe` waiting/redirection/exit propagation and sends a
+real console `CTRL_C_EVENT`. These tasks must run on matching native hosts; cross-packaging is not a
+substitute for launcher verification.
 
 ## TDD Red-Green Cycle
 
