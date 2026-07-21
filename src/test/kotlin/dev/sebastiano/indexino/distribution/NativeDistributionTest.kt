@@ -242,7 +242,7 @@ class NativeDistributionTest {
                 "/d",
                 "/s",
                 "/c",
-                "\"${launcher}\" --help 1>\"$cmdOutput\" 2>\"$cmdError\"",
+                "call \"${launcher}\" --help 1>\"$cmdOutput\" 2>\"$cmdError\"",
             )
         assertEquals(0, cmd.exitCode, cmd.diagnostic())
         assertContains(cmdOutput.readText(), "Usage: indexino")
@@ -256,7 +256,8 @@ class NativeDistributionTest {
                 "/d",
                 "/s",
                 "/c",
-                "\"${launcher}\" not-a-command 1>\"$invalidCmdOutput\" 2>\"$invalidCmdError\"",
+                "call \"${launcher}\" not-a-command " +
+                    "1>\"$invalidCmdOutput\" 2>\"$invalidCmdError\"",
             )
         assertTrue(invalidCmd.exitCode != 0, invalidCmd.diagnostic())
         assertContains(invalidCmdError.readText(), "no such subcommand")
@@ -276,7 +277,7 @@ class NativeDistributionTest {
                 ),
             )
         assertTrue(invalid.exitCode != 0, invalid.diagnostic())
-        assertContains(tempDir.resolve("invalid.err").readText(), "no such subcommand")
+        assertContains(readRedirectedText(tempDir.resolve("invalid.err")), "no such subcommand")
     }
 
     @Test
@@ -576,7 +577,7 @@ class NativeDistributionTest {
             ${'$'}process = New-Object NativeConsole+PROCESS_INFORMATION
             ${'$'}commandLine = New-Object Text.StringBuilder '${powershellQuote(commandLine)}'
             ${'$'}created = [NativeConsole]::CreateProcess(
-                ${'$'}null,
+                '${powershellQuote(launcher)}',
                 ${'$'}commandLine,
                 [IntPtr]::Zero,
                 [IntPtr]::Zero,
