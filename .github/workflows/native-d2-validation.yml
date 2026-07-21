@@ -38,13 +38,20 @@ jobs:
           distribution: temurin
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v5
-      - run: ./gradlew.bat verifyNativeDistributionWindowsX64 --rerun-tasks --no-daemon
+      - run: ./gradlew.bat verifyNativeDistributionWindowsX64 --rerun-tasks --no-daemon --stacktrace
+      - name: Inspect failed R8 output
+        if: failure()
+        shell: pwsh
+        run: |
+          Get-ChildItem build/libs
+          & jar tf build/libs/indexino-0.2.0-SNAPSHOT-shrunk.jar | Select-Object -First 20
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: d2-windows-x64
           path: |
             build/distributions/*.zip
+            build/libs/*.jar
             build/test-results/verifyNativeDistributionWindowsX64/**
             build/reports/tests/verifyNativeDistributionWindowsX64/**
           retention-days: 3
