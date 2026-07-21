@@ -8,7 +8,7 @@ xodus = "2.0.1"
 detekt = "2.0.0-alpha.2"
 ktfmt = "0.26.0"
 mavenPublish = "0.36.0"
-construo = "2.2.0"
+construo = "2.2.1"
 
 [libraries]
 kotlin-compiler-embeddable = { module = "org.jetbrains.kotlin:kotlin-compiler-embeddable", version.ref = "kotlin" }

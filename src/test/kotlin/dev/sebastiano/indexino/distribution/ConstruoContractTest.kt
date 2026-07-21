@@ -68,8 +68,8 @@ class ConstruoContractTest {
     fun `released plugin exposes the complete distribution contract`() {
         val pluginVersion = requiredProperty("indexino.construoVersion")
         assertTrue(
-            pluginVersion == "2.2.0",
-            "Construo must be pinned to the validated 2.2.0 release",
+            pluginVersion == "2.2.1",
+            "Construo must be pinned to the validated 2.2.1 release",
         )
         writeFixture(pluginVersion, "http://127.0.0.1/unused-jdk.tar.gz")
 
