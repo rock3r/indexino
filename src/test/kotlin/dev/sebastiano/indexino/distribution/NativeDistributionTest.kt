@@ -3,6 +3,7 @@ package dev.sebastiano.indexino.distribution
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.util.Base64
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.zip.ZipFile
@@ -230,7 +231,7 @@ class NativeDistributionTest {
                 powershellInvocation(launcher, powershellOutput, powershellError, "--help"),
             )
         assertEquals(0, powershell.exitCode, powershell.diagnostic())
-        assertContains(powershellOutput.readText(), "Usage: indexino")
+        assertContains(readRedirectedText(powershellOutput), "Usage: indexino")
 
         val cmdOutput = tempDir.resolve("cmd.out")
         val cmdError = tempDir.resolve("cmd.err")
@@ -318,13 +319,24 @@ class NativeDistributionTest {
         val relativeLauncher = caller.relativize(launcher)
         val relativeWorkspace = caller.relativize(workspace)
         val status =
-            runCommand(
-                caller,
-                relativeLauncher.toString(),
-                "status",
-                "--project",
-                relativeWorkspace.toString(),
-            )
+            if (launcher.fileName.toString().endsWith(".exe")) {
+                runCommand(
+                    caller,
+                    "cmd.exe",
+                    "/d",
+                    "/s",
+                    "/c",
+                    "call \"$relativeLauncher\" status --project \"$relativeWorkspace\"",
+                )
+            } else {
+                runCommand(
+                    caller,
+                    relativeLauncher.toString(),
+                    "status",
+                    "--project",
+                    relativeWorkspace.toString(),
+                )
+            }
         assertEquals(0, status.exitCode, status.diagnostic())
         assertContains(status.stdout, "selection-context")
     }
@@ -551,11 +563,13 @@ class NativeDistributionTest {
         val commandLine =
             "\"$launcher\" index --project \"$workspace\" " +
                 "--build-system gradle --gradle-module :app"
+        val nativeConsoleBase64 =
+            Base64.getEncoder().encodeToString(nativeConsoleTypeDefinition.toByteArray())
         return """
             ${'$'}ErrorActionPreference = 'Stop'
-            Add-Type -TypeDefinition @'
-            $nativeConsoleTypeDefinition
-            '@
+            ${'$'}nativeConsoleSource = [Text.Encoding]::UTF8.GetString(
+                [Convert]::FromBase64String('$nativeConsoleBase64'))
+            Add-Type -TypeDefinition ${'$'}nativeConsoleSource
 
             ${'$'}startup = New-Object NativeConsole+STARTUPINFO
             ${'$'}startup.cb = [Runtime.InteropServices.Marshal]::SizeOf(${'$'}startup)
@@ -717,6 +731,22 @@ class NativeDistributionTest {
             "exit ${'$'}LASTEXITCODE"
 
     private fun powershellQuote(value: Any): String = value.toString().replace("'", "''")
+
+    private fun readRedirectedText(path: Path): String {
+        val bytes = Files.readAllBytes(path)
+        return when {
+            bytes.size >= 2 && bytes[0] == 0xff.toByte() && bytes[1] == 0xfe.toByte() ->
+                bytes.copyOfRange(2, bytes.size).toString(Charsets.UTF_16LE)
+            bytes.size >= 2 && bytes[0] == 0xfe.toByte() && bytes[1] == 0xff.toByte() ->
+                bytes.copyOfRange(2, bytes.size).toString(Charsets.UTF_16BE)
+            bytes.size >= 3 &&
+                bytes[0] == 0xef.toByte() &&
+                bytes[1] == 0xbb.toByte() &&
+                bytes[2] == 0xbf.toByte() ->
+                bytes.copyOfRange(3, bytes.size).toString(Charsets.UTF_8)
+            else -> bytes.toString(Charsets.UTF_8)
+        }
+    }
 
     private fun requiredProperty(name: String): String =
         requireNotNull(System.getProperty(name)) { "Missing $name" }
