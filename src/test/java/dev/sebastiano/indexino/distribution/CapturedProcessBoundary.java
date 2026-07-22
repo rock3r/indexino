@@ -67,7 +67,7 @@ public final class CapturedProcessBoundary {
     private static void establishWindowsJob() {
         WindowsKernel32 kernel32 = WindowsKernel32.INSTANCE;
         Pointer job = kernel32.CreateJobObjectW(Pointer.NULL, null);
-        if (job == null || Pointer.NULL.equals(job)) {
+        if (job == null) {
             throw windowsFailure("CreateJobObjectW");
         }
 
