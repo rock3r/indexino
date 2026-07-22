@@ -3,7 +3,6 @@ package dev.sebastiano.indexino.distribution
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
-import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.createDirectories
 import kotlin.io.path.readText
@@ -18,12 +17,87 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.io.TempDir
 
 @Tag("native-distribution")
 class NativeCompatibilityTest {
     @TempDir lateinit var tempDir: Path
+
+    @Test
+    fun `completed process does not wait for descendant held output streams`() {
+        val childPidFile = tempDir.resolve("output-holder.pid")
+        val command =
+            if (requiredProperty("indexino.nativeTarget") == WINDOWS_X64) {
+                arrayOf(
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "${'$'}child = Start-Process -FilePath 'powershell.exe' " +
+                        "-ArgumentList '-NoProfile','-NonInteractive','-Command'," +
+                        "'Start-Sleep -Seconds 3' -PassThru; " +
+                        "Set-Content -LiteralPath '${powershellQuote(childPidFile)}' " +
+                        "-Value ${'$'}child.Id",
+                )
+            } else {
+                arrayOf(
+                    "/bin/sh",
+                    "-c",
+                    "sleep 3 & printf '%s' \"${'$'}!\" > \"${'$'}1\"",
+                    "sh",
+                    childPidFile.toString(),
+                )
+            }
+        val startedAt = System.nanoTime()
+        var child: ProcessHandle? = null
+
+        try {
+            val result = runCommand(tempDir, 10L, TimeUnit.SECONDS, *command)
+            assertEquals(0, result.exitCode, result.diagnostic())
+            assertTrue(Files.isRegularFile(childPidFile), "Output-holder PID was not recorded")
+            child = ProcessHandle.of(childPidFile.readText().trim().toLong()).orElse(null)
+            assertTrue(
+                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt) < 2_000L,
+                "Output capture waited for a descendant-held stream",
+            )
+        } finally {
+            child?.destroyForcibly()
+            child?.onExit()?.get(2L, TimeUnit.SECONDS)
+        }
+    }
+
+    @Test
+    fun `timeout cleanup includes descendants created during termination`() {
+        assumeTrue(
+            requiredProperty("indexino.nativeTarget") != WINDOWS_X64,
+            "Late-descendant fixture uses POSIX signal traps",
+        )
+        val lateChildPidFile = tempDir.resolve("late-child.pid")
+        val command =
+            arrayOf(
+                "/bin/sh",
+                "-c",
+                "trap 'sleep 30 & printf \"%s\" \"${'$'}!\" > \"${'$'}1\"; " +
+                    "sleep 1; exit 0' TERM; while :; do sleep 1; done",
+                "sh",
+                lateChildPidFile.toString(),
+            )
+        var lateChild: ProcessHandle? = null
+
+        try {
+            assertFailsWith<AssertionError> {
+                runCommand(tempDir, 500L, TimeUnit.MILLISECONDS, *command)
+            }
+            assertTrue(Files.isRegularFile(lateChildPidFile), "Late child PID was not recorded")
+            lateChild = ProcessHandle.of(lateChildPidFile.readText().trim().toLong()).orElse(null)
+            assertFalse(lateChild?.isAlive == true, "Late timeout descendant is still alive")
+        } finally {
+            lateChild?.destroyForcibly()
+            lateChild?.onExit()?.get(2L, TimeUnit.SECONDS)
+        }
+    }
 
     @Test
     fun `timed out compatibility process is terminated`() {
@@ -342,31 +416,16 @@ class NativeCompatibilityTest {
         timeoutUnit: TimeUnit,
         vararg command: String,
     ): ProcessResult {
-        val process =
-            ProcessBuilder(*command)
-                .directory(workingDirectory.toFile())
-                .redirectErrorStream(false)
-                .start()
-        Executors.newVirtualThreadPerTaskExecutor().use { executor ->
-            val stdout = executor.submit<String> { process.inputStream.bufferedReader().readText() }
-            val stderr = executor.submit<String> { process.errorStream.bufferedReader().readText() }
-            if (!process.waitFor(timeout, timeoutUnit)) {
-                val terminated =
-                    terminateProcessTree(
-                        process,
-                        PROCESS_TERMINATION_GRACE_SECONDS,
-                        TimeUnit.SECONDS,
-                    )
-                process.inputStream.close()
-                process.errorStream.close()
-                process.outputStream.close()
-                stdout.cancel(true)
-                stderr.cancel(true)
-                assertTrue(terminated, "Could not terminate: ${command.joinToString(" ")}")
-                throw AssertionError("Process timed out: ${command.joinToString(" ")}")
-            }
-            return ProcessResult(process.exitValue(), stdout.get(), stderr.get())
-        }
+        val result =
+            runCapturedProcess(
+                workingDirectory,
+                command.toList(),
+                timeout = timeout,
+                timeoutUnit = timeoutUnit,
+                terminationTimeout = PROCESS_TERMINATION_GRACE_SECONDS,
+                terminationTimeoutUnit = TimeUnit.SECONDS,
+            )
+        return ProcessResult(result.exitCode, result.stdout, result.stderr)
     }
 
     private fun requiredProperty(name: String): String =

@@ -13,9 +13,12 @@ import dev.sebastiano.indexino.buildlogic.NormalizedJar
 import io.github.fourlastor.construo.Target
 import io.github.fourlastor.construo.task.PackageTask
 import io.github.fourlastor.construo.task.jvm.CreateRuntimeImageTask
+import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermissions
 import java.util.Properties
 import org.gradle.api.file.DuplicatesStrategy
 import org.gradle.api.tasks.Delete
+import org.gradle.api.tasks.Sync
 import org.gradle.api.tasks.testing.Test
 
 plugins {
@@ -316,6 +319,41 @@ val finalizedMacArm64Archive by
 
 tasks.named<PackageTask>("packageMacArm64") { finalizedBy(finalizedMacArm64Archive) }
 
+val restrictedMacAotCacheDirectory =
+    layout.buildDirectory.dir("tmp/restrictedMacAotCacheForVerification")
+val prepareRestrictedMacAotCacheForVerification by
+    tasks.registering(Sync::class) {
+        from(tasks.named<AotTrainingTask>("trainAotMacArm64").flatMap { it.aotCache })
+        into(restrictedMacAotCacheDirectory)
+        outputs.upToDateWhen { false }
+        outputs.doNotCacheIf("Verification requires a restrictive source mode") { true }
+        doLast {
+            Files.setPosixFilePermissions(
+                restrictedMacAotCacheDirectory.get().file("classes.jsa").asFile.toPath(),
+                PosixFilePermissions.fromString("rw-------"),
+            )
+        }
+    }
+
+val restrictedMacArchiveForVerification by
+    tasks.registering(MacDittoArchive::class) {
+        group = "verification"
+        description = "Verify macOS archive modes from a restrictively permissioned AOT cache"
+        inputArchive.set(tasks.named<PackageTask>("packageMacArm64").flatMap { it.archiveFile })
+        normalizedJar.set(normalizedCliJar.flatMap(NormalizedJar::getArchiveFile))
+        aotCache.set(
+            prepareRestrictedMacAotCacheForVerification.map {
+                restrictedMacAotCacheDirectory.get().file("classes.jsa")
+            }
+        )
+        dittoExecutable.set("/usr/bin/ditto")
+        outputArchive.set(
+            layout.buildDirectory.file(
+                "tmp/restrictedMacArchiveForVerification/indexino-macos-arm64.zip"
+            )
+        )
+    }
+
 shadow { addShadowVariantIntoJavaComponent = false }
 
 val testMavenRepository = layout.buildDirectory.dir("test-maven-repository")
@@ -479,10 +517,21 @@ val verifyAotTrainingContract by
         systemProperty("indexino.aotTrainingTaskSource", taskSource.asFile.absolutePath)
     }
 
-fun registerNativeDistributionVerification(taskSuffix: String, artifactSuffix: String) =
-    tasks.register<Test>("verifyNativeDistribution$taskSuffix") {
+fun registerNativeDistributionVerification(
+    taskSuffix: String,
+    artifactSuffix: String,
+): TaskProvider<Test> {
+    val verificationReportDirectory =
+        layout.buildDirectory.dir("reports/native-distributions/$artifactSuffix")
+    val cleanVerificationReports =
+        tasks.register<Delete>("cleanNativeDistributionReports$taskSuffix") {
+            delete(verificationReportDirectory)
+            setFollowSymlinks(false)
+        }
+    return tasks.register<Test>("verifyNativeDistribution$taskSuffix") {
         group = "verification"
         description = "Verify the $artifactSuffix native distribution"
+        dependsOn(cleanVerificationReports)
         testClassesDirs = sourceSets.test.get().output.classesDirs
         classpath = sourceSets.test.get().runtimeClasspath
         val archive =
@@ -505,8 +554,6 @@ fun registerNativeDistributionVerification(taskSuffix: String, artifactSuffix: S
         val unshrunkApplicationJar = tasks.shadowJar.flatMap { it.archiveFile }
         val r8ApplicationJar = shrunkCliJar.flatMap { it.archiveFile }
         val thinRuntimeClasspath = files(thinApplicationJar, runtimeClasspathConfiguration)
-        val verificationReportDirectory =
-            layout.buildDirectory.dir("reports/native-distributions/$artifactSuffix")
         val executableExtension = if (artifactSuffix == "windows-x64") ".exe" else ""
         inputs.file(archive).withPropertyName("nativeArchive")
         inputs.file(normalizedApplicationJar).withPropertyName("normalizedApplicationJar")
@@ -518,12 +565,15 @@ fun registerNativeDistributionVerification(taskSuffix: String, artifactSuffix: S
         outputs.dir(verificationReportDirectory).withPropertyName("verificationReports")
         outputs.upToDateWhen { false }
         outputs.doNotCacheIf("Verification depends on matching-host native behavior") { true }
-        doFirst {
-            val reports = verificationReportDirectory.get().asFile
-            check(!reports.exists() || reports.deleteRecursively()) {
-                "Could not clear native verification reports: $reports"
-            }
-            systemProperty("indexino.thinRuntimeClasspath", thinRuntimeClasspath.asPath)
+        doFirst { systemProperty("indexino.thinRuntimeClasspath", thinRuntimeClasspath.asPath) }
+        if (taskSuffix == "MacArm64") {
+            val restrictedArchive =
+                restrictedMacArchiveForVerification.flatMap(MacDittoArchive::getOutputArchive)
+            inputs.file(restrictedArchive).withPropertyName("restrictedMacArchive")
+            systemProperty(
+                "indexino.restrictedMacArchive",
+                restrictedArchive.get().asFile.absolutePath,
+            )
         }
         inputs.dir(targetRuntimeImage).withPropertyName("targetRuntimeImage")
         inputs.file(layout.projectDirectory.file("LICENSE")).withPropertyName("applicationLicense")
@@ -565,6 +615,7 @@ fun registerNativeDistributionVerification(taskSuffix: String, artifactSuffix: S
             layout.projectDirectory.file("LICENSE").asFile.absolutePath,
         )
     }
+}
 
 registerNativeDistributionVerification("LinuxX64", "linux-x64")
 

@@ -123,12 +123,14 @@ ignore-Ctrl-C flag. The callback halts with exit code 130 so a console `CTRL_C_E
 finish successfully.
 
 The macOS archive has one Indexino-owned downstream finalization step. It extracts Construo's raw
-ZIP with `ditto`, replaces the staged application JAR and AOT cache with the exact task inputs, and
-re-archives with `ditto --norsrc`. This preserves the normalized JAR filesystem mtime when users
-extract with macOS `ditto` and prevents AppleDouble entries. The finalizer does not mutate Construo
-tasks or their inputs and is intentionally neither cacheable nor up-to-date because the JAR mtime
-and current task-owned AOT cache are part of the output contract. Its expanded staging tree is
-removed after both successful and failed finalization. The public `packageMacArm64` lifecycle
+ZIP with `ditto`, replaces the staged application JAR and AOT cache with the exact task inputs,
+normalizes the cache to ordinary-file mode `0644`, and re-archives with `ditto --norsrc`. This
+preserves the normalized JAR filesystem mtime when users extract with macOS `ditto`, prevents a
+restrictive builder umask from leaking into the archive, and prevents AppleDouble entries. The
+finalizer does not mutate Construo tasks or their inputs and is intentionally neither cacheable nor
+up-to-date because the JAR mtime and current task-owned AOT cache are part of the output contract.
+Its expanded staging tree is removed after both successful and failed finalization. The public
+`packageMacArm64` lifecycle
 finalizes the raw Construo output before it completes; downstream checksum and upload tasks must
 consume only the finalized archive.
 
@@ -150,6 +152,10 @@ indexing equivalent clean fixtures, and writes per-target AOT diagnostics plus n
 and artifact-size reports under `build/reports/native-distributions/`. Matching-host verification is
 never up-to-date or restored from the build cache because host tools, console behavior, and OS runtime
 compatibility cannot be represented safely as reusable Gradle state.
+Report cleanup uses a non-following delete task so a symlink at the predictable report path cannot
+escape the build directory. Process output is captured in task-owned files, while timeout cleanup
+re-snapshots descendants during graceful and forced termination so inherited streams and late child
+creation cannot hang or escape a verification run.
 The thin runtime dependency collection remains a declared verifier input but is converted to a
 classpath string only in the selected verifier's execution action, so unrelated Gradle tasks do not
 resolve native-verification dependencies during configuration.

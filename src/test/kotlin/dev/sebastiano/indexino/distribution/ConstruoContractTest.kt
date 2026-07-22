@@ -5,6 +5,7 @@ import java.net.InetSocketAddress
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.attribute.FileTime
 import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermission
@@ -20,12 +21,47 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
+import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.io.TempDir
 
 @Tag("construo-contract")
 class ConstruoContractTest {
     @TempDir lateinit var projectDirectory: Path
+
+    @Test
+    fun `native report cleanup deletes a symlink without following it`() {
+        assumeFalse(System.getProperty("os.name").startsWith("Windows"))
+        val rootProject = Path.of(requiredProperty("indexino.projectDirectory"))
+        val reports = rootProject.resolve("build/reports/native-distributions/macos-arm64")
+        val backup = reports.resolveSibling("${reports.fileName}.contract-backup")
+        val protectedDirectory = projectDirectory.resolve("protected").createDirectories()
+        val sentinel = protectedDirectory.resolve("sentinel.txt")
+        sentinel.writeText("preserve")
+        reports.parent.createDirectories()
+        Files.deleteIfExists(backup)
+        if (Files.exists(reports)) Files.move(reports, backup, ATOMIC_MOVE)
+        Files.createSymbolicLink(reports, protectedDirectory)
+
+        try {
+            val result =
+                GradleRunner.create()
+                    .withProjectDir(rootProject.toFile())
+                    .withTestKitDir(Path.of(requiredProperty("indexino.gradleUserHome")).toFile())
+                    .withArguments("--offline", "cleanNativeDistributionReportsMacArm64")
+                    .build()
+
+            assertEquals(
+                TaskOutcome.SUCCESS,
+                result.task(":cleanNativeDistributionReportsMacArm64")?.outcome,
+            )
+            assertFalse(Files.exists(reports), "Report-directory symlink was not deleted")
+            assertTrue(Files.isRegularFile(sentinel), "Report cleanup followed the symlink")
+        } finally {
+            Files.deleteIfExists(reports)
+            if (Files.exists(backup)) Files.move(backup, reports, ATOMIC_MOVE)
+        }
+    }
 
     @Test
     fun `native runtime classpath is resolved only when the verifier executes`() {

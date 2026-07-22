@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.nio.file.attribute.BasicFileAttributes;
 import javax.inject.Inject;
 import org.gradle.api.DefaultTask;
@@ -89,6 +90,8 @@ public abstract class MacDittoArchive extends DefaultTask {
                     stagedCache,
                     StandardCopyOption.REPLACE_EXISTING,
                     StandardCopyOption.COPY_ATTRIBUTES);
+            Files.setPosixFilePermissions(
+                    stagedCache, PosixFilePermissions.fromString("rw-r--r--"));
             if (Files.mismatch(aotCache, stagedCache) != -1L) {
                 throw new GradleException("Could not restore the exact macOS AOT cache");
             }

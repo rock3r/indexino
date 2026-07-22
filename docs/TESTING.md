@@ -82,19 +82,22 @@ A differential golden suite compares stdout/JSONL, stderr routing, exit codes, i
 the manifest schema/version across the thin Maven runtime classpath, unshrunk fat JAR, R8 JAR, and
 the target's real Roast executable. Each entry point independently indexes an equivalent clean
 fixture so store creation, schema/version, and representative records are compared; only the
-documented volatile `builtAt` value is normalized. Timed-out children are forcibly terminated so a
-launcher deadlock cannot hang the host job; descendant Git/topology processes are terminated
-leaf-first as part of the same bounded cleanup. The matching-host verifier is deliberately never
-up-to-date or restored from build cache, and clears its report directory before every execution so
-failed runs cannot upload stale diagnostics. It also writes a report-only benchmark with five
+documented volatile `builtAt` value is normalized. Process output is captured in task-owned files so
+a descendant that inherits stdout or stderr cannot keep a completed launch blocked. Timed-out
+children are forcibly terminated so a launcher deadlock cannot hang the host job; descendant
+Git/topology processes are re-snapshotted and terminated leaf-first throughout the same bounded
+cleanup. The matching-host verifier is deliberately never up-to-date or restored from build cache,
+and clears its report directory without following symlinks before every execution so failed runs
+cannot upload stale diagnostics. It also writes a report-only benchmark with five
 interleaved production-AOT and `AOTMode=off` launches, median wall/user time, and ZIP/runtime/JAR/AOT
 cache sizes to `build/reports/native-distributions/<target>/`.
 
 On macOS the public `packageMacArm64` lifecycle includes `finalizedMacArm64Archive`, which round-trips
-through native `ditto` and overlays the exact normalized JAR and current AOT cache. Verification
-consumes that final output, and future checksum/upload tasks must do the same. Standard extraction
-must recover the exact even-second JAR mtime; this is deliberately tested after extraction rather
-than inferred from Java's interpretation of ZIP extra fields.
+through native `ditto` and overlays the exact normalized JAR and current AOT cache. The staged cache
+is normalized to ordinary-file mode `0644`, including when its source was created under a restrictive
+umask. Verification consumes that final output, and future checksum/upload tasks must do the same.
+Standard extraction must recover the exact even-second JAR mtime; this is deliberately tested after
+extraction rather than inferred from Java's interpretation of ZIP extra fields.
 
 ## TDD Red-Green Cycle
 

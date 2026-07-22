@@ -5,7 +5,6 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.FileTime
 import java.util.Base64
-import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.zip.ZipFile
 import kotlin.io.path.createDirectories
@@ -34,6 +33,17 @@ class NativeDistributionTest {
             Files.exists(Path.of(requiredProperty("indexino.macFinalizerStaging"))),
             "Mac finalizer retained its expanded runtime staging tree",
         )
+    }
+
+    @Test
+    fun `mac finalizer normalizes a restrictively permissioned AOT cache`() {
+        assumeTrue(
+            requiredProperty("indexino.nativeTarget") == MACOS_ARM64,
+            "macOS finalizer contract runs on macOS arm64 only",
+        )
+        val archive = requiredFile("indexino.restrictedMacArchive")
+        val entries = readZipCentralDirectory(archive).associateBy(ZipEntryMetadata::name)
+        assertEquals(POSIX_FILE_MODE, entries.getValue(aotCacheEntry(MACOS_ARM64)).unixMode)
     }
 
     @Test
@@ -1097,26 +1107,17 @@ class NativeDistributionTest {
         vararg command: String,
         environment: Map<String, String> = emptyMap(),
     ): ProcessResult {
-        val processBuilder = ProcessBuilder(*command).directory(workingDirectory.toFile())
-        processBuilder.environment().putAll(environment)
-        val process = processBuilder.redirectErrorStream(false).start()
-        Executors.newVirtualThreadPerTaskExecutor().use { executor ->
-            val stdout = executor.submit<String> { process.inputStream.bufferedReader().readText() }
-            val stderr = executor.submit<String> { process.errorStream.bufferedReader().readText() }
-            val completed = process.waitFor(PROCESS_TIMEOUT_MINUTES, TimeUnit.MINUTES)
-            if (!completed) {
-                val terminated =
-                    terminateProcessTree(process, PROCESS_KILL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                process.inputStream.close()
-                process.errorStream.close()
-                process.outputStream.close()
-                stdout.cancel(true)
-                stderr.cancel(true)
-                assertTrue(terminated, "Could not terminate: ${command.joinToString(" ")}")
-                error("Timed out: ${command.joinToString(" ")}")
-            }
-            return ProcessResult(process.exitValue(), stdout.get(), stderr.get())
-        }
+        val result =
+            runCapturedProcess(
+                workingDirectory,
+                command.toList(),
+                environment,
+                PROCESS_TIMEOUT_MINUTES,
+                TimeUnit.MINUTES,
+                PROCESS_KILL_TIMEOUT_SECONDS,
+                TimeUnit.SECONDS,
+            )
+        return ProcessResult(result.exitCode, result.stdout, result.stderr)
     }
 
     private fun launcherEntry(target: String): String =
