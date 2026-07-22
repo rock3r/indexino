@@ -104,7 +104,8 @@ for these languages. ASM dependency producers remain a later core milestone.
 `shadowJar` and `shrunkCliJar` share explicit main output, runtime classpath, manifest, service
 merge, duplicate handling, and reproducibility settings. The shrunk task adds only the checked-in
 rules under `gradle/r8/`. `normalizedCliJar` atomically copies that R8 output and assigns a
-deterministic even-second filesystem mtime. The task is intentionally never up-to-date and its
+deterministic even-second filesystem mtime plus ordinary-file `0644` permissions on POSIX hosts.
+The task is intentionally never up-to-date and its
 build cache is disabled because Gradle content snapshots do not detect metadata-only changes that
 would invalidate AOT. Construo is configured to consume this exact normalized output.
 

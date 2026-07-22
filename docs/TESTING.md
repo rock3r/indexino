@@ -41,7 +41,8 @@ selection-context, status/freshness, deterministic symbol/reference queries, and
 checks provider-inferred overlays and preparation tasks, per-target archive outputs and target-JDK
 tool selection, raw macOS layout, Windows console options, checksum rejection, Unix ZIP modes, and
 the deterministic metadata of the non-cacheable normalized application JAR. A TestKit regression
-perturbs only that output's mtime and proves a second invocation repairs it instead of reporting
+starts from a restrictive input mode, perturbs only the output's mtime, and proves a second
+invocation repairs both `0644` POSIX permissions and the timestamp instead of reporting
 `UP-TO-DATE`; warm-cache checksum tests drive extraction tasks and prove rejection happens first.
 
 Each `verifyNativeDistribution<Target>` task packages with the matching verified target JBRSDK 25,

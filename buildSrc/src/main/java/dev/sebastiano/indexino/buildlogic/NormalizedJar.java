@@ -8,6 +8,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.FileTime;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFilePermission;
+import java.util.EnumSet;
 import org.gradle.api.GradleException;
 import org.gradle.api.file.RegularFileProperty;
 import org.gradle.api.provider.Property;
@@ -46,6 +49,16 @@ public abstract class NormalizedJar extends Jar {
                     Files.createTempFile(
                             output.getParent(), output.getFileName().toString() + ".", ".tmp");
             Files.copy(input, temporaryOutput, StandardCopyOption.REPLACE_EXISTING);
+            var posixAttributes =
+                    Files.getFileAttributeView(temporaryOutput, PosixFileAttributeView.class);
+            if (posixAttributes != null) {
+                posixAttributes.setPermissions(
+                        EnumSet.of(
+                                PosixFilePermission.OWNER_READ,
+                                PosixFilePermission.OWNER_WRITE,
+                                PosixFilePermission.GROUP_READ,
+                                PosixFilePermission.OTHERS_READ));
+            }
             Files.setLastModifiedTime(temporaryOutput, timestamp);
             try {
                 Files.move(

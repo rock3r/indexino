@@ -6,6 +6,8 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.FileTime
+import java.nio.file.attribute.PosixFileAttributeView
+import java.nio.file.attribute.PosixFilePermission
 import java.security.MessageDigest
 import java.util.Properties
 import java.util.jar.JarFile
@@ -37,6 +39,7 @@ class ConstruoContractTest {
             Files.getLastModifiedTime(normalizedJar).toMillis(),
         )
         assertEquals(0, Files.getLastModifiedTime(normalizedJar).toMillis() / 1_000L % 2L)
+        assertOrdinaryJarPermissions(normalizedJar)
         JarFile(normalizedJar.toFile()).use { jar ->
             assertEquals(
                 "dev.sebastiano.indexino.cli.MainCommandKt",
@@ -72,7 +75,10 @@ class ConstruoContractTest {
                 """
                     .trimIndent()
             )
-        projectDirectory.resolve("input.jar").writeText("reproducible application bytes")
+        val input = projectDirectory.resolve("input.jar")
+        input.writeText("reproducible application bytes")
+        Files.getFileAttributeView(input, PosixFileAttributeView::class.java)
+            ?.setPermissions(setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE))
 
         val first = runGradle("normalizedJar")
         assertEquals(TaskOutcome.SUCCESS, first.task(":normalizedJar")?.outcome)
@@ -83,6 +89,22 @@ class ConstruoContractTest {
 
         assertEquals(TaskOutcome.SUCCESS, second.task(":normalizedJar")?.outcome)
         assertEquals(NORMALIZED_JAR_MTIME_MILLIS, Files.getLastModifiedTime(output).toMillis())
+        assertOrdinaryJarPermissions(output)
+    }
+
+    private fun assertOrdinaryJarPermissions(path: Path) {
+        val attributes =
+            Files.getFileAttributeView(path, PosixFileAttributeView::class.java)?.readAttributes()
+                ?: return
+        assertEquals(
+            setOf(
+                PosixFilePermission.OWNER_READ,
+                PosixFilePermission.OWNER_WRITE,
+                PosixFilePermission.GROUP_READ,
+                PosixFilePermission.OTHERS_READ,
+            ),
+            attributes.permissions(),
+        )
     }
 
     @Test
