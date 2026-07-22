@@ -4,7 +4,8 @@
     public static void main(java.lang.String[]);
 }
 
-# JNA resolves the Win32 function and callback entry points by their Java method names.
+# JNA's native bootstrap resolves helpers on Native and our Win32 entry points by reflection.
+-keep class com.sun.jna.Native { *; }
 -keep interface dev.sebastiano.indexino.cli.WindowsConsoleCtrlHandler$Kernel32 { *; }
 -keep interface dev.sebastiano.indexino.cli.WindowsConsoleCtrlHandler$HandlerRoutine { *; }
 
