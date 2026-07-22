@@ -124,6 +124,8 @@ artefacts the user should copy verbatim.
 ./gradlew shrunkCliJar  # R8 native-packaging input at build/libs/*-shrunk.jar
 ./gradlew verifyShrunkCli # full shrunk-JAR acceptance workload
 ./gradlew verifyConstruoContract # released native-packaging contract and immutable pins
+./gradlew verifyAotTrainingContract # AOT task lifecycle and isolation contract
+./gradlew trainAotMacArm64 # real matching-host JBR 25 AOT assembly
 ./gradlew verifyNativeDistributionMacArm64 # package/smoke macOS arm64 on a native host
 # LinuxX64 and WindowsX64 variants follow the same verifyNativeDistribution<Target> naming
 ./gradlew check         # tests (extend with lint/format when added)

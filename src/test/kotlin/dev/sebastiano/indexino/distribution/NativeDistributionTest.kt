@@ -27,6 +27,7 @@ class NativeDistributionTest {
     fun `archive exposes the flat runtime metadata and license contract`() {
         val archive = requiredFile("indexino.nativeArchive")
         val target = requiredProperty("indexino.nativeTarget")
+        val aotCache = assertSeparateAotCacheInput()
         ZipFile(archive.toFile()).use { zip ->
             val entries = zip.entries().asSequence().associateBy { it.name }
             assertTrue(entries.isNotEmpty(), "Native distribution is empty: $archive")
@@ -60,6 +61,7 @@ class NativeDistributionTest {
                 "\"vmArgs\":[\"--enable-native-access=ALL-UNNAMED\"]",
             )
             assertFalse(entries.containsKey(runtimeJavaEntry(target)))
+            assertPackagedAotCache(zip, entries, aotCache)
 
             val release =
                 zip.getInputStream(entries.getValue("indexino/runtime/release"))
@@ -112,9 +114,42 @@ class NativeDistributionTest {
             assertEquals(POSIX_FILE_MODE, entries.getValue("indexino/indexino-cli.jar").unixMode)
             assertEquals(
                 POSIX_FILE_MODE,
+                entries.getValue("indexino/runtime/lib/server/classes.jsa").unixMode,
+            )
+            assertEquals(
+                POSIX_FILE_MODE,
                 entries.getValue("indexino/licenses/indexino-LICENSE").unixMode,
             )
         }
+    }
+
+    private fun assertSeparateAotCacheInput(): Path {
+        val aotCache = requiredFile("indexino.aotCache")
+        val targetRuntimeImage = requiredDirectory("indexino.targetRuntimeImage")
+        assertTrue(Files.size(aotCache) > 0L, "AOT cache is empty")
+        assertFalse(
+            aotCache.toRealPath().startsWith(targetRuntimeImage.toRealPath()),
+            "AOT training must not write into the final runtime input",
+        )
+        assertFalse(
+            Files.exists(targetRuntimeImage.resolve("lib/server/classes.jsa")),
+            "The final runtime input must remain cache-free",
+        )
+        return aotCache
+    }
+
+    private fun assertPackagedAotCache(
+        zip: ZipFile,
+        entries: Map<String, java.util.zip.ZipEntry>,
+        aotCache: Path,
+    ) {
+        val packagedAotCache = entries.getValue("indexino/runtime/lib/server/classes.jsa")
+        assertTrue(
+            zip.getInputStream(packagedAotCache)
+                .use { it.readBytes() }
+                .contentEquals(Files.readAllBytes(aotCache)),
+            "Packaged AOT overlay differs from the task-owned cache",
+        )
     }
 
     @Test

@@ -7,6 +7,7 @@ import com.vanniktech.maven.publish.KotlinJvm
 import com.vanniktech.maven.publish.SourcesJar
 import dev.detekt.gradle.Detekt
 import dev.detekt.gradle.DetektCreateBaselineTask
+import dev.sebastiano.indexino.buildlogic.AotTrainingTask
 import dev.sebastiano.indexino.buildlogic.NormalizedJar
 import io.github.fourlastor.construo.Target
 import io.github.fourlastor.construo.task.PackageTask
@@ -145,6 +146,66 @@ fun nativeDistributionPin(name: String) =
         "Missing native distribution pin '$name'"
     }
 
+val nativeVmArgs = listOf("--enable-native-access=ALL-UNNAMED")
+val aotTrainingFixture = layout.projectDirectory.dir("gradle/aot-training/fixture")
+val aotTrainingArguments =
+    listOf(
+        "index",
+        "--project",
+        "training-workspace",
+        "--build-system",
+        "gradle",
+        "--gradle-module",
+        ":app",
+        "--applications",
+        "selection-context",
+    )
+
+fun registerAotTraining(
+    taskSuffix: String,
+    targetOs: String,
+    targetArchitecture: String,
+    jbrDigest: String,
+    javaExecutableName: String,
+) =
+    tasks.register<AotTrainingTask>("trainAot$taskSuffix") {
+        group = "distribution"
+        description = "Train the $targetOs-$targetArchitecture application AOT cache"
+        val runtimeTask = tasks.named<CreateRuntimeImageTask>("createRuntimeImage$taskSuffix")
+        runtimeImage.set(runtimeTask.flatMap { it.output })
+        targetJdkRoot.set(runtimeTask.flatMap { it.jdkRoot })
+        applicationJar.set(normalizedCliJar.flatMap(NormalizedJar::getArchiveFile))
+        trainingFixture.set(aotTrainingFixture)
+        aotCache.set(
+            layout.buildDirectory.file(
+                "native-distributions/aot/${targetOs}-${targetArchitecture}/classes.jsa"
+            )
+        )
+        this.targetOs.set(targetOs)
+        this.targetArchitecture.set(targetArchitecture)
+        this.jbrDigest.set(jbrDigest)
+        normalizedJarTimestampMillis.set(normalizedCliJarTimestampMillis)
+        modules.set(runtimeTask.flatMap { it.modules })
+        mainClassName.set(cliMainClass)
+        classPath.set(
+            normalizedCliJar.flatMap(NormalizedJar::getArchiveFile).map { it.asFile.name }
+        )
+        roastWorkingDirectory.set(".")
+        fixtureVersion.set("1")
+        vmArgs.set(nativeVmArgs)
+        trainingArguments.set(aotTrainingArguments)
+        minimumHeap.set("128m")
+        maximumHeap.set("1024m")
+        this.javaExecutableName.set(javaExecutableName)
+        gitExecutable.set("git")
+        environmentVariables.put("PATH", providers.environmentVariable("PATH").orElse(""))
+        environmentVariables.put(
+            "SystemRoot",
+            providers.environmentVariable("SystemRoot").orElse(""),
+        )
+        environmentVariables.put("WINDIR", providers.environmentVariable("WINDIR").orElse(""))
+    }
+
 construo {
     name.set("indexino")
     humanName.set("Indexino")
@@ -161,7 +222,7 @@ construo {
         version.set(nativeDistributionPin("roast.version"))
         runOnFirstThread.set(true)
         useZgc.set(false)
-        vmArgs.add("--enable-native-access=ALL-UNNAMED")
+        vmArgs.addAll(nativeVmArgs)
     }
     targets {
         create<Target.Linux>("linuxX64") {
@@ -172,6 +233,18 @@ construo {
             packagingToolJdk.set(Target.PackagingToolJdk.TARGET_JDK)
             archiveFile.set(
                 layout.buildDirectory.file("distributions/indexino-$version-linux-x64.zip")
+            )
+            val aotTraining =
+                registerAotTraining(
+                    taskSuffix = "LinuxX64",
+                    targetOs = "linux",
+                    targetArchitecture = "x64",
+                    jbrDigest = nativeDistributionPin("linuxX64.jdkSha256"),
+                    javaExecutableName = "java",
+                )
+            packageFiles.put(
+                "runtime/lib/server/classes.jsa",
+                aotTraining.flatMap(AotTrainingTask::getAotCache),
             )
         }
         create<Target.MacOs>("macArm64") {
@@ -184,6 +257,18 @@ construo {
                 layout.buildDirectory.file("distributions/indexino-$version-macos-arm64.zip")
             )
             appBundle.set(false)
+            val aotTraining =
+                registerAotTraining(
+                    taskSuffix = "MacArm64",
+                    targetOs = "macos",
+                    targetArchitecture = "arm64",
+                    jbrDigest = nativeDistributionPin("macArm64.jdkSha256"),
+                    javaExecutableName = "java",
+                )
+            packageFiles.put(
+                "runtime/lib/server/classes.jsa",
+                aotTraining.flatMap(AotTrainingTask::getAotCache),
+            )
         }
         create<Target.Windows>("windowsX64") {
             architecture.set(Target.Architecture.X86_64)
@@ -196,6 +281,18 @@ construo {
             )
             useConsole.set(true)
             useGpuHint.set(false)
+            val aotTraining =
+                registerAotTraining(
+                    taskSuffix = "WindowsX64",
+                    targetOs = "windows",
+                    targetArchitecture = "x64",
+                    jbrDigest = nativeDistributionPin("windowsX64.jdkSha256"),
+                    javaExecutableName = "java.exe",
+                )
+            packageFiles.put(
+                "runtime/lib/server/classes.jsa",
+                aotTraining.flatMap(AotTrainingTask::getAotCache),
+            )
         }
     }
 }
@@ -258,7 +355,13 @@ val ideaHomeDir =
 tasks.test {
     useJUnitPlatform {
         val excludedTags =
-            mutableListOf("construo-contract", "distribution", "native-distribution", "publication")
+            mutableListOf(
+                "aot-training-contract",
+                "construo-contract",
+                "distribution",
+                "native-distribution",
+                "publication",
+            )
         if (!project.hasProperty("liveTests")) {
             excludedTags += "live"
         }
@@ -331,6 +434,21 @@ val verifyConstruoContract by
         systemProperty("indexino.normalizedJarSource", normalizedJarSource.asFile.absolutePath)
     }
 
+val verifyAotTrainingContract by
+    tasks.registering(Test::class) {
+        group = "verification"
+        description = "Verify target AOT training lifecycle and isolation contracts"
+        testClassesDirs = sourceSets.test.get().output.classesDirs
+        classpath = sourceSets.test.get().runtimeClasspath
+        val taskSource =
+            layout.projectDirectory.file(
+                "buildSrc/src/main/java/dev/sebastiano/indexino/buildlogic/AotTrainingTask.java"
+            )
+        inputs.file(taskSource).withPropertyName("aotTrainingTaskSource")
+        useJUnitPlatform { includeTags("aot-training-contract") }
+        systemProperty("indexino.aotTrainingTaskSource", taskSource.asFile.absolutePath)
+    }
+
 fun registerNativeDistributionVerification(taskSuffix: String, artifactSuffix: String) =
     tasks.register<Test>("verifyNativeDistribution$taskSuffix") {
         group = "verification"
@@ -347,9 +465,11 @@ fun registerNativeDistributionVerification(taskSuffix: String, artifactSuffix: S
                 it.output
             }
         val normalizedApplicationJar = normalizedCliJar.flatMap(NormalizedJar::getArchiveFile)
+        val aotCache = tasks.named<AotTrainingTask>("trainAot$taskSuffix").flatMap { it.aotCache }
         val executableExtension = if (artifactSuffix == "windows-x64") ".exe" else ""
         inputs.file(archive).withPropertyName("nativeArchive")
         inputs.file(normalizedApplicationJar).withPropertyName("normalizedApplicationJar")
+        inputs.file(aotCache).withPropertyName("aotCache")
         inputs.dir(targetRuntimeImage).withPropertyName("targetRuntimeImage")
         inputs.file(layout.projectDirectory.file("LICENSE")).withPropertyName("applicationLicense")
         inputs
@@ -368,6 +488,7 @@ fun registerNativeDistributionVerification(taskSuffix: String, artifactSuffix: S
             "indexino.normalizedApplicationJar",
             normalizedApplicationJar.get().asFile.absolutePath,
         )
+        systemProperty("indexino.aotCache", aotCache.get().asFile.absolutePath)
         systemProperty("indexino.expectedJbrVersion", nativeDistributionPin("jbr.version"))
         systemProperty(
             "indexino.applicationLicense",

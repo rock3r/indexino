@@ -96,7 +96,8 @@ for these languages. ASM dependency producers remain a later core milestone.
 | `*-all.jar` | Unshrunk compatibility/debug CLI for direct `java -jar` use | No |
 | `*-shrunk.jar` | Verified native-packaging input | No |
 | `native-distributions/application/indexino-cli.jar` | Metadata-normalized native/AOT application JAR | No |
-| `indexino-*-linux-x64.zip` | Linux x64 launcher, stripped JBR 25 runtime, application JAR, and licenses | No |
+| `native-distributions/aot/*/classes.jsa` | Task-owned, target-specific AOT cache overlay | No |
+| `indexino-*-linux-x64.zip` | Linux x64 launcher, stripped JBR 25 runtime, application JAR, AOT cache, and licenses | No |
 | `indexino-*-macos-arm64.zip` | Flat macOS arm64 CLI with the same installation layout | No |
 | `indexino-*-windows-x64.zip` | Windows x64 console launcher with the same installation layout | No |
 | ordinary JVM JAR | Thin dependency artifact with transitive runtime dependencies | Yes |
@@ -113,8 +114,17 @@ Each native target uses checked-in JBR and Roast digests. Construo verifies thos
 extraction, runs `jlink`, `jdeps`, and `javap` from the matching target JBRSDK 25, and emits one
 target-specific archive. The shipped jlink image intentionally omits `runtime/bin/java` while
 retaining process helpers such as `jspawnhelper`; the application still launches external Git and
-topology tools when a command needs them. AOT caches are added by the later D3 packaging layer, not
-by the baseline D2 distributions.
+topology tools when a command needs them.
+
+Each `trainAot<Target>` task treats the final jlink image and normalized JAR as immutable inputs. It
+copies them into a task-private flat Roast staging root, restores only the matching target JDK
+`java` launcher into that private runtime, initializes the committed deterministic fixture, and
+runs the production classpath/main/VM options with a bounded heap and hermetic environment. The
+cache is assembled at a temporary path and atomically published as a separate task output. Construo
+infers the producer dependency from the target-specific `packageFiles` provider and overlays only
+that cache at `runtime/lib/server/classes.jsa`; the archive still uses the original stripped runtime
+and exact normalized JAR. AOT task build caching is disabled until reproducibility and cross-runner
+compatibility are proven, while unchanged local inputs may reuse an up-to-date output.
 
 ## Phased delivery
 

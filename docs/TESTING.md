@@ -17,6 +17,8 @@ ordinary unit-test task:
 ./gradlew verifyShrunkCli       # manifest launch, full fixture workload, services, size ceiling
 ./gradlew verifyMavenPublication # thin artifact and distribution-variant non-leakage
 ./gradlew verifyConstruoContract # released native-packaging API, checksums, modes, normalized JAR
+./gradlew verifyAotTrainingContract # immutable staging, hermetic JVM args/env, atomic cache output
+./gradlew trainAotMacArm64       # matching-host AOT assembly (LinuxX64/WindowsX64 variants exist)
 ./gradlew verifyNativeDistributionLinuxX64   # native Linux x64 host only
 ./gradlew verifyNativeDistributionMacArm64   # native macOS arm64 host only
 ./gradlew verifyNativeDistributionWindowsX64 # native Windows x64 host only
@@ -45,10 +47,20 @@ starts from a restrictive input mode, perturbs only the output's mtime, and prov
 invocation repairs both `0644` POSIX permissions and the timestamp instead of reporting
 `UP-TO-DATE`; warm-cache checksum tests drive extraction tasks and prove rejection happens first.
 
+`verifyAotTrainingContract` uses Gradle TestKit and a fake POSIX target launcher to prove a full SDK
+is rejected, the final runtime and normalized JAR remain immutable, only `java` is restored into a
+task-private staging copy, the relative Roast classpath/main/options are exact, hostile ambient JVM
+option variables are removed, the normalized JAR metadata survives training, the cache is published
+atomically at its separate output, and a second unchanged invocation is locally `UP-TO-DATE`.
+Matching-host `trainAot<Target>` runs exercise the real JBR 25 one-step `AOTCacheOutput` workflow on
+the committed Kotlin/Java/XML selection-context fixture; build-cache storage and restoration are
+disabled for these metadata- and runtime-sensitive outputs.
+
 Each `verifyNativeDistribution<Target>` task packages with the matching verified target JBRSDK 25,
 extracts the ZIP with the platform's standard tool, and drives the actual Roast executable from an
 arbitrary caller directory. The suite checks the flat layout, normalized JAR timestamp and bytes,
-explicit jlink modules, the complete runtime legal tree byte-for-byte, launcher configuration,
+the byte-identical task-owned AOT cache overlay and cache-free runtime input, explicit jlink modules,
+the complete runtime legal tree byte-for-byte, launcher configuration,
 target-JBR packaging tools, POSIX modes,
 missing-Git diagnostics, the full Kotlin/Java/XML index/query workload, and relocation. The Windows
 task additionally checks PowerShell and `cmd.exe` waiting/redirection/exit propagation and sends a
