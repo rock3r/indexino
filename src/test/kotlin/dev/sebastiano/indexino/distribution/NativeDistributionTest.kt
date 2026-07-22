@@ -270,6 +270,7 @@ class NativeDistributionTest {
         Files.move(installation, relocated, StandardCopyOption.ATOMIC_MOVE)
         launcher = relocated.resolve(launcherRelativePath(target))
         assertAcceptedAotLaunch(launcher, caller, relocated, target)
+        assertCompleteWorkload(launcher, caller, workspace)
         assertCallerRelativeInvocation(launcher, caller, workspace)
     }
 
