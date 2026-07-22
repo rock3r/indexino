@@ -1,0 +1,54 @@
+name: D3 native AOT validation
+
+on:
+  push:
+    branches:
+      - feat/native-cli-d3-aot-training
+
+permissions:
+  contents: read
+
+jobs:
+  linux-x64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v5
+      - run: ./gradlew verifyNativeDistributionLinuxX64 --rerun-tasks --no-daemon
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: d3-linux-x64
+          path: |
+            build/distributions/*.zip
+            build/native-distributions/aot/**
+            build/test-results/verifyNativeDistributionLinuxX64/**
+            build/reports/tests/verifyNativeDistributionLinuxX64/**
+          retention-days: 3
+
+  windows-x64:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v5
+      - run: ./gradlew.bat verifyNativeDistributionWindowsX64 --rerun-tasks --no-daemon --stacktrace
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: d3-windows-x64
+          path: |
+            build/distributions/*.zip
+            build/native-distributions/aot/**
+            build/test-results/verifyNativeDistributionWindowsX64/**
+            build/reports/tests/verifyNativeDistributionWindowsX64/**
+          retention-days: 3
