@@ -112,10 +112,7 @@ class NativeDistributionTest {
                 entries.getValue("indexino/runtime/lib/jspawnhelper").unixMode,
             )
             assertEquals(POSIX_FILE_MODE, entries.getValue("indexino/indexino-cli.jar").unixMode)
-            assertEquals(
-                POSIX_FILE_MODE,
-                entries.getValue(aotCacheEntry(target)).unixMode,
-            )
+            assertEquals(POSIX_FILE_MODE, entries.getValue(aotCacheEntry(target)).unixMode)
             assertEquals(
                 POSIX_FILE_MODE,
                 entries.getValue("indexino/licenses/indexino-LICENSE").unixMode,
