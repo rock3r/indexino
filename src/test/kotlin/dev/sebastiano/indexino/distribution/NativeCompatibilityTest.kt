@@ -9,9 +9,12 @@ import kotlin.io.path.createDirectories
 import kotlin.io.path.readText
 import kotlin.io.path.writeText
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Tag
@@ -20,6 +23,34 @@ import org.junit.jupiter.api.io.TempDir
 @Tag("native-distribution")
 class NativeCompatibilityTest {
     @TempDir lateinit var tempDir: Path
+
+    @Test
+    fun `timed out compatibility process is terminated`() {
+        val command =
+            if (requiredProperty("indexino.nativeTarget") == WINDOWS_X64) {
+                arrayOf(
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "Start-Sleep -Seconds 30",
+                )
+            } else {
+                arrayOf("/bin/sh", "-c", "exec sleep 30")
+            }
+        val startedAt = System.nanoTime()
+
+        val failure =
+            assertFailsWith<AssertionError> {
+                runCommand(tempDir, 100L, TimeUnit.MILLISECONDS, *command)
+            }
+
+        assertContains(failure.message.orEmpty(), "timed out")
+        assertTrue(
+            TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - startedAt) < 5L,
+            "Timed-out process cleanup exceeded five seconds",
+        )
+    }
 
     @Test
     fun `all distribution entry points preserve the golden CLI contract`() {
@@ -78,17 +109,12 @@ class NativeCompatibilityTest {
 
         val template = createFixtureWorkspace()
         val caller = tempDir.resolve("compatibility-caller").createDirectories()
-        val initialIndex = run(entryPoints.first(), caller, *indexArguments(template))
-        assertEquals(0, initialIndex.exitCode, initialIndex.diagnostic())
         val commit = runCommand(template, "git", "rev-parse", "HEAD").stdout.trim()
-        val manifest = template.resolve(".indexino/index/$commit/manifest.json")
-        assertManifestSchema(manifest)
-        val expectedManifest = manifest.readText()
 
         val snapshots = entryPoints.associate { entryPoint ->
             val workspace = tempDir.resolve("workspace-${entryPoint.name}")
             copyTree(template, workspace)
-            entryPoint.name to snapshot(entryPoint, caller, workspace, commit, expectedManifest)
+            entryPoint.name to snapshot(entryPoint, caller, workspace, commit)
         }
 
         val golden = snapshots.getValue("thin")
@@ -103,7 +129,6 @@ class NativeCompatibilityTest {
         caller: Path,
         workspace: Path,
         commit: String,
-        expectedManifest: String,
     ): Snapshot {
         val results =
             linkedMapOf(
@@ -147,13 +172,15 @@ class NativeCompatibilityTest {
 
         val manifest = workspace.resolve(".indexino/index/$commit/manifest.json")
         assertManifestSchema(manifest)
-        assertEquals(expectedManifest, manifest.readText(), "Fresh indexing changed the manifest")
         assertTrue(Files.isDirectory(manifest.parent.resolve("base.xodus")))
         return Snapshot(
             results.mapValues { (_, result) -> result.normalized(workspace) },
-            manifest.readText(),
+            normalizedManifest(manifest),
         )
     }
+
+    private fun normalizedManifest(manifest: Path): Map<String, JsonElement> =
+        Json.parseToJsonElement(manifest.readText()).jsonObject.filterKeys { it != "builtAt" }
 
     private fun assertManifestSchema(manifest: Path) {
         val json = Json.parseToJsonElement(manifest.readText()).jsonObject
@@ -287,6 +314,15 @@ class NativeCompatibilityTest {
         runCommand(workingDirectory, *(entryPoint.commandPrefix + arguments).toTypedArray())
 
     private fun runCommand(workingDirectory: Path, vararg command: String): ProcessResult {
+        return runCommand(workingDirectory, PROCESS_TIMEOUT_MINUTES, TimeUnit.MINUTES, *command)
+    }
+
+    private fun runCommand(
+        workingDirectory: Path,
+        timeout: Long,
+        timeoutUnit: TimeUnit,
+        vararg command: String,
+    ): ProcessResult {
         val process =
             ProcessBuilder(*command)
                 .directory(workingDirectory.toFile())
@@ -295,7 +331,19 @@ class NativeCompatibilityTest {
         Executors.newVirtualThreadPerTaskExecutor().use { executor ->
             val stdout = executor.submit<String> { process.inputStream.bufferedReader().readText() }
             val stderr = executor.submit<String> { process.errorStream.bufferedReader().readText() }
-            assertTrue(process.waitFor(PROCESS_TIMEOUT_MINUTES, TimeUnit.MINUTES))
+            if (!process.waitFor(timeout, timeoutUnit)) {
+                process.destroy()
+                if (!process.waitFor(PROCESS_TERMINATION_GRACE_SECONDS, TimeUnit.SECONDS)) {
+                    process.destroyForcibly()
+                    process.waitFor(PROCESS_TERMINATION_GRACE_SECONDS, TimeUnit.SECONDS)
+                }
+                process.inputStream.close()
+                process.errorStream.close()
+                process.outputStream.close()
+                stdout.cancel(true)
+                stderr.cancel(true)
+                throw AssertionError("Process timed out: ${command.joinToString(" ")}")
+            }
             return ProcessResult(process.exitValue(), stdout.get(), stderr.get())
         }
     }
@@ -313,7 +361,10 @@ class NativeCompatibilityTest {
 
     private data class EntryPoint(val name: String, val commandPrefix: List<String>)
 
-    private data class Snapshot(val results: Map<String, ProcessResult>, val manifest: String)
+    private data class Snapshot(
+        val results: Map<String, ProcessResult>,
+        val manifest: Map<String, JsonElement>,
+    )
 
     private data class ProcessResult(val exitCode: Int, val stdout: String, val stderr: String) {
         fun normalized(workspace: Path): ProcessResult {
@@ -321,6 +372,7 @@ class NativeCompatibilityTest {
                 value
                     .replace(workspace.toAbsolutePath().toString(), "<workspace>")
                     .replace('\\', '/')
+                    .replace(BUILT_AT_JSON) { match -> "${match.groupValues[1]}<volatile>" }
             return copy(stdout = normalize(stdout), stderr = normalize(stderr))
         }
 
@@ -330,8 +382,10 @@ class NativeCompatibilityTest {
     private companion object {
         const val MAIN_CLASS = "dev.sebastiano.indexino.cli.MainCommandKt"
         const val PROCESS_TIMEOUT_MINUTES = 3L
+        const val PROCESS_TERMINATION_GRACE_SECONDS = 2L
         const val MACOS_ARM64 = "macos-arm64"
         const val LINUX_X64 = "linux-x64"
         const val WINDOWS_X64 = "windows-x64"
+        val BUILT_AT_JSON = Regex("""("builtAt":")[^"]+""")
     }
 }

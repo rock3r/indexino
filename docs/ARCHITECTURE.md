@@ -127,7 +127,9 @@ ZIP with `ditto`, replaces the staged application JAR and AOT cache with the exa
 re-archives with `ditto --norsrc`. This preserves the normalized JAR filesystem mtime when users
 extract with macOS `ditto` and prevents AppleDouble entries. The finalizer does not mutate Construo
 tasks or their inputs and is intentionally neither cacheable nor up-to-date because the JAR mtime
-and current task-owned AOT cache are part of the output contract.
+and current task-owned AOT cache are part of the output contract. The public `packageMacArm64`
+lifecycle finalizes the raw Construo output before it completes; downstream checksum and upload
+tasks must consume only the finalized archive.
 
 Each `trainAot<Target>` task treats the final jlink image and normalized JAR as immutable inputs. It
 copies them into a task-private flat Roast staging root, restores only the matching target JDK
@@ -142,9 +144,11 @@ compatibility are proven, while unchanged local inputs may reuse an up-to-date o
 
 Native verification augments only copied launcher JSON files with strict or diagnostic AOT flags;
 the production archive remains in automatic mode without logging flags. The verifier also compares
-the thin runtime classpath, unshrunk fat JAR, R8 JAR, and actual Roast launcher against one indexed
-fixture, and writes per-target AOT diagnostics plus non-gating launch-time and artifact-size reports
-under `build/reports/native-distributions/`.
+the thin runtime classpath, unshrunk fat JAR, R8 JAR, and actual Roast launcher by independently
+indexing equivalent clean fixtures, and writes per-target AOT diagnostics plus non-gating launch-time
+and artifact-size reports under `build/reports/native-distributions/`. Matching-host verification is
+never up-to-date or restored from the build cache because host tools, console behavior, and OS runtime
+compatibility cannot be represented safely as reusable Gradle state.
 
 ## Phased delivery
 

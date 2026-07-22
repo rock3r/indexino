@@ -314,6 +314,8 @@ val finalizedMacArm64Archive by
         )
     }
 
+tasks.named<PackageTask>("packageMacArm64") { finalizedBy(finalizedMacArm64Archive) }
+
 shadow { addShadowVariantIntoJavaComponent = false }
 
 val testMavenRepository = layout.buildDirectory.dir("test-maven-repository")
@@ -426,6 +428,14 @@ val verifyConstruoContract by
             layout.projectDirectory.file(
                 "buildSrc/src/main/java/dev/sebastiano/indexino/buildlogic/NormalizedJar.java"
             )
+        val macPackageFinalizers =
+            tasks.named<PackageTask>("packageMacArm64").map { packageTask ->
+                packageTask.finalizedBy
+                    .getDependencies(packageTask)
+                    .map { it.name }
+                    .sorted()
+                    .joinToString(",")
+            }
         inputs.file(nativeDistributionPinsFile).withPropertyName("nativeDistributionPins")
         inputs.file(normalizedJarSource).withPropertyName("normalizedJarSource")
         inputs
@@ -449,6 +459,7 @@ val verifyConstruoContract by
             shrunkCliJar.flatMap(ShadowJar::getArchiveFile).get().asFile.absolutePath,
         )
         systemProperty("indexino.normalizedJarSource", normalizedJarSource.asFile.absolutePath)
+        systemProperty("indexino.macPackageFinalizers", macPackageFinalizers.get())
     }
 
 val verifyAotTrainingContract by
@@ -503,6 +514,8 @@ fun registerNativeDistributionVerification(taskSuffix: String, artifactSuffix: S
         inputs.file(unshrunkApplicationJar).withPropertyName("unshrunkApplicationJar")
         inputs.file(r8ApplicationJar).withPropertyName("r8ApplicationJar")
         outputs.dir(verificationReportDirectory).withPropertyName("verificationReports")
+        outputs.upToDateWhen { false }
+        outputs.doNotCacheIf("Verification depends on matching-host native behavior") { true }
         inputs.dir(targetRuntimeImage).withPropertyName("targetRuntimeImage")
         inputs.file(layout.projectDirectory.file("LICENSE")).withPropertyName("applicationLicense")
         inputs

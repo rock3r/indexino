@@ -28,6 +28,16 @@ class ConstruoContractTest {
     @TempDir lateinit var projectDirectory: Path
 
     @Test
+    fun `public mac package lifecycle includes the metadata finalizer`() {
+        assertTrue(
+            requiredProperty("indexino.macPackageFinalizers")
+                .split(',')
+                .contains("finalizedMacArm64Archive"),
+            "packageMacArm64 must run finalizedMacArm64Archive",
+        )
+    }
+
+    @Test
     fun `normalized application jar has deterministic archive safe metadata`() {
         val normalizedJar = Path.of(requiredProperty("indexino.normalizedCliJar"))
         val shrunkJar = Path.of(requiredProperty("indexino.shrunkCliJar"))
