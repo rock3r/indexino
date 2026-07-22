@@ -8,12 +8,27 @@ import kotlin.test.assertTrue
 
 class WindowsConsoleCtrlHandlerTest {
     @Test
+    fun `windows launch enables ctrl c before installing the handler`() {
+        val calls = mutableListOf<String>()
+
+        WindowsConsoleCtrlHandler.install(
+            osName = "Windows 11",
+            enableInterrupts = { calls += "enable" },
+            register = { calls += "register" },
+            halt = {},
+        )
+
+        assertEquals(listOf("enable", "register"), calls)
+    }
+
+    @Test
     fun `windows interrupt handler halts with a nonzero conventional exit code`() {
         var installed: ((Int) -> Boolean)? = null
         var exitCode: Int? = null
 
         WindowsConsoleCtrlHandler.install(
             osName = "Windows 11",
+            enableInterrupts = {},
             register = { installed = it },
             halt = { exitCode = it },
         )
@@ -30,6 +45,7 @@ class WindowsConsoleCtrlHandlerTest {
 
         WindowsConsoleCtrlHandler.install(
             osName = "Windows 11",
+            enableInterrupts = {},
             register = { installed = it },
             halt = { halted = true },
         )

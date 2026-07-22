@@ -7,10 +7,12 @@ import com.sun.jna.Native
 internal object WindowsConsoleCtrlHandler {
     fun install(
         osName: String = System.getProperty("os.name"),
+        enableInterrupts: () -> Unit = ::enableConsoleInterrupts,
         register: (((Int) -> Boolean) -> Unit) = ::registerConsoleHandler,
         halt: (Int) -> Unit = Runtime.getRuntime()::halt,
     ) {
         if (!osName.startsWith("Windows", ignoreCase = true)) return
+        enableInterrupts()
         register { controlType ->
             if (controlType !in INTERRUPT_CONTROL_TYPES) {
                 false
@@ -18,6 +20,12 @@ internal object WindowsConsoleCtrlHandler {
                 halt(INTERRUPT_EXIT_CODE)
                 true
             }
+        }
+    }
+
+    private fun enableConsoleInterrupts() {
+        check(kernel32.SetConsoleCtrlHandler(null, false)) {
+            "Could not enable Windows console interrupts (error ${Native.getLastError()})"
         }
     }
 
@@ -36,7 +44,7 @@ internal object WindowsConsoleCtrlHandler {
 
     private interface Kernel32 : Library {
         @Suppress("FunctionName")
-        fun SetConsoleCtrlHandler(handler: HandlerRoutine, add: Boolean): Boolean
+        fun SetConsoleCtrlHandler(handler: HandlerRoutine?, add: Boolean): Boolean
     }
 
     private fun interface HandlerRoutine : Callback {
