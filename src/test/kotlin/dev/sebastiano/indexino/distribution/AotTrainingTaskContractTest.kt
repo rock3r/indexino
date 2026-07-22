@@ -103,10 +103,11 @@ class AotTrainingTaskContractTest {
         assertEquals("-Xms64m", arguments[0])
         assertEquals("-Xmx512m", arguments[1])
         assertEquals("--enable-native-access=ALL-UNNAMED", arguments[2])
-        assertEquals("-Duser.home=${staging.toRealPath().resolve("home")}", arguments[3])
-        assertEquals("-Djava.io.tmpdir=${staging.toRealPath().resolve("tmp")}", arguments[4])
-        assertTrue(arguments[5].startsWith("-XX:AOTCacheOutput="))
-        assertFalse(arguments[5].endsWith("/build/aot/classes.jsa"))
+        assertEquals("-Dindexino.roastLauncher=true", arguments[3])
+        assertEquals("-Duser.home=${staging.toRealPath().resolve("home")}", arguments[4])
+        assertEquals("-Djava.io.tmpdir=${staging.toRealPath().resolve("tmp")}", arguments[5])
+        assertTrue(arguments[6].startsWith("-XX:AOTCacheOutput="))
+        assertFalse(arguments[6].endsWith("/build/aot/classes.jsa"))
         assertEquals(
             listOf(
                 "-cp",
@@ -122,7 +123,7 @@ class AotTrainingTaskContractTest {
                 "--applications",
                 "selection-context",
             ),
-            arguments.drop(6),
+            arguments.drop(7),
         )
         val environment = staging.resolve("probe.env").readLines()
         assertTrue(environment.contains("PATH=${System.getenv("PATH")}"))
@@ -173,7 +174,12 @@ class AotTrainingTaskContractTest {
                     classPath.set("indexino-cli.jar")
                     roastWorkingDirectory.set(".")
                     fixtureVersion.set("1")
-                    vmArgs.set(listOf("--enable-native-access=ALL-UNNAMED"))
+                    vmArgs.set(
+                        listOf(
+                            "--enable-native-access=ALL-UNNAMED",
+                            "-Dindexino.roastLauncher=true",
+                        )
+                    )
                     trainingArguments.set(
                         listOf(
                             "index", "--project", "training-workspace",

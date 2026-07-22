@@ -5,6 +5,7 @@ import java.net.InetSocketAddress
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.attribute.FileTime
 import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermission
@@ -20,12 +21,89 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
+import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.io.TempDir
 
 @Tag("construo-contract")
 class ConstruoContractTest {
     @TempDir lateinit var projectDirectory: Path
+
+    @Test
+    fun `native report cleanup deletes a symlink without following it`() {
+        assumeFalse(System.getProperty("os.name").startsWith("Windows"))
+        val rootProject = Path.of(requiredProperty("indexino.projectDirectory"))
+        val reports = rootProject.resolve("build/reports/native-distributions/macos-arm64")
+        val backup = reports.resolveSibling("${reports.fileName}.contract-backup")
+        val protectedDirectory = projectDirectory.resolve("protected").createDirectories()
+        val sentinel = protectedDirectory.resolve("sentinel.txt")
+        sentinel.writeText("preserve")
+        reports.parent.createDirectories()
+        Files.deleteIfExists(backup)
+        var reportsMoved = false
+
+        try {
+            if (Files.exists(reports)) {
+                Files.move(reports, backup, ATOMIC_MOVE)
+                reportsMoved = true
+            }
+            Files.createSymbolicLink(reports, protectedDirectory)
+            val result =
+                GradleRunner.create()
+                    .withProjectDir(rootProject.toFile())
+                    .withTestKitDir(Path.of(requiredProperty("indexino.gradleUserHome")).toFile())
+                    .withArguments("--offline", "cleanNativeDistributionReportsMacArm64")
+                    .build()
+
+            assertEquals(
+                TaskOutcome.SUCCESS,
+                result.task(":cleanNativeDistributionReportsMacArm64")?.outcome,
+            )
+            assertFalse(Files.exists(reports), "Report-directory symlink was not deleted")
+            assertTrue(Files.isRegularFile(sentinel), "Report cleanup followed the symlink")
+        } finally {
+            Files.deleteIfExists(reports)
+            if (reportsMoved) Files.move(backup, reports, ATOMIC_MOVE)
+        }
+    }
+
+    @Test
+    fun `native runtime classpath is resolved only when the verifier executes`() {
+        val initScript = projectDirectory.resolve("reject-runtime-classpath-resolution.gradle")
+        initScript.writeText(
+            """
+            gradle.beforeProject { project ->
+                if (project == project.rootProject) {
+                    project.configurations.matching { it.name == 'runtimeClasspath' }.configureEach {
+                        incoming.beforeResolve {
+                            throw new GradleException('runtimeClasspath resolved during configuration')
+                        }
+                    }
+                }
+            }
+            """
+                .trimIndent()
+        )
+
+        val result =
+            GradleRunner.create()
+                .withProjectDir(Path.of(requiredProperty("indexino.projectDirectory")).toFile())
+                .withTestKitDir(Path.of(requiredProperty("indexino.gradleUserHome")).toFile())
+                .withArguments("--offline", "--init-script", initScript.toString(), "help")
+                .build()
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":help")?.outcome)
+    }
+
+    @Test
+    fun `public mac package lifecycle includes the metadata finalizer`() {
+        assertTrue(
+            requiredProperty("indexino.macPackageFinalizers")
+                .split(',')
+                .contains("finalizedMacArm64Archive"),
+            "packageMacArm64 must run finalizedMacArm64Archive",
+        )
+    }
 
     @Test
     fun `normalized application jar has deterministic archive safe metadata`() {

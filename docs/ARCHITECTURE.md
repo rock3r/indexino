@@ -116,6 +116,24 @@ target-specific archive. The shipped jlink image intentionally omits `runtime/bi
 retaining process helpers such as `jspawnhelper`; the application still launches external Git and
 topology tools when a command needs them.
 
+Roast embeds HotSpot in the launcher process. The packaged launcher sets an Indexino-specific VM
+property; only that marked Windows entry point installs a Win32 `SetConsoleCtrlHandler` callback
+through JNA, first clearing the process-level ignore-Ctrl-C flag. The callback halts with exit code
+130 so a console `CTRL_C_EVENT` or `CTRL_BREAK_EVENT` terminates a running command. Thin/fat/R8 JVM
+launches retain the JVM's normal interrupt and shutdown-hook behavior.
+
+The macOS archive has one Indexino-owned downstream finalization step. It extracts Construo's raw
+ZIP with `ditto`, replaces the staged application JAR and AOT cache with the exact task inputs,
+normalizes the cache to ordinary-file mode `0644`, and re-archives with `ditto --norsrc`. This
+preserves the normalized JAR filesystem mtime when users extract with macOS `ditto`, prevents a
+restrictive builder umask from leaking into the archive, and prevents AppleDouble entries. The
+finalizer does not mutate Construo tasks or their inputs and is intentionally neither cacheable nor
+up-to-date because the JAR mtime and current task-owned AOT cache are part of the output contract.
+Its expanded staging tree is removed after both successful and failed finalization. The public
+`packageMacArm64` lifecycle
+finalizes the raw Construo output before it completes; downstream checksum and upload tasks must
+consume only the finalized archive.
+
 Each `trainAot<Target>` task treats the final jlink image and normalized JAR as immutable inputs. It
 copies them into a task-private flat Roast staging root, restores only the matching target JDK
 `java` launcher into that private runtime, initializes the committed deterministic fixture, and
@@ -126,6 +144,24 @@ that cache at HotSpot's platform location: `runtime/lib/server/classes.jsa` on L
 `runtime/bin/server/classes.jsa` on Windows. The archive still uses the original stripped runtime
 and exact normalized JAR. AOT task build caching is disabled until reproducibility and cross-runner
 compatibility are proven, while unchanged local inputs may reuse an up-to-date output.
+
+Native verification augments only copied launcher JSON files with strict or diagnostic AOT flags;
+the production archive remains in automatic mode without logging flags. The verifier also compares
+the thin runtime classpath, unshrunk fat JAR, R8 JAR, and actual Roast launcher by independently
+indexing equivalent clean fixtures, and writes per-target AOT diagnostics plus non-gating launch-time
+and artifact-size reports under `build/reports/native-distributions/`. Matching-host verification is
+never up-to-date or restored from the build cache because host tools, console behavior, and OS runtime
+compatibility cannot be represented safely as reusable Gradle state.
+Report cleanup uses a non-following delete task so a symlink at the predictable report path cannot
+escape the build directory. Process output is captured in task-owned files and decoded with UTF-8
+replacement semantics for platform-native diagnostic bytes. Before a verified command starts, a
+test helper places it in a new POSIX session/process group or a Windows Job Object configured to kill
+all members when its owner closes. Timeout cleanup terminates that kernel-owned boundary rather than
+depending on a racy user-space process-tree snapshot. Inherited streams and concurrent late child
+creation therefore cannot hang or escape a verification run.
+The thin runtime dependency collection remains a declared verifier input but is converted to a
+classpath string only in the selected verifier's execution action, so unrelated Gradle tasks do not
+resolve native-verification dependencies during configuration.
 
 ## Phased delivery
 

@@ -4,6 +4,12 @@
     public static void main(java.lang.String[]);
 }
 
+# JNA's native bootstrap and proxies resolve these classes and entry points by reflection.
+-keep class com.sun.jna.** { *; }
+-keep interface * extends com.sun.jna.Library { *; }
+-keep interface * extends com.sun.jna.Callback { *; }
+-keep class * implements com.sun.jna.Callback { *; }
+
 # Xodus registers these standard MBeans reflectively by naming convention.
 -keep class jetbrains.exodus.env.management.** { *; }
 -keep class jetbrains.exodus.management.** { *; }

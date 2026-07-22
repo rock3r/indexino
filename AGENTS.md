@@ -126,7 +126,7 @@ artefacts the user should copy verbatim.
 ./gradlew verifyConstruoContract # released native-packaging contract and immutable pins
 ./gradlew verifyAotTrainingContract # AOT task lifecycle and isolation contract
 ./gradlew trainAotMacArm64 # real matching-host JBR 25 AOT assembly
-./gradlew verifyNativeDistributionMacArm64 # package/smoke macOS arm64 on a native host
+./gradlew verifyNativeDistributionMacArm64 # AOT, differential, relocation, and report verification
 # LinuxX64 and WindowsX64 variants follow the same verifyNativeDistribution<Target> naming
 ./gradlew check         # tests (extend with lint/format when added)
 ```

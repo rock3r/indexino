@@ -25,5 +25,6 @@ internal class MainCommand : CliktCommand(name = "indexino") {
  * and R8 JAR launch contracts are exercised by `verifyShrunkCli`.
  */
 internal fun main(args: Array<String>) {
+    WindowsConsoleCtrlHandler.install()
     MainCommand().main(args)
 }
