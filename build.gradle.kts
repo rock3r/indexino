@@ -16,6 +16,8 @@ import io.github.fourlastor.construo.task.PackageTask
 import io.github.fourlastor.construo.task.jvm.CreateRuntimeImageTask
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermissions
+import java.security.MessageDigest
+import java.util.HexFormat
 import java.util.Properties
 import org.gradle.api.file.DuplicatesStrategy
 import org.gradle.api.tasks.Delete
@@ -229,6 +231,10 @@ construo {
     jarTask.set(normalizedCliJar.map { it.name })
     zipFolder.set("indexino")
     packageFiles.put("licenses/indexino-LICENSE", layout.projectDirectory.file("LICENSE"))
+    packageFiles.put(
+        "licenses/roast-LICENSE",
+        layout.projectDirectory.file("third-party/roast/LICENSE"),
+    )
     jlink {
         modules.addAll("jdk.compiler", "jdk.unsupported", "jdk.crypto.ec")
         guessModulesFromJar.set(true)
@@ -576,12 +582,24 @@ fun registerNativeDistributionVerification(
         dependsOn(cleanVerificationReports)
         testClassesDirs = sourceSets.test.get().output.classesDirs
         classpath = sourceSets.test.get().runtimeClasspath
-        val archive =
+        val defaultArchive =
             if (taskSuffix == "MacArm64") {
                 finalizedMacArm64Archive.flatMap(MacDittoArchive::getOutputArchive)
             } else {
                 tasks.named<PackageTask>("package$taskSuffix").flatMap { it.archiveFile }
             }
+        val verificationArchiveEnvironment =
+            when (taskSuffix) {
+                "LinuxX64" -> "INDEXINO_NATIVE_LINUX_X64_VERIFICATION_ARCHIVE"
+                "MacArm64" -> "INDEXINO_NATIVE_MACOS_ARM64_VERIFICATION_ARCHIVE"
+                "WindowsX64" -> "INDEXINO_NATIVE_WINDOWS_X64_VERIFICATION_ARCHIVE"
+                else -> error("Unsupported native verification target: $taskSuffix")
+            }
+        val archive =
+            providers
+                .environmentVariable(verificationArchiveEnvironment)
+                .map(layout.projectDirectory::file)
+                .orElse(defaultArchive)
         val targetJdkRoot =
             tasks.named<CreateRuntimeImageTask>("createRuntimeImage$taskSuffix").flatMap {
                 it.jdkRoot
@@ -620,6 +638,9 @@ fun registerNativeDistributionVerification(
         inputs.dir(targetRuntimeImage).withPropertyName("targetRuntimeImage")
         inputs.file(layout.projectDirectory.file("LICENSE")).withPropertyName("applicationLicense")
         inputs
+            .file(layout.projectDirectory.file("third-party/roast/LICENSE"))
+            .withPropertyName("roastLicense")
+        inputs
             .files(
                 targetJdkRoot.map { it.file("bin/jlink$executableExtension") },
                 targetJdkRoot.map { it.file("bin/jdeps$executableExtension") },
@@ -655,6 +676,10 @@ fun registerNativeDistributionVerification(
         systemProperty(
             "indexino.applicationLicense",
             layout.projectDirectory.file("LICENSE").asFile.absolutePath,
+        )
+        systemProperty(
+            "indexino.roastLicense",
+            layout.projectDirectory.file("third-party/roast/LICENSE").asFile.absolutePath,
         )
     }
 }
@@ -693,6 +718,44 @@ val verifyMavenPublication by
         systemProperty("indexino.publicationArtifact", publicationArtifactId.get())
         systemProperty("indexino.publicationVersion", publicationVersion)
     }
+
+val generateBundledDependencyInventory by tasks.registering {
+    group = "distribution"
+    description = "Generate the native bundle's resolved JVM dependency inventory"
+    val outputFile = layout.buildDirectory.file("reports/release/bundled-dependencies.txt")
+    inputs.files(runtimeClasspathConfiguration).withPropertyName("runtimeClasspath")
+    outputs.file(outputFile).withPropertyName("dependencyInventory")
+    doLast {
+        val entries =
+            runtimeClasspathConfiguration
+                .get()
+                .resolvedConfiguration
+                .resolvedArtifacts
+                .sortedBy { artifact -> artifact.moduleVersion.id.toString() }
+                .map { artifact ->
+                    val digest = MessageDigest.getInstance("SHA-256")
+                    artifact.file.inputStream().use { input ->
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            digest.update(buffer, 0, count)
+                        }
+                    }
+                    "${HexFormat.of().formatHex(digest.digest())}  ${artifact.moduleVersion.id}  " +
+                        artifact.file.name
+                }
+        val output = outputFile.get().asFile
+        output.parentFile.mkdirs()
+        output.writeText(
+            buildString {
+                appendLine("# Indexino bundled JVM dependency inventory")
+                appendLine("# sha256  coordinates  resolved-file")
+                entries.forEach(::appendLine)
+            }
+        )
+    }
+}
 
 tasks.check {
     dependsOn("detektMain", "detektTest", "ktfmtCheckMain", "ktfmtCheckScripts", "ktfmtCheckTest")

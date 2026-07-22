@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "approvalStatus": "PENDING_COUNSEL_APPROVAL",
+  "nativeInputPinsSha256": "9632735145227888f60e7553efd8f340c764bb5d8a179371577184123855b108",
+  "releaseSigningKeyFingerprint": "",
+  "releaseSigningPublicKeyPath": "release/indexino-release-signing-key.asc",
+  "releaseSigningPublicKeySha256": "",
+  "jbr": {
+    "binaryBuild": "25.0.3b508.16",
+    "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+    "binaryNoticesPath": "runtime/legal",
+    "sourceMappingStatus": "PENDING_COUNSEL_APPROVAL",
+    "sourceTag": "",
+    "sourceCommit": "",
+    "correspondingSourceMechanism": "PENDING_COUNSEL_APPROVAL"
+  },
+  "roast": {
+    "version": "v1.6.0",
+    "source": "https://github.com/fourlastor-alexandria/roast/tree/v1.6.0",
+    "licensePath": "licenses/roast-LICENSE"
+  },
+  "application": {
+    "licensePath": "licenses/indexino-LICENSE",
+    "generatedDependencyInventory": "bundled-dependencies.txt"
+  },
+  "windowsAuthenticodePolicy": {
+    "policy": "UNSIGNED",
+    "rationale": "The first public Windows ZIP will use signed aggregate provenance and published SHA-256 checksums; users must expect SmartScreen reputation warnings."
+  }
+}

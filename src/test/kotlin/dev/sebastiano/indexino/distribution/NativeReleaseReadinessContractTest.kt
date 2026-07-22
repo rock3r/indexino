@@ -121,6 +121,74 @@ class NativeReleaseReadinessContractTest {
         assertContains(distributions, "No native release")
     }
 
+    @Test
+    fun `tag workflow gates native draft assets behind Maven and redistribution readiness`() {
+        val workflow = projectFile(".github/workflows/release.yml").readText()
+        val manifest = projectFile("release/native-redistribution-manifest.json").readText()
+        val readinessScript =
+            projectFile(".github/scripts/verify-native-release-readiness.sh").readText()
+
+        assertContains(workflow, "uses: ./.github/workflows/native-distributions.yml")
+        assertContains(workflow, "release: true")
+        assertContains(workflow, "needs: [readiness, publish, native-distributions]")
+        assertContains(workflow, "generate-release-provenance.sh")
+        assertContains(workflow, "gh release create")
+        assertContains(workflow, "--draft")
+        assertContains(workflow, "publishToMavenCentral")
+        assertContains(workflow, "generateBundledDependencyInventory")
+        assertContains(workflow, "approvalStatus")
+        assertContains(workflow, "verify-native-release-readiness.sh")
+        assertContains(manifest, "PENDING_COUNSEL_APPROVAL")
+        assertContains(manifest, "25.0.3b508.16")
+        assertContains(manifest, "nativeInputPinsSha256")
+        assertContains(manifest, "releaseSigningKeyFingerprint")
+        assertContains(manifest, "releaseSigningPublicKeySha256")
+        assertContains(readinessScript, "current_pins_sha")
+        assertContains(readinessScript, "nativeInputPinsSha256")
+        assertContains(readinessScript, "--show-keys")
+        assertContains(manifest, "UNSIGNED")
+        assertContains(projectFile("third-party/roast/LICENSE").readText(), "Apache License")
+        assertContains(projectFile("build.gradle.kts").readText(), "licenses/roast-LICENSE")
+    }
+
+    @Test
+    fun `release native matrix notarizes immutable mac bytes and reverifies before checksums`() {
+        val workflow = projectFile(".github/workflows/native-distributions.yml").readText()
+        val build = projectFile("build.gradle.kts").readText()
+        val signingScript =
+            projectFile(".github/scripts/sign-notarize-macos-distribution.sh").readText()
+        val provenanceScript =
+            projectFile(".github/scripts/generate-release-provenance.sh").readText()
+
+        assertContains(workflow, "workflow_call:")
+        assertContains(workflow, "Enforce native release approval")
+        assertContains(workflow, "test -n \"\$INDEXINO_RELEASE_VERSION\"")
+        assertFalse(
+            workflow.substringBefore("workflow_call:").contains("release:"),
+            "Manual dispatch must not expose release signing",
+        )
+        assertContains(workflow, "MACOS_CERTIFICATE_P12")
+        assertContains(workflow, "sign-notarize-macos-distribution.sh")
+        assertContains(workflow, "INDEXINO_NATIVE_MACOS_ARM64_VERIFICATION_ARCHIVE")
+        assertContains(workflow, "verifyNativeDistributionMacArm64")
+        assertTrue(
+            workflow.indexOf("INDEXINO_NATIVE_MACOS_ARM64_VERIFICATION_ARCHIVE") <
+                workflow.lastIndexOf(".sha256"),
+            "Final macOS verification must precede release checksum generation",
+        )
+        assertContains(build, "INDEXINO_NATIVE_MACOS_ARM64_VERIFICATION_ARCHIVE")
+        assertContains(signingScript, "codesign")
+        assertContains(signingScript, "notarytool submit")
+        assertContains(signingScript, "spctl")
+        assertContains(signingScript, "stapler validate")
+        assertContains(provenanceScript, "GITHUB_SHA")
+        assertContains(provenanceScript, "GITHUB_RUN_ID")
+        assertContains(provenanceScript, "gpg")
+        assertContains(provenanceScript, "release/indexino-release-signing-key.asc")
+        assertContains(provenanceScript, "releaseSigningKeyFingerprint")
+        assertContains(provenanceScript, "PUBLIC_KEY_FINGERPRINT")
+    }
+
     private fun projectFile(path: String): File {
         val file = projectDirectory.resolve(path)
         assertTrue(file.isFile, "Missing project file: $path")

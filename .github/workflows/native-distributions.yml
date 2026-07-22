@@ -2,9 +2,33 @@ name: Native distributions
 
 on:
   workflow_dispatch:
-  # Temporary D5 source validation; removed after the first full green matrix.
-  push:
-    branches: [feat/native-cli-d5-release-readiness]
+    inputs:
+      version:
+        description: Optional release version override
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      release:
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      MACOS_CERTIFICATE_P12:
+        required: false
+      MACOS_CERTIFICATE_PASSWORD:
+        required: false
+      MACOS_SIGNING_IDENTITY:
+        required: false
+      APPLE_ID:
+        required: false
+      APPLE_APP_SPECIFIC_PASSWORD:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
 
 permissions:
   contents: read
@@ -13,7 +37,9 @@ jobs:
   verify-native:
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 35
+    timeout-minutes: 60
+    env:
+      INDEXINO_RELEASE_VERSION: ${{ inputs.version }}
     strategy:
       fail-fast: false
       matrix:
@@ -35,6 +61,14 @@ jobs:
             checksum_task: sha256NativeDistributionWindowsX64
     steps:
       - uses: actions/checkout@v6
+      - name: Enforce native release approval
+        if: inputs.release
+        env:
+          NATIVE_RELEASE_APPROVED: ${{ vars.NATIVE_RELEASE_APPROVED }}
+        shell: bash
+        run: |
+          test -n "$INDEXINO_RELEASE_VERSION"
+          .github/scripts/verify-native-release-readiness.sh
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -54,17 +88,59 @@ jobs:
         run: |
           mkdir -p "build/ci-logs/${{ matrix.target }}"
           set -o pipefail
+          version_arguments=()
+          if [[ -n "$INDEXINO_RELEASE_VERSION" ]]; then
+            version_arguments+=("-PVERSION_NAME=$INDEXINO_RELEASE_VERSION")
+          fi
           .github/scripts/native-archive-cache.sh run \
             "${{ matrix.target }}" .native-download-cache -- \
             ./gradlew \
               "${{ matrix.verification_task }}" \
               "${{ matrix.checksum_task }}" \
+              "${version_arguments[@]}" \
               --no-daemon --console=plain 2>&1 | \
             tee "build/ci-logs/${{ matrix.target }}/verification.log"
       - name: Smoke oldest supported Linux baseline (ubuntu:22.04 / glibc 2.35)
         if: matrix.target == 'linux-x64'
         shell: bash
         run: scripts/smoke-linux-baseline.sh build/distributions/*.zip ubuntu:22.04
+      - name: Sign, notarize, and assess immutable macOS release bytes
+        if: inputs.release && matrix.target == 'macos-arm64'
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          unsigned_archive="$(find build/distributions -maxdepth 1 -name '*-macos-arm64.zip' -print -quit)"
+          test -n "$unsigned_archive"
+          mkdir -p build/release-distributions
+          signed_archive="build/release-distributions/$(basename "$unsigned_archive")"
+          .github/scripts/sign-notarize-macos-distribution.sh \
+            "$unsigned_archive" "$signed_archive"
+      - name: Reverify final signed and notarized macOS release bytes
+        if: inputs.release && matrix.target == 'macos-arm64'
+        shell: bash
+        run: |
+          signed_archive="$(find build/release-distributions -maxdepth 1 -name '*-macos-arm64.zip' -print -quit)"
+          test -n "$signed_archive"
+          mkdir -p build/ci-logs/macos-arm64
+          set -o pipefail
+          .github/scripts/native-archive-cache.sh run macos-arm64 .native-download-cache -- \
+            env INDEXINO_NATIVE_MACOS_ARM64_VERIFICATION_ARCHIVE="$PWD/$signed_archive" \
+            ./gradlew verifyNativeDistributionMacArm64 \
+              "-PVERSION_NAME=$INDEXINO_RELEASE_VERSION" \
+              --no-daemon --console=plain 2>&1 | \
+            tee build/ci-logs/macos-arm64/final-release-verification.log
+
+          unsigned_archive="$(find build/distributions -maxdepth 1 -name '*-macos-arm64.zip' -print -quit)"
+          cp "$signed_archive" "$unsigned_archive"
+          digest="$(shasum -a 256 "$unsigned_archive" | awk '{ print $1 }')"
+          printf '%s  %s\n' "$digest" "$(basename "$unsigned_archive")" > \
+            "$unsigned_archive.sha256"
       - name: Upload native distribution evidence
         if: always()
         uses: actions/upload-artifact@v4

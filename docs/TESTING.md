@@ -18,6 +18,7 @@ ordinary unit-test task:
 ./gradlew verifyMavenPublication # thin artifact and distribution-variant non-leakage
 ./gradlew verifyConstruoContract # released native-packaging API, checksums, modes, normalized JAR
 ./gradlew verifyAotTrainingContract # immutable staging, hermetic JVM args/env, atomic cache output
+./gradlew generateBundledDependencyInventory # release legal/provenance input
 ./gradlew trainAotMacArm64       # matching-host AOT assembly (LinuxX64/WindowsX64 variants exist)
 ./gradlew verifyNativeDistributionLinuxX64   # native Linux x64 host only
 ./gradlew verifyNativeDistributionMacArm64   # native macOS arm64 host only

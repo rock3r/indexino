@@ -80,16 +80,40 @@ startup. Reinstall the complete ZIP to restore the matching cache.
   `PATH` from the same shell that launches Indexino.
 - AOT rejection: reinstall the whole archive. Automatic mode should still run; strict diagnostic
   runs intentionally fail when the cache does not match.
-- macOS quarantine or Gatekeeper failures: current CI artifacts are unsigned and unnotarized test
-  outputs, not public releases.
-- Windows security warnings: current CI artifacts are not Authenticode-signed public releases.
+- macOS quarantine or Gatekeeper failures: ordinary CI artifacts are unsigned and unnotarized test
+  outputs. A future approved release ZIP is signed and notarized as immutable bytes. ZIPs cannot
+  carry a stapled notarization ticket, so a first launch on a quarantined machine needs network
+  access for Gatekeeper to retrieve the ticket. After successful online assessment macOS may cache
+  the ticket; an offline first launch can be rejected and should be retried online.
+- Windows security warnings: the decided first-release Authenticode policy is `UNSIGNED`. Verify the
+  published SHA-256 file and signed aggregate provenance; SmartScreen reputation warnings are
+  expected. Enabling Authenticode later requires signing the final executable before archiving and
+  rerunning the complete verifier on those final bytes.
+
+For an approved release, first fetch `release/native-redistribution-manifest.json` and
+`release/indexino-release-signing-key.asc` independently from the immutable source tag in the
+official `rock3r/indexino` repository; do not use only the copies co-distributed with a release or
+mirror. Compare the full fingerprint printed by `gpg --show-keys --fingerprint` with
+`releaseSigningKeyFingerprint` in that independently fetched manifest. Only after that identity
+check, verify the aggregate signature and per-archive checksum from the directory containing the
+downloaded release assets:
+
+```bash
+gpg --show-keys --fingerprint release/indexino-release-signing-key.asc
+gpg --import release/indexino-release-signing-key.asc
+gpg --verify indexino-release-provenance.txt.asc indexino-release-provenance.txt
+sha256sum -c indexino-<version>-windows-x64.zip.sha256
+```
 
 ## Release blockers
 
 No native release may be created until the manual Tier 1 matrix is green for the intended source
-commit and all release-safety work is complete. That includes an approved redistribution manifest
-for the exact JBR and Roast inputs, retained JBR GPLv2 with Classpath Exception and module notices, a
-counsel-approved corresponding-source mechanism, a bundled dependency inventory, immutable-payload
-macOS codesigning and notarization, a documented Gatekeeper policy, and a decided Windows
-Authenticode policy. Final signed/notarized bytes must repeat the full Roast, AOT, relocation, mode,
-and differential verifier before release checksums are generated.
+commit and all release-safety work is complete. The tag workflow enforces a checked-in
+`release/native-redistribution-manifest.json` approval plus the repository
+`NATIVE_RELEASE_APPROVED=true` gate. The checked-in manifest intentionally remains
+`PENDING_COUNSEL_APPROVAL`, so native drafting is disabled. Approval must cover the exact JBR and
+Roast inputs, retained JBR GPLv2 with Classpath Exception and module notices, a counsel-approved
+corresponding-source mechanism, a bundled dependency inventory, immutable-payload macOS codesigning
+and notarization, and the documented Gatekeeper and Windows Authenticode policies. Final
+signed/notarized bytes must repeat the full Roast, AOT, relocation, mode, and differential verifier
+before release checksums are generated.

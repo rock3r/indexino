@@ -6,6 +6,7 @@ import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.FileTime
 import java.util.Base64
 import java.util.concurrent.TimeUnit
+import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import kotlin.io.path.createDirectories
 import kotlin.io.path.readText
@@ -112,14 +113,7 @@ class NativeDistributionTest {
                 "Missing required modules: ${REQUIRED_MODULES - runtimeModules}",
             )
 
-            val packagedLicense = entries.getValue("indexino/licenses/indexino-LICENSE")
-            val packagedLicenseBytes = zip.getInputStream(packagedLicense).use { it.readBytes() }
-            assertTrue(
-                packagedLicenseBytes.contentEquals(
-                    Files.readAllBytes(requiredFile("indexino.applicationLicense"))
-                ),
-                "Packaged application license differs from LICENSE",
-            )
+            assertPackagedLicenses(zip, entries)
             runtimeModules.forEach { module ->
                 REQUIRED_JBR_LEGAL_FILES.forEach { file ->
                     assertTrue(
@@ -148,6 +142,26 @@ class NativeDistributionTest {
             assertEquals(
                 POSIX_FILE_MODE,
                 entries.getValue("indexino/licenses/indexino-LICENSE").unixMode,
+            )
+            assertEquals(
+                POSIX_FILE_MODE,
+                entries.getValue("indexino/licenses/roast-LICENSE").unixMode,
+            )
+        }
+    }
+
+    private fun assertPackagedLicenses(zip: ZipFile, entries: Map<String, ZipEntry>) {
+        val expectedLicenses =
+            mapOf(
+                "indexino/licenses/indexino-LICENSE" to "indexino.applicationLicense",
+                "indexino/licenses/roast-LICENSE" to "indexino.roastLicense",
+            )
+        expectedLicenses.forEach { (entryName, propertyName) ->
+            val packagedBytes =
+                zip.getInputStream(entries.getValue(entryName)).use { it.readBytes() }
+            assertTrue(
+                packagedBytes.contentEquals(Files.readAllBytes(requiredFile(propertyName))),
+                "Packaged license differs from its pinned source: $entryName",
             )
         }
     }
