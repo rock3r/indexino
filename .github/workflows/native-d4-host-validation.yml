@@ -13,6 +13,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - target: linux-x64
+            runner: ubuntu-latest
+            task: verifyNativeDistributionLinuxX64
           - target: windows-x64
             runner: windows-latest
             task: verifyNativeDistributionWindowsX64
@@ -28,18 +31,12 @@ jobs:
         run: git config --global commit.gpgSign false
       - name: Verify native distribution
         shell: bash
-        run: >-
-          ./gradlew verifyNativeDistributionWindowsX64
-          --tests "*windows console launcher terminates*"
-          --tests "*AOT launch performance*"
-          --no-daemon
+        run: ./gradlew ${{ matrix.task }} --no-daemon
       - name: Upload D4 reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: native-d4-${{ matrix.target }}
-          path: |
-            build/reports/native-distributions/${{ matrix.target }}/
-            build/test-results/verifyNativeDistributionWindowsX64/
+          path: build/reports/native-distributions/${{ matrix.target }}/
           if-no-files-found: warn
           retention-days: 3
