@@ -37,6 +37,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: native-d4-${{ matrix.target }}
-          path: build/reports/native-distributions/${{ matrix.target }}/
+          path: |
+            build/reports/native-distributions/${{ matrix.target }}/
+            build/test-results/${{ matrix.task }}/
           if-no-files-found: warn
           retention-days: 3
