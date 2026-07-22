@@ -19,6 +19,11 @@ class ShrunkCliDistributionTest {
     @TempDir lateinit var tempDir: Path
 
     @Test
+    fun `shadow uses the validated release`() {
+        assertEquals("9.6.0", requireNotNull(System.getProperty("indexino.shadowVersion")))
+    }
+
+    @Test
     fun `shrunk jar preserves the complete cli workload`() {
         val shrunkJar = requiredJar("indexino.shrunkJar")
         val unshrunkJar = requiredJar("indexino.unshrunkJar")

@@ -124,6 +124,11 @@ val shrunkCliJar by
     tasks.registering(ShadowJar::class) {
         description = "Build the R8-shrunk native-distribution CLI JAR"
         configureCliArchive("shrunk")
+        // Shadow 9.6 extracts dependency rules but its merger deduplicates repeated rule lines,
+        // including the closing braces shared by multiline blocks.
+        // Keep the runtime-sensitive rules in vetted one-line form until the merger accepts the
+        // dependency resources intact.
+        exclude("META-INF/com.android.tools/**", "META-INF/proguard/**")
         minimize {
             r8 { keepRuleFiles.from(layout.projectDirectory.file("gradle/r8/shrunk-cli.pro")) }
         }
@@ -500,6 +505,7 @@ val verifyShrunkCli by
             "indexino.unshrunkJar",
             tasks.shadowJar.flatMap(ShadowJar::getArchiveFile).get().asFile.absolutePath,
         )
+        systemProperty("indexino.shadowVersion", libs.versions.shadow.get())
     }
 
 val verifyConstruoContract by

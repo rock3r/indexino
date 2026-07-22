@@ -40,6 +40,10 @@ as an automatic CI repair.
 `verifyShrunkCli` runs only CLI behavior through `shrunkCliJar`; the unshrunk JAR is retained as a
 size baseline and diagnostic fallback. The fixture must exercise Kotlin, Java, Android XML, Xodus,
 selection-context, status/freshness, deterministic symbol/reference queries, and resource lookup.
+It also pins the validated Shadow release. Shadow 9.6 discovers dependency-supplied R8 rules, but
+its rule merger deduplicates repeated lines and therefore corrupts multiline rule blocks that share
+closing braces. The shrunk JAR excludes those embedded resources and supplies vetted one-line
+runtime rules in `gradle/r8/shrunk-cli.pro`; keep the full workload green when changing either side.
 
 `verifyConstruoContract` runs a Gradle TestKit consumer against the pinned Construo release. It
 checks provider-inferred overlays and preparation tasks, per-target archive outputs and target-JDK
