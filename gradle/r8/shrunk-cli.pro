@@ -4,10 +4,11 @@
     public static void main(java.lang.String[]);
 }
 
-# JNA's native bootstrap resolves helpers on Native and our Win32 entry points by reflection.
--keep class com.sun.jna.Native { *; }
--keep interface dev.sebastiano.indexino.cli.WindowsConsoleCtrlHandler$Kernel32 { *; }
--keep interface dev.sebastiano.indexino.cli.WindowsConsoleCtrlHandler$HandlerRoutine { *; }
+# JNA's native bootstrap and proxies resolve these classes and entry points by reflection.
+-keep class com.sun.jna.** { *; }
+-keep interface * extends com.sun.jna.Library { *; }
+-keep interface * extends com.sun.jna.Callback { *; }
+-keep class * implements com.sun.jna.Callback { *; }
 
 # Xodus registers these standard MBeans reflectively by naming convention.
 -keep class jetbrains.exodus.env.management.** { *; }
