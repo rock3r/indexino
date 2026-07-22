@@ -73,6 +73,7 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.xodus.environment)
     implementation(libs.slf4j.nop)
+    implementation(libs.jna)
 
     testImplementation(kotlin("test"))
     testImplementation(gradleTestKit())

@@ -116,9 +116,10 @@ target-specific archive. The shipped jlink image intentionally omits `runtime/bi
 retaining process helpers such as `jspawnhelper`; the application still launches external Git and
 topology tools when a command needs them.
 
-Roast embeds HotSpot in the launcher process. On Windows, Indexino installs a JVM `INT` handler at
-CLI startup and halts with exit code 130 so a console `CTRL_C_EVENT` terminates a running command
-instead of allowing the embedded invocation to finish successfully.
+Roast embeds HotSpot in the launcher process. On Windows, Indexino installs a Win32
+`SetConsoleCtrlHandler` callback through JNA at CLI startup and halts with exit code 130 so a
+console `CTRL_C_EVENT` or `CTRL_BREAK_EVENT` terminates a running command instead of allowing the
+embedded invocation to finish successfully.
 
 The macOS archive has one Indexino-owned downstream finalization step. It extracts Construo's raw
 ZIP with `ditto`, replaces the staged application JAR and AOT cache with the exact task inputs, and

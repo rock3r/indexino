@@ -4,11 +4,12 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 class WindowsConsoleCtrlHandlerTest {
     @Test
     fun `windows interrupt handler halts with a nonzero conventional exit code`() {
-        var installed: (() -> Unit)? = null
+        var installed: ((Int) -> Boolean)? = null
         var exitCode: Int? = null
 
         WindowsConsoleCtrlHandler.install(
@@ -17,8 +18,24 @@ class WindowsConsoleCtrlHandlerTest {
             halt = { exitCode = it },
         )
 
-        assertNotNull(installed).invoke()
+        val handler = assertNotNull(installed)
+        assertTrue(handler(0))
         assertEquals(130, exitCode)
+    }
+
+    @Test
+    fun `windows handler ignores non-interrupt console events`() {
+        var installed: ((Int) -> Boolean)? = null
+        var halted = false
+
+        WindowsConsoleCtrlHandler.install(
+            osName = "Windows 11",
+            register = { installed = it },
+            halt = { halted = true },
+        )
+
+        assertFalse(assertNotNull(installed)(2))
+        assertFalse(halted)
     }
 
     @Test

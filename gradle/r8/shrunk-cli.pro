@@ -4,6 +4,10 @@
     public static void main(java.lang.String[]);
 }
 
+# JNA resolves the Win32 function and callback entry points by their Java method names.
+-keep interface dev.sebastiano.indexino.cli.WindowsConsoleCtrlHandler$Kernel32 { *; }
+-keep interface dev.sebastiano.indexino.cli.WindowsConsoleCtrlHandler$HandlerRoutine { *; }
+
 # Xodus registers these standard MBeans reflectively by naming convention.
 -keep class jetbrains.exodus.env.management.** { *; }
 -keep class jetbrains.exodus.management.** { *; }

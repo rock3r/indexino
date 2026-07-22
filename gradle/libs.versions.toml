@@ -9,6 +9,7 @@ detekt = "2.0.0-alpha.2"
 ktfmt = "0.26.0"
 mavenPublish = "0.36.0"
 construo = "2.2.1"
+jna = "5.14.0"
 
 [libraries]
 kotlin-compiler-embeddable = { module = "org.jetbrains.kotlin:kotlin-compiler-embeddable", version.ref = "kotlin" }
@@ -16,6 +17,7 @@ clikt = { module = "com.github.ajalt.clikt:clikt", version.ref = "clikt" }
 slf4j-nop = { module = "org.slf4j:slf4j-nop", version.ref = "slf4j" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
 xodus-environment = { module = "org.jetbrains.xodus:xodus-environment", version.ref = "xodus" }
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
