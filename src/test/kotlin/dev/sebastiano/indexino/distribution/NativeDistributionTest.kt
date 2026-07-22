@@ -480,10 +480,9 @@ class NativeDistributionTest {
             ${'$'}process = Start-Process -FilePath '${powershellQuote(launcher)}' `
                 -ArgumentList '--help' `
                 -WorkingDirectory '${powershellQuote(caller)}' `
-                -NoNewWindow -PassThru `
+                -NoNewWindow -Wait -PassThru `
                 -RedirectStandardOutput '${powershellQuote(stdout)}' `
                 -RedirectStandardError '${powershellQuote(stderr)}'
-            ${'$'}process.WaitForExit()
             ${'$'}timer.Stop()
             Write-Output ('INDEXINO_TIMING {0} {1}' -f `
                 (${'$'}timer.Elapsed.TotalSeconds.ToString('R', [Globalization.CultureInfo]::InvariantCulture)), `
