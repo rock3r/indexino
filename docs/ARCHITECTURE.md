@@ -100,6 +100,7 @@ for these languages. ASM dependency producers remain a later core milestone.
 | `indexino-*-linux-x64.zip` | Linux x64 launcher, stripped JBR 25 runtime, application JAR, AOT cache, and licenses | No |
 | `indexino-*-macos-arm64.zip` | Flat macOS arm64 CLI with the same installation layout | No |
 | `indexino-*-windows-x64.zip` | Windows x64 console launcher with the same installation layout | No |
+| `indexino-*-<target>.zip.sha256` | Portable checksum for the finalized native ZIP | No |
 | ordinary JVM JAR | Thin dependency artifact with transitive runtime dependencies | Yes |
 
 `shadowJar` and `shrunkCliJar` share explicit main output, runtime classpath, manifest, service
@@ -152,6 +153,11 @@ indexing equivalent clean fixtures, and writes per-target AOT diagnostics plus n
 and artifact-size reports under `build/reports/native-distributions/`. Matching-host verification is
 never up-to-date or restored from the build cache because host tools, console behavior, and OS runtime
 compatibility cannot be represented safely as reusable Gradle state.
+CI keeps only the original JBR and Roast download archives in a dedicated cache whose exact key
+contains both checked-in SHA-256 digests. A cache helper verifies every restored or downloaded byte,
+then exposes those archives through a loopback HTTP server so Construo's ordinary download and digest
+tasks remain unchanged. Extracted JDKs, runtime images, normalized JARs, trained AOT caches, packages,
+and reports are never restored from that cache.
 Report cleanup uses a non-following delete task so a symlink at the predictable report path cannot
 escape the build directory. Process output is captured in task-owned files and decoded with UTF-8
 replacement semantics for platform-native diagnostic bytes. Before a verified command starts, a
@@ -162,6 +168,11 @@ creation therefore cannot hang or escape a verification run.
 The thin runtime dependency collection remains a declared verifier input but is converted to a
 classpath string only in the selected verifier's execution action, so unrelated Gradle tasks do not
 resolve native-verification dependencies during configuration.
+
+Pull requests run the JVM/publication/R8 gates and the Linux x64 native verifier. The latter repeats
+an actual Roast index/query smoke inside Ubuntu 20.04 (glibc 2.31). A manual workflow runs the full
+matching-host verifier on Ubuntu 24.04 x64, macOS 15 arm64, and Windows Server 2022 x64 and retains
+the finalized ZIP, checksum, reports, test results, and console log for seven days.
 
 ## Phased delivery
 

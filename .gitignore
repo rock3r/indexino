@@ -29,6 +29,8 @@ local.properties
 .plans/
 plans/
 scratch/
+.cal-industries/
+.native-download-cache/
 
 # Agent skill temp dirs
 .agents/skills/*/tmp/

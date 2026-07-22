@@ -22,6 +22,7 @@ ordinary unit-test task:
 ./gradlew verifyNativeDistributionLinuxX64   # native Linux x64 host only
 ./gradlew verifyNativeDistributionMacArm64   # native macOS arm64 host only
 ./gradlew verifyNativeDistributionWindowsX64 # native Windows x64 host only
+./gradlew sha256NativeDistributionMacArm64    # checksum final native ZIP (target variants exist)
 ```
 
 Kotlin ABI validation is part of `./gradlew check`. Until the first embedded API is defined,
@@ -102,6 +103,18 @@ is normalized to ordinary-file mode `0644`, including when its source was create
 umask. Verification consumes that final output, and future checksum/upload tasks must do the same.
 Standard extraction must recover the exact even-second JAR mtime; this is deliberately tested after
 extraction rather than inferred from Java's interpretation of ZIP extra fields.
+
+The pull-request workflow runs `check`, `verifyMavenPublication`, and `verifyShrunkCli`, then runs the
+complete Linux x64 native verifier in a separate matching-host job. That job also launches the built
+Roast distribution from an arbitrary directory inside `ubuntu:20.04`, whose glibc 2.31 is the oldest
+declared Linux baseline, and performs an index/query workload. The manually dispatched
+`native-distributions.yml` workflow repeats full native verification on all Tier 1 runners.
+
+Native CI caches only the original JBR and Roast archives. The key contains both checked-in digests;
+the helper verifies a restored archive before serving it to unchanged Construo download/digest tasks.
+Do not add extracted runtimes, `native-distributions/aot`, `classes.jsa`, application JARs, ZIPs, or
+reports to a reusable cache. Every run uploads the finalized ZIP and `.sha256` plus size/benchmark
+reports, test results, and the plain verification log with seven-day retention.
 
 ## TDD Red-Green Cycle
 

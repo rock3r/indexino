@@ -8,11 +8,15 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import org.gradle.testkit.runner.GradleRunner
 import org.junit.jupiter.api.Tag
+import org.junit.jupiter.api.io.TempDir
 import org.w3c.dom.Element
 
 @Tag("publication")
 class MavenPublicationTest {
+    @TempDir lateinit var tempDir: File
+
     @Test
     fun `publication remains thin and excludes distribution variants`() {
         val artifactDirectory = requiredProperty("indexino.publicationDirectory").let(::File)
@@ -103,6 +107,54 @@ class MavenPublicationTest {
                 "Shadow's optional runtime variant leaked into publication metadata",
             )
         }
+    }
+
+    @Test
+    fun `ordinary JVM 21 consumer resolves coordinates and launches the thin CLI`() {
+        val repository = requiredProperty("indexino.publicationRepository").let(::File)
+        val groupId = requiredProperty("indexino.publicationGroup")
+        val artifactId = requiredProperty("indexino.publicationArtifact")
+        val version = requiredProperty("indexino.publicationVersion")
+        val consumer = tempDir.resolve("consumer").apply(File::mkdirs)
+        consumer.resolve("settings.gradle.kts").writeText("rootProject.name = \"consumer\"\n")
+        consumer
+            .resolve("build.gradle.kts")
+            .writeText(
+                """
+            plugins { application }
+
+            repositories {
+                maven { url = uri("${repository.toURI()}") }
+                mavenCentral()
+            }
+
+            dependencies {
+                implementation("$groupId:$artifactId:$version")
+            }
+
+            java {
+                toolchain.languageVersion.set(JavaLanguageVersion.of(21))
+            }
+
+            application {
+                mainClass.set("dev.sebastiano.indexino.cli.MainCommandKt")
+            }
+
+            tasks.named<JavaExec>("run") {
+                args("--help")
+            }
+            """
+                    .trimIndent()
+            )
+
+        val result =
+            GradleRunner.create()
+                .withProjectDir(consumer)
+                .withArguments("--stacktrace", "run")
+                .forwardOutput()
+                .build()
+
+        assertTrue(result.output.contains("indexino", ignoreCase = true), result.output)
     }
 
     private fun requiredProperty(name: String): String =

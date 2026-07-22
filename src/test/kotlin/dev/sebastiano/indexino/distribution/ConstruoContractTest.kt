@@ -195,6 +195,10 @@ class ConstruoContractTest {
             pins.getProperty("construo.version"),
         )
         assertEquals("v1.6.0", pins.getProperty("roast.version"))
+        assertEquals(
+            "https://github.com/fourlastor-alexandria/roast/releases/download",
+            pins.getProperty("roast.baseUrl"),
+        )
         assertEquals("25.0.3b508.16", pins.getProperty("jbr.version"))
 
         val targets = listOf("linuxX64", "macArm64", "windowsX64")

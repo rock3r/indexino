@@ -128,6 +128,8 @@ artefacts the user should copy verbatim.
 ./gradlew trainAotMacArm64 # real matching-host JBR 25 AOT assembly
 ./gradlew verifyNativeDistributionMacArm64 # AOT, differential, relocation, and report verification
 # LinuxX64 and WindowsX64 variants follow the same verifyNativeDistribution<Target> naming
+./gradlew sha256NativeDistributionMacArm64 # checksum the finalized target ZIP
+# workflow_dispatch: Native distributions runs the full Tier 1 matching-host matrix
 ./gradlew check         # tests (extend with lint/format when added)
 ```
 

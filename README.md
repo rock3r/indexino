@@ -76,6 +76,18 @@ Run tests:
 ./gradlew check
 ```
 
+Build and verify a native distribution on its matching host:
+
+```bash
+./gradlew verifyNativeDistributionLinuxX64 sha256NativeDistributionLinuxX64
+# macOS arm64 and Windows x64 use the corresponding MacArm64 / WindowsX64 suffix.
+```
+
+The resulting ZIP and `.sha256` file are under `build/distributions/`. Native packages bundle JBR
+25 and the application, but still expect repository tools such as Git and the selected Bazel or
+Gradle tooling on `PATH`. See [docs/DISTRIBUTIONS.md](docs/DISTRIBUTIONS.md) for installation,
+supported baselines, AOT fallback, and current pre-release restrictions.
+
 ## Maven publication
 
 The future embedded API will use normal Maven Central coordinates with no custom Gradle plugin.
@@ -104,6 +116,7 @@ publication verification and the release flow.
 | [docs/INDEX-STORAGE.md](docs/INDEX-STORAGE.md) | `.indexino/` + keys |
 | [docs/API-STABILITY.md](docs/API-STABILITY.md) | Public API boundary and compatibility gates |
 | [docs/PUBLISHING.md](docs/PUBLISHING.md) | Maven coordinates and release flow |
+| [docs/DISTRIBUTIONS.md](docs/DISTRIBUTIONS.md) | Native installation, support, and release gates |
 | [AGENTS.md](AGENTS.md) | Agent rules |
 
 ## Contributing

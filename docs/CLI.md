@@ -2,6 +2,11 @@
 
 Commands for **indexino**. Persistent store lives at `<project>/.indexino/index/<commit>/`.
 
+Examples use `indexino` as the command name. For a native ZIP, that means
+`/path/to/indexino/indexino` on Linux/macOS or `C:\path\to\indexino\indexino.exe` on Windows. The
+installation may be outside the caller directory; keep its bundled `runtime/`, `indexino-cli.jar`,
+and AOT cache beside the launcher. See [DISTRIBUTIONS.md](DISTRIBUTIONS.md).
+
 ## Commands
 
 ### `index`
