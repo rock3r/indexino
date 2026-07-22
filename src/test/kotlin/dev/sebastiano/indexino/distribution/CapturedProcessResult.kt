@@ -1,5 +1,7 @@
 package dev.sebastiano.indexino.distribution
 
+import com.sun.jna.Native
+import java.io.File
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -18,14 +20,25 @@ internal fun runCapturedProcess(
 ): CapturedProcessResult {
     val stdout = Files.createTempFile("indexino-native-process-", ".stdout")
     val stderr = Files.createTempFile("indexino-native-process-", ".stderr")
+    val boundaryReady = Files.createTempFile("indexino-native-process-", ".ready")
     try {
+        Files.delete(boundaryReady)
         val processBuilder =
-            ProcessBuilder(command)
+            ProcessBuilder(boundaryCommand(boundaryReady, command))
                 .directory(workingDirectory.toFile())
                 .redirectOutput(stdout.toFile())
                 .redirectError(stderr.toFile())
         processBuilder.environment().putAll(environment)
         val process = processBuilder.start()
+        if (!awaitBoundaryReady(process, boundaryReady)) {
+            process.destroyForcibly()
+            process.waitFor(BOUNDARY_START_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            val startupError = String(Files.readAllBytes(stderr), Charsets.UTF_8)
+            error(
+                "Could not establish process boundary: ${command.joinToString(" ")}\n" +
+                    "stderr:\n$startupError"
+            )
+        }
         if (!process.waitFor(timeout, timeoutUnit)) {
             val terminated =
                 terminateProcessTree(process, terminationTimeout, terminationTimeoutUnit)
@@ -41,8 +54,40 @@ internal fun runCapturedProcess(
     } finally {
         deleteCaptureFile(stdout)
         deleteCaptureFile(stderr)
+        deleteCaptureFile(boundaryReady)
     }
 }
+
+private fun boundaryCommand(boundaryReady: Path, command: List<String>): List<String> {
+    val javaExecutable =
+        Path.of(System.getProperty("java.home"), "bin", if (isWindows()) "java.exe" else "java")
+    val boundaryClasses =
+        Path.of(CapturedProcessBoundary::class.java.protectionDomain.codeSource.location.toURI())
+    val jnaJar = Path.of(Native::class.java.protectionDomain.codeSource.location.toURI())
+    val classpath = listOf(boundaryClasses, jnaJar).joinToString(File.pathSeparator)
+    return buildList {
+        add(javaExecutable.toString())
+        add("-cp")
+        add(classpath)
+        add(CapturedProcessBoundary::class.java.name)
+        add(boundaryReady.toString())
+        addAll(command)
+    }
+}
+
+private fun awaitBoundaryReady(process: Process, boundaryReady: Path): Boolean {
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(BOUNDARY_START_TIMEOUT_SECONDS)
+    val expectedMarker = if (isWindows()) "windows-job" else "posix-process-group"
+    while (System.nanoTime() < deadline) {
+        if (hasBoundaryMarker(boundaryReady, expectedMarker)) return true
+        if (!process.isAlive) return hasBoundaryMarker(boundaryReady, expectedMarker)
+        Thread.sleep(POLL_MILLIS)
+    }
+    return hasBoundaryMarker(boundaryReady, expectedMarker)
+}
+
+private fun hasBoundaryMarker(boundaryReady: Path, expectedMarker: String): Boolean =
+    Files.isRegularFile(boundaryReady) && Files.readString(boundaryReady) == expectedMarker
 
 private fun deleteCaptureFile(path: Path) {
     try {
@@ -59,8 +104,7 @@ internal fun terminateProcessTree(process: Process, timeout: Long, timeoutUnit: 
     val finalDeadline = System.nanoTime() + timeoutNanos
 
     refreshProcessTree(root, handles)
-    root.destroyForcibly()
-    terminateDescendants(root, handles)
+    if (!CapturedProcessBoundary.terminate(root.pid())) return false
     return awaitTermination(root, handles, finalDeadline)
 }
 
@@ -107,4 +151,7 @@ private fun awaitTermination(
     }
 }
 
+private fun isWindows(): Boolean = System.getProperty("os.name").startsWith("Windows")
+
+private const val BOUNDARY_START_TIMEOUT_SECONDS = 10L
 private const val POLL_MILLIS = 10L

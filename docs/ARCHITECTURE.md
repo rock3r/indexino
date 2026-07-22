@@ -154,11 +154,11 @@ never up-to-date or restored from the build cache because host tools, console be
 compatibility cannot be represented safely as reusable Gradle state.
 Report cleanup uses a non-following delete task so a symlink at the predictable report path cannot
 escape the build directory. Process output is captured in task-owned files and decoded with UTF-8
-replacement semantics for platform-native diagnostic bytes, while timeout cleanup re-snapshots
-descendants during bounded termination. Every observed tree member is forced down
-without invoking graceful-termination hooks, preventing either a root or descendant hook from
-creating a last-moment orphan. Inherited streams and late child creation therefore cannot hang or
-escape a verification run.
+replacement semantics for platform-native diagnostic bytes. Before a verified command starts, a
+test helper places it in a new POSIX session/process group or a Windows Job Object configured to kill
+all members when its owner closes. Timeout cleanup terminates that kernel-owned boundary rather than
+depending on a racy user-space process-tree snapshot. Inherited streams and concurrent late child
+creation therefore cannot hang or escape a verification run.
 The thin runtime dependency collection remains a declared verifier input but is converted to a
 classpath string only in the selected verifier's execution action, so unrelated Gradle tasks do not
 resolve native-verification dependencies during configuration.

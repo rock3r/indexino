@@ -47,6 +47,31 @@ class NativeCompatibilityTest {
     }
 
     @Test
+    fun `captured process runs inside an OS-owned kill boundary`() {
+        val command =
+            if (requiredProperty("indexino.nativeTarget") == WINDOWS_X64) {
+                arrayOf(
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "if (${'$'}env:INDEXINO_CAPTURE_BOUNDARY -ne 'windows-job') { exit 41 }",
+                )
+            } else {
+                arrayOf(
+                    "/bin/sh",
+                    "-c",
+                    "test \"${'$'}INDEXINO_CAPTURE_BOUNDARY\" = 'posix-process-group'",
+                )
+            }
+
+        repeat(25) {
+            val result = runCommand(tempDir, 10L, TimeUnit.SECONDS, *command)
+            assertEquals(0, result.exitCode, result.diagnostic())
+        }
+    }
+
+    @Test
     fun `completed process does not wait for descendant held output streams`() {
         val childPidFile = tempDir.resolve("output-holder.pid")
         val command =
