@@ -3,7 +3,9 @@
 package dev.sebastiano.indexino.buildlogic;
 
 import java.io.IOException;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.FileTime;
 import org.gradle.api.GradleException;
@@ -20,6 +22,10 @@ import org.gradle.work.DisableCachingByDefault;
 @DisableCachingByDefault(
         because = "Cache restoration is not proven to preserve the application JAR filesystem mtime")
 public abstract class NormalizedJar extends Jar {
+    public NormalizedJar() {
+        getOutputs().upToDateWhen(task -> false);
+    }
+
     @InputFile
     @PathSensitive(PathSensitivity.NONE)
     public abstract RegularFileProperty getInputJar();
@@ -33,10 +39,23 @@ public abstract class NormalizedJar extends Jar {
         var input = getInputJar().get().getAsFile().toPath();
         var output = getArchiveFile().get().getAsFile().toPath();
         var timestamp = FileTime.fromMillis(getNormalizedTimestampMillis().get());
+        Path temporaryOutput = null;
         try {
             Files.createDirectories(output.getParent());
-            Files.copy(input, output, StandardCopyOption.REPLACE_EXISTING);
-            Files.setLastModifiedTime(output, timestamp);
+            temporaryOutput =
+                    Files.createTempFile(
+                            output.getParent(), output.getFileName().toString() + ".", ".tmp");
+            Files.copy(input, temporaryOutput, StandardCopyOption.REPLACE_EXISTING);
+            Files.setLastModifiedTime(temporaryOutput, timestamp);
+            try {
+                Files.move(
+                        temporaryOutput,
+                        output,
+                        StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException unsupported) {
+                Files.move(temporaryOutput, output, StandardCopyOption.REPLACE_EXISTING);
+            }
             var actualTimestamp = Files.getLastModifiedTime(output);
             if (!actualTimestamp.equals(timestamp)) {
                 throw new GradleException(
@@ -46,6 +65,13 @@ public abstract class NormalizedJar extends Jar {
                                 + actualTimestamp);
             }
         } catch (IOException failure) {
+            if (temporaryOutput != null) {
+                try {
+                    Files.deleteIfExists(temporaryOutput);
+                } catch (IOException cleanupFailure) {
+                    failure.addSuppressed(cleanupFailure);
+                }
+            }
             throw new GradleException("Could not normalize application JAR mtime", failure);
         }
     }

@@ -129,7 +129,6 @@ val normalizedCliJar by
         archiveFileName.set("indexino-cli.jar")
         destinationDirectory.set(layout.buildDirectory.dir("native-distributions/application"))
         normalizedTimestampMillis.set(normalizedCliJarTimestampMillis)
-        outputs.cacheIf("filesystem mtime is part of the AOT input contract") { false }
     }
 
 val nativeDistributionPinsFile =
@@ -303,7 +302,12 @@ val verifyConstruoContract by
         testClassesDirs = sourceSets.test.get().output.classesDirs
         classpath = sourceSets.test.get().runtimeClasspath
         dependsOn(normalizedCliJar)
+        val normalizedJarSource =
+            layout.projectDirectory.file(
+                "buildSrc/src/main/java/dev/sebastiano/indexino/buildlogic/NormalizedJar.java"
+            )
         inputs.file(nativeDistributionPinsFile).withPropertyName("nativeDistributionPins")
+        inputs.file(normalizedJarSource).withPropertyName("normalizedJarSource")
         inputs
             .file(normalizedCliJar.flatMap(NormalizedJar::getArchiveFile))
             .withPropertyName("normalizedCliJar")
@@ -324,6 +328,7 @@ val verifyConstruoContract by
             "indexino.shrunkCliJar",
             shrunkCliJar.flatMap(ShadowJar::getArchiveFile).get().asFile.absolutePath,
         )
+        systemProperty("indexino.normalizedJarSource", normalizedJarSource.asFile.absolutePath)
     }
 
 fun registerNativeDistributionVerification(taskSuffix: String, artifactSuffix: String) =
@@ -337,8 +342,15 @@ fun registerNativeDistributionVerification(taskSuffix: String, artifactSuffix: S
             tasks.named<CreateRuntimeImageTask>("createRuntimeImage$taskSuffix").flatMap {
                 it.jdkRoot
             }
+        val targetRuntimeImage =
+            tasks.named<CreateRuntimeImageTask>("createRuntimeImage$taskSuffix").flatMap {
+                it.output
+            }
+        val normalizedApplicationJar = normalizedCliJar.flatMap(NormalizedJar::getArchiveFile)
         val executableExtension = if (artifactSuffix == "windows-x64") ".exe" else ""
         inputs.file(archive).withPropertyName("nativeArchive")
+        inputs.file(normalizedApplicationJar).withPropertyName("normalizedApplicationJar")
+        inputs.dir(targetRuntimeImage).withPropertyName("targetRuntimeImage")
         inputs.file(layout.projectDirectory.file("LICENSE")).withPropertyName("applicationLicense")
         inputs
             .files(
@@ -351,6 +363,11 @@ fun registerNativeDistributionVerification(taskSuffix: String, artifactSuffix: S
         systemProperty("indexino.nativeArchive", archive.get().asFile.absolutePath)
         systemProperty("indexino.nativeTarget", artifactSuffix)
         systemProperty("indexino.targetJdkRoot", targetJdkRoot.get().asFile.absolutePath)
+        systemProperty("indexino.targetRuntimeImage", targetRuntimeImage.get().asFile.absolutePath)
+        systemProperty(
+            "indexino.normalizedApplicationJar",
+            normalizedApplicationJar.get().asFile.absolutePath,
+        )
         systemProperty("indexino.expectedJbrVersion", nativeDistributionPin("jbr.version"))
         systemProperty(
             "indexino.applicationLicense",

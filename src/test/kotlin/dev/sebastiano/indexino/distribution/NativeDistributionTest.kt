@@ -37,6 +37,13 @@ class NativeDistributionTest {
             assertFalse(launcher.isDirectory)
             val applicationJar = entries.getValue("indexino/indexino-cli.jar")
             assertEquals(NORMALIZED_JAR_MTIME_MILLIS, applicationJar.time)
+            val packagedApplicationBytes = zip.getInputStream(applicationJar).use { it.readBytes() }
+            assertTrue(
+                packagedApplicationBytes.contentEquals(
+                    Files.readAllBytes(requiredFile("indexino.normalizedApplicationJar"))
+                ),
+                "Packaged application JAR differs from the normalized training input",
+            )
             val launcherConfiguration =
                 zip.getInputStream(entries.getValue("indexino/app/indexino.json"))
                     .bufferedReader()
@@ -87,6 +94,11 @@ class NativeDistributionTest {
                     )
                 }
             }
+            assertRuntimeLegalTreeMatches(
+                zip,
+                entries,
+                requiredDirectory("indexino.targetRuntimeImage").resolve("legal"),
+            )
         }
 
         if (target != WINDOWS_X64) {
@@ -667,6 +679,37 @@ class NativeDistributionTest {
             }
         assertEquals(0, result.exitCode, result.diagnostic())
         return destination.resolve("indexino")
+    }
+
+    private fun assertRuntimeLegalTreeMatches(
+        zip: ZipFile,
+        entries: Map<String, java.util.zip.ZipEntry>,
+        runtimeLegalRoot: Path,
+    ) {
+        val expectedFiles =
+            Files.walk(runtimeLegalRoot).use { paths ->
+                paths
+                    .filter(Files::isRegularFile)
+                    .map { runtimeLegalRoot.relativize(it).toString().replace('\\', '/') }
+                    .toList()
+                    .toSet()
+            }
+        val packagedPrefix = "indexino/runtime/legal/"
+        val packagedFiles =
+            entries.values
+                .asSequence()
+                .filter { !it.isDirectory && it.name.startsWith(packagedPrefix) }
+                .associateBy { it.name.removePrefix(packagedPrefix) }
+        assertEquals(expectedFiles, packagedFiles.keys, "Packaged runtime legal inventory differs")
+        expectedFiles.forEach { relativePath ->
+            val expected = Files.readAllBytes(runtimeLegalRoot.resolve(relativePath))
+            val actual =
+                zip.getInputStream(packagedFiles.getValue(relativePath)).use { it.readBytes() }
+            assertTrue(
+                expected.contentEquals(actual),
+                "Packaged runtime legal file differs: $relativePath",
+            )
+        }
     }
 
     private fun runLauncher(

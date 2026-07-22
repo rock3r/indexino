@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.FileTime
 import java.security.MessageDigest
 import java.util.Properties
@@ -42,6 +43,46 @@ class ConstruoContractTest {
                 jar.manifest.mainAttributes.getValue("Main-Class"),
             )
         }
+    }
+
+    @Test
+    fun `normalized jar task repairs perturbed output metadata`() {
+        val source = Path.of(requiredProperty("indexino.normalizedJarSource"))
+        val fixtureSource =
+            projectDirectory.resolve(
+                "buildSrc/src/main/java/dev/sebastiano/indexino/buildlogic/NormalizedJar.java"
+            )
+        fixtureSource.parent.createDirectories()
+        Files.copy(source, fixtureSource, StandardCopyOption.REPLACE_EXISTING)
+        projectDirectory
+            .resolve("settings.gradle.kts")
+            .writeText("rootProject.name = \"normalized-jar-lifecycle\"\n")
+        projectDirectory
+            .resolve("build.gradle.kts")
+            .writeText(
+                """
+                import dev.sebastiano.indexino.buildlogic.NormalizedJar
+
+                tasks.register<NormalizedJar>("normalizedJar") {
+                    inputJar.set(layout.projectDirectory.file("input.jar"))
+                    archiveFileName.set("output.jar")
+                    destinationDirectory.set(layout.buildDirectory.dir("normalized"))
+                    normalizedTimestampMillis.set($NORMALIZED_JAR_MTIME_MILLIS)
+                }
+                """
+                    .trimIndent()
+            )
+        projectDirectory.resolve("input.jar").writeText("reproducible application bytes")
+
+        val first = runGradle("normalizedJar")
+        assertEquals(TaskOutcome.SUCCESS, first.task(":normalizedJar")?.outcome)
+        val output = projectDirectory.resolve("build/normalized/output.jar")
+        Files.setLastModifiedTime(output, FileTime.fromMillis(PERTURBED_JAR_MTIME_MILLIS))
+
+        val second = runGradle("normalizedJar")
+
+        assertEquals(TaskOutcome.SUCCESS, second.task(":normalizedJar")?.outcome)
+        assertEquals(NORMALIZED_JAR_MTIME_MILLIS, Files.getLastModifiedTime(output).toMillis())
     }
 
     @Test
@@ -121,7 +162,7 @@ class ConstruoContractTest {
             server.start()
             writeFixture(pluginVersion, "http://127.0.0.1:${server.address.port}/jdk.tar.gz")
 
-            val result = runGradleAndFail("verifyJdkLinuxX64")
+            val result = runGradleAndFail("unzipJdkLinuxX64")
 
             assertTrue(result.output.contains("SHA-256 mismatch"), result.output)
             assertFalse(
@@ -148,6 +189,10 @@ class ConstruoContractTest {
                 projectDirectory.resolve("build/construo/jdk/linuxX64.tar.gz").toFile().exists(),
                 "A warm-cache JBR mismatch must remove the untrusted archive",
             )
+            assertFalse(
+                projectDirectory.resolve("build/construo/jdk/linuxX64").toFile().exists(),
+                "A warm-cache JBR mismatch must fail before extraction",
+            )
         }
     }
 
@@ -159,7 +204,7 @@ class ConstruoContractTest {
             writeFixture(pluginVersion, "http://127.0.0.1/unused-jdk.tar.gz", url, sha256(archive))
             runGradle("downloadRoastLinuxX64")
 
-            val result = runGradleAndFail("verifyRoastLinuxX64")
+            val result = runGradleAndFail("unzipRoastLinuxX64")
 
             assertTrue(result.output.contains("SHA-256 mismatch"), result.output)
             assertFalse(
@@ -168,6 +213,10 @@ class ConstruoContractTest {
                     .toFile()
                     .exists(),
                 "A warm-cache Roast mismatch must remove the untrusted archive",
+            )
+            assertFalse(
+                projectDirectory.resolve("build/construo/roast-exe/linuxX64").toFile().exists(),
+                "A warm-cache Roast mismatch must fail before extraction",
             )
         }
     }
@@ -415,6 +464,7 @@ class ConstruoContractTest {
 
     private companion object {
         const val NORMALIZED_JAR_MTIME_MILLIS = 1_700_000_000_000L
+        const val PERTURBED_JAR_MTIME_MILLIS = 1_704_067_261_000L
         const val HEX_DIGITS = "0123456789abcdef"
         val SHA256 = Regex("[0-9a-f]{64}")
     }
