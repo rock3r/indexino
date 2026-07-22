@@ -85,10 +85,10 @@ fixture so store creation, schema/version, and representative records are compar
 documented volatile `builtAt` value is normalized. Process output is captured in task-owned files so
 a descendant that inherits stdout or stderr cannot keep a completed launch blocked. Timed-out
 children are forcibly terminated so a launcher deadlock cannot hang the host job; descendant
-Git/topology processes are re-snapshotted and terminated leaf-first throughout the same bounded
-cleanup. The timed-out root is forced only after its observed descendants are handled, so a graceful
-root termination hook cannot create an untracked last-moment child. The matching-host verifier is
-deliberately never up-to-date or restored from build cache,
+Git/topology processes are re-snapshotted throughout the same bounded cleanup. Every observed member
+of a timed-out tree is forcibly terminated, so neither a root nor descendant graceful-termination
+hook can create an untracked last-moment child. The matching-host verifier is deliberately never
+up-to-date or restored from build cache,
 and clears its report directory without following symlinks before every execution so failed runs
 cannot upload stale diagnostics. It also writes a report-only benchmark with five
 interleaved production-AOT and `AOTMode=off` launches, median wall/user time, and ZIP/runtime/JAR/AOT

@@ -154,10 +154,10 @@ never up-to-date or restored from the build cache because host tools, console be
 compatibility cannot be represented safely as reusable Gradle state.
 Report cleanup uses a non-following delete task so a symlink at the predictable report path cannot
 escape the build directory. Process output is captured in task-owned files, while timeout cleanup
-re-snapshots descendants during graceful and forced termination. The root is not sent a graceful
-termination signal; after observed descendants are handled it is forced down, preventing a root
-termination hook from creating a last-moment orphan. Inherited streams and late child creation
-therefore cannot hang or escape a verification run.
+re-snapshots descendants during bounded termination. Every observed tree member is forced down
+without invoking graceful-termination hooks, preventing either a root or descendant hook from
+creating a last-moment orphan. Inherited streams and late child creation therefore cannot hang or
+escape a verification run.
 The thin runtime dependency collection remains a declared verifier input but is converted to a
 classpath string only in the selected verifier's execution action, so unrelated Gradle tasks do not
 resolve native-verification dependencies during configuration.

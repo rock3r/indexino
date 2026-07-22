@@ -77,13 +77,21 @@ class NativeCompatibilityTest {
             "Late-descendant fixture uses POSIX signal traps",
         )
         val lateChildPidFile = tempDir.resolve("late-child.pid")
+        val hookedChild = tempDir.resolve("hooked-child.sh")
+        hookedChild.writeText(
+            """
+            trap 'sleep 30 & printf "%s" "${'$'}!" > "${'$'}1"; exit 0' TERM
+            while :; do sleep 1; done
+            """
+                .trimIndent()
+        )
         val command =
             arrayOf(
                 "/bin/sh",
                 "-c",
-                "trap 'sleep 30 & printf \"%s\" \"${'$'}!\" > \"${'$'}1\"; " +
-                    "exit 0' TERM; while :; do sleep 1; done",
+                "/bin/sh \"${'$'}1\" \"${'$'}2\" & wait",
                 "sh",
+                hookedChild.toString(),
                 lateChildPidFile.toString(),
             )
         var lateChild: ProcessHandle? = null
@@ -98,7 +106,7 @@ class NativeCompatibilityTest {
             }
             assertFalse(
                 Files.exists(lateChildPidFile),
-                "Root termination hook was allowed to create a late descendant",
+                "Descendant termination hook was allowed to create a late process",
             )
         } finally {
             lateChild?.destroyForcibly()

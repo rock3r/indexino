@@ -56,16 +56,11 @@ internal fun terminateProcessTree(process: Process, timeout: Long, timeoutUnit: 
     val root = process.toHandle()
     val handles = linkedMapOf<Long, ProcessHandle>()
     val timeoutNanos = timeoutUnit.toNanos(timeout)
-    val startedAt = System.nanoTime()
-    val gracefulDeadline = startedAt + timeoutNanos / 2L
-    val finalDeadline = startedAt + timeoutNanos
+    val finalDeadline = System.nanoTime() + timeoutNanos
 
     refreshProcessTree(root, handles)
-    terminateDescendants(root, handles, forcibly = false)
-    awaitDescendantTermination(root, handles, gracefulDeadline)
-    refreshProcessTree(root, handles)
     root.destroyForcibly()
-    terminateDescendants(root, handles, forcibly = true)
+    terminateDescendants(root, handles)
     return awaitTermination(root, handles, finalDeadline)
 }
 
@@ -78,31 +73,13 @@ private fun refreshProcessTree(root: ProcessHandle, handles: MutableMap<Long, Pr
     }
 }
 
-private fun terminateDescendants(
-    root: ProcessHandle,
-    handles: MutableMap<Long, ProcessHandle>,
-    forcibly: Boolean,
-) {
+private fun terminateDescendants(root: ProcessHandle, handles: MutableMap<Long, ProcessHandle>) {
     refreshProcessTree(root, handles)
     handles.values
         .filter { it.pid() != root.pid() }
         .sortedByDescending(::processDepth)
         .filter(ProcessHandle::isAlive)
-        .forEach { handle -> if (forcibly) handle.destroyForcibly() else handle.destroy() }
-}
-
-private fun awaitDescendantTermination(
-    root: ProcessHandle,
-    handles: MutableMap<Long, ProcessHandle>,
-    deadlineNanos: Long,
-) {
-    while (true) {
-        terminateDescendants(root, handles, forcibly = false)
-        if (handles.values.none { it.pid() != root.pid() && it.isAlive }) return
-        val remainingNanos = deadlineNanos - System.nanoTime()
-        if (remainingNanos <= 0L) return
-        Thread.sleep(minOf(TimeUnit.NANOSECONDS.toMillis(remainingNanos) + 1L, POLL_MILLIS))
-    }
+        .forEach(ProcessHandle::destroyForcibly)
 }
 
 private fun processDepth(handle: ProcessHandle): Int {
@@ -122,6 +99,7 @@ private fun awaitTermination(
 ): Boolean {
     while (true) {
         refreshProcessTree(root, handles)
+        terminateDescendants(root, handles)
         if (handles.values.none(ProcessHandle::isAlive)) return true
         val remainingNanos = deadlineNanos - System.nanoTime()
         if (remainingNanos <= 0L) return false
