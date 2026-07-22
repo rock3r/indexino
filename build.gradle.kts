@@ -326,11 +326,7 @@ val verifyConstruoContract by
         )
     }
 
-fun registerNativeDistributionVerification(
-    targetName: String,
-    taskSuffix: String,
-    artifactSuffix: String,
-) =
+fun registerNativeDistributionVerification(taskSuffix: String, artifactSuffix: String) =
     tasks.register<Test>("verifyNativeDistribution$taskSuffix") {
         group = "verification"
         description = "Verify the $artifactSuffix native distribution"
@@ -341,7 +337,7 @@ fun registerNativeDistributionVerification(
             tasks.named<CreateRuntimeImageTask>("createRuntimeImage$taskSuffix").flatMap {
                 it.jdkRoot
             }
-        val executableExtension = if (targetName == "windowsX64") ".exe" else ""
+        val executableExtension = if (artifactSuffix == "windows-x64") ".exe" else ""
         inputs.file(archive).withPropertyName("nativeArchive")
         inputs.file(layout.projectDirectory.file("LICENSE")).withPropertyName("applicationLicense")
         inputs
@@ -362,11 +358,11 @@ fun registerNativeDistributionVerification(
         )
     }
 
-registerNativeDistributionVerification("linuxX64", "LinuxX64", "linux-x64")
+registerNativeDistributionVerification("LinuxX64", "linux-x64")
 
-registerNativeDistributionVerification("macArm64", "MacArm64", "macos-arm64")
+registerNativeDistributionVerification("MacArm64", "macos-arm64")
 
-registerNativeDistributionVerification("windowsX64", "WindowsX64", "windows-x64")
+registerNativeDistributionVerification("WindowsX64", "windows-x64")
 
 val verifyMavenPublication by
     tasks.registering(Test::class) {

@@ -575,9 +575,6 @@ class NativeDistributionTest {
             if (-not [NativeConsole]::AllocConsole()) {
                 throw "AllocConsole failed: ${'$'}([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
             }
-            if (-not [NativeConsole]::SetConsoleCtrlHandler([IntPtr]::Zero, ${'$'}true)) {
-                throw 'Could not ignore CTRL_C_EVENT in the verifier process'
-            }
 
             ${'$'}startup = New-Object NativeConsole+STARTUPINFO
             ${'$'}startup.cb = [Runtime.InteropServices.Marshal]::SizeOf(${'$'}startup)
@@ -595,6 +592,9 @@ class NativeDistributionTest {
                 [ref]${'$'}startup,
                 [ref]${'$'}process)
             if (-not ${'$'}created) { throw "CreateProcess failed: ${'$'}([Runtime.InteropServices.Marshal]::GetLastWin32Error())" }
+            if (-not [NativeConsole]::SetConsoleCtrlHandler([IntPtr]::Zero, ${'$'}true)) {
+                throw 'Could not ignore CTRL_C_EVENT in the verifier process'
+            }
 
             try {
                 Start-Sleep -Milliseconds 1500
