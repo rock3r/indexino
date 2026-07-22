@@ -10,12 +10,12 @@ has been published.
 
 | Target | Archive | Tested minimum |
 |---|---|---|
-| Linux x64 | `indexino-<version>-linux-x64.zip` | Ubuntu 20.04 x64 / glibc 2.31 |
+| Linux x64 | `indexino-<version>-linux-x64.zip` | Ubuntu 22.04 x64 / glibc 2.35 |
 | macOS arm64 | `indexino-<version>-macos-arm64.zip` | macOS 15 on Apple silicon |
 | Windows x64 | `indexino-<version>-windows-x64.zip` | Windows Server 2022 x64 |
 
 The Linux package is built and fully verified on Ubuntu 24.04, then its actual Roast executable runs
-an index/query workload inside the declared Ubuntu 20.04 baseline container. The manually
+an index/query workload inside the declared Ubuntu 22.04 baseline container. The manually
 dispatched native matrix performs the complete matching-host verifier on macOS 15 arm64 and Windows
 Server 2022 as well. Environments older than these baselines are unsupported until they are added to
 the permanent smoke matrix.

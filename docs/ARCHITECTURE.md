@@ -170,7 +170,7 @@ classpath string only in the selected verifier's execution action, so unrelated 
 resolve native-verification dependencies during configuration.
 
 Pull requests run the JVM/publication/R8 gates and the Linux x64 native verifier. The latter repeats
-an actual Roast index/query smoke inside Ubuntu 20.04 (glibc 2.31). A manual workflow runs the full
+an actual Roast index/query smoke inside Ubuntu 22.04 (glibc 2.35). A manual workflow runs the full
 matching-host verifier on Ubuntu 24.04 x64, macOS 15 arm64, and Windows Server 2022 x64 and retains
 the finalized ZIP, checksum, reports, test results, and console log for seven days.
 

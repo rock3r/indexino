@@ -52,7 +52,7 @@ jobs:
       - name: Verify native distribution
         shell: bash
         run: |
-          mkdir -p "build/reports/native-distributions/${{ matrix.target }}"
+          mkdir -p "build/ci-logs/${{ matrix.target }}"
           set -o pipefail
           .github/scripts/native-archive-cache.sh run \
             "${{ matrix.target }}" .native-download-cache -- \
@@ -60,11 +60,11 @@ jobs:
               "${{ matrix.verification_task }}" \
               "${{ matrix.checksum_task }}" \
               --no-daemon --console=plain 2>&1 | \
-            tee "build/reports/native-distributions/${{ matrix.target }}/verification.log"
-      - name: Smoke oldest supported Linux baseline (ubuntu:20.04 / glibc 2.31)
+            tee "build/ci-logs/${{ matrix.target }}/verification.log"
+      - name: Smoke oldest supported Linux baseline (ubuntu:22.04 / glibc 2.35)
         if: matrix.target == 'linux-x64'
         shell: bash
-        run: scripts/smoke-linux-baseline.sh build/distributions/*.zip ubuntu:20.04
+        run: scripts/smoke-linux-baseline.sh build/distributions/*.zip ubuntu:22.04
       - name: Upload native distribution evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -73,6 +73,7 @@ jobs:
           path: |
             build/distributions/*.zip
             build/distributions/*.sha256
+            build/ci-logs
             build/reports/native-distributions
             build/test-results/verifyNativeDistribution${{ matrix.task_suffix }}
           if-no-files-found: warn

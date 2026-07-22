@@ -106,7 +106,7 @@ extraction rather than inferred from Java's interpretation of ZIP extra fields.
 
 The pull-request workflow runs `check`, `verifyMavenPublication`, and `verifyShrunkCli`, then runs the
 complete Linux x64 native verifier in a separate matching-host job. That job also launches the built
-Roast distribution from an arbitrary directory inside `ubuntu:20.04`, whose glibc 2.31 is the oldest
+Roast distribution from an arbitrary directory inside `ubuntu:22.04`, whose glibc 2.35 is the oldest
 declared Linux baseline, and performs an index/query workload. The manually dispatched
 `native-distributions.yml` workflow repeats full native verification on all Tier 1 runners.
 

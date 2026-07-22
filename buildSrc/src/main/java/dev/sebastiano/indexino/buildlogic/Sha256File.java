@@ -18,7 +18,7 @@ import org.gradle.api.tasks.TaskAction;
 @CacheableTask
 public abstract class Sha256File extends DefaultTask {
     @InputFile
-    @PathSensitive(PathSensitivity.NONE)
+    @PathSensitive(PathSensitivity.NAME_ONLY)
     public abstract RegularFileProperty getInputFile();
 
     @OutputFile
