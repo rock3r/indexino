@@ -5,6 +5,11 @@
 > **Pre-release** — there is no supported embedded API yet. Index layout and CLI contracts may
 > change until the first release.
 
+> **Personal experiment only** — Indexino is a personal experimentation project, not a product or
+> supported tool. It is not production-ready and carries no commitment to stability, maintenance,
+> security fixes, compatibility, releases, or fitness for any use. Do not depend on it for
+> important work; it may change radically or be abandoned without notice.
+
 Standalone Kotlin CLI that builds a **persistent** local code index (Xodus under
 `<workspace>/.indexino/index/<commit>/`) for agent audit tools. Detekt-independent,
 Bazel-first (Gradle secondary), and ships as a fat compatibility JAR with no target-repo build
