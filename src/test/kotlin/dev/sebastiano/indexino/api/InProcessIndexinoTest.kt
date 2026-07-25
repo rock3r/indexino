@@ -83,6 +83,39 @@ class InProcessIndexinoTest {
     }
 
     @Test
+    fun `bazel scopes without includingDependencies fail rather than silently expanding deps`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-bazel-deps-required-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            val indexino = Indexino.connectBlocking(workspace)
+            try {
+                val failure =
+                    assertFailsWith<IndexinoException> {
+                        runSuspend {
+                            indexino
+                                .refresh(RefreshRequest.forScope(IndexScope.bazel("//ui:ui")))
+                                .await()
+                        }
+                    }
+                assertEquals("INVALID_REQUEST", failure.failure.category.value)
+                assertEquals("bazel_dependencies_required", failure.failure.code)
+                assertTrue(failure.failure.message.contains("includingDependencies()"))
+            } finally {
+                indexino.close()
+            }
+        } finally {
+            if (previousCacheDirectory == null) {
+                System.clearProperty("indexino.cache.dir")
+            } else {
+                System.setProperty("indexino.cache.dir", previousCacheDirectory)
+            }
+        }
+    }
+
+    @Test
     fun `close reclaims unpinned client generation copies`() {
         val workspace = createGitWorkspace()
         val cacheDirectory = createTempDirectory("indexino-close-reclaim-cache-")

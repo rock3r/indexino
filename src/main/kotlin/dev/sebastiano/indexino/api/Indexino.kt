@@ -68,6 +68,21 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
     @OptIn(IndexinoInternalApi::class)
     public suspend fun refresh(request: RefreshRequest): RefreshHandle {
         ensureOpen()
+        if (
+            request.scope.buildSystem == BuildSystem.BAZEL && !request.scope.includesDependencies
+        ) {
+            // BazelTopology currently always expands deps(); honouring includeDeps=false would
+            // silently flip CLI defaults. Until that topology work lands, require an explicit
+            // includingDependencies() so the facade does not pretend target-only scopes work.
+            throw failure(
+                category = IndexFailureCategory.INVALID_REQUEST,
+                code = "bazel_dependencies_required",
+                message =
+                    "Bazel scopes always include dependencies in S1; call " +
+                        "IndexScope.bazel(target).includingDependencies()",
+                retryable = false,
+            )
+        }
         val refreshId = RefreshId.of(UUID.randomUUID().toString())
         val applications =
             request.plugins.map { plugin ->
