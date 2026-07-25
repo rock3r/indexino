@@ -73,10 +73,13 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
         symbolsByName: Map<String, List<SymbolRecord>>
     ): Reference {
         val candidates = candidateSymbols(symbolsByName)
+        val directMatches = candidates.filter { it.fqn == symbolFqn || symbolFqn in it.aliases }
         val direct =
-            candidates
-                .firstOrNull { it.fqn == symbolFqn || symbolFqn in it.aliases }
-                ?.definitionId() ?: externalId(symbolFqn)
+            when (directMatches.size) {
+                0 -> externalId(symbolFqn)
+                1 -> directMatches.single().definitionId()
+                else -> ambiguousId(symbolFqn)
+            }
         val candidateIds =
             candidates.map { it.definitionId() }.ifEmpty { candidateSymbolFqns.map(::externalId) }
         return Reference(
@@ -94,18 +97,10 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
         symbolId: SymbolId,
         symbolsByName: Map<String, List<SymbolRecord>>,
     ): Boolean {
-        val candidates = candidateSymbols(symbolsByName)
-        if (candidates.any { it.definitionId() == symbolId }) {
-            return true
-        }
-        // candidateSymbols already applies arityCompatibleWith. A name hit that fails arity leaves
-        // candidates empty and correctly falls through to generation-local external matching.
-        // Preferring a local definition over an external digest is workspace precedence (S1);
-        // S9 must revisit this when multi-origin duplicates become ranked candidates instead.
-        if (candidates.isNotEmpty()) {
-            return false
-        }
-        return (candidateSymbolFqns + symbolFqn).any { externalId(it) == symbolId }
+        // Match the IDs materialization would actually emit so external directs still round-trip
+        // when other candidate names resolve locally (S9 may later rank multi-origin duplicates).
+        val materialized = toPublicReference(symbolsByName)
+        return materialized.symbolId == symbolId || symbolId in materialized.candidateSymbolIds
     }
 
     fun ReferenceRecord.canTarget(symbol: SymbolRecord): Boolean {
@@ -144,6 +139,11 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
     private fun externalId(fqn: String): SymbolId =
         SymbolId.of(
             "indexino:external:v1:" + sha256(listOf(generation.value, fqn).joinToString("\u0000"))
+        )
+
+    private fun ambiguousId(fqn: String): SymbolId =
+        SymbolId.of(
+            "indexino:ambiguous:v1:" + sha256(listOf(generation.value, fqn).joinToString("\u0000"))
         )
 
     private fun sha256(value: String): String =

@@ -180,7 +180,10 @@ private constructor(
                 store = store,
                 revision = revision,
                 generation = generation,
-                freshnessAtAcquisition = SnapshotFreshness.CURRENT,
+                // S1 has no watcher / acquisition-time rehash, so currency cannot be proven.
+                // CURRENT becomes reportable with AWAIT_CURRENT (S3) and watcher reconciliation
+                // (S7).
+                freshnessAtAcquisition = SnapshotFreshness.UNKNOWN,
                 onClose = onClose,
             )
     }

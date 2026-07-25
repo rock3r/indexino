@@ -48,6 +48,7 @@ class InProcessIndexinoTest {
 
             val snapshot = runSuspend { indexino.snapshot() }
             try {
+                assertEquals(SnapshotFreshness.UNKNOWN, snapshot.freshnessAtAcquisition)
                 assertSnapshotQueries(snapshot, result, workspace)
             } finally {
                 snapshot.close()
