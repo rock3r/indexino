@@ -47,7 +47,9 @@ worktree for product storage.
     current                            # atomic pointer
     refs/<runtime-or-snapshot-id>
     change-journal
-    legacy-store/                      # S1 bridge to commit-addressed Xodus; removed in S2
+    legacy-store/                      # S1 bridge; removed as one unit in S2
+      index/<commit>/                  # mutable incremental writer
+      generations/<generation-id>/store/ # immutable snapshot copy
   registry/workspaces.json             # path → fs identity, generations, last-used
   registry/tombstones/
   runtime/<workspace-id>.sock          # AF_UNIX (all platforms)
@@ -122,11 +124,15 @@ last-used in the registry (not filesystem `atime`). GC grace window + re-verify 
 
 ## Transitional implementation note
 
-S1 opens the existing commit-addressed Xodus layout beneath
-`workspaces/<workspace-id>/legacy-store/`. This is a user-local production bridge, not the product
-layout and not a temporary test store. S2 removes `legacy-store` when generation manifests and packs
-land. Do **not** extend `<project>/.indexino/index/<commit>/`; new features must assume user-local
-composite storage.
+S1 writes through the existing commit-addressed Xodus layout beneath
+`workspaces/<workspace-id>/legacy-store/`, then atomically copies each completed generation to
+`legacy-store/generations/<generation-id>/store/` so open snapshots retain immutable backing data.
+Superseded copies are deleted when their last in-process snapshot closes. The full copy preserves
+incremental indexing but costs O(index size) per publish; it is an explicit S1 trade-off, not the
+large-repository design. These are user-local production bridges, not the product pack layout and
+not temporary test stores. S2 removes `legacy-store` as one unit and replaces it with generation
+manifests, reference tracking, and content-addressed packs. Do **not** extend
+`<project>/.indexino/index/<commit>/`; new features must assume user-local composite storage.
 
 ## Deprecated / rejected paths
 

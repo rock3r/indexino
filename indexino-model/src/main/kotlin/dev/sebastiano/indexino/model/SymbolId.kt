@@ -1,5 +1,12 @@
 package dev.sebastiano.indexino.model
 
+/**
+ * An opaque symbol definition identity that is stable only within one generation.
+ *
+ * Consumers should obtain IDs from queried [Symbol] values, not parse or synthesize them. Source
+ * movement may change an ID across generations; correlate durable concepts by their public symbol
+ * attributes instead.
+ */
 public class SymbolId private constructor(public val value: String) {
     public companion object {
         @JvmStatic

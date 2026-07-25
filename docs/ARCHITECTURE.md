@@ -73,7 +73,15 @@ types. Host constructs SPI contexts with public constructors annotated `@Indexin
 The S1 in-process facade delegates refresh orchestration to internal `cli/IndexBuildRunner`. This is
 a tracer shortcut, not the target dependency direction. S3 extracts that orchestration into an
 internal `IndexingCoordinator` owned below both facade and CLI when the refresh registry lands; the
-CLI then becomes an adapter over the coordinator.
+CLI then becomes an adapter over the coordinator. The coordinator must return the exact manifest,
+changes, and outcome used by the completed run; callers must not re-resolve `HEAD` or re-derive a
+result from mutable storage.
+
+Until S2 lands content-addressed packs, the S1 writer uses `legacy-store` and atomically copies each
+completed generation into immutable generation-specific Xodus storage beneath that bridge for
+snapshots. Superseded copies are reclaimed after their last in-process snapshot closes. The
+O(index-size) copy preserves incremental indexing and the public snapshot-pinning contract without
+treating the bridge as the target storage design.
 
 The Maven Local `indexino` publication is dogfood-only until the S5 artifact split. Its generated
 library POM deliberately omits CLI-only Clikt, JNA, and `slf4j-nop`; Gradle Module Metadata is

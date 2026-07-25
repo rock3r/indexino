@@ -17,6 +17,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class InProcessIndexinoTest {
@@ -78,6 +79,126 @@ class InProcessIndexinoTest {
             assertFailsWith<IndexinoException> { Indexino.connectBlocking(missingWorkspace) }
 
         assertEquals("INVALID_REQUEST", failure.failure.category.value)
+    }
+
+    @Test
+    fun `snapshots pin immutable generations and definition identities`() {
+        val workspace = createGitWorkspace()
+        Files.writeString(
+            workspace.resolve("ui/src/main/kotlin/Overloads.kt"),
+            """
+            fun overloaded() {}
+            fun overloaded(value: Int) {}
+            fun callOverloads() {
+                overloaded()
+                overloaded(1)
+            }
+            """
+                .trimIndent(),
+        )
+        val cacheDirectory = createTempDirectory("indexino-generations-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        val indexino = Indexino.connectBlocking(workspace)
+        try {
+            val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+            val firstResult = runSuspend { indexino.refresh(request).await() }
+            val firstSnapshot = runSuspend { indexino.snapshot() }
+            try {
+                val overloads =
+                    runSuspend {
+                            firstSnapshot.findSymbols(
+                                SymbolQuery.named("overloaded"),
+                                QueryOptions.page(limit = 10),
+                            )
+                        }
+                        .items
+                assertEquals(2, overloads.size)
+                assertEquals(2, overloads.map { it.id }.distinct().size)
+                overloads.forEach { overload ->
+                    val references = runSuspend {
+                        firstSnapshot.findReferences(
+                            ReferenceQuery.to(overload.id),
+                            QueryOptions.page(limit = 10),
+                        )
+                    }
+                    assertEquals(1, references.items.size)
+                    assertEquals(overload.id, references.items.single().symbolId)
+                }
+
+                Files.writeString(
+                    workspace.resolve("ui/src/main/kotlin/AddedAfterSnapshot.kt"),
+                    "fun AddedAfterSnapshot() = Unit",
+                )
+                val secondResult = runSuspend { indexino.refresh(request).await() }
+                assertNotEquals(firstResult.generation, secondResult.generation)
+                val oldSymbols = runSuspend {
+                    firstSnapshot.findSymbols(
+                        SymbolQuery.named("AddedAfterSnapshot"),
+                        QueryOptions.page(limit = 10),
+                    )
+                }
+                assertTrue(oldSymbols.items.isEmpty())
+                runSuspend { indexino.snapshot() }
+                    .use { secondSnapshot ->
+                        val newSymbols = runSuspend {
+                            secondSnapshot.findSymbols(
+                                SymbolQuery.named("AddedAfterSnapshot"),
+                                QueryOptions.page(limit = 10),
+                            )
+                        }
+                        assertEquals(1, newSymbols.items.size)
+                    }
+
+                assertPluginGenerationIsDistinct(
+                    indexino,
+                    request,
+                    firstResult,
+                    firstSnapshot,
+                    secondResult,
+                )
+            } finally {
+                firstSnapshot.close()
+            }
+            assertFalse(
+                Files.exists(
+                    InProcessCacheLayout.generationStore(workspace, firstResult.generation.value)
+                        .parent
+                )
+            )
+        } finally {
+            indexino.close()
+            if (previousCacheDirectory == null) {
+                System.clearProperty("indexino.cache.dir")
+            } else {
+                System.setProperty("indexino.cache.dir", previousCacheDirectory)
+            }
+        }
+    }
+
+    private fun assertPluginGenerationIsDistinct(
+        indexino: Indexino,
+        request: RefreshRequest,
+        firstResult: RefreshResult,
+        firstSnapshot: IndexSnapshot,
+        secondResult: RefreshResult,
+    ) {
+        val pluginResult = runSuspend {
+            indexino
+                .refresh(request.withPlugin(PluginId.of("dev.sebastiano.selection-context")))
+                .await()
+        }
+        assertEquals(secondResult.revision, pluginResult.revision)
+        assertNotEquals(secondResult.generation, pluginResult.generation)
+        assertEquals(firstResult.generation, firstSnapshot.generation)
+        val stillPinnedSymbols = runSuspend {
+            firstSnapshot.findSymbols(
+                SymbolQuery.named("AddedAfterSnapshot"),
+                QueryOptions.page(limit = 10),
+            )
+        }
+        assertTrue(stillPinnedSymbols.items.isEmpty())
     }
 
     private fun assertSnapshotQueries(

@@ -19,6 +19,7 @@ import dev.sebastiano.indexino.topology.BuildSystem as InternalBuildSystem
 import dev.sebastiano.indexino.topology.TopologyRequest
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.HexFormat
 import java.util.UUID
@@ -27,6 +28,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 public class Indexino private constructor(private val workspace: Path) : AutoCloseable {
     private val closed = AtomicBoolean()
     private val storeRoot = InProcessCacheLayout.storeRoot(workspace)
+    private val generationLock = Any()
+    private val generationStores = mutableMapOf<WorkspaceGenerationId, Path>()
+    private val snapshotPins = mutableMapOf<WorkspaceGenerationId, Int>()
     private var published: PublishedGeneration? = null
 
     public companion object {
@@ -83,13 +87,18 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                     "Refresh failed while resolving or indexing ${request.scope.value}",
                 )
         val revision = manifest.toWorkspaceRevision()
-        val generation = WorkspaceGenerationId.of(revision.fingerprint)
-        published =
-            PublishedGeneration(
-                commit = manifest.commit,
-                revision = revision,
-                generation = generation,
-            )
+        val generation = manifest.toGenerationId(revision)
+        val generationStore = publishGenerationStore(manifest.commit, generation)
+        synchronized(generationLock) {
+            generationStores[generation] = generationStore
+            published =
+                PublishedGeneration(
+                    storePath = generationStore,
+                    revision = revision,
+                    generation = generation,
+                )
+            reclaimUnpinnedGenerations()
+        }
         val changedFileCount = execution.changes?.changedFiles?.size ?: 0
         val removedFileCount = execution.changes?.deletedFiles?.size ?: 0
         val result =
@@ -118,18 +127,29 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
     public suspend fun snapshot(): IndexSnapshot {
         ensureOpen()
         val generation =
-            published
-                ?: throw failure(
-                    category = IndexFailureCategory.INDEX_NOT_FOUND,
-                    code = "index_not_found",
-                    message = "No published index exists; call refresh first",
-                    retryable = true,
-                )
-        val resolver = IndexPathResolver(workspace, storeRootOverride = storeRoot)
+            synchronized(generationLock) {
+                val current =
+                    published
+                        ?: throw failure(
+                            category = IndexFailureCategory.INDEX_NOT_FOUND,
+                            code = "index_not_found",
+                            message = "No published index exists; call refresh first",
+                            retryable = true,
+                        )
+                snapshotPins[current.generation] =
+                    snapshotPins.getOrDefault(current.generation, 0) + 1
+                current
+            }
+        val openedStore = runCatching { IndexStoreOpener.openForQuery(generation.storePath) }
+        if (openedStore.isFailure) {
+            releaseGeneration(generation.generation)
+        }
+        val store = openedStore.getOrThrow()
         return IndexSnapshot.create(
-            store = IndexStoreOpener.openForQuery(resolver, generation.commit),
+            store = store,
             revision = generation.revision,
             generation = generation.generation,
+            onClose = { releaseGeneration(generation.generation) },
         )
     }
 
@@ -180,6 +200,71 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         return WorkspaceRevision(fingerprint, listOf(origin))
     }
 
+    private fun IndexManifest.toGenerationId(revision: WorkspaceRevision): WorkspaceGenerationId =
+        WorkspaceGenerationId.of(
+            sha256(
+                // BasicFactSchemaVersion joins these inputs when the S2 generation manifest lands.
+                listOf(
+                        revision.fingerprint,
+                        indexerVersion,
+                        applications.sorted().joinToString("\u0001"),
+                    )
+                    .joinToString("\u0000")
+            )
+        )
+
+    private fun publishGenerationStore(commit: String, generation: WorkspaceGenerationId): Path {
+        val destination = InProcessCacheLayout.generationStore(workspace, generation.value)
+        if (Files.isDirectory(destination)) return destination
+
+        val source =
+            IndexPathResolver(workspace, storeRootOverride = storeRoot).resolveBaseStore(commit)
+        Files.createDirectories(destination.parent)
+        val staging = destination.resolveSibling("${destination.fileName}.tmp-${UUID.randomUUID()}")
+        try {
+            Files.walk(source).use { paths ->
+                paths.forEach { path ->
+                    val target = staging.resolve(source.relativize(path).toString())
+                    if (Files.isDirectory(path)) {
+                        Files.createDirectories(target)
+                    } else {
+                        Files.createDirectories(target.parent)
+                        Files.copy(path, target, StandardCopyOption.COPY_ATTRIBUTES)
+                    }
+                }
+            }
+            Files.move(staging, destination, StandardCopyOption.ATOMIC_MOVE)
+        } finally {
+            if (Files.exists(staging)) {
+                staging.toFile().deleteRecursively()
+            }
+        }
+        return destination
+    }
+
+    private fun releaseGeneration(generation: WorkspaceGenerationId) {
+        synchronized(generationLock) {
+            val remaining = snapshotPins.getOrDefault(generation, 0) - 1
+            if (remaining > 0) {
+                snapshotPins[generation] = remaining
+            } else {
+                snapshotPins.remove(generation)
+            }
+            reclaimUnpinnedGenerations()
+        }
+    }
+
+    private fun reclaimUnpinnedGenerations() {
+        val current = published?.generation
+        val reclaimable = generationStores.filterKeys { generation ->
+            generation != current && snapshotPins.getOrDefault(generation, 0) == 0
+        }
+        reclaimable.forEach { (generation, path) ->
+            path.parent.toFile().deleteRecursively()
+            generationStores.remove(generation)
+        }
+    }
+
     private fun buildFailure(execution: IndexBuildExecution, message: String): IndexinoException =
         failure(
             category =
@@ -204,7 +289,7 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.toByteArray()))
 
     private class PublishedGeneration(
-        val commit: String,
+        val storePath: Path,
         val revision: WorkspaceRevision,
         val generation: WorkspaceGenerationId,
     )
