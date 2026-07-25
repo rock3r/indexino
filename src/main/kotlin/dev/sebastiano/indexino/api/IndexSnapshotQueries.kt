@@ -53,9 +53,13 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
             range = null,
             ownerId =
                 ownerFqn?.let { owner ->
-                    val owners = symbolsByName[owner]
-                    owners?.firstOrNull { it.fqn == owner }?.definitionId()
-                        ?: owners?.firstOrNull()?.definitionId()
+                    val owners = symbolsByName[owner].orEmpty()
+                    owners
+                        .firstOrNull { it.fqn == owner && it.relativeFile == relativeFile }
+                        ?.definitionId()
+                        ?: owners.firstOrNull { it.relativeFile == relativeFile }?.definitionId()
+                        ?: owners.firstOrNull { it.fqn == owner }?.definitionId()
+                        ?: owners.firstOrNull()?.definitionId()
                         ?: externalId(owner)
                 },
             signature = signature,

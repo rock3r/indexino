@@ -8,8 +8,13 @@ internal object InProcessCacheLayout {
     fun storeRoot(workspace: Path): Path =
         cacheRoot().resolve("workspaces").resolve(workspaceId(workspace)).resolve("legacy-store")
 
-    fun generationStore(workspace: Path, generation: String): Path =
-        storeRoot(workspace).resolve("generations").resolve(generation).resolve("store")
+    fun generationStore(workspace: Path, clientId: String, generation: String): Path =
+        storeRoot(workspace)
+            .resolve("clients")
+            .resolve(clientId)
+            .resolve("generations")
+            .resolve(generation)
+            .resolve("store")
 
     private fun cacheRoot(): Path {
         val explicit =

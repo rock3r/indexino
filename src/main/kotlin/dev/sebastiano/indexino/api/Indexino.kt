@@ -27,6 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 public class Indexino private constructor(private val workspace: Path) : AutoCloseable {
     private val closed = AtomicBoolean()
+    private val clientId = UUID.randomUUID().toString()
     private val storeRoot = InProcessCacheLayout.storeRoot(workspace)
     private val generationLock = Any()
     private val generationStores = mutableMapOf<WorkspaceGenerationId, Path>()
@@ -214,7 +215,8 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         )
 
     private fun publishGenerationStore(commit: String, generation: WorkspaceGenerationId): Path {
-        val destination = InProcessCacheLayout.generationStore(workspace, generation.value)
+        val destination =
+            InProcessCacheLayout.generationStore(workspace, clientId, generation.value)
         if (Files.isDirectory(destination)) return destination
 
         val source =

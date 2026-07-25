@@ -49,7 +49,7 @@ worktree for product storage.
     change-journal
     legacy-store/                      # S1 bridge; removed as one unit in S2
       index/<commit>/                  # mutable incremental writer
-      generations/<generation-id>/store/ # immutable snapshot copy
+      clients/<client-id>/generations/<generation-id>/store/ # per-client immutable snapshot copy
   registry/workspaces.json             # path → fs identity, generations, last-used
   registry/tombstones/
   runtime/<workspace-id>.sock          # AF_UNIX (all platforms)
@@ -126,13 +126,16 @@ last-used in the registry (not filesystem `atime`). GC grace window + re-verify 
 
 S1 writes through the existing commit-addressed Xodus layout beneath
 `workspaces/<workspace-id>/legacy-store/`, then atomically copies each completed generation to
-`legacy-store/generations/<generation-id>/store/` so open snapshots retain immutable backing data.
-Superseded copies are deleted when their last in-process snapshot closes. The full copy preserves
-incremental indexing but costs O(index size) per publish; it is an explicit S1 trade-off, not the
-large-repository design. These are user-local production bridges, not the product pack layout and
-not temporary test stores. S2 removes `legacy-store` as one unit and replaces it with generation
-manifests, reference tracking, and content-addressed packs. Do **not** extend
-`<project>/.indexino/index/<commit>/`; new features must assume user-local composite storage.
+`legacy-store/clients/<client-id>/generations/<generation-id>/store/` so open snapshots retain
+immutable backing data. Copies are **per client instance** in S1: in-process refcounts reclaim only
+directories that client created, which prevents an uncoordinated peer from deleting a store another
+client still pins. S6 replaces this with shared generations plus on-disk `refs/`. Superseded copies
+are deleted when their last in-process snapshot closes. The full copy preserves incremental indexing
+but costs O(index size) per publish; it is an explicit S1 trade-off, not the large-repository design.
+These are user-local production bridges, not the product pack layout and not temporary test stores.
+S2 removes `legacy-store` as one unit and replaces it with generation manifests, reference tracking,
+and content-addressed packs. Do **not** extend `<project>/.indexino/index/<commit>/`; new features
+must assume user-local composite storage.
 
 ## Deprecated / rejected paths
 

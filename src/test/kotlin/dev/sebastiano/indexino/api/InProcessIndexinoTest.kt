@@ -82,6 +82,126 @@ class InProcessIndexinoTest {
     }
 
     @Test
+    fun `clients keep independent generation copies so reclaim cannot delete peers`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-clients-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        val clientA = Indexino.connectBlocking(workspace)
+        val clientB = Indexino.connectBlocking(workspace)
+        try {
+            val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+            val firstGeneration = runSuspend { clientA.refresh(request).await() }.generation
+            val pinned = runSuspend { clientA.snapshot() }
+            try {
+                runSuspend { clientB.refresh(request).await() }
+                Files.writeString(
+                    workspace.resolve("ui/src/main/kotlin/PeerRefresh.kt"),
+                    "fun PeerRefresh() = Unit",
+                )
+                val secondGeneration = runSuspend { clientB.refresh(request).await() }.generation
+                assertNotEquals(firstGeneration, secondGeneration)
+
+                assertEquals(firstGeneration, pinned.generation)
+                val pinnedSymbols = runSuspend {
+                    pinned.findSymbols(
+                        SymbolQuery.named("ActionButton"),
+                        QueryOptions.page(limit = 1),
+                    )
+                }
+                assertEquals(1, pinnedSymbols.items.size)
+            } finally {
+                pinned.close()
+            }
+        } finally {
+            clientA.close()
+            clientB.close()
+            if (previousCacheDirectory == null) {
+                System.clearProperty("indexino.cache.dir")
+            } else {
+                System.setProperty("indexino.cache.dir", previousCacheDirectory)
+            }
+        }
+    }
+
+    @Test
+    fun `symbol ownerId prefers the enclosing definition in the same file`() {
+        val workspace = createGitWorkspace()
+        Files.writeString(
+            workspace.resolve("ui/src/main/kotlin/OwnerA.kt"),
+            """
+            package owners
+            class SharedOwner {
+                fun memberA() = Unit
+            }
+            """
+                .trimIndent(),
+        )
+        Files.writeString(
+            workspace.resolve("ui/src/main/kotlin/OwnerB.kt"),
+            """
+            package owners
+            class SharedOwner {
+                fun memberB() = Unit
+            }
+            """
+                .trimIndent(),
+        )
+        val cacheDirectory = createTempDirectory("indexino-owner-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        val indexino = Indexino.connectBlocking(workspace)
+        try {
+            runSuspend {
+                indexino.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui"))).await()
+            }
+            runSuspend { indexino.snapshot() }
+                .use { snapshot ->
+                    val owners =
+                        runSuspend {
+                                snapshot.findSymbols(
+                                    SymbolQuery.named("SharedOwner"),
+                                    QueryOptions.page(limit = 10),
+                                )
+                            }
+                            .items
+                    assertEquals(2, owners.size)
+                    val ownerA = owners.single { it.location.file.path.endsWith("OwnerA.kt") }
+                    val ownerB = owners.single { it.location.file.path.endsWith("OwnerB.kt") }
+                    val memberA =
+                        runSuspend {
+                                snapshot.findSymbols(
+                                    SymbolQuery.named("memberA"),
+                                    QueryOptions.page(limit = 1),
+                                )
+                            }
+                            .items
+                            .single()
+                    val memberB =
+                        runSuspend {
+                                snapshot.findSymbols(
+                                    SymbolQuery.named("memberB"),
+                                    QueryOptions.page(limit = 1),
+                                )
+                            }
+                            .items
+                            .single()
+                    assertEquals(ownerA.id, memberA.ownerId)
+                    assertEquals(ownerB.id, memberB.ownerId)
+                }
+        } finally {
+            indexino.close()
+            if (previousCacheDirectory == null) {
+                System.clearProperty("indexino.cache.dir")
+            } else {
+                System.setProperty("indexino.cache.dir", previousCacheDirectory)
+            }
+        }
+    }
+
+    @Test
     fun `findReferences does not attach call sites to same-name properties`() {
         val workspace = createGitWorkspace()
         Files.writeString(
@@ -227,12 +347,7 @@ class InProcessIndexinoTest {
             } finally {
                 firstSnapshot.close()
             }
-            assertFalse(
-                Files.exists(
-                    InProcessCacheLayout.generationStore(workspace, firstResult.generation.value)
-                        .parent
-                )
-            )
+            assertFalse(generationCopyExists(workspace, firstResult.generation.value))
         } finally {
             indexino.close()
             if (previousCacheDirectory == null) {
@@ -351,6 +466,16 @@ class InProcessIndexinoTest {
             }
         assertEquals("CLOSED", closedFailure.failure.category.value)
         assertFalse(Files.exists(workspace.resolve(".indexino")))
+    }
+
+    private fun generationCopyExists(workspace: java.nio.file.Path, generation: String): Boolean {
+        val clientsRoot = InProcessCacheLayout.storeRoot(workspace).resolve("clients")
+        if (!Files.isDirectory(clientsRoot)) return false
+        return Files.walk(clientsRoot).use { paths ->
+            paths.anyMatch { path ->
+                path.fileName.toString() == generation && Files.isDirectory(path)
+            }
+        }
     }
 
     private fun createGitWorkspace(): java.nio.file.Path {
