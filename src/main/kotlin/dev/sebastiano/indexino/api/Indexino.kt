@@ -139,6 +139,15 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         ensureOpen()
         val generation =
             synchronized(generationLock) {
+                // Prefer CLOSED over INDEX_NOT_FOUND if close() raced after ensureOpen().
+                if (closed.get()) {
+                    throw failure(
+                        category = IndexFailureCategory.CLOSED,
+                        code = "client_closed",
+                        message = "Indexino client is closed",
+                        retryable = false,
+                    )
+                }
                 val current =
                     published
                         ?: throw failure(
@@ -165,7 +174,13 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
     }
 
     override fun close() {
-        closed.set(true)
+        if (!closed.compareAndSet(false, true)) return
+        // Drop the published exemption so unpinned per-client copies can be reclaimed. Open
+        // snapshots keep their pins and are only deleted when those snapshots close (see C3/S3/S6).
+        synchronized(generationLock) {
+            published = null
+            reclaimUnpinnedGenerations()
+        }
     }
 
     private fun ensureOpen() {

@@ -83,6 +83,30 @@ class InProcessIndexinoTest {
     }
 
     @Test
+    fun `close reclaims unpinned client generation copies`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-close-reclaim-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        val indexino = Indexino.connectBlocking(workspace)
+        try {
+            runSuspend {
+                indexino.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui"))).await()
+            }
+            assertTrue(generationCopyExists(workspace, null))
+        } finally {
+            indexino.close()
+        }
+        assertFalse(generationCopyExists(workspace, null))
+        if (previousCacheDirectory == null) {
+            System.clearProperty("indexino.cache.dir")
+        } else {
+            System.setProperty("indexino.cache.dir", previousCacheDirectory)
+        }
+    }
+
+    @Test
     fun `findSymbols does not expose resource definitions before S10`() {
         val workspace = createGitWorkspace()
         val cacheDirectory = createTempDirectory("indexino-no-res-cache-")
@@ -563,12 +587,17 @@ class InProcessIndexinoTest {
         assertFalse(Files.exists(workspace.resolve(".indexino")))
     }
 
-    private fun generationCopyExists(workspace: java.nio.file.Path, generation: String): Boolean {
+    private fun generationCopyExists(workspace: java.nio.file.Path, generation: String?): Boolean {
         val clientsRoot = InProcessCacheLayout.storeRoot(workspace).resolve("clients")
         if (!Files.isDirectory(clientsRoot)) return false
         return Files.walk(clientsRoot).use { paths ->
             paths.anyMatch { path ->
-                path.fileName.toString() == generation && Files.isDirectory(path)
+                if (!Files.isDirectory(path)) return@anyMatch false
+                if (generation == null) {
+                    path.fileName.toString() == "store"
+                } else {
+                    path.fileName.toString() == generation
+                }
             }
         }
     }
