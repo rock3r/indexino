@@ -32,6 +32,7 @@ private constructor(
 
     public suspend fun findSymbols(query: SymbolQuery, options: QueryOptions): QueryPage<Symbol> {
         ensureOpen()
+        validateQueryOptions(options)
         val symbols = symbolRecords()
         val symbolsByName = queries.indexSymbolsByName(symbols)
         val records =
@@ -57,6 +58,7 @@ private constructor(
         options: QueryOptions,
     ): QueryPage<Reference> {
         ensureOpen()
+        validateQueryOptions(options)
         val symbols = symbolRecords()
         val symbolsByName = queries.indexSymbolsByName(symbols)
         val targetSymbol =
@@ -137,6 +139,19 @@ private constructor(
         store.prefixScan("sym:").map { it.second }.filterIsInstance<SymbolRecord>().toList()
 
     @OptIn(IndexinoInternalApi::class)
+    private fun validateQueryOptions(options: QueryOptions) {
+        if (options.limit > HOST_QUERY_LIMIT_MAXIMUM) {
+            throw indexinoFailure(
+                category = IndexFailureCategory.INVALID_REQUEST,
+                code = "limit_exceeds_maximum",
+                message =
+                    "limit ${options.limit} exceeds the host maximum of $HOST_QUERY_LIMIT_MAXIMUM",
+                retryable = false,
+            )
+        }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
     private fun <T> List<T>.page(options: QueryOptions): QueryPage<T> {
         val offset =
             options.afterCursor?.let { cursor ->
@@ -166,6 +181,9 @@ private constructor(
 
     internal companion object {
         private const val CURSOR_PREFIX: String = "indexino:v1:"
+        // Host policy for this in-process facade. Not a public ABI constant until the owner
+        // settles exact default page limits in docs/PUBLIC-API-DESIGN.html.
+        private const val HOST_QUERY_LIMIT_MAXIMUM: Int = 10_000
         private val WORKSPACE_ORIGIN: SourceOriginId = SourceOriginId.of("workspace")
 
         internal fun create(

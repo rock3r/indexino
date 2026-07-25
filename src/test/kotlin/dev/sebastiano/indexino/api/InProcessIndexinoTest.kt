@@ -522,15 +522,70 @@ class InProcessIndexinoTest {
         assertTrue(firstSymbols.hasMore)
         val cursor = requireNotNull(firstSymbols.nextCursor)
         assertTrue(cursor.startsWith("indexino:v1:"))
+        // Host maximum is 10_000 (facade policy; not published as a public constant yet).
+        val hostMax = 10_000
         val overflowSafeSymbols = runSuspend {
             snapshot.findSymbols(
                 SymbolQuery.inFile(sourceFile),
-                QueryOptions.page(limit = Int.MAX_VALUE, offset = 1),
+                QueryOptions.page(limit = hostMax, offset = 1),
             )
         }
         assertEquals(checkNotNull(firstSymbols.totalCount) - 1, overflowSafeSymbols.items.size)
         assertFalse(overflowSafeSymbols.hasMore)
         assertEquals(null, overflowSafeSymbols.nextCursor)
+
+        val atHostMax = runSuspend {
+            snapshot.findSymbols(
+                SymbolQuery.inFile(sourceFile),
+                QueryOptions.page(limit = hostMax),
+            )
+        }
+        assertEquals(firstSymbols.totalCount, atHostMax.totalCount)
+
+        val overHostMax =
+            assertFailsWith<IndexinoException> {
+                runSuspend {
+                    snapshot.findSymbols(
+                        SymbolQuery.inFile(sourceFile),
+                        QueryOptions.page(limit = hostMax + 1),
+                    )
+                }
+            }
+        assertEquals("INVALID_REQUEST", overHostMax.failure.category.value)
+        assertEquals("limit_exceeds_maximum", overHostMax.failure.code)
+        assertTrue(overHostMax.failure.message.contains((hostMax + 1).toString()))
+        assertTrue(overHostMax.failure.message.contains(hostMax.toString()))
+
+        val overHostMaxCursor =
+            assertFailsWith<IndexinoException> {
+                runSuspend {
+                    snapshot.findSymbols(
+                        SymbolQuery.inFile(sourceFile),
+                        QueryOptions.after(limit = hostMax + 1, cursor = cursor),
+                    )
+                }
+            }
+        assertEquals("limit_exceeds_maximum", overHostMaxCursor.failure.code)
+
+        val actionButtonForLimit =
+            runSuspend {
+                    snapshot.findSymbols(
+                        SymbolQuery.named("ActionButton"),
+                        QueryOptions.page(limit = 1),
+                    )
+                }
+                .items
+                .single()
+        val overHostMaxReferences =
+            assertFailsWith<IndexinoException> {
+                runSuspend {
+                    snapshot.findReferences(
+                        ReferenceQuery.to(actionButtonForLimit.id),
+                        QueryOptions.page(limit = hostMax + 1),
+                    )
+                }
+            }
+        assertEquals("limit_exceeds_maximum", overHostMaxReferences.failure.code)
 
         val remainingSymbols = runSuspend {
             snapshot.findSymbols(
