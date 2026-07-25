@@ -89,20 +89,107 @@ class InProcessIndexinoTest {
         tempDirs.add(cacheDirectory)
         val previousCacheDirectory = System.getProperty("indexino.cache.dir")
         System.setProperty("indexino.cache.dir", cacheDirectory.toString())
-        val indexino = Indexino.connectBlocking(workspace)
         try {
-            runSuspend {
-                indexino.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui"))).await()
+            val indexino = Indexino.connectBlocking(workspace)
+            try {
+                runSuspend {
+                    indexino.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui"))).await()
+                }
+                assertTrue(generationCopyExists(workspace, null))
+            } finally {
+                indexino.close()
             }
-            assertTrue(generationCopyExists(workspace, null))
+            assertFalse(generationCopyExists(workspace, null))
         } finally {
-            indexino.close()
+            if (previousCacheDirectory == null) {
+                System.clearProperty("indexino.cache.dir")
+            } else {
+                System.setProperty("indexino.cache.dir", previousCacheDirectory)
+            }
         }
-        assertFalse(generationCopyExists(workspace, null))
-        if (previousCacheDirectory == null) {
-            System.clearProperty("indexino.cache.dir")
-        } else {
-            System.setProperty("indexino.cache.dir", previousCacheDirectory)
+    }
+
+    @Test
+    fun `refresh finishing after close fails closed and leaves no generation copies`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-close-during-refresh-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            val indexino = Indexino.connectBlocking(workspace)
+            indexino.afterPublishGenerationStoreForTests = { indexino.close() }
+            try {
+                val failure =
+                    assertFailsWith<IndexinoException> {
+                        runSuspend {
+                            indexino
+                                .refresh(RefreshRequest.forScope(IndexScope.gradle(":ui")))
+                                .await()
+                        }
+                    }
+                assertEquals("CLOSED", failure.failure.category.value)
+                assertEquals("client_closed", failure.failure.code)
+                assertFalse(generationCopyExists(workspace, null))
+            } finally {
+                indexino.afterPublishGenerationStoreForTests = null
+                indexino.close()
+            }
+        } finally {
+            if (previousCacheDirectory == null) {
+                System.clearProperty("indexino.cache.dir")
+            } else {
+                System.setProperty("indexino.cache.dir", previousCacheDirectory)
+            }
+        }
+    }
+
+    @Test
+    fun `close during same-generation refresh keeps pinned snapshot stores`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-close-pinned-refresh-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            val indexino = Indexino.connectBlocking(workspace)
+            val first =
+                runSuspend {
+                    indexino.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui"))).await()
+                }
+            val pinned = runSuspend { indexino.snapshot() }
+            try {
+                indexino.afterPublishGenerationStoreForTests = { indexino.close() }
+                val failure =
+                    assertFailsWith<IndexinoException> {
+                        runSuspend {
+                            indexino
+                                .refresh(RefreshRequest.forScope(IndexScope.gradle(":ui")))
+                                .await()
+                        }
+                    }
+                assertEquals("CLOSED", failure.failure.category.value)
+                assertTrue(generationCopyExists(workspace, first.generation.value))
+                val symbols =
+                    runSuspend {
+                        pinned.findSymbols(
+                            SymbolQuery.named("ActionButton"),
+                            QueryOptions.page(limit = 1),
+                        )
+                    }
+                assertEquals(1, symbols.items.size)
+            } finally {
+                indexino.afterPublishGenerationStoreForTests = null
+                pinned.close()
+                indexino.close()
+            }
+            assertFalse(generationCopyExists(workspace, first.generation.value))
+        } finally {
+            if (previousCacheDirectory == null) {
+                System.clearProperty("indexino.cache.dir")
+            } else {
+                System.setProperty("indexino.cache.dir", previousCacheDirectory)
+            }
         }
     }
 

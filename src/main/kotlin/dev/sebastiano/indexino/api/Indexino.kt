@@ -35,6 +35,13 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
     private val snapshotPins = mutableMapOf<WorkspaceGenerationId, Int>()
     private var published: PublishedGeneration? = null
 
+    /**
+     * Test-only seam: runs after a generation copy is staged and before it is published under
+     * [generationLock]. Production leaves this null. Instance-scoped so one client cannot leak the
+     * hook into another.
+     */
+    @Volatile internal var afterPublishGenerationStoreForTests: (() -> Unit)? = null
+
     public companion object {
         private val workspaceRefreshLocks = ConcurrentHashMap<Path, Any>()
 
@@ -98,12 +105,37 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                     )
             val revision = manifest.toWorkspaceRevision()
             val generation = manifest.toGenerationId(revision)
-            val generationStore = publishGenerationStore(manifest.commit, generation)
+            // Optional optimisation only — the under-lock check below remains load-bearing.
+            if (closed.get()) {
+                throw failure(
+                    category = IndexFailureCategory.CLOSED,
+                    code = "client_closed",
+                    message = "Indexino client is closed",
+                    retryable = false,
+                )
+            }
+            val publishedStore = publishGenerationStore(manifest.commit, generation)
+            afterPublishGenerationStoreForTests?.invoke()
             synchronized(generationLock) {
-                generationStores[generation] = generationStore
+                // Mirror snapshot(): close may have raced during the long index+copy while
+                // generationLock was free. Never publish onto a closed client (CAS close will not
+                // run again to reclaim this copy).
+                if (closed.get()) {
+                    // Undo exactly what this publish did: delete only a directory we created.
+                    if (publishedStore.created) {
+                        publishedStore.path.parent.toFile().deleteRecursively()
+                    }
+                    throw failure(
+                        category = IndexFailureCategory.CLOSED,
+                        code = "client_closed",
+                        message = "Indexino client is closed",
+                        retryable = false,
+                    )
+                }
+                generationStores[generation] = publishedStore.path
                 published =
                     PublishedGeneration(
-                        storePath = generationStore,
+                        storePath = publishedStore.path,
                         revision = revision,
                         generation = generation,
                     )
@@ -239,10 +271,15 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
             )
         )
 
-    private fun publishGenerationStore(commit: String, generation: WorkspaceGenerationId): Path {
+    private fun publishGenerationStore(
+        commit: String,
+        generation: WorkspaceGenerationId,
+    ): PublishedStore {
         val destination =
             InProcessCacheLayout.generationStore(workspace, clientId, generation.value)
-        if (Files.isDirectory(destination)) return destination
+        if (Files.isDirectory(destination)) {
+            return PublishedStore(path = destination, created = false)
+        }
 
         val source =
             IndexPathResolver(workspace, storeRootOverride = storeRoot).resolveBaseStore(commit)
@@ -266,7 +303,7 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                 staging.toFile().deleteRecursively()
             }
         }
-        return destination
+        return PublishedStore(path = destination, created = true)
     }
 
     private fun releaseGeneration(generation: WorkspaceGenerationId) {
@@ -314,6 +351,8 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
 
     private fun sha256(value: String): String =
         HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.toByteArray()))
+
+    private class PublishedStore(val path: Path, val created: Boolean)
 
     private class PublishedGeneration(
         val storePath: Path,
