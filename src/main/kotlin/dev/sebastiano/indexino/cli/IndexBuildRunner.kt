@@ -30,8 +30,29 @@ internal class IndexBuildRunner(
     private val bazelProcessRunner: BazelProcessRunner?,
     private val progress: (String) -> Unit,
     private val machineProgress: IndexBuildProgressReporter?,
+    private val storeRootOverride: Path? = null,
 ) {
+    private var latestChanges: SourceChangeSet? = null
+    private var reusedFreshIndex: Boolean = false
+
+    fun runDetailed(): IndexBuildExecution {
+        val exitCode = run()
+        if (exitCode != CliExitCodes.SUCCESS) {
+            return IndexBuildExecution(exitCode, null, null, reusedFreshIndex)
+        }
+        val commit = GitHeadResolver.resolve(project)
+        val resolver = IndexPathResolver(project, storeRootOverride = storeRootOverride)
+        return IndexBuildExecution(
+            exitCode = exitCode,
+            manifest = ManifestIO.read(resolver.resolveManifest(commit)),
+            changes = latestChanges,
+            reusedFreshIndex = reusedFreshIndex,
+        )
+    }
+
     fun run(): Int {
+        latestChanges = null
+        reusedFreshIndex = false
         val topologyResult =
             TopologyResolver.resolve(
                 project = project,
@@ -49,7 +70,7 @@ internal class IndexBuildRunner(
         val sourceFiles = topologyResult.sourceFiles
         machineProgress?.discoveryCompleted(sourceFiles.size)
         val commit = GitHeadResolver.resolve(project)
-        val resolver = IndexPathResolver(project)
+        val resolver = IndexPathResolver(project, storeRootOverride = storeRootOverride)
         val manifestPath = resolver.resolveManifest(commit)
         val previewHash = previewHash(sourceFiles)
         val criteria =
@@ -61,6 +82,7 @@ internal class IndexBuildRunner(
             )
         val existingManifest = manifestPath.takeIf { it.exists() }?.let(ManifestIO::read)
         if (existingManifest != null && ManifestFreshness.isFresh(existingManifest, criteria)) {
+            reusedFreshIndex = true
             progress("index fresh for ${topologyResult.scope} @ $commit — skip rebuild")
             machineProgress?.completed("fresh")
             return CliExitCodes.SUCCESS
@@ -108,6 +130,7 @@ internal class IndexBuildRunner(
         val store = XodusCodeIndexStore.open(resolver.resolveBaseStore(commit))
         try {
             val changes = detectChanges(store, sourceFiles, forceFullRebuild)
+            latestChanges = changes
             val context =
                 IndexBuildContext(
                     store = store,
@@ -175,3 +198,10 @@ internal class IndexBuildRunner(
         const val SOURCE_HASH_PREVIEW_PHASE = "source-hash-preview"
     }
 }
+
+internal data class IndexBuildExecution(
+    val exitCode: Int,
+    val manifest: IndexManifest?,
+    val changes: SourceChangeSet?,
+    val reusedFreshIndex: Boolean,
+)

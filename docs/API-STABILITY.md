@@ -1,27 +1,31 @@
 # API stability
 
-Indexino has not published a release and currently exposes no supported embedded Kotlin API. This
-is intentional: the first API will start from a reviewed clean slate instead of inheriting the CLI,
-Xodus, topology, parser, producer, or persistence implementation as accidental compatibility
-commitments.
+Indexino has not published a release. The reviewed embedded API is landing incrementally through
+the tracer-bullet slices in [PUBLIC-API-DESIGN.html](PUBLIC-API-DESIGN.html), starting with the S1
+model and in-process facade. CLI, Xodus, topology, parser, producer, and persistence implementation
+types remain outside the compatibility boundary.
 
 ## Current boundary
 
-- Every production Kotlin declaration is `internal`.
+- Public declarations exist only in the packages and artifacts listed below; other production
+  declarations remain `internal`.
 - Strict Kotlin explicit API mode is enabled.
-- No package in the current thin JAR is a supported Java or Kotlin embedding contract.
+- `dev.sebastiano.indexino.model` and `dev.sebastiano.indexino.api` are the supported S1 embedding
+  packages.
 - CLI JSONL protocols and the on-disk schema are separate contracts documented in
   [CLI.md](CLI.md) and [INDEX-STORAGE.md](INDEX-STORAGE.md).
-- Until the multi-artifact public API lands, KGP `abiValidation` / empty `api/indexino.api` may
-  still run as a tripwire against accidental `public` declarations. The **target** compatibility
-  stack (first embedded API / S1+) is Metalava-only — see below and
+- **Metalava** is the sole reviewed signature source for public packages
+  (`api/<artifact>/current.txt`). Update dumps only via the explicit
+  `metalavaUpdateSignature` / `:indexino-model:metalavaUpdateSignature` tasks after human review —
+  never to silence CI.
+- KGP `abiValidation` / `api/indexino.api` are **not** used. See
   [PUBLIC-API-DESIGN.html](PUBLIC-API-DESIGN.html).
 
 Kotlin `internal` declarations still compile to JVM implementation bytecode because the CLI is a
 single module. Their presence in the JAR does not make them supported API, and consumers must not
 link to them from Java, reflection, or other JVM languages.
 
-## Target packages (first embedded API)
+## Public and planned packages
 
 | Artifact | Package | Role |
 |----------|---------|------|
@@ -44,7 +48,8 @@ opt-in annotations and fact types (`IndexinoInternalApi`, `BasicFactQueries`, `P
 2. Use explicit `public` visibility and explicit return/property types.
 3. Prefer ordinary final classes with factories and structural `equals`/`hashCode`/`toString` for
    value/request/result types. Do not publish data classes or `@JvmInline` value classes.
-4. Add Kotlin consumer compilation tests and Java linkage fixtures (forward fixtures in `check`).
+4. Add Kotlin consumer compilation tests and Java linkage fixtures (forward fixtures in
+   `check verifyMavenPublication`).
 5. Generate and review Metalava signatures (`api/<artifact>/current.txt`) with `--jdk-home` from
    the Gradle toolchain and an explicit `--format` pin.
 6. Document whether the API is stable or requires an explicit experimental opt-in.
@@ -75,6 +80,7 @@ public inline implementation details unless their compatibility cost has been re
    etc.). Pin format and always pass `--jdk-home`.
 2. **detekt** (Jewel-adapted) — package-scoped equality members, no public data classes, API-status
    annotations. detekt **2.0.0-alpha.3**.
-3. **Consumer fixtures** — forward in every `check`; cross-version linkage at release only.
+3. **Consumer fixtures** — forward in the pre-merge `check verifyMavenPublication` gate;
+   cross-version linkage at release only.
 
 KGP `abiValidation` and japicmp are **not** part of the target stack.

@@ -1,0 +1,299 @@
+// Signature format: 5.0
+package dev.sebastiano.indexino.model {
+
+  @kotlin.annotation.Retention(kotlin.annotation.AnnotationRetention.BINARY) @kotlin.annotation.Target(allowedTargets=kotlin.annotation.AnnotationTarget.PROPERTY) public @interface ExcludeFromEquality {
+  }
+
+  public final class IndexFailure {
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.IndexFailureCategory getCategory();
+    method @InaccessibleFromKotlin public String getCode();
+    method @InaccessibleFromKotlin public String getMessage();
+    method @InaccessibleFromKotlin public boolean getRetryable();
+    method @dev.sebastiano.indexino.model.IndexinoInternalApi public static dev.sebastiano.indexino.model.IndexFailure of(dev.sebastiano.indexino.model.IndexFailureCategory category, String code, String message, boolean retryable);
+    property public dev.sebastiano.indexino.model.IndexFailureCategory category;
+    property public String code;
+    property public String message;
+    property public boolean retryable;
+    field public static final dev.sebastiano.indexino.model.IndexFailure.Companion Companion;
+  }
+
+  public static final class IndexFailure.Companion {
+    method @dev.sebastiano.indexino.model.IndexinoInternalApi public dev.sebastiano.indexino.model.IndexFailure of(dev.sebastiano.indexino.model.IndexFailureCategory category, String code, String message, boolean retryable);
+  }
+
+  public final class IndexFailureCategory {
+    method @InaccessibleFromKotlin public String getValue();
+    property public String value;
+    field public static final dev.sebastiano.indexino.model.IndexFailureCategory CLOSED;
+    field public static final dev.sebastiano.indexino.model.IndexFailureCategory.Companion Companion;
+    field public static final dev.sebastiano.indexino.model.IndexFailureCategory INDEX_NOT_FOUND;
+    field public static final dev.sebastiano.indexino.model.IndexFailureCategory INTERNAL;
+    field public static final dev.sebastiano.indexino.model.IndexFailureCategory INVALID_REQUEST;
+    field public static final dev.sebastiano.indexino.model.IndexFailureCategory IO;
+    field public static final dev.sebastiano.indexino.model.IndexFailureCategory PARSE;
+    field public static final dev.sebastiano.indexino.model.IndexFailureCategory PLUGIN;
+    field public static final dev.sebastiano.indexino.model.IndexFailureCategory SCRIPT;
+    field public static final dev.sebastiano.indexino.model.IndexFailureCategory STORAGE_BUSY;
+    field public static final dev.sebastiano.indexino.model.IndexFailureCategory TOPOLOGY;
+    field public static final dev.sebastiano.indexino.model.IndexFailureCategory WORKSPACE_LOST;
+  }
+
+  public static final class IndexFailureCategory.Companion {
+    property public dev.sebastiano.indexino.model.IndexFailureCategory CLOSED;
+    property public dev.sebastiano.indexino.model.IndexFailureCategory INDEX_NOT_FOUND;
+    property public dev.sebastiano.indexino.model.IndexFailureCategory INTERNAL;
+    property public dev.sebastiano.indexino.model.IndexFailureCategory INVALID_REQUEST;
+    property public dev.sebastiano.indexino.model.IndexFailureCategory IO;
+    property public dev.sebastiano.indexino.model.IndexFailureCategory PARSE;
+    property public dev.sebastiano.indexino.model.IndexFailureCategory PLUGIN;
+    property public dev.sebastiano.indexino.model.IndexFailureCategory SCRIPT;
+    property public dev.sebastiano.indexino.model.IndexFailureCategory STORAGE_BUSY;
+    property public dev.sebastiano.indexino.model.IndexFailureCategory TOPOLOGY;
+    property public dev.sebastiano.indexino.model.IndexFailureCategory WORKSPACE_LOST;
+  }
+
+  @kotlin.RequiresOptIn(level=kotlin.RequiresOptIn.Level.ERROR, message="Internal Indexino host API; not for application or plugin authors.") @kotlin.annotation.Retention(kotlin.annotation.AnnotationRetention.BINARY) @kotlin.annotation.Target(allowedTargets={kotlin.annotation.AnnotationTarget.CLASS, kotlin.annotation.AnnotationTarget.CONSTRUCTOR, kotlin.annotation.AnnotationTarget.FUNCTION, kotlin.annotation.AnnotationTarget.PROPERTY}) public @interface IndexinoInternalApi {
+  }
+
+  public enum NameMatchMode {
+    enum_constant public static final dev.sebastiano.indexino.model.NameMatchMode EXACT;
+    enum_constant public static final dev.sebastiano.indexino.model.NameMatchMode FQN;
+    enum_constant public static final dev.sebastiano.indexino.model.NameMatchMode PREFIX;
+  }
+
+  public final class PluginId {
+    method @InaccessibleFromKotlin public String getValue();
+    method public static dev.sebastiano.indexino.model.PluginId of(String value);
+    property public String value;
+    field public static final dev.sebastiano.indexino.model.PluginId.Companion Companion;
+  }
+
+  public static final class PluginId.Companion {
+    method public dev.sebastiano.indexino.model.PluginId of(String value);
+  }
+
+  public final class QueryOptions {
+    method public static dev.sebastiano.indexino.model.QueryOptions after(int limit, String cursor);
+    method @InaccessibleFromKotlin public String? getAfterCursor();
+    method @InaccessibleFromKotlin public int getLimit();
+    method @InaccessibleFromKotlin public int getOffset();
+    method public static dev.sebastiano.indexino.model.QueryOptions page(int limit);
+    method public static dev.sebastiano.indexino.model.QueryOptions page(int limit, int offset);
+    property public String? afterCursor;
+    property public int limit;
+    property public int offset;
+    field public static final dev.sebastiano.indexino.model.QueryOptions.Companion Companion;
+  }
+
+  public static final class QueryOptions.Companion {
+    method public dev.sebastiano.indexino.model.QueryOptions after(int limit, String cursor);
+    method public dev.sebastiano.indexino.model.QueryOptions page(int limit);
+    method public dev.sebastiano.indexino.model.QueryOptions page(int limit, int offset);
+  }
+
+  public final class QueryPage<T> {
+    ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public QueryPage(java.util.List<? extends T> items, int offset, int limit, boolean hasMore, String? nextCursor, Integer? totalCount);
+    method @InaccessibleFromKotlin public boolean getHasMore();
+    method @InaccessibleFromKotlin public java.util.List<T> getItems();
+    method @InaccessibleFromKotlin public int getLimit();
+    method @InaccessibleFromKotlin public String? getNextCursor();
+    method @InaccessibleFromKotlin public int getOffset();
+    method @InaccessibleFromKotlin public Integer? getTotalCount();
+    property public boolean hasMore;
+    property public java.util.List<T> items;
+    property public int limit;
+    property public String? nextCursor;
+    property public int offset;
+    property public Integer? totalCount;
+  }
+
+  public final class Reference {
+    ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public Reference(dev.sebastiano.indexino.model.SymbolId symbolId, String referencedName, String language, dev.sebastiano.indexino.model.SourceLocation location, String? qualifier, java.util.List<dev.sebastiano.indexino.model.SymbolId> candidateSymbolIds, Integer? arity);
+    method @InaccessibleFromKotlin public Integer? getArity();
+    method @InaccessibleFromKotlin public java.util.List<dev.sebastiano.indexino.model.SymbolId> getCandidateSymbolIds();
+    method @InaccessibleFromKotlin public String getLanguage();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceLocation getLocation();
+    method @InaccessibleFromKotlin public String? getQualifier();
+    method @InaccessibleFromKotlin public String getReferencedName();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SymbolId getSymbolId();
+    property public Integer? arity;
+    property public java.util.List<dev.sebastiano.indexino.model.SymbolId> candidateSymbolIds;
+    property public String language;
+    property public dev.sebastiano.indexino.model.SourceLocation location;
+    property public String? qualifier;
+    property public String referencedName;
+    property public dev.sebastiano.indexino.model.SymbolId symbolId;
+  }
+
+  public final class ReferenceQuery {
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SymbolId getSymbolId();
+    method public static dev.sebastiano.indexino.model.ReferenceQuery to(dev.sebastiano.indexino.model.SymbolId symbolId);
+    property public dev.sebastiano.indexino.model.SymbolId symbolId;
+    field public static final dev.sebastiano.indexino.model.ReferenceQuery.Companion Companion;
+  }
+
+  public static final class ReferenceQuery.Companion {
+    method public dev.sebastiano.indexino.model.ReferenceQuery to(dev.sebastiano.indexino.model.SymbolId symbolId);
+  }
+
+  public final class RefreshId {
+    method @InaccessibleFromKotlin public String getValue();
+    method public static dev.sebastiano.indexino.model.RefreshId of(String value);
+    property public String value;
+    field public static final dev.sebastiano.indexino.model.RefreshId.Companion Companion;
+  }
+
+  public static final class RefreshId.Companion {
+    method public dev.sebastiano.indexino.model.RefreshId of(String value);
+  }
+
+  public final class SourceFile {
+    method @InaccessibleFromKotlin public String getDisplayPath();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceOriginId getOriginId();
+    method @InaccessibleFromKotlin public String getPath();
+    method public static dev.sebastiano.indexino.model.SourceFile of(dev.sebastiano.indexino.model.SourceOriginId originId, String path, String displayPath);
+    property @dev.sebastiano.indexino.model.ExcludeFromEquality public String displayPath;
+    property public dev.sebastiano.indexino.model.SourceOriginId originId;
+    property public String path;
+    field public static final dev.sebastiano.indexino.model.SourceFile.Companion Companion;
+  }
+
+  public static final class SourceFile.Companion {
+    method public dev.sebastiano.indexino.model.SourceFile of(dev.sebastiano.indexino.model.SourceOriginId originId, String path, String displayPath);
+  }
+
+  public final class SourceLocation {
+    method @InaccessibleFromKotlin public Integer? getColumn();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceFile getFile();
+    method @InaccessibleFromKotlin public int getLine();
+    method @InaccessibleFromKotlin public Integer? getOffset();
+    method public static dev.sebastiano.indexino.model.SourceLocation of(dev.sebastiano.indexino.model.SourceFile file, int line);
+    method public static dev.sebastiano.indexino.model.SourceLocation of(dev.sebastiano.indexino.model.SourceFile file, int line, Integer? column, Integer? offset);
+    property public Integer? column;
+    property public dev.sebastiano.indexino.model.SourceFile file;
+    property public int line;
+    property public Integer? offset;
+    field public static final dev.sebastiano.indexino.model.SourceLocation.Companion Companion;
+  }
+
+  public static final class SourceLocation.Companion {
+    method public dev.sebastiano.indexino.model.SourceLocation of(dev.sebastiano.indexino.model.SourceFile file, int line);
+    method public dev.sebastiano.indexino.model.SourceLocation of(dev.sebastiano.indexino.model.SourceFile file, int line, Integer? column, Integer? offset);
+  }
+
+  public final class SourceOriginId {
+    method @InaccessibleFromKotlin public String getValue();
+    method public static dev.sebastiano.indexino.model.SourceOriginId of(String value);
+    property public String value;
+    field public static final dev.sebastiano.indexino.model.SourceOriginId.Companion Companion;
+  }
+
+  public static final class SourceOriginId.Companion {
+    method public dev.sebastiano.indexino.model.SourceOriginId of(String value);
+  }
+
+  public final class SourceOriginRevision {
+    ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public SourceOriginRevision(dev.sebastiano.indexino.model.SourceOriginId originId, String? revision, String stateFingerprint, String? expectedRevision);
+    method @InaccessibleFromKotlin public String? getExpectedRevision();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceOriginId getOriginId();
+    method @InaccessibleFromKotlin public String? getRevision();
+    method @InaccessibleFromKotlin public String getStateFingerprint();
+    property public String? expectedRevision;
+    property public dev.sebastiano.indexino.model.SourceOriginId originId;
+    property public String? revision;
+    property public String stateFingerprint;
+  }
+
+  public final class SourceRange {
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceLocation getEnd();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceLocation getStart();
+    method public static dev.sebastiano.indexino.model.SourceRange of(dev.sebastiano.indexino.model.SourceLocation start, dev.sebastiano.indexino.model.SourceLocation end);
+    property public dev.sebastiano.indexino.model.SourceLocation end;
+    property public dev.sebastiano.indexino.model.SourceLocation start;
+    field public static final dev.sebastiano.indexino.model.SourceRange.Companion Companion;
+  }
+
+  public static final class SourceRange.Companion {
+    method public dev.sebastiano.indexino.model.SourceRange of(dev.sebastiano.indexino.model.SourceLocation start, dev.sebastiano.indexino.model.SourceLocation end);
+  }
+
+  public final class Symbol {
+    ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public Symbol(dev.sebastiano.indexino.model.SymbolId id, String name, String kind, String language, dev.sebastiano.indexino.model.SourceLocation location, dev.sebastiano.indexino.model.SourceRange? range, dev.sebastiano.indexino.model.SymbolId? ownerId, String? signature, Integer? arity, java.util.List<java.lang.String> aliases);
+    method @InaccessibleFromKotlin public java.util.List<java.lang.String> getAliases();
+    method @InaccessibleFromKotlin public Integer? getArity();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SymbolId getId();
+    method @InaccessibleFromKotlin public String getKind();
+    method @InaccessibleFromKotlin public String getLanguage();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceLocation getLocation();
+    method @InaccessibleFromKotlin public String getName();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SymbolId? getOwnerId();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceRange? getRange();
+    method @InaccessibleFromKotlin public String? getSignature();
+    property public java.util.List<java.lang.String> aliases;
+    property public Integer? arity;
+    property public dev.sebastiano.indexino.model.SymbolId id;
+    property public String kind;
+    property public String language;
+    property public dev.sebastiano.indexino.model.SourceLocation location;
+    property public String name;
+    property public dev.sebastiano.indexino.model.SymbolId? ownerId;
+    property public dev.sebastiano.indexino.model.SourceRange? range;
+    property public String? signature;
+  }
+
+  public final class SymbolId {
+    method @InaccessibleFromKotlin public String getValue();
+    method public static dev.sebastiano.indexino.model.SymbolId of(String value);
+    property public String value;
+    field public static final dev.sebastiano.indexino.model.SymbolId.Companion Companion;
+  }
+
+  public static final class SymbolId.Companion {
+    method public dev.sebastiano.indexino.model.SymbolId of(String value);
+  }
+
+  public final class SymbolQuery {
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceFile? getFile();
+    method @InaccessibleFromKotlin public String? getKind();
+    method @InaccessibleFromKotlin public String? getLanguage();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.NameMatchMode getMatch();
+    method @InaccessibleFromKotlin public String? getName();
+    method public static dev.sebastiano.indexino.model.SymbolQuery inFile(dev.sebastiano.indexino.model.SourceFile file);
+    method public static dev.sebastiano.indexino.model.SymbolQuery named(String name);
+    method public dev.sebastiano.indexino.model.SymbolQuery withKind(String kind);
+    method public dev.sebastiano.indexino.model.SymbolQuery withLanguage(String language);
+    method public dev.sebastiano.indexino.model.SymbolQuery withMatch(dev.sebastiano.indexino.model.NameMatchMode mode);
+    property public dev.sebastiano.indexino.model.SourceFile? file;
+    property public String? kind;
+    property public String? language;
+    property public dev.sebastiano.indexino.model.NameMatchMode match;
+    property public String? name;
+    field public static final dev.sebastiano.indexino.model.SymbolQuery.Companion Companion;
+  }
+
+  public static final class SymbolQuery.Companion {
+    method public dev.sebastiano.indexino.model.SymbolQuery inFile(dev.sebastiano.indexino.model.SourceFile file);
+    method public dev.sebastiano.indexino.model.SymbolQuery named(String name);
+  }
+
+  public final class WorkspaceGenerationId {
+    method @InaccessibleFromKotlin public String getValue();
+    method public static dev.sebastiano.indexino.model.WorkspaceGenerationId of(String value);
+    property public String value;
+    field public static final dev.sebastiano.indexino.model.WorkspaceGenerationId.Companion Companion;
+  }
+
+  public static final class WorkspaceGenerationId.Companion {
+    method public dev.sebastiano.indexino.model.WorkspaceGenerationId of(String value);
+  }
+
+  public final class WorkspaceRevision {
+    ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public WorkspaceRevision(String fingerprint, java.util.List<dev.sebastiano.indexino.model.SourceOriginRevision> origins);
+    method @InaccessibleFromKotlin public String getFingerprint();
+    method @InaccessibleFromKotlin public java.util.List<dev.sebastiano.indexino.model.SourceOriginRevision> getOrigins();
+    property public String fingerprint;
+    property public java.util.List<dev.sebastiano.indexino.model.SourceOriginRevision> origins;
+  }
+
+}
+

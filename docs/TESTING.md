@@ -26,13 +26,17 @@ ordinary unit-test task:
 ./gradlew sha256NativeDistributionMacArm64    # checksum final native ZIP (target variants exist)
 ```
 
-Until the multi-artifact public API lands, KGP ABI validation may still trip on accidental
-`public` declarations. The **target** stack (S1+) is Metalava signature lineage + detekt
-declaration rules + forward consumer fixtures in `./gradlew check`. Cross-version linkage against
-the previously published artifact runs at **release time only**. See
+The public API stack is Metalava signature lineage + detekt declaration rules + forward consumer
+fixtures. Cross-version linkage against the previously published artifact runs at **release time
+only**. See
 [API-STABILITY.md](API-STABILITY.md) and [PUBLIC-API-DESIGN.html](PUBLIC-API-DESIGN.html).
 
-Never update Metalava dumps (or a transitional KGP baseline) merely to make CI green.
+The Maven-coordinate forward fixture runs under `verifyMavenPublication`, not the unit-test portion
+of `check`, because it publishes to an isolated Maven Local repository and launches an external
+Gradle consumer. CI and the pre-merge gate run `check verifyMavenPublication` together.
+
+Never update Metalava dumps merely to make CI green. Move a reviewed dump only through
+`metalavaUpdateSignature` (or the corresponding artifact-qualified task).
 
 `verifyShrunkCli` runs only CLI behavior through `shrunkCliJar`; the unshrunk JAR is retained as a
 size baseline and diagnostic fallback. The fixture must exercise Kotlin, Java, Android XML, Xodus,

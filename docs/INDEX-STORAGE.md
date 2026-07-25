@@ -47,6 +47,7 @@ worktree for product storage.
     current                            # atomic pointer
     refs/<runtime-or-snapshot-id>
     change-journal
+    legacy-store/                      # S1 bridge to commit-addressed Xodus; removed in S2
   registry/workspaces.json             # path → fs identity, generations, last-used
   registry/tombstones/
   runtime/<workspace-id>.sock          # AF_UNIX (all platforms)
@@ -65,6 +66,8 @@ doc). Payload values use the durable `PluginFactValue` model in `indexino-model`
 
 ### Workspace identity
 
+- `<workspace-id>` is the first 16 hexadecimal characters of SHA-256 over the canonical workspace
+  path. The fixed 64-bit identifier keeps the S6 runtime socket below macOS's 102-character budget.
 - **Not** “one Git commit = one store directory”.
 - A workspace generation is a **composite** manifest pinning topology + origin shards + link
   generation (public types are composite even when the first engine is one-shard).
@@ -119,9 +122,11 @@ last-used in the registry (not filesystem `atime`). GC grace window + re-verify 
 
 ## Transitional implementation note
 
-Until S2 lands the pack layout, production code may still open a temporary store for tests. Do
-**not** document or extend `<project>/.indexino/index/<commit>/` as the product contract. New
-features must assume user-local composite storage.
+S1 opens the existing commit-addressed Xodus layout beneath
+`workspaces/<workspace-id>/legacy-store/`. This is a user-local production bridge, not the product
+layout and not a temporary test store. S2 removes `legacy-store` when generation manifests and packs
+land. Do **not** extend `<project>/.indexino/index/<commit>/`; new features must assume user-local
+composite storage.
 
 ## Deprecated / rejected paths
 

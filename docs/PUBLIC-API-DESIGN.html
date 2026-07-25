@@ -1157,9 +1157,10 @@ ref = "&lt;release-tag-or-commit&gt;"</code></pre>
         <div class="decision">
           <strong>Mandatory structural equality.</strong>
           Every public value, request, query, and result type declares <code>equals</code>,
-          <code>hashCode</code>, and <code>toString</code> (shown in the listing and signature dumps). Enforced by
-          detekt (package-scoped, opt-out for reference types: <code>Indexino</code>,
-          <code>IndexSnapshot</code>, <code>RefreshHandle</code>). Without this, refresh deduplication and
+          <code>hashCode</code>, and <code>toString</code> (shown in the listing; Metalava omits
+          <code>java.lang.Object</code> overrides from signature dumps). Enforced by detekt
+          (package-scoped, opt-out for reference types: <code>Indexino</code>,
+          <code>IndexSnapshot</code>, <code>RefreshHandle</code>, <code>IndexinoException</code>). Without this, refresh deduplication and
           <code>Set</code>/<code>Map</code> usage silently break.
         </div>
         <p>
@@ -1753,8 +1754,8 @@ host.abi.major == plugin.targetAbi.major</code></pre>
           <table>
             <thead><tr><th>Module / package</th><th>Status</th><th>Contents</th></tr></thead>
             <tbody>
-              <tr><td><code>indexino-model</code><br><code>dev.sebastiano.indexino.model</code></td><td class="yes">Public, shared</td><td>IDs (<code>PluginId</code>, <code>SymbolId</code>, <code>CallSiteId</code>, …), <code>SourceFile</code>/<code>SourceRange</code>/<code>SourceLocation</code>, <code>QueryPage</code>/<code>QueryOptions</code>, <code>Finding</code>, <code>BasicFactSchemaVersion</code>, shared failure/diagnostic primitives. No engine, no SPI contributions.</td></tr>
-              <tr><td><code>indexino</code><br><code>dev.sebastiano.indexino.api</code></td><td class="yes">Public, supported</td><td>Workspace client, durable refresh handles/events, snapshots, basic symbol/reference/call facts (resources from S10), status, diagnostics, generic check routing. Depends on <code>indexino-model</code>. Engine as implementation bytecode; Metalava surface is public packages only.</td></tr>
+              <tr><td><code>indexino-model</code><br><code>dev.sebastiano.indexino.model</code></td><td class="yes">Public, shared</td><td>IDs (<code>PluginId</code>, <code>SymbolId</code>, <code>CallSiteId</code>, …), <code>SourceFile</code>/<code>SourceRange</code>/<code>SourceLocation</code>, symbol/reference/call query and fact DTOs, <code>QueryPage</code>/<code>QueryOptions</code>, <code>Finding</code>, <code>BasicFactSchemaVersion</code>, shared failure/diagnostic primitives. No engine, no SPI contributions.</td></tr>
+              <tr><td><code>indexino</code><br><code>dev.sebastiano.indexino.api</code></td><td class="yes">Public, supported</td><td>Workspace client, durable refresh handles/events, snapshots and query implementations, status, diagnostics, generic check routing. Depends on <code>indexino-model</code>. Engine as implementation bytecode; Metalava surface is public packages only.</td></tr>
               <tr><td><code>indexino-plugin-api</code><br><code>dev.sebastiano.indexino.plugin.api</code></td><td class="yes">Public, separately versioned</td><td>Provider, registrar, descriptors, versioned contributions, host-owned contexts (public ctors + <code>@IndexinoInternalApi</code>), namespaced fact interfaces, test kit. Depends on <code>indexino-model</code> only—not on <code>indexino</code>.</td></tr>
               <tr><td><code>indexino-selection-context</code><br><code>dev.sebastiano.indexino.plugin.selection</code></td><td class="yes">Reference compiled plugin</td><td>Selection facts, checks, typed convenience query API, service provider metadata.</td></tr>
               <tr><td><code>indexino-script-host</code><br><code>dev.sebastiano.indexino.script</code></td><td class="conditional">Optional JVM-only Alpha</td><td>Custom <code>.indexino.kts</code> definition, compiler/cache, read-only non-suspend DSL, locked dependency policy.</td></tr>
@@ -2069,7 +2070,73 @@ host.abi.major == plugin.targetAbi.major</code></pre>
     <span class="kw">override fun</span> hashCode(): Int { … }
     <span class="kw">override fun</span> toString(): String { … }
 }
-<span class="cm">// Same shape: SymbolId, CallSiteId, RefreshId, SourceOriginId, WorkspaceGenerationId.</span>
+<span class="kw">public class</span> <span class="ty">SymbolId</span> <span class="kw">private constructor</span>(<span class="kw">public val</span> value: String) {
+    <span class="kw">public companion object</span> {
+        @JvmStatic <span class="kw">public fun</span> of(value: String): SymbolId { … } <span class="cm">// validates non-blank</span>
+    }
+    <span class="cm">/* equals/hashCode/toString */</span>
+}
+
+<span class="kw">public class</span> <span class="ty">RefreshId</span> <span class="kw">private constructor</span>(<span class="kw">public val</span> value: String) {
+    <span class="kw">public companion object</span> {
+        @JvmStatic <span class="kw">public fun</span> of(value: String): RefreshId { … } <span class="cm">// validates non-blank</span>
+    }
+    <span class="cm">/* equals/hashCode/toString */</span>
+}
+
+<span class="kw">public class</span> <span class="ty">SourceOriginId</span> <span class="kw">private constructor</span>(<span class="kw">public val</span> value: String) {
+    <span class="kw">public companion object</span> {
+        @JvmStatic <span class="kw">public fun</span> of(value: String): SourceOriginId { … } <span class="cm">// validates non-blank</span>
+    }
+    <span class="cm">/* equals/hashCode/toString */</span>
+}
+
+<span class="kw">public class</span> <span class="ty">WorkspaceGenerationId</span> <span class="kw">private constructor</span>(<span class="kw">public val</span> value: String) {
+    <span class="kw">public companion object</span> {
+        @JvmStatic <span class="kw">public fun</span> of(value: String): WorkspaceGenerationId { … } <span class="cm">// validates non-blank</span>
+    }
+    <span class="cm">/* equals/hashCode/toString */</span>
+}
+<span class="cm">// CallSiteId uses the same shape when it lands in S2.</span>
+
+<span class="kw">public class</span> <span class="ty">SourceOriginRevision</span> @IndexinoInternalApi <span class="kw">public constructor</span>(
+    <span class="kw">public val</span> originId: SourceOriginId,
+    <span class="kw">public val</span> revision: String?,
+    <span class="kw">public val</span> stateFingerprint: String,
+    <span class="kw">public val</span> expectedRevision: String?,
+) { <span class="cm">/* equals/hashCode/toString */</span> }
+
+<span class="kw">public class</span> <span class="ty">WorkspaceRevision</span> @IndexinoInternalApi <span class="kw">public constructor</span>(
+    <span class="kw">public val</span> fingerprint: String,
+    <span class="kw">public val</span> origins: List&lt;SourceOriginRevision&gt;, <span class="cm">// defensive copy, sorted by originId</span>
+) { <span class="cm">/* equals/hashCode/toString */</span> }
+
+<span class="kw">public class</span> <span class="ty">IndexFailureCategory</span> <span class="kw">private constructor</span>(
+    <span class="kw">public val</span> value: String,
+) {
+    <span class="kw">public companion object</span> {
+        <span class="cm">// @JvmField constants: INVALID_REQUEST, INDEX_NOT_FOUND, TOPOLOGY, STORAGE_BUSY,</span>
+        <span class="cm">// IO, PARSE, PLUGIN, SCRIPT, WORKSPACE_LOST, CLOSED, INTERNAL.</span>
+    }
+    <span class="cm">/* equals/hashCode/toString */</span>
+}
+
+<span class="kw">public class</span> <span class="ty">IndexFailure</span> <span class="kw">private constructor</span>(
+    <span class="kw">public val</span> category: IndexFailureCategory,
+    <span class="kw">public val</span> code: String,
+    <span class="kw">public val</span> message: String,
+    <span class="kw">public val</span> retryable: Boolean,
+) {
+    <span class="kw">public companion object</span> {
+        @IndexinoInternalApi @JvmStatic <span class="kw">public fun</span> of(
+            category: IndexFailureCategory,
+            code: String,
+            message: String,
+            retryable: Boolean,
+        ): IndexFailure { … }
+    }
+    <span class="cm">/* equals/hashCode/toString; throwable remains on IndexinoException.cause */</span>
+}
 
 <span class="kw">public class</span> <span class="ty">BasicFactSchemaVersion</span> <span class="kw">private constructor</span>(
     <span class="kw">public val</span> value: Int,
@@ -2262,6 +2329,15 @@ host.abi.major == plugin.targetAbi.major</code></pre>
     <span class="cm">/* equals/hashCode/toString */</span>
 }
 
+<span class="cm">// Engine-produced argument classification. Constant class, not enum.</span>
+<span class="kw">public class</span> <span class="ty">ArgumentKind</span> <span class="kw">private constructor</span>(<span class="kw">public val</span> value: String) {
+    <span class="kw">public companion object</span> {
+        @JvmField <span class="kw">public val</span> VALUE: ArgumentKind
+        @JvmField <span class="kw">public val</span> LAMBDA: ArgumentKind
+        @JvmField <span class="kw">public val</span> TRAILING_LAMBDA: ArgumentKind
+    }
+}
+
 <span class="kw">package</span> dev.sebastiano.indexino.api
 
 <span class="kw">public class</span> <span class="ty">Indexino</span> <span class="kw">private constructor</span>() : AutoCloseable {
@@ -2353,8 +2429,16 @@ host.abi.major == plugin.targetAbi.major</code></pre>
     <span class="kw">public val</span> changes: IndexChanges,
 ) { <span class="cm">/* equals/hashCode/toString */</span> }
 
-<span class="kw">public class</span> <span class="ty">RefreshHandle</span> @IndexinoInternalApi <span class="kw">public constructor</span>() {
-    <span class="kw">public val</span> id: RefreshId
+<span class="kw">public class</span> <span class="ty">IndexChanges</span> @IndexinoInternalApi <span class="kw">public constructor</span>(
+    <span class="kw">public val</span> changedFileCount: Int,
+    <span class="kw">public val</span> unchangedFileCount: Int,
+    <span class="kw">public val</span> removedFileCount: Int,
+) { <span class="cm">/* equals/hashCode/toString */</span> }
+
+<span class="kw">public class</span> <span class="ty">RefreshHandle</span> @IndexinoInternalApi <span class="kw">public constructor</span>(
+    <span class="kw">public val</span> id: RefreshId,
+    result: RefreshResult,
+) {
     <span class="kw">public suspend fun</span> await(): RefreshResult { … }
 
     <span class="cm">// S3 adds events() and stop(). S1 ships await-only: the slice is manual-refresh,</span>
@@ -2368,14 +2452,6 @@ host.abi.major == plugin.targetAbi.major</code></pre>
         @JvmField <span class="kw">public val</span> CURRENT: SnapshotFreshness
         @JvmField <span class="kw">public val</span> DIRTY: SnapshotFreshness
         @JvmField <span class="kw">public val</span> UNKNOWN: SnapshotFreshness
-    }
-}
-
-<span class="kw">public class</span> <span class="ty">ArgumentKind</span> <span class="kw">private constructor</span>(<span class="kw">public val</span> value: String) {
-    <span class="kw">public companion object</span> {
-        @JvmField <span class="kw">public val</span> VALUE: ArgumentKind
-        @JvmField <span class="kw">public val</span> LAMBDA: ArgumentKind
-        @JvmField <span class="kw">public val</span> TRAILING_LAMBDA: ArgumentKind
     }
 }
 
@@ -2397,6 +2473,8 @@ host.abi.major == plugin.targetAbi.major</code></pre>
     <span class="kw">public val</span> failure: IndexFailure,
     cause: Throwable?,
 ) : RuntimeException(failure.message, cause)
+
+<span class="kw">package</span> dev.sebastiano.indexino.model
 
 <span class="kw">public class</span> <span class="ty">SymbolQuery</span> <span class="kw">private constructor</span>(…) {
     <span class="kw">public companion object</span> {
@@ -2470,6 +2548,8 @@ host.abi.major == plugin.targetAbi.major</code></pre>
     <span class="kw">public val</span> arguments: List&lt;CallArgument&gt;,
     <span class="kw">public val</span> confidence: ResolutionConfidence,
 ) { <span class="cm">/* equals/hashCode/toString */</span> }
+
+<span class="kw">package</span> dev.sebastiano.indexino.api
 
 <span class="kw">public class</span> <span class="ty">IndexSnapshot</span> <span class="kw">private constructor</span>() :
     AutoCloseable, BasicFactQueries {
@@ -2627,6 +2707,7 @@ host.abi.major == plugin.targetAbi.major</code></pre>
         <div class="code-block">
           <div class="code-label">Kotlin · progress collection</div>
           <pre><code><span class="kw">import</span> dev.sebastiano.indexino.api.*
+<span class="kw">import</span> dev.sebastiano.indexino.model.*
 <span class="kw">import</span> java.nio.file.Path
 <span class="kw">import</span> kotlinx.coroutines.flow.collect
 <span class="kw">import</span> kotlinx.coroutines.runBlocking
@@ -2636,7 +2717,7 @@ host.abi.major == plugin.targetAbi.major</code></pre>
         <span class="kw">val</span> scope = IndexScope.bazel(<span class="st">"//plugins/devkit/intellij.devkit.compose:compose"</span>)
             .includingDependencies()
         <span class="kw">val</span> request = RefreshRequest.forScope(scope)
-            .withPlugin(PluginId(<span class="st">"dev.sebastiano.selection-context"</span>))
+            .withPlugin(PluginId.of(<span class="st">"dev.sebastiano.selection-context"</span>))
         <span class="kw">val</span> refresh = indexino.refresh(request)
 
         refresh.events().collect { event -&gt;
@@ -2671,6 +2752,7 @@ host.abi.major == plugin.targetAbi.major</code></pre>
         <div class="code-block">
           <div class="code-label">Kotlin · session-independent refresh</div>
           <pre><code><span class="kw">import</span> dev.sebastiano.indexino.api.*
+<span class="kw">import</span> dev.sebastiano.indexino.model.*
 <span class="kw">import</span> java.nio.file.Path
 <span class="kw">import</span> kotlin.time.Duration.Companion.seconds
 <span class="kw">import</span> kotlinx.coroutines.cancelAndJoin
@@ -2711,6 +2793,7 @@ host.abi.major == plugin.targetAbi.major</code></pre>
         <div class="code-block">
           <div class="code-label">Kotlin · explicit stop</div>
           <pre><code><span class="kw">import</span> dev.sebastiano.indexino.api.*
+<span class="kw">import</span> dev.sebastiano.indexino.model.*
 <span class="kw">import</span> java.nio.file.Path
 <span class="kw">import</span> kotlinx.coroutines.runBlocking
 
@@ -2733,6 +2816,7 @@ host.abi.major == plugin.targetAbi.major</code></pre>
         <div class="code-block">
           <div class="code-label">Kotlin · core queries</div>
           <pre><code><span class="kw">import</span> dev.sebastiano.indexino.api.*
+<span class="kw">import</span> dev.sebastiano.indexino.model.*
 <span class="kw">import</span> java.nio.file.Path
 <span class="kw">import</span> kotlinx.coroutines.runBlocking
 
@@ -2762,6 +2846,7 @@ host.abi.major == plugin.targetAbi.major</code></pre>
         <div class="code-block">
           <div class="code-label">Kotlin · typed plugin wrapper</div>
           <pre><code><span class="kw">import</span> dev.sebastiano.indexino.api.*
+<span class="kw">import</span> dev.sebastiano.indexino.model.*
 <span class="kw">import</span> dev.sebastiano.indexino.plugin.selection.*
 <span class="kw">import</span> java.nio.file.Path
 <span class="kw">import</span> kotlinx.coroutines.runBlocking

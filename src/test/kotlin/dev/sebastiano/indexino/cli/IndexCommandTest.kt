@@ -153,7 +153,10 @@ class IndexCommandTest {
 
     private fun runGit(workspace: java.nio.file.Path, vararg args: String) {
         val process =
-            ProcessBuilder(*listOf("git", "-C", workspace.toString(), *args).toTypedArray())
+            ProcessBuilder(
+                    *listOf("git", "-C", workspace.toString(), "-c", "commit.gpgsign=false", *args)
+                        .toTypedArray()
+                )
                 .redirectErrorStream(true)
                 .start()
         val output = process.inputStream.bufferedReader().readText()

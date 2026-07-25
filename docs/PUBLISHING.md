@@ -8,11 +8,10 @@ publication.
 
 ## API publication state
 
-No version has been published and the current snapshot deliberately has no supported embedded API.
-All implementation declarations are Kotlin `internal` and strict explicit API mode is enabled.
-Until the multi-artifact API lands, an empty KGP ABI baseline may still trip on accidental
-`public` types; the **target** stack is Metalava signature dumps under `api/<artifact>/` plus
-consumer fixtures. See [API-STABILITY.md](API-STABILITY.md) and
+No version has been published. The current snapshot exposes the reviewed S1 API from
+`indexino-model` and `dev.sebastiano.indexino.api`; implementation packages remain unsupported.
+Metalava signature dumps under `api/<artifact>/`, detekt declaration rules, and external consumer
+fixtures enforce that boundary. See [API-STABILITY.md](API-STABILITY.md) and
 [PUBLIC-API-DESIGN.html](PUBLIC-API-DESIGN.html).
 
 The CLI remains executable from the Shadow and R8 artifacts. Presence of implementation bytecode

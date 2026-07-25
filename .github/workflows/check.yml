@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "25"
       - uses: gradle/actions/setup-gradle@v6
       - name: Run JVM, publication, consumer, and R8 checks
         run: ./gradlew check verifyMavenPublication verifyShrunkCli --no-daemon
@@ -30,7 +30,7 @@ jobs:
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "25"
       - uses: gradle/actions/setup-gradle@v6
       - name: Read immutable native input pins
         id: pins

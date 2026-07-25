@@ -53,6 +53,7 @@ shared storage and topology. Binding product design:
 | `engine` (internal) | Workspace runtime, refresh registry, coordinator, pack cache, GC |
 | `cli` (internal) | Clikt, daemon/cache commands, JSONL, exit codes |
 | `producer` / `topology` / `parse` / `core` (internal) | Analysis, Bazel/Gradle, PSI/Javac/StAX, keys |
+| `detekt-plugin` (build-only) | Enforces equality and no-data-class rules on public packages; targets JDK 17 so Gradle can load it while product artifacts target JDK 25 |
 
 Dependency direction (public):
 
@@ -67,11 +68,25 @@ script-host ──► indexino + model
 **Never** `indexino-plugin-api` → `indexino` or `indexino` → `api(indexino-plugin-api)` for shared
 types. Host constructs SPI contexts with public constructors annotated `@IndexinoInternalApi`.
 
+### S1 transitional boundaries
+
+The S1 in-process facade delegates refresh orchestration to internal `cli/IndexBuildRunner`. This is
+a tracer shortcut, not the target dependency direction. S3 extracts that orchestration into an
+internal `IndexingCoordinator` owned below both facade and CLI when the refresh registry lands; the
+CLI then becomes an adapter over the coordinator.
+
+The Maven Local `indexino` publication is dogfood-only until the S5 artifact split. Its generated
+library POM deliberately omits CLI-only Clikt, JNA, and `slf4j-nop`; Gradle Module Metadata is
+disabled for this publication so Gradle consumers resolve that stripped POM instead of the unfiltered
+`.module` graph. The fat CLI distribution still contains its runtime dependencies. S5 publishes
+separate thin library and CLI coordinates and replaces the no-op logging binding with the
+library-appropriate API dependency.
+
 ## Embedded API boundary
 
 Supported packages are only those listed in [API-STABILITY.md](API-STABILITY.md). Implementation
 remains `internal` until deliberately published. Target tooling: Metalava + detekt + consumer
-fixtures (KGP ABI may remain a transitional tripwire).
+fixtures.
 
 JDK floor for library artifacts: **25**.
 

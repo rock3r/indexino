@@ -37,3 +37,9 @@ naming:
   FunctionNaming:
     ignoreAnnotated:
       - "Test"
+
+indexino:
+  EqualityMembers:
+    active: true
+  NoDataClassesInPublicApi:
+    active: true

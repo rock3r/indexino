@@ -49,7 +49,10 @@ class MavenPublicationTest {
         val sourcesJar = requireArtifact("sources JAR", "$artifactStem-sources.jar")
         requireArtifact("javadoc JAR", "$artifactStem-javadoc.jar")
         val pomFile = requireArtifact("POM", "$artifactStem.pom")
-        val moduleFile = requireArtifact("Gradle module metadata", "$artifactStem.module")
+        assertTrue(
+            publishedFiles.none { it.name.endsWith(".module") },
+            "Dogfood S1 publication must not emit Gradle module metadata",
+        )
         assertEquals(
             setOf("$artifactStem.jar", "$artifactStem-sources.jar", "$artifactStem-javadoc.jar"),
             publishedFiles.filter { it.name.endsWith(".jar") }.map(File::getName).toSet(),
@@ -96,8 +99,7 @@ class MavenPublicationTest {
         )
 
         val pomText = pomFile.readText()
-        val moduleText = moduleFile.readText()
-        listOf(pomText, moduleText).forEach { metadata ->
+        listOf(pomText).forEach { metadata ->
             assertFalse(
                 metadata.contains("-shrunk.jar"),
                 "Shrunk JAR leaked into publication metadata",
@@ -110,13 +112,32 @@ class MavenPublicationTest {
     }
 
     @Test
-    fun `ordinary JVM 21 consumer resolves coordinates and launches the thin CLI`() {
+    fun `ordinary JVM 25 consumer resolves coordinates and loads the public facade`() {
         val repository = requiredProperty("indexino.publicationRepository").let(::File)
         val groupId = requiredProperty("indexino.publicationGroup")
         val artifactId = requiredProperty("indexino.publicationArtifact")
         val version = requiredProperty("indexino.publicationVersion")
         val consumer = tempDir.resolve("consumer").apply(File::mkdirs)
         consumer.resolve("settings.gradle.kts").writeText("rootProject.name = \"consumer\"\n")
+        consumer.resolve("src/main/java/consumer/Consumer.java").apply {
+            parentFile.mkdirs()
+            writeText(
+                """
+                package consumer;
+
+                import dev.sebastiano.indexino.api.IndexScope;
+
+                public final class Consumer {
+                    private Consumer() {}
+
+                    public static void main(String[] args) {
+                        System.out.println(IndexScope.gradle(":"));
+                    }
+                }
+                """
+                    .trimIndent()
+            )
+        }
         consumer
             .resolve("build.gradle.kts")
             .writeText(
@@ -133,15 +154,11 @@ class MavenPublicationTest {
             }
 
             java {
-                toolchain.languageVersion.set(JavaLanguageVersion.of(21))
+                toolchain.languageVersion.set(JavaLanguageVersion.of(25))
             }
 
             application {
-                mainClass.set("dev.sebastiano.indexino.cli.MainCommandKt")
-            }
-
-            tasks.named<JavaExec>("run") {
-                args("--help")
+                mainClass.set("consumer.Consumer")
             }
             """
                     .trimIndent()
@@ -154,7 +171,7 @@ class MavenPublicationTest {
                 .forwardOutput()
                 .build()
 
-        assertTrue(result.output.contains("indexino", ignoreCase = true), result.output)
+        assertTrue(result.output.contains("GRADLE"), result.output)
     }
 
     private fun requiredProperty(name: String): String =
