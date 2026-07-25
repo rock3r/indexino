@@ -83,6 +83,100 @@ class InProcessIndexinoTest {
     }
 
     @Test
+    fun `findSymbols does not expose resource definitions before S10`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-no-res-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        val indexino = Indexino.connectBlocking(workspace)
+        try {
+            runSuspend {
+                indexino.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui"))).await()
+            }
+            runSuspend { indexino.snapshot() }
+                .use { snapshot ->
+                    val resources = runSuspend {
+                        snapshot.findSymbols(
+                            SymbolQuery.named("main").withKind("resource"),
+                            QueryOptions.page(limit = 20),
+                        )
+                    }
+                    assertTrue(resources.items.isEmpty())
+                }
+        } finally {
+            indexino.close()
+            if (previousCacheDirectory == null) {
+                System.clearProperty("indexino.cache.dir")
+            } else {
+                System.setProperty("indexino.cache.dir", previousCacheDirectory)
+            }
+        }
+    }
+
+    @Test
+    fun `concurrent refreshes on one workspace both publish openable generations`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-lock-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        val clientA = Indexino.connectBlocking(workspace)
+        val clientB = Indexino.connectBlocking(workspace)
+        try {
+            val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+            val errors = mutableListOf<Throwable>()
+            val resultA = arrayOfNulls<RefreshResult>(1)
+            val resultB = arrayOfNulls<RefreshResult>(1)
+            val threadA = Thread {
+                runCatching { resultA[0] = runSuspend { clientA.refresh(request).await() } }
+                    .onFailure { errors += it }
+            }
+            val threadB = Thread {
+                runCatching { resultB[0] = runSuspend { clientB.refresh(request).await() } }
+                    .onFailure { errors += it }
+            }
+            threadA.start()
+            threadB.start()
+            threadA.join()
+            threadB.join()
+            assertTrue(errors.isEmpty(), errors.joinToString())
+            val first = requireNotNull(resultA[0])
+            val second = requireNotNull(resultB[0])
+            runSuspend { clientA.snapshot() }
+                .use { snapshot ->
+                    assertEquals(first.generation, snapshot.generation)
+                    val symbols = runSuspend {
+                        snapshot.findSymbols(
+                            SymbolQuery.named("ActionButton"),
+                            QueryOptions.page(limit = 1),
+                        )
+                    }
+                    assertEquals(1, symbols.items.size)
+                }
+            runSuspend { clientB.snapshot() }
+                .use { snapshot ->
+                    assertEquals(second.generation, snapshot.generation)
+                    val symbols = runSuspend {
+                        snapshot.findSymbols(
+                            SymbolQuery.named("ActionButton"),
+                            QueryOptions.page(limit = 1),
+                        )
+                    }
+                    assertEquals(1, symbols.items.size)
+                }
+        } finally {
+            clientA.close()
+            clientB.close()
+            if (previousCacheDirectory == null) {
+                System.clearProperty("indexino.cache.dir")
+            } else {
+                System.setProperty("indexino.cache.dir", previousCacheDirectory)
+            }
+        }
+    }
+
+    @Test
     fun `clients keep independent generation copies so reclaim cannot delete peers`() {
         val workspace = createGitWorkspace()
         val cacheDirectory = createTempDirectory("indexino-clients-cache-")

@@ -23,6 +23,7 @@ import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.HexFormat
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 public class Indexino private constructor(private val workspace: Path) : AutoCloseable {
@@ -35,6 +36,11 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
     private var published: PublishedGeneration? = null
 
     public companion object {
+        private val workspaceRefreshLocks = ConcurrentHashMap<Path, Any>()
+
+        private fun refreshLockFor(workspace: Path): Any =
+            workspaceRefreshLocks.computeIfAbsent(workspace) { Any() }
+
         @JvmStatic
         public suspend fun connect(workspace: Path): Indexino = connectBlocking(workspace)
 
@@ -69,60 +75,64 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                         )
                 }
             }
-        val execution =
-            IndexBuildRunner(
-                    project = workspace,
-                    topologyRequest = request.scope.toTopologyRequest(),
-                    applications = applications,
-                    bazelQueryExecutor = null,
-                    bazelProcessRunner = null,
-                    progress = {},
-                    machineProgress = null,
-                    storeRootOverride = storeRoot,
-                )
-                .runDetailed()
-        val manifest =
-            execution.manifest
-                ?: throw buildFailure(
-                    execution,
-                    "Refresh failed while resolving or indexing ${request.scope.value}",
-                )
-        val revision = manifest.toWorkspaceRevision()
-        val generation = manifest.toGenerationId(revision)
-        val generationStore = publishGenerationStore(manifest.commit, generation)
-        synchronized(generationLock) {
-            generationStores[generation] = generationStore
-            published =
-                PublishedGeneration(
-                    storePath = generationStore,
-                    revision = revision,
+        // Serialize in-process peers across run+copy so a shared commit writer cannot mutate while
+        // another client copies it. Cross-process single-writer election remains S6.
+        synchronized(refreshLockFor(workspace)) {
+            val execution =
+                IndexBuildRunner(
+                        project = workspace,
+                        topologyRequest = request.scope.toTopologyRequest(),
+                        applications = applications,
+                        bazelQueryExecutor = null,
+                        bazelProcessRunner = null,
+                        progress = {},
+                        machineProgress = null,
+                        storeRootOverride = storeRoot,
+                    )
+                    .runDetailed()
+            val manifest =
+                execution.manifest
+                    ?: throw buildFailure(
+                        execution,
+                        "Refresh failed while resolving or indexing ${request.scope.value}",
+                    )
+            val revision = manifest.toWorkspaceRevision()
+            val generation = manifest.toGenerationId(revision)
+            val generationStore = publishGenerationStore(manifest.commit, generation)
+            synchronized(generationLock) {
+                generationStores[generation] = generationStore
+                published =
+                    PublishedGeneration(
+                        storePath = generationStore,
+                        revision = revision,
+                        generation = generation,
+                    )
+                reclaimUnpinnedGenerations()
+            }
+            val changedFileCount = execution.changes?.changedFiles?.size ?: 0
+            val removedFileCount = execution.changes?.deletedFiles?.size ?: 0
+            val result =
+                RefreshResult(
+                    refreshId = refreshId,
+                    outcome =
+                        if (execution.reusedFreshIndex) {
+                            RefreshOutcome.UNCHANGED
+                        } else {
+                            RefreshOutcome.UPDATED
+                        },
                     generation = generation,
+                    revision = revision,
+                    scope = request.scope,
+                    changes =
+                        IndexChanges(
+                            changedFileCount = changedFileCount,
+                            unchangedFileCount =
+                                (manifest.sourceFileCount - changedFileCount).coerceAtLeast(0),
+                            removedFileCount = removedFileCount,
+                        ),
                 )
-            reclaimUnpinnedGenerations()
+            return RefreshHandle(refreshId, result)
         }
-        val changedFileCount = execution.changes?.changedFiles?.size ?: 0
-        val removedFileCount = execution.changes?.deletedFiles?.size ?: 0
-        val result =
-            RefreshResult(
-                refreshId = refreshId,
-                outcome =
-                    if (execution.reusedFreshIndex) {
-                        RefreshOutcome.UNCHANGED
-                    } else {
-                        RefreshOutcome.UPDATED
-                    },
-                generation = generation,
-                revision = revision,
-                scope = request.scope,
-                changes =
-                    IndexChanges(
-                        changedFileCount = changedFileCount,
-                        unchangedFileCount =
-                            (manifest.sourceFileCount - changedFileCount).coerceAtLeast(0),
-                        removedFileCount = removedFileCount,
-                    ),
-            )
-        return RefreshHandle(refreshId, result)
     }
 
     public suspend fun snapshot(): IndexSnapshot {

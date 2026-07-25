@@ -132,11 +132,9 @@ private constructor(
     }
 
     private fun symbolRecords(): List<SymbolRecord> =
-        sequenceOf("sym:", "res:")
-            .flatMap(store::prefixScan)
-            .map { it.second }
-            .filterIsInstance<SymbolRecord>()
-            .toList()
+        // Resource definitions stay in producer storage for the CLI, but the embedded API must not
+        // expose them through Symbol queries before the S10 resource model lands.
+        store.prefixScan("sym:").map { it.second }.filterIsInstance<SymbolRecord>().toList()
 
     @OptIn(IndexinoInternalApi::class)
     private fun <T> List<T>.page(options: QueryOptions): QueryPage<T> {
