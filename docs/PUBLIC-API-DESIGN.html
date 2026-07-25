@@ -2199,7 +2199,7 @@ host.abi.major == plugin.targetAbi.major</code></pre>
     <span class="kw">override fun</span> toString(): String { … }
 }
 
-<span class="kw">public class</span> <span class="ty">QueryPage</span>&lt;T&gt; <span class="kw">private constructor</span>(
+<span class="kw">public class</span> <span class="ty">QueryPage</span>&lt;T&gt; @IndexinoInternalApi <span class="kw">public constructor</span>(
     <span class="kw">public val</span> items: List&lt;T&gt;,
     <span class="kw">public val</span> offset: Int,
     <span class="kw">public val</span> limit: Int,
@@ -2208,7 +2208,7 @@ host.abi.major == plugin.targetAbi.major</code></pre>
     <span class="kw">public val</span> totalCount: Int?,
 ) { <span class="cm">/* equals/hashCode/toString */</span> }
 
-<span class="kw">public class</span> <span class="ty">Finding</span> <span class="kw">private constructor</span>(
+<span class="kw">public class</span> <span class="ty">Finding</span> @IndexinoInternalApi <span class="kw">public constructor</span>(
     <span class="kw">public val</span> plugin: PluginId,
     <span class="kw">public val</span> checkId: String,
     <span class="kw">public val</span> message: String,
@@ -2216,17 +2216,51 @@ host.abi.major == plugin.targetAbi.major</code></pre>
     <span class="kw">public val</span> properties: Map&lt;String, String&gt;,
 ) { <span class="cm">/* equals/hashCode/toString */</span> }
 
+<span class="cm">// Pure value types: public factories. Consumers legitimately construct these for</span>
+<span class="cm">// tests and queries, and a fabricated one is inert. Contrast the engine-produced</span>
+<span class="cm">// result types below, whose constructors are @IndexinoInternalApi.</span>
+<span class="kw">public class</span> <span class="ty">SourceFile</span> <span class="kw">private constructor</span>(
+    <span class="kw">public val</span> originId: SourceOriginId,
+    <span class="kw">public val</span> path: String, <span class="cm">// normalized, origin-relative; identity and lookup key</span>
+    <span class="kw">public val</span> displayPath: String, <span class="cm">// diagnostic text only; never an identity</span>
+) {
+    <span class="kw">public companion object</span> {
+        @JvmStatic <span class="kw">public fun</span> of(
+            originId: SourceOriginId,
+            path: String,
+            displayPath: String,
+        ): SourceFile { … }
+    }
+    <span class="cm">/* equals/hashCode/toString */</span>
+}
+
 <span class="kw">public class</span> <span class="ty">SourceLocation</span> <span class="kw">private constructor</span>(
     <span class="kw">public val</span> file: SourceFile,
     <span class="kw">public val</span> line: Int,
     <span class="kw">public val</span> column: Int?,
     <span class="kw">public val</span> offset: Int?, <span class="cm">// UTF-16 offset when known; nullable for legacy rows</span>
-) { <span class="cm">/* equals/hashCode/toString */</span> }
+) {
+    <span class="kw">public companion object</span> {
+        @JvmStatic <span class="kw">public fun</span> of(file: SourceFile, line: Int): SourceLocation { … }
+        @JvmStatic <span class="kw">public fun</span> of(
+            file: SourceFile,
+            line: Int,
+            column: Int?,
+            offset: Int?,
+        ): SourceLocation { … }
+    }
+    <span class="cm">/* equals/hashCode/toString */</span>
+}
 
 <span class="kw">public class</span> <span class="ty">SourceRange</span> <span class="kw">private constructor</span>(
     <span class="kw">public val</span> start: SourceLocation,
     <span class="kw">public val</span> end: SourceLocation,
-) { <span class="cm">/* equals/hashCode/toString */</span> }
+) {
+    <span class="kw">public companion object</span> {
+        @JvmStatic <span class="kw">public fun</span> of(start: SourceLocation, end: SourceLocation): SourceRange { … }
+    }
+    <span class="cm">/* equals/hashCode/toString */</span>
+}
 
 <span class="kw">package</span> dev.sebastiano.indexino.api
 
@@ -2307,6 +2341,28 @@ host.abi.major == plugin.targetAbi.major</code></pre>
     }
 }
 
+<span class="cm">// Engine-produced result. Constructed by the host across an artifact boundary, so the</span>
+<span class="cm">// constructor is public but opt-in gated: a cross-module `internal constructor` does</span>
+<span class="cm">// not compile, and a consumer fabricating a result is meaningless.</span>
+<span class="kw">public class</span> <span class="ty">RefreshResult</span> @IndexinoInternalApi <span class="kw">public constructor</span>(
+    <span class="kw">public val</span> refreshId: RefreshId,
+    <span class="kw">public val</span> outcome: RefreshOutcome,
+    <span class="kw">public val</span> generation: WorkspaceGenerationId,
+    <span class="kw">public val</span> revision: WorkspaceRevision,
+    <span class="kw">public val</span> scope: IndexScope,
+    <span class="kw">public val</span> changes: IndexChanges,
+) { <span class="cm">/* equals/hashCode/toString */</span> }
+
+<span class="kw">public class</span> <span class="ty">RefreshHandle</span> @IndexinoInternalApi <span class="kw">public constructor</span>() {
+    <span class="kw">public val</span> id: RefreshId
+    <span class="kw">public suspend fun</span> await(): RefreshResult { … }
+
+    <span class="cm">// S3 adds events() and stop(). S1 ships await-only: the slice is manual-refresh,</span>
+    <span class="cm">// and adding methods to a final class later is binary- and source-compatible.</span>
+    <span class="cm">// public fun events(): Flow&lt;RefreshEvent&gt;   // S3</span>
+    <span class="cm">// public suspend fun stop(): Unit           // S3</span>
+}
+
 <span class="kw">public class</span> <span class="ty">SnapshotFreshness</span> <span class="kw">private constructor</span>(<span class="kw">public val</span> value: String) {
     <span class="kw">public companion object</span> {
         @JvmField <span class="kw">public val</span> CURRENT: SnapshotFreshness
@@ -2323,7 +2379,7 @@ host.abi.major == plugin.targetAbi.major</code></pre>
     }
 }
 
-<span class="kw">public class</span> <span class="ty">IndexStatus</span> <span class="kw">private constructor</span>(
+<span class="kw">public class</span> <span class="ty">IndexStatus</span> @IndexinoInternalApi <span class="kw">public constructor</span>(
     <span class="kw">public val</span> generation: WorkspaceGenerationId?,
     <span class="kw">public val</span> revision: WorkspaceRevision?,
     <span class="kw">public val</span> scope: IndexScope?,
@@ -2372,7 +2428,7 @@ host.abi.major == plugin.targetAbi.major</code></pre>
     <span class="cm">/* equals/hashCode/toString */</span>
 }
 
-<span class="kw">public class</span> <span class="ty">Symbol</span> <span class="kw">private constructor</span>(
+<span class="kw">public class</span> <span class="ty">Symbol</span> @IndexinoInternalApi <span class="kw">public constructor</span>(
     <span class="kw">public val</span> id: SymbolId,
     <span class="kw">public val</span> name: String,
     <span class="kw">public val</span> kind: String,
@@ -2385,7 +2441,7 @@ host.abi.major == plugin.targetAbi.major</code></pre>
     <span class="kw">public val</span> aliases: List&lt;String&gt;,
 ) { <span class="cm">/* equals/hashCode/toString */</span> }
 
-<span class="kw">public class</span> <span class="ty">Reference</span> <span class="kw">private constructor</span>(
+<span class="kw">public class</span> <span class="ty">Reference</span> @IndexinoInternalApi <span class="kw">public constructor</span>(
     <span class="kw">public val</span> symbolId: SymbolId,
     <span class="kw">public val</span> referencedName: String,
     <span class="kw">public val</span> language: String,
@@ -2395,7 +2451,7 @@ host.abi.major == plugin.targetAbi.major</code></pre>
     <span class="kw">public val</span> arity: Int?,
 ) { <span class="cm">/* equals/hashCode/toString */</span> }
 
-<span class="kw">public class</span> <span class="ty">CallArgument</span> <span class="kw">private constructor</span>(
+<span class="kw">public class</span> <span class="ty">CallArgument</span> @IndexinoInternalApi <span class="kw">public constructor</span>(
     <span class="kw">public val</span> position: Int,
     <span class="kw">public val</span> resolvedName: String?,
     <span class="kw">public val</span> kind: ArgumentKind,
@@ -2403,7 +2459,7 @@ host.abi.major == plugin.targetAbi.major</code></pre>
     <span class="kw">public val</span> nestedCallIds: List&lt;CallSiteId&gt;,
 ) { <span class="cm">/* equals/hashCode/toString */</span> }
 
-<span class="kw">public class</span> <span class="ty">CallSite</span> <span class="kw">private constructor</span>(
+<span class="kw">public class</span> <span class="ty">CallSite</span> @IndexinoInternalApi <span class="kw">public constructor</span>(
     <span class="kw">public val</span> id: CallSiteId,
     <span class="kw">public val</span> calleeName: String,
     <span class="kw">public val</span> candidateSymbolIds: List&lt;SymbolId&gt;,
