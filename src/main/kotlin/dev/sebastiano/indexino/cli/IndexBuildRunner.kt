@@ -33,6 +33,7 @@ internal class IndexBuildRunner(
     private val storeRootOverride: Path? = null,
 ) {
     private var latestChanges: SourceChangeSet? = null
+    private var latestManifest: IndexManifest? = null
     private var reusedFreshIndex: Boolean = false
 
     fun runDetailed(): IndexBuildExecution {
@@ -40,11 +41,10 @@ internal class IndexBuildRunner(
         if (exitCode != CliExitCodes.SUCCESS) {
             return IndexBuildExecution(exitCode, null, null, reusedFreshIndex)
         }
-        val commit = GitHeadResolver.resolve(project)
-        val resolver = IndexPathResolver(project, storeRootOverride = storeRootOverride)
         return IndexBuildExecution(
             exitCode = exitCode,
-            manifest = ManifestIO.read(resolver.resolveManifest(commit)),
+            manifest =
+                checkNotNull(latestManifest) { "Successful index run did not produce a manifest" },
             changes = latestChanges,
             reusedFreshIndex = reusedFreshIndex,
         )
@@ -52,6 +52,7 @@ internal class IndexBuildRunner(
 
     fun run(): Int {
         latestChanges = null
+        latestManifest = null
         reusedFreshIndex = false
         val topologyResult =
             TopologyResolver.resolve(
@@ -82,6 +83,7 @@ internal class IndexBuildRunner(
             )
         val existingManifest = manifestPath.takeIf { it.exists() }?.let(ManifestIO::read)
         if (existingManifest != null && ManifestFreshness.isFresh(existingManifest, criteria)) {
+            latestManifest = existingManifest
             reusedFreshIndex = true
             progress("index fresh for ${topologyResult.scope} @ $commit — skip rebuild")
             machineProgress?.completed("fresh")
@@ -150,8 +152,7 @@ internal class IndexBuildRunner(
                 producer.produce(context.copy(activePhase = producer.id), store)
                 machineProgress?.phaseCompleted(producer.id, phaseTotal)
             }
-            ManifestIO.write(
-                resolver.resolveManifest(commit),
+            val manifest =
                 IndexManifest(
                     commit = commit,
                     indexerVersion = Version.NAME,
@@ -162,8 +163,9 @@ internal class IndexBuildRunner(
                     sourcesContentHash = previewHash,
                     builtAt = Instant.now().toString(),
                     applications = applications,
-                ),
-            )
+                )
+            ManifestIO.write(resolver.resolveManifest(commit), manifest)
+            latestManifest = manifest
         } finally {
             store.close()
         }

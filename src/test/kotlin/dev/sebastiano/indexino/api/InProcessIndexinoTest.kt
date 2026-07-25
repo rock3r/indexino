@@ -101,6 +101,15 @@ class InProcessIndexinoTest {
         assertTrue(firstSymbols.hasMore)
         val cursor = requireNotNull(firstSymbols.nextCursor)
         assertTrue(cursor.startsWith("indexino:v1:"))
+        val overflowSafeSymbols = runSuspend {
+            snapshot.findSymbols(
+                SymbolQuery.inFile(sourceFile),
+                QueryOptions.page(limit = Int.MAX_VALUE, offset = 1),
+            )
+        }
+        assertEquals(checkNotNull(firstSymbols.totalCount) - 1, overflowSafeSymbols.items.size)
+        assertFalse(overflowSafeSymbols.hasMore)
+        assertEquals(null, overflowSafeSymbols.nextCursor)
 
         val remainingSymbols = runSuspend {
             snapshot.findSymbols(

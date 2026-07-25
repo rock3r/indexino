@@ -178,7 +178,7 @@ private constructor(
                 }
                 decoded.toInt()
             } ?: options.offset
-        val end = (offset + options.limit).coerceAtMost(size)
+        val end = (offset.toLong() + options.limit).coerceAtMost(size.toLong()).toInt()
         val items = if (offset >= size) emptyList() else subList(offset, end)
         val hasMore = end < size
         return QueryPage(
