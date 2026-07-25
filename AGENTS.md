@@ -2,32 +2,36 @@
 
 ## Project Overview
 
-**indexino** is a standalone Kotlin CLI that builds a **persistent** local code index
-(Xodus under `<workspace>/.indexino/index/<commit>/`) for agent audit tools. It is
-Detekt-independent, Bazel-first (Gradle secondary), and ships as a fat compatibility JAR with no
-target-repo build coupling. A separate R8 JAR is the internal native-distribution input.
+**indexino** is a standalone Kotlin CLI and embeddable library that builds a **persistent** local
+code index for agent audit tools. Product storage is a **user-local content-addressed cache** (not
+under the worktree). It is Detekt-independent, Bazel-first (Gradle secondary), and ships as a fat
+compatibility JAR with no target-repo build coupling. A separate R8 JAR is the internal
+native-distribution input.
 
-**selection-context** is the **first application plugin**: precomputed SelectionContainer /
-DisableSelection facts at composable call sites for Compose/Jewel audits — replacing token-heavy
-manual file reading.
+**selection-context** is the **first compiled plugin**: precomputed SelectionContainer /
+DisableSelection facts for Compose/Jewel audits — replacing token-heavy manual file reading.
+
+**Binding product contract:** [docs/PUBLIC-API-DESIGN.html](docs/PUBLIC-API-DESIGN.html)
+(Accepted 2026-07-25). Older plan notes under `.plans/` that describe in-worktree commit stores or
+a cold `Flow` indexing API are **historical** unless marked current.
 
 ## Source of Truth Docs
 
 | Document | Use it for |
 |----------|------------|
-| [.plans/HANDOFF.md](.plans/HANDOFF.md) | **New session start** — read first |
-| [.plans/kotlin-code-index-core.md](.plans/kotlin-code-index-core.md) | Persistent index platform, Xodus, producers |
-| [.plans/application-selection-context.md](.plans/application-selection-context.md) | First application (SelectionContainer) |
-| [.plans/master-plan.md](.plans/master-plan.md) | Phased delivery (Core C* / App A*) |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layer map, dependency direction |
-| [docs/INDEX-STORAGE.md](docs/INDEX-STORAGE.md) | `.indexino/` layout, key namespaces |
-| [docs/BAZEL-TOPOLOGY.md](docs/BAZEL-TOPOLOGY.md) | Bazel target closure, `.bazelproject` |
-| [docs/GRADLE-TOPOLOGY.md](docs/GRADLE-TOPOLOGY.md) | Gradle backend (phase G) |
-| [docs/CLI.md](docs/CLI.md) | Commands, flags, JSONL output schema |
-| [docs/PUBLISHING.md](docs/PUBLISHING.md) | Maven Central coordinates and release flow |
-| [docs/API-STABILITY.md](docs/API-STABILITY.md) | Public API boundary, ABI baseline, SemVer policy |
+| [.plans/HANDOFF.md](.plans/HANDOFF.md) | **New session start** — read first (S-slices + pointers) |
+| [docs/PUBLIC-API-DESIGN.html](docs/PUBLIC-API-DESIGN.html) | **Accepted 2026-07-25** platform contract, SPI, tracer slices S0–S11 |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layer map, artifacts, runtime, dependency direction |
+| [docs/INDEX-STORAGE.md](docs/INDEX-STORAGE.md) | User-local cache layout, packs, GC |
+| [docs/API-STABILITY.md](docs/API-STABILITY.md) | Public packages, Metalava/detekt policy |
+| [docs/CLI.md](docs/CLI.md) | Commands, daemon/cache, JSONL, exit codes |
+| [docs/CONVENTIONS.md](docs/CONVENTIONS.md) | File/module placement, public API rules |
 | [docs/TESTING.md](docs/TESTING.md) | TDD flow, fixture layout |
-| [docs/CONVENTIONS.md](docs/CONVENTIONS.md) | File placement, style, git workflow |
+| [docs/BAZEL-TOPOLOGY.md](docs/BAZEL-TOPOLOGY.md) | Bazel target closure, `.bazelproject` |
+| [docs/GRADLE-TOPOLOGY.md](docs/GRADLE-TOPOLOGY.md) | Gradle backend |
+| [docs/PUBLISHING.md](docs/PUBLISHING.md) | Maven Central coordinates and release flow |
+| [.plans/application-selection-context.md](.plans/application-selection-context.md) | Selection-context domain notes |
+| [.plans/master-plan.md](.plans/master-plan.md) | Historical C*/A* delivery (superseded for *new* work by S-slices) |
 
 ## Non-Negotiables
 
@@ -36,13 +40,17 @@ manual file reading.
 Before writing or modifying production code, read these docs in full for every session:
 
 1. [.plans/HANDOFF.md](.plans/HANDOFF.md) (if new to the repo)
-2. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-3. [docs/INDEX-STORAGE.md](docs/INDEX-STORAGE.md)
-4. [docs/CONVENTIONS.md](docs/CONVENTIONS.md)
-5. [docs/TESTING.md](docs/TESTING.md)
+2. [docs/PUBLIC-API-DESIGN.html](docs/PUBLIC-API-DESIGN.html) — **accepted contract**
+3. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+4. [docs/INDEX-STORAGE.md](docs/INDEX-STORAGE.md)
+5. [docs/CONVENTIONS.md](docs/CONVENTIONS.md)
+6. [docs/TESTING.md](docs/TESTING.md)
 
 If the task touches Bazel topology or CLI contracts, also read
 [docs/BAZEL-TOPOLOGY.md](docs/BAZEL-TOPOLOGY.md) and/or [docs/CLI.md](docs/CLI.md).
+
+If a plan under `.plans/` conflicts with PUBLIC-API-DESIGN.html or INDEX-STORAGE.md, **follow the
+docs/** versions of the accepted design.
 
 ### TDD First
 
@@ -85,10 +93,13 @@ When a change touches a surface a doc describes, update the doc in the same sess
 
 ### Public API
 
-The committed ABI baseline is intentionally empty until the first embedded API is designed. Keep
-implementation declarations `internal` and strict explicit API mode enabled. Any public declaration
-requires an intentional `api/indexino.api` review and the compatibility analysis described in
-[docs/API-STABILITY.md](docs/API-STABILITY.md).
+Keep implementation declarations `internal` and strict explicit API mode enabled until a reviewed
+embedded API lands. The product boundary and tracer-bullet plan live in
+[docs/PUBLIC-API-DESIGN.html](docs/PUBLIC-API-DESIGN.html). Compatibility analysis is described in
+[docs/API-STABILITY.md](docs/API-STABILITY.md): **Metalava** signature dumps (not KGP
+`api/indexino.api` long-term), detekt equality/no-data-class rules, and consumer fixtures. Any new
+public declaration requires a reviewed Metalava diff and must not introduce public data classes or
+`@JvmInline` value classes.
 
 ## Actions Requiring Explicit User Approval
 

@@ -26,16 +26,13 @@ ordinary unit-test task:
 ./gradlew sha256NativeDistributionMacArm64    # checksum final native ZIP (target variants exist)
 ```
 
-Kotlin ABI validation is part of `./gradlew check`. Until the first embedded API is defined,
-`api/indexino.api` is intentionally empty and `checkKotlinAbi` fails on any accidental public
-declaration:
+Until the multi-artifact public API lands, KGP ABI validation may still trip on accidental
+`public` declarations. The **target** stack (S1+) is Metalava signature lineage + detekt
+declaration rules + forward consumer fixtures in `./gradlew check`. Cross-version linkage against
+the previously published artifact runs at **release time only**. See
+[API-STABILITY.md](API-STABILITY.md) and [PUBLIC-API-DESIGN.html](PUBLIC-API-DESIGN.html).
 
-```bash
-./gradlew checkKotlinAbi
-```
-
-Run `updateKotlinAbi` only when intentionally accepting a reviewed public API change; never use it
-as an automatic CI repair.
+Never update Metalava dumps (or a transitional KGP baseline) merely to make CI green.
 
 `verifyShrunkCli` runs only CLI behavior through `shrunkCliJar`; the unshrunk JAR is retained as a
 size baseline and diagnostic fallback. The fixture must exercise Kotlin, Java, Android XML, Xodus,
