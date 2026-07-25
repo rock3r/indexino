@@ -12,16 +12,11 @@ import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.QueryPage
 import dev.sebastiano.indexino.model.Reference
 import dev.sebastiano.indexino.model.ReferenceQuery
-import dev.sebastiano.indexino.model.SourceFile
-import dev.sebastiano.indexino.model.SourceLocation
 import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.Symbol
-import dev.sebastiano.indexino.model.SymbolId
 import dev.sebastiano.indexino.model.SymbolQuery
 import dev.sebastiano.indexino.model.WorkspaceGenerationId
 import dev.sebastiano.indexino.model.WorkspaceRevision
-import java.security.MessageDigest
-import java.util.HexFormat
 import java.util.concurrent.atomic.AtomicBoolean
 
 public class IndexSnapshot
@@ -33,10 +28,12 @@ private constructor(
     private val onClose: () -> Unit,
 ) : AutoCloseable {
     private val closed = AtomicBoolean()
+    private val queries = IndexSnapshotQueries(generation)
 
     public suspend fun findSymbols(query: SymbolQuery, options: QueryOptions): QueryPage<Symbol> {
         ensureOpen()
         val symbols = symbolRecords()
+        val symbolsByName = queries.indexSymbolsByName(symbols)
         val records =
             symbols
                 .asSequence()
@@ -50,7 +47,7 @@ private constructor(
                         SymbolRecord::name,
                     )
                 )
-                .map { it.toPublicSymbol(symbols) }
+                .map { with(queries) { it.toPublicSymbol(symbolsByName) } }
                 .toList()
         return records.page(options)
     }
@@ -61,11 +58,23 @@ private constructor(
     ): QueryPage<Reference> {
         ensureOpen()
         val symbols = symbolRecords()
+        val symbolsByName = queries.indexSymbolsByName(symbols)
+        val targetSymbol =
+            with(queries) { symbols.firstOrNull { it.definitionId() == query.symbolId } }
         val records =
             store
                 .prefixScan("ref:")
                 .map { it.second }
                 .filterIsInstance<ReferenceRecord>()
+                .filter { reference ->
+                    with(queries) {
+                        if (targetSymbol != null) {
+                            reference.canTarget(targetSymbol)
+                        } else {
+                            reference.matchesSymbolId(query.symbolId, symbolsByName)
+                        }
+                    }
+                }
                 .sortedWith(
                     compareBy(
                         ReferenceRecord::relativeFile,
@@ -75,8 +84,7 @@ private constructor(
                         ReferenceRecord::symbolFqn,
                     )
                 )
-                .map { it.toPublicReference(symbols) }
-                .filter { it.symbolId == query.symbolId || query.symbolId in it.candidateSymbolIds }
+                .map { with(queries) { it.toPublicReference(symbolsByName) } }
                 .toList()
         return records.page(options)
     }
@@ -123,87 +131,12 @@ private constructor(
         return fileMatches && kindMatches && languageMatches && nameMatches
     }
 
-    @OptIn(IndexinoInternalApi::class)
-    private fun SymbolRecord.toPublicSymbol(symbols: List<SymbolRecord>): Symbol {
-        val location = sourceLocation(relativeFile, line, null)
-        return Symbol(
-            id = definitionId(),
-            name = name,
-            kind = kind,
-            language = language,
-            location = location,
-            range = null,
-            ownerId =
-                ownerFqn?.let { owner ->
-                    symbols.firstOrNull { it.fqn == owner }?.definitionId() ?: externalId(owner)
-                },
-            signature = signature,
-            arity = arity,
-            aliases = aliases,
-        )
-    }
-
-    @OptIn(IndexinoInternalApi::class)
-    private fun ReferenceRecord.toPublicReference(symbols: List<SymbolRecord>): Reference {
-        val candidates = symbols.filter { canTarget(it) }
-        val direct =
-            candidates
-                .firstOrNull { it.fqn == symbolFqn || symbolFqn in it.aliases }
-                ?.definitionId() ?: externalId(symbolFqn)
-        val candidateIds =
-            candidates.map { it.definitionId() }.ifEmpty { candidateSymbolFqns.map(::externalId) }
-        return Reference(
-            symbolId = direct,
-            referencedName = referencedName,
-            language = language,
-            location = sourceLocation(relativeFile, line, column.takeIf { it >= 1 }),
-            qualifier = qualifier,
-            candidateSymbolIds = candidateIds,
-            arity = arity,
-        )
-    }
-
-    private fun ReferenceRecord.canTarget(symbol: SymbolRecord): Boolean {
-        val targetNames = candidateSymbolFqns + symbolFqn
-        val symbolNames = symbol.aliases + symbol.fqn
-        val nameMatches = targetNames.any(symbolNames::contains)
-        val arityMatches = arity == null || symbol.arity == null || arity == symbol.arity
-        return nameMatches && arityMatches
-    }
-
     private fun symbolRecords(): List<SymbolRecord> =
         sequenceOf("sym:", "res:")
             .flatMap(store::prefixScan)
             .map { it.second }
             .filterIsInstance<SymbolRecord>()
             .toList()
-
-    private fun SymbolRecord.definitionId(): SymbolId =
-        SymbolId.of(
-            "indexino:symbol:v1:" +
-                sha256(
-                    listOf(
-                            generation.value,
-                            fqn,
-                            relativeFile,
-                            line.toString(),
-                            signature.orEmpty(),
-                            kind,
-                        )
-                        .joinToString("\u0000")
-                )
-        )
-
-    private fun externalId(fqn: String): SymbolId =
-        SymbolId.of("indexino:external:v1:${sha256(fqn)}")
-
-    private fun sha256(value: String): String =
-        HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.toByteArray()))
-
-    private fun sourceLocation(path: String, line: Int, column: Int?): SourceLocation {
-        val file = SourceFile.of(WORKSPACE_ORIGIN, path, path)
-        return SourceLocation.of(file, line, column, null)
-    }
 
     @OptIn(IndexinoInternalApi::class)
     private fun <T> List<T>.page(options: QueryOptions): QueryPage<T> {

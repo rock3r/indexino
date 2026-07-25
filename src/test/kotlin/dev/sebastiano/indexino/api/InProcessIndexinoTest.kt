@@ -82,6 +82,72 @@ class InProcessIndexinoTest {
     }
 
     @Test
+    fun `findReferences does not attach call sites to same-name properties`() {
+        val workspace = createGitWorkspace()
+        Files.writeString(
+            workspace.resolve("ui/src/main/kotlin/SharedName.kt"),
+            """
+            val shared = 1
+            fun shared(value: Int) = value
+            fun useShared() {
+                shared(2)
+            }
+            """
+                .trimIndent(),
+        )
+        val cacheDirectory = createTempDirectory("indexino-arity-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        val indexino = Indexino.connectBlocking(workspace)
+        try {
+            runSuspend {
+                indexino.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui"))).await()
+            }
+            runSuspend { indexino.snapshot() }
+                .use { snapshot ->
+                    val symbols =
+                        runSuspend {
+                                snapshot.findSymbols(
+                                    SymbolQuery.named("shared"),
+                                    QueryOptions.page(limit = 10),
+                                )
+                            }
+                            .items
+                    val property = symbols.single { it.kind == "property" }
+                    val function = symbols.single { it.kind == "function" }
+                    assertNotEquals(property.id, function.id)
+
+                    val propertyRefs = runSuspend {
+                        snapshot.findReferences(
+                            ReferenceQuery.to(property.id),
+                            QueryOptions.page(limit = 10),
+                        )
+                    }
+                    assertTrue(propertyRefs.items.none { it.arity != null })
+
+                    val functionRefs = runSuspend {
+                        snapshot.findReferences(
+                            ReferenceQuery.to(function.id),
+                            QueryOptions.page(limit = 10),
+                        )
+                    }
+                    assertEquals(1, functionRefs.items.size)
+                    assertEquals(function.id, functionRefs.items.single().symbolId)
+                    assertEquals(1, functionRefs.items.single().arity)
+                    assertFalse(property.id in functionRefs.items.single().candidateSymbolIds)
+                }
+        } finally {
+            indexino.close()
+            if (previousCacheDirectory == null) {
+                System.clearProperty("indexino.cache.dir")
+            } else {
+                System.setProperty("indexino.cache.dir", previousCacheDirectory)
+            }
+        }
+    }
+
+    @Test
     fun `snapshots pin immutable generations and definition identities`() {
         val workspace = createGitWorkspace()
         Files.writeString(
