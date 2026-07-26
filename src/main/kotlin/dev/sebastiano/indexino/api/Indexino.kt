@@ -30,6 +30,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
+@Suppress("TooManyFunctions")
 public class Indexino private constructor(private val workspace: Path) : AutoCloseable {
     private val closed = AtomicBoolean()
     private val clientId = UUID.randomUUID().toString()
@@ -209,7 +210,7 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                 retryable = false,
             )
         }
-        val publishedStore = publishGenerationStore(commit, generation)
+        val publishedStore = publishGenerationStore(commit, generation, revision)
         afterPublishGenerationStoreForTests?.invoke()
         synchronized(generationLock) {
             // Mirror snapshot(): close may have raced during the long index+copy while
@@ -253,6 +254,7 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                 }
                 val current =
                     published
+                        ?: restorePublishedGeneration()
                         ?: throw failure(
                             category = IndexFailureCategory.INDEX_NOT_FOUND,
                             code = "index_not_found",
@@ -351,6 +353,7 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
     private fun publishGenerationStore(
         commit: String,
         generation: WorkspaceGenerationId,
+        revision: WorkspaceRevision,
     ): PublishedStore {
         val destination =
             InProcessCacheLayout.generationStore(workspace, clientId, generation.value)
@@ -366,14 +369,45 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
             .publish(
                 WorkspaceGenerationManifest(
                     generation = generation.value,
-                    originId = "workspace",
-                    revision = commit.takeUnless(GitHeadResolver::isFilesystemRevision),
-                    stateFingerprint = packKey,
+                    workspaceRevisionFingerprint = revision.fingerprint,
+                    originId = revision.origins.single().originId.value,
+                    revision = revision.origins.single().revision,
+                    stateFingerprint = revision.origins.single().stateFingerprint,
                     packKeys = listOf(packKey),
                 )
             )
         ContentAddressedPackCache(cacheRoot).materializeDirectory(packKey, destination)
         return PublishedStore(path = destination, created = true)
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    private fun restorePublishedGeneration(): PublishedGeneration? {
+        val cacheRoot = InProcessCacheLayout.cacheRoot()
+        val manifest =
+            WorkspaceGenerationManifestStore(cacheRoot, InProcessCacheLayout.workspaceId(workspace))
+                .current() ?: return null
+        val generation = WorkspaceGenerationId.of(manifest.generation)
+        val storePath = InProcessCacheLayout.generationStore(workspace, clientId, generation.value)
+        if (!Files.isDirectory(storePath)) {
+            ContentAddressedPackCache(cacheRoot)
+                .materializeDirectory(manifest.packKeys.single(), storePath)
+        }
+        val revision =
+            WorkspaceRevision(
+                manifest.workspaceRevisionFingerprint,
+                listOf(
+                    SourceOriginRevision(
+                        originId = SourceOriginId.of(manifest.originId),
+                        revision = manifest.revision,
+                        stateFingerprint = manifest.stateFingerprint,
+                        expectedRevision = null,
+                    )
+                ),
+            )
+        val restored = PublishedGeneration(storePath, revision, generation)
+        generationStores[generation] = storePath
+        published = restored
+        return restored
     }
 
     private fun releaseGeneration(generation: WorkspaceGenerationId) {

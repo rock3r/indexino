@@ -21,6 +21,7 @@ class WorkspaceGenerationManifestStoreTest {
         val manifest =
             WorkspaceGenerationManifest(
                 generation = "generation-1",
+                workspaceRevisionFingerprint = "revision",
                 originId = "filesystem:origin",
                 revision = null,
                 stateFingerprint = "state",
