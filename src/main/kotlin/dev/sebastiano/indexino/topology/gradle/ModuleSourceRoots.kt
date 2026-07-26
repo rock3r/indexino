@@ -11,6 +11,11 @@ internal object ModuleSourceRoots {
 
     fun moduleDirectory(workspace: Path, modulePath: String): Path {
         val segments = modulePath.removePrefix(":").split(":").filter { it.isNotBlank() }
+        // Topology discovery must never return paths that escape a root via ".." (contract).
+        // This check is load-bearing for the CLI, which never constructs IndexScope.
+        require(segments.none { it == "." || it == ".." }) {
+            "Gradle module path must not contain '.' or '..' segments: $modulePath"
+        }
         return if (segments.isEmpty()) {
             workspace
         } else {

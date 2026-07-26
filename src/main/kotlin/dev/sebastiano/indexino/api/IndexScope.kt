@@ -23,7 +23,24 @@ private constructor(
         @JvmStatic
         public fun gradle(module: String): IndexScope {
             require(module.isNotBlank()) { "Gradle module must not be blank" }
+            requireValidGradleModulePath(module)
             return IndexScope(BuildSystem.GRADLE, module, false)
+        }
+
+        private fun requireValidGradleModulePath(module: String) {
+            // Colon-separated Gradle module identifiers never use filesystem "." / ".." segments.
+            // Reject them here as a structural factory invariant (same shape as SourceFile paths).
+            val body = module.removePrefix(":")
+            if (body.isEmpty()) {
+                return
+            }
+            require(
+                body.split(':').all { segment ->
+                    segment.isNotEmpty() && segment != "." && segment != ".."
+                }
+            ) {
+                "Gradle module path must not contain empty, '.', or '..' segments: $module"
+            }
         }
     }
 
