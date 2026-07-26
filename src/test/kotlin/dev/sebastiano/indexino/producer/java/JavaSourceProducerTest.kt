@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.producer.java
 
+import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
@@ -63,6 +64,40 @@ class JavaSourceProducerTest {
                 references.any { it.symbolFqn == "sample.Panel#helper" && it.context == "call" }
             )
             assertEquals(2, references.count { it.symbolFqn == "sample.Panel#helper" })
+        }
+    }
+
+    @Test
+    fun `indexes Java method calls with argument ranges`() {
+        val source =
+            """
+            package sample;
+            class Calls {
+                void child() {}
+                void outer(Runnable content) { content.run(); }
+                void render() { outer(() -> child()); }
+            }
+            """
+                .trimIndent()
+        withStore { store ->
+            checkNotNull(ProducerRegistry.get("java-source"))
+                .produce(
+                    IndexBuildContext.forInlineSources(
+                        store = store,
+                        commitHash = "calls",
+                        sourceFiles = mapOf("Calls.java" to source),
+                    )
+                )
+            val calls =
+                store
+                    .prefixScan("call:")
+                    .map { it.second }
+                    .filterIsInstance<CallSiteRecord>()
+                    .toList()
+            val outer = calls.first { it.calleeName == "outer" }
+            assertEquals(1, outer.arguments.size)
+            assertEquals("LAMBDA", outer.arguments.single().kind)
+            assertTrue(outer.startOffset < outer.endOffset)
         }
     }
 

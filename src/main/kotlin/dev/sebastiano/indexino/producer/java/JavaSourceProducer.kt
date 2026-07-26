@@ -20,6 +20,8 @@ import com.sun.source.util.JavacTask
 import com.sun.source.util.TreePathScanner
 import com.sun.source.util.Trees
 import dev.sebastiano.indexino.core.key.CodeIndexKey
+import dev.sebastiano.indexino.core.record.CallArgumentRecord
+import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
@@ -274,7 +276,54 @@ internal class JavaSourceProducer : IndexProducer {
                     candidates = target.candidates,
                 )
             }
+            call(node, target)
             super.visitMethodInvocation(node, data)
+        }
+
+        private fun call(node: MethodInvocationTree, target: InvocationTarget?) {
+            val start = position(node)
+            val end = endPosition(node)
+            val identity = callIdentity(start)
+            val parent =
+                generateSequence(currentPath.parentPath) { it.parentPath }
+                    .map { it.leaf }
+                    .filterIsInstance<MethodInvocationTree>()
+                    .firstOrNull()
+                    ?.let { parentNode -> callIdentity(position(parentNode)) }
+            store.put(
+                CodeIndexKey.call(identity),
+                CallSiteRecord(
+                    identity = identity,
+                    calleeName =
+                        target?.name ?: node.methodSelect.toString().substringAfterLast('.'),
+                    candidateSymbolFqns = target?.candidates.orEmpty(),
+                    receiver = target?.qualifier,
+                    parentCallIdentity = parent,
+                    relativeFile = relativePath,
+                    startLine = start.line,
+                    startColumn = start.column,
+                    startOffset = start.offset,
+                    endLine = end.line,
+                    endColumn = end.column,
+                    endOffset = end.offset,
+                    arguments =
+                        node.arguments.mapIndexed { index, argument ->
+                            val argumentStart = position(argument)
+                            val argumentEnd = endPosition(argument)
+                            CallArgumentRecord(
+                                position = index,
+                                kind = if (argument is LambdaExpressionTree) "LAMBDA" else "VALUE",
+                                startLine = argumentStart.line,
+                                startColumn = argumentStart.column,
+                                startOffset = argumentStart.offset,
+                                endLine = argumentEnd.line,
+                                endColumn = argumentEnd.column,
+                                endOffset = argumentEnd.offset,
+                            )
+                        },
+                    confidence = if (target == null) "UNRESOLVED" else "RESOLVED",
+                ),
+            )
         }
 
         private fun resolveInvocation(select: Tree): InvocationTarget? =
@@ -447,18 +496,29 @@ internal class JavaSourceProducer : IndexProducer {
             )
         }
 
-        private fun position(tree: Tree): SourcePosition {
-            val offset = trees.sourcePositions.getStartPosition(unit, tree)
-            if (offset < 0) {
-                return SourcePosition(1, 1)
-            }
+        private fun position(tree: Tree): SourcePosition =
+            sourcePosition(trees.sourcePositions.getStartPosition(unit, tree))
+
+        private fun endPosition(tree: Tree): SourcePosition =
+            sourcePosition(
+                (trees.sourcePositions.getEndPosition(unit, tree) - 1).coerceAtLeast(
+                    trees.sourcePositions.getStartPosition(unit, tree)
+                )
+            )
+
+        private fun sourcePosition(offset: Long): SourcePosition {
+            if (offset < 0) return SourcePosition(1, 1, 0)
             return SourcePosition(
                 unit.lineMap.getLineNumber(offset).toInt(),
                 unit.lineMap.getColumnNumber(offset).toInt(),
+                offset.toInt(),
             )
         }
 
-        private data class SourcePosition(val line: Int, val column: Int)
+        private fun callIdentity(position: SourcePosition): String =
+            "$relativePath:${position.offset}"
+
+        private data class SourcePosition(val line: Int, val column: Int, val offset: Int)
 
         private data class InvocationTarget(
             val symbolFqn: String,
