@@ -140,6 +140,16 @@ internal class JavaSourceProducer : IndexProducer {
                 }
             if (name.isNotBlank()) {
                 symbol(fqn, name, classKind(node.kind), node, ownerFqn = owner)
+                if (node.members.none { it is MethodTree && it.name.contentEquals("<init>") }) {
+                    symbol(
+                        fqn = "$fqn#<init>",
+                        name = name,
+                        kind = "constructor",
+                        tree = node,
+                        ownerFqn = fqn,
+                        arity = 0,
+                    )
+                }
             }
             classOwners.addLast(fqn)
             classMethodNames.addLast(
@@ -197,6 +207,7 @@ internal class JavaSourceProducer : IndexProducer {
                 signature = signature,
                 arity = node.parameters.size,
                 parameterNames = node.parameters.map { it.name.toString() },
+                isVararg = node.parameters.lastOrNull()?.toString()?.contains("...") == true,
             )
             variableScopes.addLast(mutableMapOf())
             node.parameters.forEach {
@@ -297,7 +308,7 @@ internal class JavaSourceProducer : IndexProducer {
                     listOf("$owner#<init>"),
                 )
             reference(
-                target = owner,
+                target = target.symbolFqn,
                 name = target.name,
                 qualifier = null,
                 tree = node,
@@ -475,7 +486,9 @@ internal class JavaSourceProducer : IndexProducer {
             val outer = type.substringBefore('.')
             return if ('.' in type && outer.firstOrNull()?.isUpperCase() == true) {
                 val suffix = type.removePrefix(outer)
-                (imports[outer] ?: qualify(outer)) + suffix
+                (imports[outer]
+                    ?: classNestedTypes.reversed().firstNotNullOfOrNull { it[outer] }
+                    ?: qualify(outer)) + suffix
             } else {
                 qualifyType(type)
             }
@@ -528,6 +541,7 @@ internal class JavaSourceProducer : IndexProducer {
             signature: String? = null,
             arity: Int? = null,
             parameterNames: List<String> = emptyList(),
+            isVararg: Boolean = false,
         ) {
             val position = position(tree)
             store.put(
@@ -543,6 +557,7 @@ internal class JavaSourceProducer : IndexProducer {
                     signature = signature,
                     arity = arity,
                     parameterNames = parameterNames,
+                    isVararg = isVararg,
                 ),
             )
         }

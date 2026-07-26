@@ -93,6 +93,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                     signature = symbol.signature,
                     arity = symbol.arity,
                     parameterNames = symbol.parameterNames,
+                    isVararg = symbol.isVararg,
                     aliases = symbol.aliases,
                 ),
             )
@@ -340,6 +341,10 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                     signature = signature,
                     arity = function.valueParameters.size,
                     parameterNames = function.valueParameters.mapNotNull { it.name },
+                    isVararg =
+                        function.valueParameters
+                            .lastOrNull()
+                            ?.hasModifier(KtTokens.VARARG_KEYWORD) == true,
                     aliases =
                         if (owner == null) {
                             listOf(
@@ -648,6 +653,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         val signature: String? = null,
         val arity: Int? = null,
         val parameterNames: List<String> = emptyList(),
+        val isVararg: Boolean = false,
         val aliases: List<String> = emptyList(),
     )
 

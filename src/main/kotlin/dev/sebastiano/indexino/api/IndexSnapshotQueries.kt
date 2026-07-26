@@ -86,7 +86,8 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
                                 (it.fqn == name || name in it.aliases) &&
                                     (it.arity == null ||
                                         it.arity == arguments.size ||
-                                        (it.language == "kotlin" && it.arity > arguments.size))
+                                        (it.language == "kotlin" && it.arity > arguments.size) ||
+                                        (it.isVararg && it.arity <= arguments.size))
                             }
                             .map { symbol -> symbol.definitionId() }
                             .ifEmpty { listOf(externalSymbolId(name)) }
