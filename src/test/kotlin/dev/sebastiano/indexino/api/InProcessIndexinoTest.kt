@@ -840,11 +840,7 @@ class InProcessIndexinoTest {
         assertTrue(firstSymbols.hasMore)
         val cursor = requireNotNull(firstSymbols.nextCursor)
         assertTrue(cursor.startsWith("indexino:v1:"))
-        assertHostQueryLimit(
-            snapshot = snapshot,
-            sourceFile = sourceFile,
-            cursor = cursor,
-        )
+        assertHostQueryLimit(snapshot = snapshot, sourceFile = sourceFile, cursor = cursor)
 
         val remainingSymbols = runSuspend {
             snapshot.findSymbols(
