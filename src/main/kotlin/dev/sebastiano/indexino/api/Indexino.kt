@@ -366,10 +366,7 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
     ): PublishedStore {
         val destination =
             InProcessCacheLayout.generationStore(workspace, clientId, generation.value)
-        if (Files.isDirectory(destination)) {
-            return PublishedStore(path = destination, created = false)
-        }
-
+        val alreadyMaterialized = Files.isDirectory(destination)
         val source =
             IndexPathResolver(workspace, storeRootOverride = storeRoot).resolveBaseStore(commit)
         val cacheRoot = InProcessCacheLayout.cacheRoot()
@@ -388,7 +385,7 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                 )
             )
         ContentAddressedPackCache(cacheRoot).materializeDirectory(packKey, destination)
-        return PublishedStore(path = destination, created = true)
+        return PublishedStore(path = destination, created = !alreadyMaterialized)
     }
 
     @OptIn(IndexinoInternalApi::class)
@@ -397,6 +394,7 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         val manifest =
             WorkspaceGenerationManifestStore(cacheRoot, InProcessCacheLayout.workspaceId(workspace))
                 .current() ?: return null
+        if (manifest.basicFactSchemaVersion != BASIC_FACT_SCHEMA_VERSION) return null
         val generation = WorkspaceGenerationId.of(manifest.generation)
         val storePath = InProcessCacheLayout.generationStore(workspace, clientId, generation.value)
         if (!Files.isDirectory(storePath)) {

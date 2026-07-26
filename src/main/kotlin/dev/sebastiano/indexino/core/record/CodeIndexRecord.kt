@@ -26,6 +26,7 @@ internal data class SymbolRecord(
     val ownerFqn: String? = null,
     val signature: String? = null,
     val arity: Int? = null,
+    val parameterNames: List<String> = emptyList(),
     val aliases: List<String> = emptyList(),
 ) : CodeIndexRecord
 

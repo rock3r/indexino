@@ -92,6 +92,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                     ownerFqn = symbol.ownerFqn,
                     signature = symbol.signature,
                     arity = symbol.arity,
+                    parameterNames = symbol.parameterNames,
                     aliases = symbol.aliases,
                 ),
             )
@@ -142,9 +143,13 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         for (call in file.collectDescendantsOfType<KtCallExpression>()) {
             val identity = callIdentity(relativePath, call)
             val target = resolveCall(file, call, projectSymbols, imports, store)
-            val resolvedSymbol = target?.let { resolved ->
-                projectSymbols.firstOrNull { it.fqn == resolved.symbolFqn }
-            }
+            val parameterNames =
+                target
+                    ?.let { resolved ->
+                        projectSymbols.firstOrNull { it.fqn == resolved.symbolFqn }?.parameterNames
+                            ?: storedParameterNames(store, resolved.symbolFqn)
+                    }
+                    .orEmpty()
             store.put(
                 CodeIndexKey.call(identity),
                 CallSiteRecord(
@@ -152,7 +157,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                     calleeName = call.calleeExpression?.text ?: "<unknown>",
                     candidateSymbolFqns = target?.candidates.orEmpty(),
                     receiver = target?.qualifier,
-                    enclosingSymbolFqn = enclosingSymbol(call, projectSymbols),
+                    enclosingSymbolFqn = enclosingSymbol(call, collectSymbols(file)),
                     parentCallIdentity =
                         generateSequence(call.parent) { it.parent }
                             .filterIsInstance<KtCallExpression>()
@@ -165,17 +170,30 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                     endLine = call.endLineNumber(),
                     endColumn = call.endColumnNumber(),
                     endOffset = call.inclusiveEndOffset(),
-                    arguments = callArguments(call, relativePath, resolvedSymbol),
+                    arguments = callArguments(call, relativePath, parameterNames),
                     confidence = if (target == null) "UNRESOLVED" else "RESOLVED",
                 ),
             )
         }
     }
 
+    private fun storedParameterNames(store: CodeIndexStore, fqn: String): List<String> {
+        var parameterNames = emptyList<String>()
+        store.forEachPrefix("sym:$fqn:") { _, record ->
+            if (record is SymbolRecord && record.fqn == fqn) {
+                parameterNames = record.parameterNames
+                false
+            } else {
+                true
+            }
+        }
+        return parameterNames
+    }
+
     private fun callArguments(
         call: KtCallExpression,
         relativePath: String,
-        target: ResolvedSymbol?,
+        parameterNames: List<String>,
     ): List<CallArgumentRecord> = buildList {
         call.valueArguments.forEachIndexed { position, argument ->
             val expression = argument.getArgumentExpression() ?: return@forEachIndexed
@@ -184,7 +202,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                     position = position,
                     resolvedName =
                         argument.getArgumentName()?.asName?.identifier
-                            ?: target?.parameterNames?.getOrNull(position),
+                            ?: parameterNames.getOrNull(position),
                     kind = if (expression is KtLambdaExpression) "LAMBDA" else "VALUE",
                     relativePath = relativePath,
                 )
@@ -200,7 +218,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                 add(
                     expression.toCallArgument(
                         position = position,
-                        resolvedName = target?.parameterNames?.getOrNull(position),
+                        resolvedName = parameterNames.getOrNull(position),
                         kind = "TRAILING_LAMBDA",
                         relativePath = relativePath,
                     )
@@ -225,9 +243,9 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             endColumn = endColumnNumber(),
             endOffset = inclusiveEndOffset(),
             nestedCallIdentities =
-                collectDescendantsOfType<KtCallExpression>().map { call ->
-                    callIdentity(relativePath, call)
-                },
+                (listOfNotNull(this as? KtCallExpression) +
+                        collectDescendantsOfType<KtCallExpression>())
+                    .map { call -> callIdentity(relativePath, call) },
         )
 
     private fun enclosingSymbol(call: KtCallExpression, symbols: List<ResolvedSymbol>): String? {

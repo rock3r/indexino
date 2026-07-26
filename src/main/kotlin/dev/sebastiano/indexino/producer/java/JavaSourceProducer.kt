@@ -328,7 +328,7 @@ internal class JavaSourceProducer : IndexProducer {
                                 nestedCallIdentities = nestedCallIdentities(argument),
                             )
                         },
-                    confidence = if (target == null) "UNRESOLVED" else "RESOLVED",
+                    confidence = if (target == null) "UNRESOLVED" else "HEURISTIC",
                 ),
             )
         }

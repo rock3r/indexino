@@ -18,8 +18,9 @@ class KotlinPsiSymbolProducerTest {
     fun `incremental callers resolve unchanged same-package declarations`() {
         val sources =
             mapOf(
-                "src/main/kotlin/sample/Helpers.kt" to "package sample\nfun helper() {}",
-                "src/main/kotlin/sample/Caller.kt" to "package sample\nfun call() { helper() }",
+                "src/main/kotlin/sample/Helpers.kt" to
+                    "package sample\nfun helper(content: () -> Unit) = content()",
+                "src/main/kotlin/sample/Caller.kt" to "package sample\nfun call() { helper({}) }",
             )
         val producer = checkNotNull(ProducerRegistry.get("kotlin-psi-symbols"))
         producer.produce(IndexBuildContext.forInlineSources(store, "first", sources), store)
@@ -41,6 +42,13 @@ class KotlinPsiSymbolProducerTest {
                 .filterIsInstance<ReferenceRecord>()
                 .toList()
         assertTrue(references.any { it.relativeFile.endsWith("Caller.kt") })
+        val call =
+            store
+                .prefixScan("call:")
+                .map { it.second }
+                .filterIsInstance<CallSiteRecord>()
+                .single { it.relativeFile.endsWith("Caller.kt") }
+        assertEquals("content", call.arguments.single().resolvedName)
     }
 
     @Test

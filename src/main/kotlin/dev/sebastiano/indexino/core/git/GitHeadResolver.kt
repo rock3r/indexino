@@ -5,7 +5,7 @@ import java.security.MessageDigest
 import java.util.HexFormat
 
 internal object GitHeadResolver {
-    const val FILESYSTEM_REVISION_PREFIX: String = "filesystem:"
+    const val FILESYSTEM_REVISION_PREFIX: String = "filesystem-"
 
     fun resolve(workspaceRoot: Path): String {
         val process =
