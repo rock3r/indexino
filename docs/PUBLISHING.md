@@ -1,10 +1,14 @@
 # Publishing
 
-`indexino` is configured to publish a thin JVM artifact to the Sonatype Central Portal with the
+`indexino` is wired with
 [`com.vanniktech.maven.publish`](https://github.com/vanniktech/gradle-maven-publish-plugin)
-plugin. The Shadow `*-all.jar` remains the standalone CLI distribution and the `*-shrunk.jar`
-remains an internal native-packaging input. Both are deliberately excluded from the Maven
-publication.
+for a thin JVM artifact, but **tag releases to Maven Central are blocked until S5** configures
+`indexino-model` for the same signed Central path (the facade POM already depends on it). Until
+then, publish only to Maven Local for dogfood. Because the tag workflow's native-distribution and
+draft-release jobs need the publish job, that block intentionally stops the whole tag pipeline —
+not only Central upload — until S5 unblocks all three. The Shadow `*-all.jar` remains the
+standalone CLI distribution and the `*-shrunk.jar` remains an internal native-packaging input.
+Both are deliberately excluded from the Maven publication.
 
 ## API publication state
 

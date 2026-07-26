@@ -109,6 +109,32 @@ class MavenPublicationTest {
                 "Shadow's optional runtime variant leaked into publication metadata",
             )
         }
+
+        assertSiblingCentralDependenciesAreReleasable(pomText, groupId)
+    }
+
+    @Test
+    fun `tag release cannot publish Central without every sibling POM dependency`() {
+        val releaseWorkflow = File(".github/workflows/release.yml").readText()
+        val modelBuild = File("indexino-model/build.gradle.kts").readText()
+        val modelHasCentralPublisher =
+            modelBuild.contains("com.vanniktech.maven.publish") ||
+                modelBuild.contains("publishToMavenCentral")
+        if (modelHasCentralPublisher) {
+            assertTrue(
+                releaseWorkflow.contains("publishToMavenCentral"),
+                "indexino-model is Central-configured; release.yml should publish it",
+            )
+        } else {
+            assertFalse(
+                releaseWorkflow.contains("publishToMavenCentral"),
+                "release.yml must not call publishToMavenCentral while indexino-model lacks Central config",
+            )
+            assertTrue(
+                releaseWorkflow.contains("blocked until S5"),
+                "release.yml must refuse incomplete Central coordinate sets until S5",
+            )
+        }
     }
 
     @Test
@@ -172,6 +198,34 @@ class MavenPublicationTest {
                 .build()
 
         assertTrue(result.output.contains("GRADLE"), result.output)
+    }
+
+    private fun assertSiblingCentralDependenciesAreReleasable(pomText: String, groupId: String) {
+        val siblingArtifacts =
+            Regex(
+                    """<groupId>\s*${Regex.escape(groupId)}\s*</groupId>\s*<artifactId>\s*([^<]+)\s*</artifactId>"""
+                )
+                .findAll(pomText)
+                .map { it.groupValues[1].trim() }
+                .filter { it != "indexino" }
+                .toSet()
+        if (siblingArtifacts.isEmpty()) return
+
+        val releaseWorkflow = File(".github/workflows/release.yml").readText()
+        val modelBuild = File("indexino-model/build.gradle.kts").readText()
+        val modelHasCentralPublisher =
+            modelBuild.contains("com.vanniktech.maven.publish") ||
+                modelBuild.contains("publishToMavenCentral")
+        if ("indexino-model" in siblingArtifacts && !modelHasCentralPublisher) {
+            assertFalse(
+                releaseWorkflow.contains("publishToMavenCentral"),
+                "Facade POM depends on indexino-model but release.yml still publishes to Central",
+            )
+            assertTrue(
+                releaseWorkflow.contains("blocked until S5"),
+                "Release workflow must block incomplete Central publishes until S5",
+            )
+        }
     }
 
     private fun requiredProperty(name: String): String =

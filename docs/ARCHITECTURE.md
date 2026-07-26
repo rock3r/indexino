@@ -91,6 +91,13 @@ disabled for this publication so Gradle consumers resolve that stripped POM inst
 separate thin library and CLI coordinates and replaces the no-op logging binding with the
 library-appropriate API dependency.
 
+Maven Central tag releases are **blocked until S5**: the facade POM already declares a compile
+dependency on `indexino-model`, but that module is not yet wired for the same signed
+`publishToMavenCentral` path as `indexino`. Cutting a Central release of the facade alone would
+publish an unresolvable coordinate set. Dogfood via Maven Local
+(`:indexino-model:publishToMavenLocal` then `:publishToMavenLocal`) until S5 lands the multi-artifact
+Central configuration.
+
 ## Embedded API boundary
 
 Supported packages are only those listed in [API-STABILITY.md](API-STABILITY.md). Implementation
