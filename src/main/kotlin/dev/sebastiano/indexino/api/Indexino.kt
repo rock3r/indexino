@@ -398,8 +398,9 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
             generation != current && snapshotPins.getOrDefault(generation, 0) == 0
         }
         reclaimable.forEach { (generation, path) ->
-            path.parent.toFile().deleteRecursively()
-            generationStores.remove(generation)
+            if (path.parent.toFile().deleteRecursively()) {
+                generationStores.remove(generation)
+            }
         }
     }
 
