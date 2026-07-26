@@ -1,6 +1,8 @@
 package dev.sebastiano.indexino.producer.kotlinpsi
 
 import dev.sebastiano.indexino.core.key.CodeIndexKey
+import dev.sebastiano.indexino.core.record.CallArgumentRecord
+import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
@@ -124,8 +126,122 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                 ),
             )
         }
+        indexCalls(file, indexedFile.relativePath, projectSymbols, imports, store)
         indexMemberReferences(file, indexedFile.relativePath, store, imports)
     }
+
+    private fun indexCalls(
+        file: KtFile,
+        relativePath: String,
+        projectSymbols: List<ResolvedSymbol>,
+        imports: Map<String, String>,
+        store: CodeIndexStore,
+    ) {
+        for (call in file.collectDescendantsOfType<KtCallExpression>()) {
+            val identity = callIdentity(relativePath, call)
+            val target = resolveCall(file, call, projectSymbols, imports, store)
+            val resolvedSymbol = target?.let { resolved ->
+                projectSymbols.firstOrNull { it.fqn == resolved.symbolFqn }
+            }
+            store.put(
+                CodeIndexKey.call(identity),
+                CallSiteRecord(
+                    identity = identity,
+                    calleeName = call.calleeExpression?.text ?: "<unknown>",
+                    candidateSymbolFqns = target?.candidates.orEmpty(),
+                    receiver = target?.qualifier,
+                    enclosingSymbolFqn = enclosingSymbol(call, projectSymbols),
+                    parentCallIdentity =
+                        generateSequence(call.parent) { it.parent }
+                            .filterIsInstance<KtCallExpression>()
+                            .firstOrNull()
+                            ?.let { parent -> callIdentity(relativePath, parent) },
+                    relativeFile = relativePath,
+                    startLine = call.lineNumber(),
+                    startColumn = call.columnNumber(),
+                    startOffset = call.textRange.startOffset,
+                    endLine = call.endLineNumber(),
+                    endColumn = call.endColumnNumber(),
+                    endOffset = call.textRange.endOffset,
+                    arguments = callArguments(call, relativePath, resolvedSymbol),
+                    confidence = if (target == null) "UNRESOLVED" else "RESOLVED",
+                ),
+            )
+        }
+    }
+
+    private fun callArguments(
+        call: KtCallExpression,
+        relativePath: String,
+        target: ResolvedSymbol?,
+    ): List<CallArgumentRecord> = buildList {
+        call.valueArguments.forEachIndexed { position, argument ->
+            val expression = argument.getArgumentExpression() ?: return@forEachIndexed
+            add(
+                expression.toCallArgument(
+                    position = position,
+                    resolvedName =
+                        argument.getArgumentName()?.asName?.identifier
+                            ?: target?.parameterNames?.getOrNull(position),
+                    kind = if (expression is KtFunctionLiteral) "LAMBDA" else "VALUE",
+                    relativePath = relativePath,
+                )
+            )
+        }
+        call.lambdaArguments
+            .filter { lambda ->
+                call.valueArguments.none { value -> value.textRange == lambda.textRange }
+            }
+            .forEachIndexed { lambdaIndex, argument ->
+                val expression = argument.getLambdaExpression() ?: return@forEachIndexed
+                val position = call.valueArguments.size + lambdaIndex
+                add(
+                    expression.toCallArgument(
+                        position = position,
+                        resolvedName = target?.parameterNames?.getOrNull(position),
+                        kind = "TRAILING_LAMBDA",
+                        relativePath = relativePath,
+                    )
+                )
+            }
+    }
+
+    private fun KtExpression.toCallArgument(
+        position: Int,
+        resolvedName: String?,
+        kind: String,
+        relativePath: String,
+    ): CallArgumentRecord =
+        CallArgumentRecord(
+            position = position,
+            resolvedName = resolvedName,
+            kind = kind,
+            startLine = lineNumber(),
+            startColumn = columnNumber(),
+            startOffset = textRange.startOffset,
+            endLine = endLineNumber(),
+            endColumn = endColumnNumber(),
+            endOffset = textRange.endOffset,
+            nestedCallIdentities =
+                collectDescendantsOfType<KtCallExpression>().map { call ->
+                    callIdentity(relativePath, call)
+                },
+        )
+
+    private fun enclosingSymbol(call: KtCallExpression, symbols: List<ResolvedSymbol>): String? {
+        val function =
+            generateSequence(call.parent) { it.parent }
+                .filterIsInstance<KtNamedFunction>()
+                .firstOrNull()
+        return function?.let { declaration ->
+            symbols
+                .firstOrNull { it.line == declaration.lineNumber() && it.name == declaration.name }
+                ?.fqn
+        }
+    }
+
+    private fun callIdentity(relativePath: String, call: KtCallExpression): String =
+        "$relativePath:${call.textRange.startOffset}"
 
     private fun collectSymbols(file: KtFile): List<ResolvedSymbol> {
         val results = mutableListOf<ResolvedSymbol>()
@@ -179,6 +295,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                     ownerFqn = owner,
                     signature = signature,
                     arity = function.valueParameters.size,
+                    parameterNames = function.valueParameters.mapNotNull { it.name },
                     aliases =
                         if (owner == null) {
                             listOf(
@@ -460,6 +577,20 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         return textRange.startOffset - document.getLineStartOffset(line) + 1
     }
 
+    private fun KtElement.endLineNumber(): Int {
+        val document = containingFile.viewProvider.document ?: return lineNumber()
+        return document.getLineNumber(
+            (textRange.endOffset - 1).coerceAtLeast(textRange.startOffset)
+        ) + 1
+    }
+
+    private fun KtElement.endColumnNumber(): Int {
+        val document = containingFile.viewProvider.document ?: return columnNumber()
+        val offset = (textRange.endOffset - 1).coerceAtLeast(textRange.startOffset)
+        val line = document.getLineNumber(offset)
+        return offset - document.getLineStartOffset(line) + 1
+    }
+
     private data class ResolvedSymbol(
         val fqn: String,
         val name: String,
@@ -469,6 +600,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         val ownerFqn: String? = null,
         val signature: String? = null,
         val arity: Int? = null,
+        val parameterNames: List<String> = emptyList(),
         val aliases: List<String> = emptyList(),
     )
 
