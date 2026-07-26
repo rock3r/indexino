@@ -60,6 +60,8 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
 
     fun externalSymbolId(fqn: String): SymbolId = externalId(fqn)
 
+    fun ambiguousSymbolId(fqn: String): SymbolId = ambiguousId(fqn)
+
     @OptIn(IndexinoInternalApi::class)
     fun ReferenceRecord.toPublicReference(candidates: List<SymbolRecord>): Reference {
         val directMatches = candidates.filter { it.fqn == symbolFqn || symbolFqn in it.aliases }
@@ -70,7 +72,16 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
                 else -> ambiguousId(symbolFqn)
             }
         val candidateIds =
-            candidates.map { it.definitionId() }.ifEmpty { candidateSymbolFqns.map(::externalId) }
+            buildList {
+                    addAll(candidates.map { it.definitionId() })
+                    for (candidateName in candidateSymbolFqns) {
+                        val resolvesLocally = candidates.any {
+                            it.fqn == candidateName || candidateName in it.aliases
+                        }
+                        if (!resolvesLocally) add(externalId(candidateName))
+                    }
+                }
+                .distinct()
         return Reference(
             symbolId = direct,
             referencedName = referencedName,

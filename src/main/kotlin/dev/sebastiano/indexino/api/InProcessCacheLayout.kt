@@ -34,8 +34,9 @@ internal object InProcessCacheLayout {
     }
 
     private fun workspaceId(workspace: Path): String {
-        val canonicalPath = workspace.toRealPath().toString()
-        val digest = MessageDigest.getInstance("SHA-256").digest(canonicalPath.toByteArray())
+        // Indexino canonicalizes the workspace once at connection entry. Repeating toRealPath()
+        // here would create a second unwrapped I/O failure window during construction.
+        val digest = MessageDigest.getInstance("SHA-256").digest(workspace.toString().toByteArray())
         return HexFormat.of().formatHex(digest).take(WORKSPACE_ID_HEX_LENGTH)
     }
 

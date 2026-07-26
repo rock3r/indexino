@@ -107,13 +107,14 @@ class IndexSnapshotStorageFailureTest {
         try {
             val symbols =
                 runCatching {
-                    runSuspend {
-                        snapshot.findSymbols(
-                            SymbolQuery.named("demo.").withMatch(NameMatchMode.PREFIX),
-                            QueryOptions.page(limit = 1),
-                        )
+                        runSuspend {
+                            snapshot.findSymbols(
+                                SymbolQuery.named("demo.").withMatch(NameMatchMode.PREFIX),
+                                QueryOptions.page(limit = 1),
+                            )
+                        }
                     }
-                }.getOrNull()
+                    .getOrNull()
             assertTrue(symbols != null, "The first symbol page must not materialize later rows")
             assertEquals(listOf("First"), symbols.items.map { it.name })
             assertTrue(symbols.hasMore)
@@ -121,14 +122,18 @@ class IndexSnapshotStorageFailureTest {
 
             val references =
                 runCatching {
-                    runSuspend {
-                        snapshot.findReferences(
-                            ReferenceQuery.to(symbols.items.single().id),
-                            QueryOptions.page(limit = 1),
-                        )
+                        runSuspend {
+                            snapshot.findReferences(
+                                ReferenceQuery.to(symbols.items.single().id),
+                                QueryOptions.page(limit = 1),
+                            )
+                        }
                     }
-                }.getOrNull()
-            assertTrue(references != null, "The first reference page must not materialize later rows")
+                    .getOrNull()
+            assertTrue(
+                references != null,
+                "The first reference page must not materialize later rows",
+            )
             assertEquals(listOf("First.kt"), references.items.map { it.location.file.path })
             assertTrue(references.hasMore)
             assertEquals(null, references.totalCount)
@@ -159,18 +164,16 @@ class IndexSnapshotStorageFailureTest {
                 )
         val snapshot = snapshotWithStreamingRecords(record, reference)
         try {
-            val page =
-                runSuspend {
-                    snapshot.findSymbols(SymbolQuery.named("Streamed"), QueryOptions.page(limit = 1))
-                }
+            val page = runSuspend {
+                snapshot.findSymbols(SymbolQuery.named("Streamed"), QueryOptions.page(limit = 1))
+            }
             assertEquals(listOf("Streamed"), page.items.map { it.name })
-            val references =
-                runSuspend {
-                    snapshot.findReferences(
-                        ReferenceQuery.to(page.items.single().id),
-                        QueryOptions.page(limit = 1),
-                    )
-                }
+            val references = runSuspend {
+                snapshot.findReferences(
+                    ReferenceQuery.to(page.items.single().id),
+                    QueryOptions.page(limit = 1),
+                )
+            }
             assertEquals(listOf("Use.kt"), references.items.map { it.location.file.path })
         } finally {
             snapshot.close()
@@ -218,13 +221,12 @@ class IndexSnapshotStorageFailureTest {
                 generation = WorkspaceGenerationId.of("generation"),
             )
         try {
-            val symbols =
-                runSuspend {
-                    snapshot.findSymbols(
-                        SymbolQuery.named("demo.").withMatch(NameMatchMode.PREFIX),
-                        QueryOptions.page(limit = 3),
-                    )
-                }
+            val symbols = runSuspend {
+                snapshot.findSymbols(
+                    SymbolQuery.named("demo.").withMatch(NameMatchMode.PREFIX),
+                    QueryOptions.page(limit = 3),
+                )
+            }
             assertEquals(3, symbols.items.size)
             assertEquals(2, store.forEachPrefixCalls)
         } finally {
@@ -258,12 +260,60 @@ class IndexSnapshotStorageFailureTest {
                     ),
             )
         try {
-            val externalId = with(IndexSnapshotQueries(generation)) { externalSymbolId("missing.Shared") }
-            val references =
-                runSuspend {
-                    snapshot.findReferences(ReferenceQuery.to(externalId), QueryOptions.page(limit = 1))
-                }
+            val externalId =
+                with(IndexSnapshotQueries(generation)) { externalSymbolId("missing.Shared") }
+            val references = runSuspend {
+                snapshot.findReferences(ReferenceQuery.to(externalId), QueryOptions.page(limit = 1))
+            }
             assertEquals(listOf(externalId), references.items.map { it.symbolId })
+        } finally {
+            snapshot.close()
+        }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    @Test
+    fun `ambiguous reference ids round-trip through findReferences`() {
+        val generation = WorkspaceGenerationId.of("generation")
+        val snapshot =
+            snapshotWithRecords(
+                CodeIndexKey.symbolDefinition("demo.shared", "One.kt", 1, 1) to
+                    SymbolRecord(
+                        fqn = "demo.shared",
+                        relativeFile = "One.kt",
+                        line = 1,
+                        kind = "function",
+                        name = "shared",
+                        arity = 1,
+                    ),
+                CodeIndexKey.symbolDefinition("demo.shared", "Two.kt", 1, 1) to
+                    SymbolRecord(
+                        fqn = "demo.shared",
+                        relativeFile = "Two.kt",
+                        line = 1,
+                        kind = "function",
+                        name = "shared",
+                        arity = 1,
+                    ),
+                CodeIndexKey.ref("demo.shared", "Use.kt", 1) to
+                    ReferenceRecord(
+                        symbolFqn = "demo.shared",
+                        relativeFile = "Use.kt",
+                        line = 1,
+                        column = 1,
+                        arity = 1,
+                    ),
+            )
+        try {
+            val ambiguousId =
+                with(IndexSnapshotQueries(generation)) { ambiguousSymbolId("demo.shared") }
+            val references = runSuspend {
+                snapshot.findReferences(
+                    ReferenceQuery.to(ambiguousId),
+                    QueryOptions.page(limit = 1),
+                )
+            }
+            assertEquals(listOf(ambiguousId), references.items.map { it.symbolId })
         } finally {
             snapshot.close()
         }
@@ -351,7 +401,9 @@ class IndexSnapshotStorageFailureTest {
     }
 
     @OptIn(IndexinoInternalApi::class)
-    private fun snapshotWithRecords(vararg records: Pair<CodeIndexKey, CodeIndexRecord>): IndexSnapshot =
+    private fun snapshotWithRecords(
+        vararg records: Pair<CodeIndexKey, CodeIndexRecord>
+    ): IndexSnapshot =
         IndexSnapshot.create(
             store = RecordsCodeIndexStore(records.asList()),
             revision = workspaceRevision(),
@@ -360,7 +412,7 @@ class IndexSnapshotStorageFailureTest {
 
     @OptIn(IndexinoInternalApi::class)
     private fun snapshotWithStreamingRecords(
-        vararg records: Pair<CodeIndexKey, CodeIndexRecord>,
+        vararg records: Pair<CodeIndexKey, CodeIndexRecord>
     ): IndexSnapshot =
         IndexSnapshot.create(
             store = StreamingRecordsCodeIndexStore(records.asList()),
@@ -404,9 +456,10 @@ class IndexSnapshotStorageFailureTest {
         )
 
     private class RecordsCodeIndexStore(
-        private val records: List<Pair<CodeIndexKey, CodeIndexRecord>>,
+        private val records: List<Pair<CodeIndexKey, CodeIndexRecord>>
     ) : CodeIndexStore {
-        override fun get(key: CodeIndexKey): CodeIndexRecord? = records.firstOrNull { it.first == key }?.second
+        override fun get(key: CodeIndexKey): CodeIndexRecord? =
+            records.firstOrNull { it.first == key }?.second
 
         override fun put(key: CodeIndexKey, record: CodeIndexRecord) = unsupported()
 
@@ -424,12 +477,13 @@ class IndexSnapshotStorageFailureTest {
     }
 
     private class CountingRecordsCodeIndexStore(
-        private val records: List<Pair<CodeIndexKey, CodeIndexRecord>>,
+        private val records: List<Pair<CodeIndexKey, CodeIndexRecord>>
     ) : CodeIndexStore {
         var forEachPrefixCalls: Int = 0
             private set
 
-        override fun get(key: CodeIndexKey): CodeIndexRecord? = records.firstOrNull { it.first == key }?.second
+        override fun get(key: CodeIndexKey): CodeIndexRecord? =
+            records.firstOrNull { it.first == key }?.second
 
         override fun put(key: CodeIndexKey, record: CodeIndexRecord) = unsupported()
 
@@ -438,7 +492,10 @@ class IndexSnapshotStorageFailureTest {
         override fun prefixScan(prefix: String): Sequence<Pair<CodeIndexKey, CodeIndexRecord>> =
             records.asSequence().filter { it.first.value.startsWith(prefix) }
 
-        override fun forEachPrefix(prefix: String, action: (CodeIndexKey, CodeIndexRecord) -> Boolean) {
+        override fun forEachPrefix(
+            prefix: String,
+            action: (CodeIndexKey, CodeIndexRecord) -> Boolean,
+        ) {
             forEachPrefixCalls += 1
             for ((key, record) in records) {
                 if (key.value.startsWith(prefix) && !action(key, record)) return
@@ -454,9 +511,10 @@ class IndexSnapshotStorageFailureTest {
     }
 
     private class StreamingRecordsCodeIndexStore(
-        private val records: List<Pair<CodeIndexKey, CodeIndexRecord>>,
+        private val records: List<Pair<CodeIndexKey, CodeIndexRecord>>
     ) : CodeIndexStore {
-        override fun get(key: CodeIndexKey): CodeIndexRecord? = records.firstOrNull { it.first == key }?.second
+        override fun get(key: CodeIndexKey): CodeIndexRecord? =
+            records.firstOrNull { it.first == key }?.second
 
         override fun put(key: CodeIndexKey, record: CodeIndexRecord) = unsupported()
 
@@ -465,7 +523,10 @@ class IndexSnapshotStorageFailureTest {
         override fun prefixScan(prefix: String): Sequence<Pair<CodeIndexKey, CodeIndexRecord>> =
             throw SimulatedStorageFailure("prefixScan must not be used")
 
-        override fun forEachPrefix(prefix: String, action: (CodeIndexKey, CodeIndexRecord) -> Boolean) {
+        override fun forEachPrefix(
+            prefix: String,
+            action: (CodeIndexKey, CodeIndexRecord) -> Boolean,
+        ) {
             for ((key, record) in records) {
                 if (key.value.startsWith(prefix) && !action(key, record)) {
                     return

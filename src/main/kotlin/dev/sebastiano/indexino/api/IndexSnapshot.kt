@@ -72,10 +72,10 @@ private constructor(
         validateQueryOptions(options)
         return mapUnexpectedFailures {
             val targetSymbol = findSymbolById(query.symbolId)
-            val externalCandidates =
-                if (targetSymbol == null) externalReferenceCandidates(query.symbolId)
-                else emptySet()
-            val localExternalCandidates = localExternalCandidates(externalCandidates)
+            val unknownTargetNames =
+                if (targetSymbol == null) unknownReferenceNamesForId(query.symbolId)
+                else UnknownReferenceNames()
+            val unknownTargetCandidates = candidatesByName(unknownTargetNames.all)
             orderedPage(
                 options = options,
                 comparator =
@@ -94,9 +94,10 @@ private constructor(
                                     if (targetSymbol != null) {
                                         record.canTarget(targetSymbol)
                                     } else {
-                                        record.matchesExternalSymbol(
-                                            externalCandidates = externalCandidates,
-                                            localCandidates = localExternalCandidates,
+                                        record.matchesUnknownSymbolId(
+                                            externalNames = unknownTargetNames.external,
+                                            ambiguousNames = unknownTargetNames.ambiguous,
+                                            candidatesByName = unknownTargetCandidates,
                                         )
                                     }
                                 }
@@ -174,13 +175,32 @@ private constructor(
         return result
     }
 
-    private fun externalReferenceCandidates(symbolId: SymbolId): Set<String> {
-        val candidates = LinkedHashSet<String>()
+    private fun unknownReferenceNamesForId(symbolId: SymbolId): UnknownReferenceNames {
+        val external = LinkedHashSet<String>()
+        val ambiguous = LinkedHashSet<String>()
         store.forEachPrefix("ref:") { _, record ->
             if (record is ReferenceRecord) {
-                for (name in record.candidateSymbolFqns + record.symbolFqn) {
-                    if (with(queries) { externalSymbolId(name) } == symbolId) {
-                        candidates += name
+                val recordNames = record.candidateSymbolFqns + record.symbolFqn
+                with(queries) {
+                    recordNames.filterTo(external) { externalSymbolId(it) == symbolId }
+                    if (ambiguousSymbolId(record.symbolFqn) == symbolId) {
+                        ambiguous += record.symbolFqn
+                    }
+                }
+            }
+            true
+        }
+        return UnknownReferenceNames(external = external, ambiguous = ambiguous)
+    }
+
+    private fun candidatesByName(names: Set<String>): Map<String, List<SymbolRecord>> {
+        if (names.isEmpty()) return emptyMap()
+        val candidates = names.associateWith { mutableListOf<SymbolRecord>() }
+        store.forEachPrefix("sym:") { _, record ->
+            if (record is SymbolRecord) {
+                for (name in names) {
+                    if (record.fqn == name || name in record.aliases) {
+                        candidates.getValue(name) += record
                     }
                 }
             }
@@ -189,44 +209,27 @@ private constructor(
         return candidates
     }
 
-    private fun localExternalCandidates(externalCandidates: Set<String>): Map<String, Set<Int?>> {
-        if (externalCandidates.isEmpty()) return emptyMap()
-        val local = LinkedHashMap<String, MutableSet<Int?>>()
-        store.forEachPrefix("sym:") { _, record ->
-            if (record is SymbolRecord) {
-                for (name in externalCandidates) {
-                    if (name == record.fqn || name in record.aliases) {
-                        local.getOrPut(name) { linkedSetOf() } += record.arity
-                    }
-                }
-            }
-            true
-        }
-        return local
-    }
-
-    private fun ReferenceRecord.matchesExternalSymbol(
-        externalCandidates: Set<String>,
-        localCandidates: Map<String, Set<Int?>>,
+    private fun ReferenceRecord.matchesUnknownSymbolId(
+        externalNames: Set<String>,
+        ambiguousNames: Set<String>,
+        candidatesByName: Map<String, List<SymbolRecord>>,
     ): Boolean {
-        val names = candidateSymbolFqns + symbolFqn
-        val directIsExternal =
-            symbolFqn in externalCandidates &&
-                localCandidates[symbolFqn].orEmpty().none { arity.matches(it) }
-        if (directIsExternal) return true
+        fun localCandidates(name: String): List<SymbolRecord> =
+            candidatesByName[name].orEmpty().filter { with(queries) { isArityCompatibleWith(it) } }
 
-        val hasResolvedCandidate = names.any {
-            localCandidates[it].orEmpty().any { arity.matches(it) }
+        if (symbolFqn in ambiguousNames && localCandidates(symbolFqn).size > 1) return true
+        if (symbolFqn in externalNames && localCandidates(symbolFqn).isEmpty()) return true
+        return candidateSymbolFqns.any { name ->
+            name in externalNames && localCandidates(name).isEmpty()
         }
-        return !hasResolvedCandidate && names.any { it in externalCandidates }
     }
 
-    private fun Int?.matches(symbolArity: Int?): Boolean =
-        when {
-            this == null -> true
-            symbolArity == null -> false
-            else -> this == symbolArity
-        }
+    private class UnknownReferenceNames(
+        val external: Set<String> = emptySet(),
+        val ambiguous: Set<String> = emptySet(),
+    ) {
+        val all: Set<String> = external + ambiguous
+    }
 
     private fun candidatesFor(
         references: List<ReferenceRecord>

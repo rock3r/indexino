@@ -98,6 +98,7 @@ class IndexSnapshotQueriesTest {
         val public = with(queries) { reference.toPublicReference(candidates) }
 
         assertTrue(public.symbolId.value.startsWith("indexino:external:v1:"))
+        assertTrue(public.candidateSymbolIds.any { it.value.startsWith("indexino:external:v1:") })
         assertTrue(with(queries) { reference.matchesSymbolId(public.symbolId, candidates) })
     }
 }
