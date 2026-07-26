@@ -1,4 +1,4 @@
-@file:Suppress("RedundantSuspendModifier")
+@file:Suppress("RedundantSuspendModifier", "TooManyFunctions")
 
 package dev.sebastiano.indexino.api
 
