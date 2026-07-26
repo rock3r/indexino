@@ -82,7 +82,10 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
                 candidateSymbolFqns
                     .flatMap { name ->
                         candidates
-                            .filter { it.fqn == name || name in it.aliases }
+                            .filter {
+                                (it.fqn == name || name in it.aliases) &&
+                                    (it.arity == null || it.arity == arguments.size)
+                            }
                             .map { symbol -> symbol.definitionId() }
                             .ifEmpty { listOf(externalSymbolId(name)) }
                     }

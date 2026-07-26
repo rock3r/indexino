@@ -5,6 +5,7 @@ import com.sun.source.tree.CatchTree
 import com.sun.source.tree.ClassTree
 import com.sun.source.tree.CompilationUnitTree
 import com.sun.source.tree.EnhancedForLoopTree
+import com.sun.source.tree.ExpressionTree
 import com.sun.source.tree.ForLoopTree
 import com.sun.source.tree.IdentifierTree
 import com.sun.source.tree.ImportTree
@@ -195,6 +196,7 @@ internal class JavaSourceProducer : IndexProducer {
                 ownerFqn = owner,
                 signature = signature,
                 arity = node.parameters.size,
+                parameterNames = node.parameters.map { it.name.toString() },
             )
             variableScopes.addLast(mutableMapOf())
             node.parameters.forEach {
@@ -281,26 +283,53 @@ internal class JavaSourceProducer : IndexProducer {
                     candidates = target.candidates,
                 )
             }
-            call(node, target)
+            call(node, node.arguments, target, node.methodSelect.toString().substringAfterLast('.'))
             super.visitMethodInvocation(node, data)
         }
 
-        private fun call(node: MethodInvocationTree, target: InvocationTarget?) {
+        override fun visitNewClass(node: NewClassTree, data: Unit?) {
+            val owner = qualifyType(node.identifier.toString())
+            val target =
+                InvocationTarget(
+                    "$owner#<init>",
+                    node.identifier.toString().substringAfterLast('.'),
+                    null,
+                    listOf("$owner#<init>"),
+                )
+            reference(
+                target = owner,
+                name = target.name,
+                qualifier = null,
+                tree = node,
+                context = "call",
+                arity = node.arguments.size,
+                candidates = target.candidates,
+            )
+            call(node, node.arguments, target, target.name)
+            super.visitNewClass(node, data)
+        }
+
+        private fun call(
+            node: Tree,
+            arguments: List<ExpressionTree>,
+            target: InvocationTarget?,
+            fallbackName: String,
+        ) {
             val start = position(node)
             val end = endPosition(node)
             val identity = callIdentity(start)
+            val parameterNames =
+                target?.let { storedParameterNames(it.symbolFqn, arguments.size) }.orEmpty()
             val parent =
                 generateSequence(currentPath.parentPath) { it.parentPath }
                     .map { it.leaf }
-                    .filterIsInstance<MethodInvocationTree>()
-                    .firstOrNull()
+                    .firstOrNull { it is MethodInvocationTree || it is NewClassTree }
                     ?.let { parentNode -> callIdentity(position(parentNode)) }
             store.put(
                 CodeIndexKey.call(identity),
                 CallSiteRecord(
                     identity = identity,
-                    calleeName =
-                        target?.name ?: node.methodSelect.toString().substringAfterLast('.'),
+                    calleeName = target?.name ?: fallbackName,
                     candidateSymbolFqns = target?.candidates.orEmpty(),
                     receiver = target?.qualifier,
                     enclosingSymbolFqn = methodOwners.lastOrNull(),
@@ -313,12 +342,13 @@ internal class JavaSourceProducer : IndexProducer {
                     endColumn = end.column,
                     endOffset = end.offset,
                     arguments =
-                        node.arguments.mapIndexed { index, argument ->
+                        arguments.mapIndexed { index, argument ->
                             val argumentStart = position(argument)
                             val argumentEnd = endPosition(argument)
                             CallArgumentRecord(
                                 position = index,
                                 kind = if (argument is LambdaExpressionTree) "LAMBDA" else "VALUE",
+                                resolvedName = parameterNames.getOrNull(index),
                                 startLine = argumentStart.line,
                                 startColumn = argumentStart.column,
                                 startOffset = argumentStart.offset,
@@ -340,9 +370,25 @@ internal class JavaSourceProducer : IndexProducer {
                         identities += callIdentity(position(node))
                         return super.visitMethodInvocation(node, data)
                     }
+
+                    override fun visitNewClass(node: NewClassTree, data: Unit?) {
+                        identities += callIdentity(position(node))
+                        return super.visitNewClass(node, data)
+                    }
                 }
                 .scan(argument, Unit)
             return identities
+        }
+
+        private fun storedParameterNames(fqn: String, argumentCount: Int): List<String> {
+            val candidates = mutableListOf<SymbolRecord>()
+            store.forEachPrefix("sym:$fqn:") { _, record ->
+                if (record is SymbolRecord && record.fqn == fqn && record.arity == argumentCount) {
+                    candidates += record
+                }
+                true
+            }
+            return candidates.singleOrNull()?.parameterNames.orEmpty()
         }
 
         private fun resolveInvocation(select: Tree): InvocationTarget? =
@@ -470,6 +516,7 @@ internal class JavaSourceProducer : IndexProducer {
             ownerFqn: String? = null,
             signature: String? = null,
             arity: Int? = null,
+            parameterNames: List<String> = emptyList(),
         ) {
             val position = position(tree)
             store.put(
@@ -484,6 +531,7 @@ internal class JavaSourceProducer : IndexProducer {
                     ownerFqn = ownerFqn,
                     signature = signature,
                     arity = arity,
+                    parameterNames = parameterNames,
                 ),
             )
         }

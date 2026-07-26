@@ -151,18 +151,20 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         for (call in file.collectDescendantsOfType<KtCallExpression>()) {
             val identity = callIdentity(relativePath, call)
             val target = resolveCall(file, call, projectSymbols, imports, store)
+            val explicitArgumentCount = call.valueArguments.size + call.lambdaArguments.size
             val parameterNames =
                 target
                     ?.let { resolved ->
                         projectSymbols
-                            .firstOrNull {
-                                it.fqn == resolved.symbolFqn && it.arity == call.valueArguments.size
+                            .singleOrNull {
+                                it.fqn == resolved.symbolFqn &&
+                                    (it.arity == null || it.arity >= explicitArgumentCount)
                             }
                             ?.parameterNames
                             ?: storedParameterNames(
                                 store,
                                 resolved.symbolFqn,
-                                call.valueArguments.size,
+                                explicitArgumentCount,
                             )
                     }
                     .orEmpty()
@@ -193,17 +195,23 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         }
     }
 
-    private fun storedParameterNames(store: CodeIndexStore, fqn: String, arity: Int): List<String> {
-        var parameterNames = emptyList<String>()
+    private fun storedParameterNames(
+        store: CodeIndexStore,
+        fqn: String,
+        argumentCount: Int,
+    ): List<String> {
+        val candidates = mutableListOf<SymbolRecord>()
         store.forEachPrefix("sym:$fqn:") { _, record ->
-            if (record is SymbolRecord && record.fqn == fqn && record.arity == arity) {
-                parameterNames = record.parameterNames
-                false
-            } else {
-                true
+            if (
+                record is SymbolRecord &&
+                    record.fqn == fqn &&
+                    (record.arity == null || record.arity >= argumentCount)
+            ) {
+                candidates += record
             }
+            true
         }
-        return parameterNames
+        return candidates.singleOrNull()?.parameterNames.orEmpty()
     }
 
     private fun callArguments(

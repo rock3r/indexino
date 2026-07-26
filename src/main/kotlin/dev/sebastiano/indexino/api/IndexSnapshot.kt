@@ -6,6 +6,8 @@ import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
+import dev.sebastiano.indexino.model.BasicFactQueries
+import dev.sebastiano.indexino.model.BasicFactSchemaVersion
 import dev.sebastiano.indexino.model.CallQuery
 import dev.sebastiano.indexino.model.CallSite
 import dev.sebastiano.indexino.model.IndexFailureCategory
@@ -28,14 +30,15 @@ public class IndexSnapshot
 private constructor(
     private val store: CodeIndexStore,
     public val revision: WorkspaceRevision,
-    public val generation: WorkspaceGenerationId,
+    override val generation: WorkspaceGenerationId,
+    override val basicFactSchemaVersion: BasicFactSchemaVersion = BasicFactSchemaVersion.of(1),
     public val freshnessAtAcquisition: SnapshotFreshness,
     private val onClose: () -> Unit,
-) : AutoCloseable {
+) : BasicFactQueries, AutoCloseable {
     private val closed = AtomicBoolean()
     private val queries = IndexSnapshotQueries(generation)
 
-    public suspend fun findSymbols(query: SymbolQuery, options: QueryOptions): QueryPage<Symbol> {
+    override suspend fun findSymbols(query: SymbolQuery, options: QueryOptions): QueryPage<Symbol> {
         ensureOpen()
         validateQueryOptions(options)
         return mapUnexpectedFailures {
@@ -67,7 +70,7 @@ private constructor(
         }
     }
 
-    public suspend fun findReferences(
+    override suspend fun findReferences(
         query: ReferenceQuery,
         options: QueryOptions,
     ): QueryPage<Reference> {
@@ -121,7 +124,7 @@ private constructor(
         }
     }
 
-    public suspend fun findCalls(query: CallQuery, options: QueryOptions): QueryPage<CallSite> {
+    override suspend fun findCalls(query: CallQuery, options: QueryOptions): QueryPage<CallSite> {
         ensureOpen()
         validateQueryOptions(options)
         return mapUnexpectedFailures {

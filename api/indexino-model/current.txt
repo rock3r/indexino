@@ -16,6 +16,27 @@ package dev.sebastiano.indexino.model {
     property public dev.sebastiano.indexino.model.ArgumentKind VALUE;
   }
 
+  public interface BasicFactQueries {
+    method public suspend Object? findCalls(dev.sebastiano.indexino.model.CallQuery query, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.CallSite>>);
+    method public suspend Object? findReferences(dev.sebastiano.indexino.model.ReferenceQuery query, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.Reference>>);
+    method public suspend Object? findSymbols(dev.sebastiano.indexino.model.SymbolQuery query, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.Symbol>>);
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.BasicFactSchemaVersion getBasicFactSchemaVersion();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.WorkspaceGenerationId getGeneration();
+    property public abstract dev.sebastiano.indexino.model.BasicFactSchemaVersion basicFactSchemaVersion;
+    property public abstract dev.sebastiano.indexino.model.WorkspaceGenerationId generation;
+  }
+
+  public final class BasicFactSchemaVersion {
+    method @InaccessibleFromKotlin public int getValue();
+    method public static dev.sebastiano.indexino.model.BasicFactSchemaVersion of(int value);
+    property public int value;
+    field public static final dev.sebastiano.indexino.model.BasicFactSchemaVersion.Companion Companion;
+  }
+
+  public static final class BasicFactSchemaVersion.Companion {
+    method public dev.sebastiano.indexino.model.BasicFactSchemaVersion of(int value);
+  }
+
   public final class CallArgument {
     ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public CallArgument(int position, String? resolvedName, dev.sebastiano.indexino.model.ArgumentKind kind, dev.sebastiano.indexino.model.SourceRange range, java.util.List<dev.sebastiano.indexino.model.CallSiteId> nestedCallIds);
     method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.ArgumentKind getKind();

@@ -97,11 +97,44 @@ class JavaSourceProducerTest {
             val outer = calls.first { it.calleeName == "outer" }
             assertEquals(1, outer.arguments.size)
             assertEquals("LAMBDA", outer.arguments.single().kind)
+            assertEquals("content", outer.arguments.single().resolvedName)
             assertEquals("sample.Calls#render", outer.enclosingSymbolFqn)
             val child = calls.first { it.calleeName == "child" }
             assertEquals(listOf(child.identity), outer.arguments.single().nestedCallIdentities)
             assertTrue(outer.startOffset < outer.endOffset)
             assertEquals(')', source[outer.endOffset])
+        }
+    }
+
+    @Test
+    fun `indexes Java constructor calls and nested constructor arguments`() {
+        val source =
+            """
+            package sample;
+            class Child {}
+            class Parent { Parent(Child child) {} }
+            class Calls { void render() { new Parent(new Child()); } }
+            """
+                .trimIndent()
+        withStore { store ->
+            checkNotNull(ProducerRegistry.get("java-source"))
+                .produce(
+                    IndexBuildContext.forInlineSources(
+                        store = store,
+                        commitHash = "constructors",
+                        sourceFiles = mapOf("Calls.java" to source),
+                    )
+                )
+            val calls =
+                store
+                    .prefixScan("call:")
+                    .map { it.second }
+                    .filterIsInstance<CallSiteRecord>()
+                    .toList()
+            val parent = calls.first { it.calleeName == "Parent" }
+            val child = calls.first { it.calleeName == "Child" }
+            assertEquals(listOf(child.identity), parent.arguments.single().nestedCallIdentities)
+            assertEquals("sample.Calls#render", parent.enclosingSymbolFqn)
         }
     }
 

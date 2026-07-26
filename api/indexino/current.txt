@@ -42,14 +42,16 @@ package dev.sebastiano.indexino.api {
     method public dev.sebastiano.indexino.api.IndexScope gradle(String module);
   }
 
-  public final class IndexSnapshot implements java.lang.AutoCloseable {
+  public final class IndexSnapshot implements java.lang.AutoCloseable dev.sebastiano.indexino.model.BasicFactQueries {
     method public void close();
     method public suspend Object? findCalls(dev.sebastiano.indexino.model.CallQuery query, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.CallSite>>);
     method public suspend Object? findReferences(dev.sebastiano.indexino.model.ReferenceQuery query, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.Reference>>);
     method public suspend Object? findSymbols(dev.sebastiano.indexino.model.SymbolQuery query, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.Symbol>>);
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.BasicFactSchemaVersion getBasicFactSchemaVersion();
     method @InaccessibleFromKotlin public dev.sebastiano.indexino.api.SnapshotFreshness getFreshnessAtAcquisition();
     method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.WorkspaceGenerationId getGeneration();
     method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.WorkspaceRevision getRevision();
+    property public dev.sebastiano.indexino.model.BasicFactSchemaVersion basicFactSchemaVersion;
     property public dev.sebastiano.indexino.api.SnapshotFreshness freshnessAtAcquisition;
     property public dev.sebastiano.indexino.model.WorkspaceGenerationId generation;
     property public dev.sebastiano.indexino.model.WorkspaceRevision revision;
