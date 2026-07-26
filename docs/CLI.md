@@ -182,10 +182,10 @@ indexino status --project /path/to/monorepo [--bazel-target //pkg:ui]
 indexino status --project /path/to/gradle-repo --gradle-module :ui
 ```
 
-When scope flags are omitted, freshness is checked against the scope stored in the generation
-manifest. May include reclaimable-cache hints for operators. **Transitional shipping CLI** may still
-re-resolve topology and rehash — that is a bug relative to the product contract, not a feature to
-preserve.
+When scope flags are omitted, freshness is checked against the scope and `includeDeps` stored in the
+generation manifest (whether the index is still current for its own configuration). May include
+reclaimable-cache hints for operators. **Transitional shipping CLI** may still re-resolve topology
+and rehash — that is a bug relative to the product contract, not a feature to preserve.
 
 ### `script` (Alpha; requires script-host on the distribution)
 

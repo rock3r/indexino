@@ -114,6 +114,7 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                 requireScopeMatchesManifest(
                     scope = request.scope,
                     observedIncludeDeps = manifest.includeDeps,
+                    observedTopology = manifest.topology,
                     observedOverride = observedIncludeDepsOverrideForTests,
                 )
                 val revision = manifest.toWorkspaceRevision()
@@ -408,18 +409,31 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
 private fun requireScopeMatchesManifest(
     scope: IndexScope,
     observedIncludeDeps: Boolean,
+    observedTopology: String,
     observedOverride: Boolean?,
 ) {
     val observed = observedOverride ?: observedIncludeDeps
     if (observed != scope.includesDependencies) {
         // S1 has no RefreshWarningEvent channel yet (S3). Fail rather than publish an index
         // whose closure does not match the requested scope; revisit as a warning in S3.
+        val causeHint =
+            when {
+                scope.buildSystem != BuildSystem.BAZEL || observed -> ""
+                observedTopology == "build-parse" ->
+                    "; Bazel was not found on PATH — install Bazel or index this workspace " +
+                        "through the CLI (degraded target-only topology is not published " +
+                        "through the facade)"
+                else ->
+                    "; the Bazel dependency query failed for this target — check the target " +
+                        "and its BUILD file (degraded target-only topology is not published " +
+                        "through the facade)"
+            }
         throw indexinoFailure(
             category = IndexFailureCategory.TOPOLOGY,
             code = "scope_include_deps_mismatch",
             message =
                 "Resolved includeDeps=$observed but scope requested " +
-                    "includesDependencies=${scope.includesDependencies}",
+                    "includesDependencies=${scope.includesDependencies}$causeHint",
             retryable = true,
         )
     }
