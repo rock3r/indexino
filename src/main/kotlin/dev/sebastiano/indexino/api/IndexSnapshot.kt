@@ -14,9 +14,11 @@ import dev.sebastiano.indexino.model.Reference
 import dev.sebastiano.indexino.model.ReferenceQuery
 import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.Symbol
+import dev.sebastiano.indexino.model.SymbolId
 import dev.sebastiano.indexino.model.SymbolQuery
 import dev.sebastiano.indexino.model.WorkspaceGenerationId
 import dev.sebastiano.indexino.model.WorkspaceRevision
+import java.util.PriorityQueue
 import java.util.concurrent.atomic.AtomicBoolean
 
 public class IndexSnapshot
@@ -34,24 +36,31 @@ private constructor(
         ensureOpen()
         validateQueryOptions(options)
         return mapUnexpectedFailures {
-            val symbols = symbolRecords()
-            val symbolsByName = queries.indexSymbolsByName(symbols)
-            val records =
-                symbols
-                    .asSequence()
-                    .filter { it.matches(query) }
-                    .sortedWith(
-                        compareBy(
-                            SymbolRecord::fqn,
-                            SymbolRecord::relativeFile,
-                            SymbolRecord::line,
-                            { it.signature.orEmpty() },
-                            SymbolRecord::name,
-                        )
-                    )
-                    .map { with(queries) { it.toPublicSymbol(symbolsByName) } }
-                    .toList()
-            records.page(options)
+            orderedPage(
+                options = options,
+                comparator =
+                    compareBy(
+                        SymbolRecord::fqn,
+                        SymbolRecord::relativeFile,
+                        SymbolRecord::line,
+                        { it.signature.orEmpty() },
+                        SymbolRecord::name,
+                    ),
+                scan = { accept ->
+                    store.forEachPrefix("sym:") { _, record ->
+                        if (record is SymbolRecord && record.matches(query)) {
+                            accept(record)
+                        }
+                        true
+                    }
+                },
+                transform = { records ->
+                    val ownerIds = ownerIdsFor(records)
+                    records.map { record ->
+                        with(queries) { record.toPublicSymbol(ownerIds.getValue(record)) }
+                    }
+                },
+            )
         }
     }
 
@@ -62,36 +71,48 @@ private constructor(
         ensureOpen()
         validateQueryOptions(options)
         return mapUnexpectedFailures {
-            val symbols = symbolRecords()
-            val symbolsByName = queries.indexSymbolsByName(symbols)
-            val targetSymbol =
-                with(queries) { symbols.firstOrNull { it.definitionId() == query.symbolId } }
-            val records =
-                store
-                    .prefixScan("ref:")
-                    .map { it.second }
-                    .filterIsInstance<ReferenceRecord>()
-                    .filter { reference ->
-                        with(queries) {
-                            if (targetSymbol != null) {
-                                reference.canTarget(targetSymbol)
-                            } else {
-                                reference.matchesSymbolId(query.symbolId, symbolsByName)
+            val targetSymbol = findSymbolById(query.symbolId)
+            val externalCandidates =
+                if (targetSymbol == null) externalReferenceCandidates(query.symbolId) else emptySet()
+            val localExternalCandidates = localExternalCandidates(externalCandidates)
+            orderedPage(
+                options = options,
+                comparator =
+                    compareBy(
+                        ReferenceRecord::relativeFile,
+                        ReferenceRecord::line,
+                        ReferenceRecord::column,
+                        ReferenceRecord::referencedName,
+                        ReferenceRecord::symbolFqn,
+                    ),
+                scan = { accept ->
+                    store.forEachPrefix("ref:") { _, record ->
+                        if (record is ReferenceRecord) {
+                            val matches =
+                                with(queries) {
+                                    if (targetSymbol != null) {
+                                        record.canTarget(targetSymbol)
+                                    } else {
+                                        record.matchesExternalSymbol(
+                                            externalCandidates = externalCandidates,
+                                            localCandidates = localExternalCandidates,
+                                        )
+                                    }
+                                }
+                            if (matches) {
+                                accept(record)
                             }
                         }
+                        true
                     }
-                    .sortedWith(
-                        compareBy(
-                            ReferenceRecord::relativeFile,
-                            ReferenceRecord::line,
-                            ReferenceRecord::column,
-                            ReferenceRecord::referencedName,
-                            ReferenceRecord::symbolFqn,
-                        )
-                    )
-                    .map { with(queries) { it.toPublicReference(symbolsByName) } }
-                    .toList()
-            records.page(options)
+                },
+                transform = { records ->
+                    val candidates = candidatesFor(records)
+                    records.map { record ->
+                        with(queries) { record.toPublicReference(checkNotNull(candidates[record])) }
+                    }
+                },
+            )
         }
     }
 
@@ -139,10 +160,147 @@ private constructor(
         return fileMatches && kindMatches && languageMatches && nameMatches
     }
 
-    private fun symbolRecords(): List<SymbolRecord> =
-        // Resource definitions stay in producer storage for the CLI, but the embedded API must not
-        // expose them through Symbol queries before the S10 resource model lands.
-        store.prefixScan("sym:").map { it.second }.filterIsInstance<SymbolRecord>().toList()
+    private fun findSymbolById(symbolId: SymbolId): SymbolRecord? {
+        var result: SymbolRecord? = null
+        store.forEachPrefix("sym:") { _, record ->
+            if (record is SymbolRecord && with(queries) { record.definitionId() == symbolId }) {
+                result = record
+                false
+            } else {
+                true
+            }
+        }
+        return result
+    }
+
+    private fun externalReferenceCandidates(symbolId: SymbolId): Set<String> {
+        val candidates = LinkedHashSet<String>()
+        store.forEachPrefix("ref:") { _, record ->
+            if (record is ReferenceRecord) {
+                for (name in record.candidateSymbolFqns + record.symbolFqn) {
+                    if (with(queries) { externalSymbolId(name) } == symbolId) {
+                        candidates += name
+                    }
+                }
+            }
+            true
+        }
+        return candidates
+    }
+
+    private fun localExternalCandidates(externalCandidates: Set<String>): Map<String, Set<Int?>> {
+        if (externalCandidates.isEmpty()) return emptyMap()
+        val local = LinkedHashMap<String, MutableSet<Int?>>()
+        store.forEachPrefix("sym:") { _, record ->
+            if (record is SymbolRecord) {
+                for (name in externalCandidates) {
+                    if (name == record.fqn || name in record.aliases) {
+                        local.getOrPut(name) { linkedSetOf() } += record.arity
+                    }
+                }
+            }
+            true
+        }
+        return local
+    }
+
+    private fun ReferenceRecord.matchesExternalSymbol(
+        externalCandidates: Set<String>,
+        localCandidates: Map<String, Set<Int?>>,
+    ): Boolean {
+        val names = candidateSymbolFqns + symbolFqn
+        val directIsExternal =
+            symbolFqn in externalCandidates &&
+                localCandidates[symbolFqn].orEmpty().none { arity.matches(it) }
+        if (directIsExternal) return true
+
+        val hasResolvedCandidate = names.any { localCandidates[it].orEmpty().any { arity.matches(it) } }
+        return !hasResolvedCandidate && names.any { it in externalCandidates }
+    }
+
+    private fun Int?.matches(symbolArity: Int?): Boolean =
+        when {
+            this == null -> true
+            symbolArity == null -> false
+            else -> this == symbolArity
+        }
+
+    private fun candidatesFor(references: List<ReferenceRecord>): Map<ReferenceRecord, List<SymbolRecord>> {
+        if (references.isEmpty()) return emptyMap()
+        val namesByReference = references.associateWith { it.candidateSymbolFqns + it.symbolFqn }
+        val matchesByReference = LinkedHashMap<ReferenceRecord, LinkedHashMap<String, MutableList<SymbolRecord>>>()
+        store.forEachPrefix("sym:") { _, record ->
+            if (record is SymbolRecord) {
+                for ((reference, names) in namesByReference) {
+                    if (with(queries) { reference.isArityCompatibleWith(record) }) {
+                        for (name in names) {
+                            if (name == record.fqn || name in record.aliases) {
+                                matchesByReference
+                                    .getOrPut(reference) { LinkedHashMap() }
+                                    .getOrPut(name) { mutableListOf() }
+                                    .add(record)
+                            }
+                        }
+                    }
+                }
+            }
+            true
+        }
+        return references.associateWith { reference ->
+            val candidates = LinkedHashSet<SymbolRecord>()
+            for (name in namesByReference.getValue(reference)) {
+                matchesByReference[reference]?.get(name)?.let(candidates::addAll)
+            }
+            candidates.toList()
+        }
+    }
+
+    private fun ownerIdsFor(symbols: List<SymbolRecord>): Map<SymbolRecord, SymbolId?> {
+        val symbolsByOwner =
+            symbols.mapNotNull { symbol -> symbol.ownerFqn?.let { it to symbol } }.groupBy({ it.first }, { it.second })
+        if (symbolsByOwner.isEmpty()) return symbols.associateWith { null }
+
+        val candidates: MutableMap<SymbolRecord, OwnerCandidates> =
+            symbolsByOwner.values.flatten().associateWith { OwnerCandidates() }.toMutableMap()
+        store.forEachPrefix("sym:") { _, record ->
+            if (record is SymbolRecord) {
+                val owners = buildSet {
+                    if (record.fqn in symbolsByOwner) add(record.fqn)
+                    record.aliases.filterTo(this) { it in symbolsByOwner }
+                }
+                for (owner in owners) {
+                    for (symbol in symbolsByOwner.getValue(owner)) {
+                        candidates.getValue(symbol).consider(owner, symbol.relativeFile, record)
+                    }
+                }
+            }
+            true
+        }
+        return symbols.associateWith { symbol ->
+            symbol.ownerFqn?.let { owner ->
+                with(queries) { candidates.getValue(symbol).best()?.definitionId() ?: externalSymbolId(owner) }
+            }
+        }
+    }
+
+    private class OwnerCandidates {
+        private var sameFileExact: SymbolRecord? = null
+        private var sameFileAlias: SymbolRecord? = null
+        private var exact: SymbolRecord? = null
+        private var alias: SymbolRecord? = null
+
+        fun consider(owner: String, symbolFile: String, candidate: SymbolRecord) {
+            when {
+                candidate.fqn == owner && candidate.relativeFile == symbolFile ->
+                    sameFileExact = sameFileExact ?: candidate
+                candidate.relativeFile == symbolFile -> sameFileAlias = sameFileAlias ?: candidate
+                candidate.fqn == owner -> exact = exact ?: candidate
+                else -> alias = alias ?: candidate
+            }
+        }
+
+        fun best(): SymbolRecord? = sameFileExact ?: sameFileAlias ?: exact ?: alias
+    }
 
     private fun <T> mapUnexpectedFailures(block: () -> T): T =
         try {
@@ -173,34 +331,82 @@ private constructor(
                 retryable = false,
             )
         }
+        validatePageWindow(parsePageOffset(options), options.limit)
     }
 
     @OptIn(IndexinoInternalApi::class)
-    private fun <T> List<T>.page(options: QueryOptions): QueryPage<T> {
-        val offset =
-            options.afterCursor?.let { cursor ->
-                val decoded = cursor.removePrefix(CURSOR_PREFIX)
-                if (decoded == cursor || decoded.toIntOrNull()?.let { it >= 0 } != true) {
-                    throw indexinoFailure(
-                        category = IndexFailureCategory.INVALID_REQUEST,
-                        code = "invalid_cursor",
-                        message = "Query cursor is invalid",
-                        retryable = false,
-                    )
-                }
-                decoded.toInt()
-            } ?: options.offset
-        val end = (offset.toLong() + options.limit).coerceAtMost(size.toLong()).toInt()
-        val items = if (offset >= size) emptyList() else subList(offset, end)
-        val hasMore = end < size
+    private fun <T, R> orderedPage(
+        options: QueryOptions,
+        comparator: Comparator<T>,
+        scan: ((T) -> Unit) -> Unit,
+        transform: (List<T>) -> List<R>,
+    ): QueryPage<R> {
+        val offset = parsePageOffset(options)
+        validatePageWindow(offset, options.limit)
+        val windowSize = offset + options.limit + 1
+        val retained = PriorityQueue<T>(windowSize, comparator.reversed())
+        scan { candidate ->
+            if (retained.size < windowSize) {
+                retained.add(candidate)
+            } else if (comparator.compare(candidate, retained.peek()) < 0) {
+                retained.remove()
+                retained.add(candidate)
+            }
+        }
+        val ordered = retained.sortedWith(comparator)
+        val end = minOf(offset + options.limit, ordered.size)
+        if (ordered.size > end && end == HOST_QUERY_WINDOW_MAXIMUM) {
+            throw indexinoFailure(
+                category = IndexFailureCategory.INVALID_REQUEST,
+                code = "result_window_exceeds_maximum",
+                message = "Query result window exceeds the host maximum of $HOST_QUERY_WINDOW_MAXIMUM",
+                retryable = false,
+            )
+        }
+        val pageItems = if (offset >= ordered.size) emptyList() else ordered.subList(offset, end)
+        val items = transform(pageItems)
+        val hasMore = ordered.size > end
         return QueryPage(
             items = items,
             offset = offset,
             limit = options.limit,
             hasMore = hasMore,
             nextCursor = "$CURSOR_PREFIX$end".takeIf { hasMore },
-            totalCount = size,
+            totalCount = null,
         )
+    }
+
+    private fun parsePageOffset(options: QueryOptions): Int =
+        options.afterCursor?.let { cursor ->
+            val decoded = cursor.removePrefix(CURSOR_PREFIX)
+            if (decoded == cursor || decoded.toIntOrNull()?.let { it >= 0 } != true) {
+                throw indexinoFailure(
+                    category = IndexFailureCategory.INVALID_REQUEST,
+                    code = "invalid_cursor",
+                    message = "Query cursor is invalid",
+                    retryable = false,
+                )
+            }
+            decoded.toInt()
+        } ?: options.offset
+
+    private fun validatePageWindow(offset: Int, limit: Int) {
+        if (offset > HOST_QUERY_WINDOW_MAXIMUM) {
+            throw indexinoFailure(
+                category = IndexFailureCategory.INVALID_REQUEST,
+                code = "offset_exceeds_maximum",
+                message = "offset $offset exceeds the host maximum of $HOST_QUERY_WINDOW_MAXIMUM",
+                retryable = false,
+            )
+        }
+        if (offset.toLong() + limit > HOST_QUERY_WINDOW_MAXIMUM) {
+            throw indexinoFailure(
+                category = IndexFailureCategory.INVALID_REQUEST,
+                code = "page_window_exceeds_maximum",
+                message = "Query offset and limit exceed the host result maximum",
+                retryable = false,
+            )
+        }
     }
 
     internal companion object {
@@ -208,6 +414,7 @@ private constructor(
         // Host policy for this in-process facade. Not a public ABI constant until the owner
         // settles exact default page limits in docs/PUBLIC-API-DESIGN.html.
         private const val HOST_QUERY_LIMIT_MAXIMUM: Int = 10_000
+        private const val HOST_QUERY_WINDOW_MAXIMUM: Int = 10_000
         private val WORKSPACE_ORIGIN: SourceOriginId = SourceOriginId.of("workspace")
 
         internal fun create(

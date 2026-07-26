@@ -844,7 +844,6 @@ class InProcessIndexinoTest {
             snapshot = snapshot,
             sourceFile = sourceFile,
             cursor = cursor,
-            totalCount = checkNotNull(firstSymbols.totalCount),
         )
 
         val remainingSymbols = runSuspend {
@@ -906,24 +905,24 @@ class InProcessIndexinoTest {
         snapshot: IndexSnapshot,
         sourceFile: SourceFile,
         cursor: String,
-        totalCount: Int,
     ) {
         // Host maximum is 10_000 (facade policy; not published as a public constant yet).
         val hostMax = 10_000
-        val overflowSafeSymbols = runSuspend {
-            snapshot.findSymbols(
-                SymbolQuery.inFile(sourceFile),
-                QueryOptions.page(limit = hostMax, offset = 1),
-            )
-        }
-        assertEquals(totalCount - 1, overflowSafeSymbols.items.size)
-        assertFalse(overflowSafeSymbols.hasMore)
-        assertEquals(null, overflowSafeSymbols.nextCursor)
+        val windowFailure =
+            assertFailsWith<IndexinoException> {
+                runSuspend {
+                    snapshot.findSymbols(
+                        SymbolQuery.inFile(sourceFile),
+                        QueryOptions.page(limit = hostMax, offset = 1),
+                    )
+                }
+            }
+        assertEquals("page_window_exceeds_maximum", windowFailure.failure.code)
 
         val atHostMax = runSuspend {
             snapshot.findSymbols(SymbolQuery.inFile(sourceFile), QueryOptions.page(limit = hostMax))
         }
-        assertEquals(totalCount, atHostMax.totalCount)
+        assertEquals(null, atHostMax.totalCount)
 
         val overHostMax =
             assertFailsWith<IndexinoException> {

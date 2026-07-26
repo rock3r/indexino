@@ -42,7 +42,7 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
         )
 
     @OptIn(IndexinoInternalApi::class)
-    fun SymbolRecord.toPublicSymbol(symbolsByName: Map<String, List<SymbolRecord>>): Symbol {
+    fun SymbolRecord.toPublicSymbol(ownerId: SymbolId?): Symbol {
         val location = sourceLocation(relativeFile, line, null)
         return Symbol(
             id = definitionId(),
@@ -51,28 +51,17 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
             language = language,
             location = location,
             range = null,
-            ownerId =
-                ownerFqn?.let { owner ->
-                    val owners = symbolsByName[owner].orEmpty()
-                    owners
-                        .firstOrNull { it.fqn == owner && it.relativeFile == relativeFile }
-                        ?.definitionId()
-                        ?: owners.firstOrNull { it.relativeFile == relativeFile }?.definitionId()
-                        ?: owners.firstOrNull { it.fqn == owner }?.definitionId()
-                        ?: owners.firstOrNull()?.definitionId()
-                        ?: externalId(owner)
-                },
+            ownerId = ownerId,
             signature = signature,
             arity = arity,
             aliases = aliases,
         )
     }
 
+    fun externalSymbolId(fqn: String): SymbolId = externalId(fqn)
+
     @OptIn(IndexinoInternalApi::class)
-    fun ReferenceRecord.toPublicReference(
-        symbolsByName: Map<String, List<SymbolRecord>>
-    ): Reference {
-        val candidates = candidateSymbols(symbolsByName)
+    fun ReferenceRecord.toPublicReference(candidates: List<SymbolRecord>): Reference {
         val directMatches = candidates.filter { it.fqn == symbolFqn || symbolFqn in it.aliases }
         val direct =
             when (directMatches.size) {
@@ -93,13 +82,10 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
         )
     }
 
-    fun ReferenceRecord.matchesSymbolId(
-        symbolId: SymbolId,
-        symbolsByName: Map<String, List<SymbolRecord>>,
-    ): Boolean {
+    fun ReferenceRecord.matchesSymbolId(symbolId: SymbolId, candidates: List<SymbolRecord>): Boolean {
         // Match the IDs materialization would actually emit so external directs still round-trip
         // when other candidate names resolve locally (S9 may later rank multi-origin duplicates).
-        val materialized = toPublicReference(symbolsByName)
+        val materialized = toPublicReference(candidates)
         return materialized.symbolId == symbolId || symbolId in materialized.candidateSymbolIds
     }
 
@@ -110,20 +96,8 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
         return nameMatches && arityCompatibleWith(symbol)
     }
 
-    private fun ReferenceRecord.candidateSymbols(
-        symbolsByName: Map<String, List<SymbolRecord>>
-    ): List<SymbolRecord> {
-        val seen = LinkedHashSet<SymbolRecord>()
-        for (name in candidateSymbolFqns + symbolFqn) {
-            val matches = symbolsByName[name] ?: continue
-            for (symbol in matches) {
-                if (arityCompatibleWith(symbol)) {
-                    seen += symbol
-                }
-            }
-        }
-        return seen.toList()
-    }
+    fun ReferenceRecord.isArityCompatibleWith(symbol: SymbolRecord): Boolean =
+        arityCompatibleWith(symbol)
 
     private fun ReferenceRecord.arityCompatibleWith(symbol: SymbolRecord): Boolean =
         when {

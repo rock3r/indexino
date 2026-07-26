@@ -2,8 +2,11 @@ package dev.sebastiano.indexino.api
 
 import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.CodeIndexRecord
+import dev.sebastiano.indexino.core.record.ReferenceRecord
+import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.model.IndexinoInternalApi
+import dev.sebastiano.indexino.model.NameMatchMode
 import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.ReferenceQuery
 import dev.sebastiano.indexino.model.SourceOriginId
@@ -67,6 +70,261 @@ class IndexSnapshotStorageFailureTest {
 
     @OptIn(IndexinoInternalApi::class)
     @Test
+    fun `queries do not materialize rows beyond the requested page`() {
+        val snapshot =
+            snapshotWithRecords(
+                CodeIndexKey.symbolDefinition("demo.First", "First.kt", 1, 1) to
+                    SymbolRecord(
+                        fqn = "demo.First",
+                        relativeFile = "First.kt",
+                        line = 1,
+                        kind = "class",
+                        name = "First",
+                    ),
+                CodeIndexKey.symbolDefinition("demo.Later", "Later.kt", 0, 1) to
+                    SymbolRecord(
+                        fqn = "demo.Later",
+                        relativeFile = "Later.kt",
+                        line = 0,
+                        kind = "class",
+                        name = "Later",
+                    ),
+                CodeIndexKey.ref("demo.First", "First.kt", 1) to
+                    ReferenceRecord(
+                        symbolFqn = "demo.First",
+                        relativeFile = "First.kt",
+                        line = 1,
+                        column = 1,
+                    ),
+                CodeIndexKey.ref("demo.First", "Later.kt", 0) to
+                    ReferenceRecord(
+                        symbolFqn = "demo.First",
+                        relativeFile = "Later.kt",
+                        line = 0,
+                        column = 1,
+                    ),
+            )
+        try {
+            val symbols =
+                runCatching {
+                    runSuspend {
+                        snapshot.findSymbols(
+                            SymbolQuery.named("demo.").withMatch(NameMatchMode.PREFIX),
+                            QueryOptions.page(limit = 1),
+                        )
+                    }
+                }.getOrNull()
+            assertTrue(symbols != null, "The first symbol page must not materialize later rows")
+            assertEquals(listOf("First"), symbols.items.map { it.name })
+            assertTrue(symbols.hasMore)
+            assertEquals(null, symbols.totalCount)
+
+            val references =
+                runCatching {
+                    runSuspend {
+                        snapshot.findReferences(
+                            ReferenceQuery.to(symbols.items.single().id),
+                            QueryOptions.page(limit = 1),
+                        )
+                    }
+                }.getOrNull()
+            assertTrue(references != null, "The first reference page must not materialize later rows")
+            assertEquals(listOf("First.kt"), references.items.map { it.location.file.path })
+            assertTrue(references.hasMore)
+            assertEquals(null, references.totalCount)
+        } finally {
+            snapshot.close()
+        }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    @Test
+    fun `findSymbols uses the bounded store scan rather than prefixScan materialization`() {
+        val record =
+            CodeIndexKey.symbolDefinition("demo.Streamed", "Streamed.kt", 1, 1) to
+                SymbolRecord(
+                    fqn = "demo.Streamed",
+                    relativeFile = "Streamed.kt",
+                    line = 1,
+                    kind = "class",
+                    name = "Streamed",
+                )
+        val reference =
+            CodeIndexKey.ref("demo.Streamed", "Use.kt", 1) to
+                ReferenceRecord(
+                    symbolFqn = "demo.Streamed",
+                    relativeFile = "Use.kt",
+                    line = 1,
+                    column = 1,
+                )
+        val snapshot = snapshotWithStreamingRecords(record, reference)
+        try {
+            val page =
+                runSuspend {
+                    snapshot.findSymbols(SymbolQuery.named("Streamed"), QueryOptions.page(limit = 1))
+                }
+            assertEquals(listOf("Streamed"), page.items.map { it.name })
+            val references =
+                runSuspend {
+                    snapshot.findReferences(
+                        ReferenceQuery.to(page.items.single().id),
+                        QueryOptions.page(limit = 1),
+                    )
+                }
+            assertEquals(listOf("Use.kt"), references.items.map { it.location.file.path })
+        } finally {
+            snapshot.close()
+        }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    @Test
+    fun `findSymbols batches owner resolution into one additional store scan`() {
+        val store =
+            CountingRecordsCodeIndexStore(
+                listOf(
+                    CodeIndexKey.symbolDefinition("demo.Owner", "Owner.kt", 1, 1) to
+                        SymbolRecord(
+                            fqn = "demo.Owner",
+                            relativeFile = "Owner.kt",
+                            line = 1,
+                            kind = "class",
+                            name = "Owner",
+                        ),
+                    CodeIndexKey.symbolDefinition("demo.Owner.first", "Owner.kt", 2, 1) to
+                        SymbolRecord(
+                            fqn = "demo.Owner.first",
+                            relativeFile = "Owner.kt",
+                            line = 2,
+                            kind = "function",
+                            name = "first",
+                            ownerFqn = "demo.Owner",
+                        ),
+                    CodeIndexKey.symbolDefinition("demo.Owner.second", "Owner.kt", 3, 1) to
+                        SymbolRecord(
+                            fqn = "demo.Owner.second",
+                            relativeFile = "Owner.kt",
+                            line = 3,
+                            kind = "function",
+                            name = "second",
+                            ownerFqn = "demo.Owner",
+                        ),
+                )
+            )
+        val snapshot =
+            IndexSnapshot.create(
+                store = store,
+                revision = workspaceRevision(),
+                generation = WorkspaceGenerationId.of("generation"),
+            )
+        try {
+            val symbols =
+                runSuspend {
+                    snapshot.findSymbols(
+                        SymbolQuery.named("demo.").withMatch(NameMatchMode.PREFIX),
+                        QueryOptions.page(limit = 3),
+                    )
+                }
+            assertEquals(3, symbols.items.size)
+            assertEquals(2, store.forEachPrefixCalls)
+        } finally {
+            snapshot.close()
+        }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    @Test
+    fun `external direct references remain queryable when another candidate resolves locally`() {
+        val generation = WorkspaceGenerationId.of("generation")
+        val snapshot =
+            snapshotWithRecords(
+                CodeIndexKey.symbolDefinition("local.Candidate", "Local.kt", 1, 1) to
+                    SymbolRecord(
+                        fqn = "local.Candidate",
+                        relativeFile = "Local.kt",
+                        line = 1,
+                        kind = "function",
+                        name = "Candidate",
+                        arity = 1,
+                    ),
+                CodeIndexKey.ref("missing.Shared", "Use.kt", 1) to
+                    ReferenceRecord(
+                        symbolFqn = "missing.Shared",
+                        candidateSymbolFqns = listOf("local.Candidate"),
+                        relativeFile = "Use.kt",
+                        line = 1,
+                        column = 1,
+                        arity = 1,
+                    ),
+            )
+        try {
+            val externalId = with(IndexSnapshotQueries(generation)) { externalSymbolId("missing.Shared") }
+            val references =
+                runSuspend {
+                    snapshot.findReferences(ReferenceQuery.to(externalId), QueryOptions.page(limit = 1))
+                }
+            assertEquals(listOf(externalId), references.items.map { it.symbolId })
+        } finally {
+            snapshot.close()
+        }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    @Test
+    fun `queries reject offsets beyond the host maximum before allocating a page window`() {
+        val snapshot = snapshotWithThrowingStore()
+        try {
+            val failure =
+                assertFailsWith<IndexinoException> {
+                    runSuspend {
+                        snapshot.findSymbols(
+                            SymbolQuery.named("demo"),
+                            QueryOptions.page(limit = 1, offset = 10_001),
+                        )
+                    }
+                }
+            assertEquals("INVALID_REQUEST", failure.failure.category.value)
+            assertEquals("offset_exceeds_maximum", failure.failure.code)
+        } finally {
+            snapshot.close()
+        }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    @Test
+    fun `queries fail rather than expose an unusable cursor beyond the host window`() {
+        val records =
+            (0..10_000).map { index ->
+                val name = "demo.%05d".format(index)
+                CodeIndexKey.symbolDefinition(name, "$index.kt", 1, 1) to
+                    SymbolRecord(
+                        fqn = name,
+                        relativeFile = "$index.kt",
+                        line = 1,
+                        kind = "class",
+                        name = name,
+                    )
+            }
+        val snapshot = snapshotWithRecords(*records.toTypedArray())
+        try {
+            val failure =
+                assertFailsWith<IndexinoException> {
+                    runSuspend {
+                        snapshot.findSymbols(
+                            SymbolQuery.named("demo.").withMatch(NameMatchMode.PREFIX),
+                            QueryOptions.page(limit = 1, offset = 9_999),
+                        )
+                    }
+                }
+            assertEquals("INVALID_REQUEST", failure.failure.category.value)
+            assertEquals("result_window_exceeds_maximum", failure.failure.code)
+        } finally {
+            snapshot.close()
+        }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    @Test
     fun `close maps unexpected store close failures to IndexinoException INTERNAL`() {
         val snapshot =
             IndexSnapshot.create(
@@ -93,6 +351,24 @@ class IndexSnapshotStorageFailureTest {
     }
 
     @OptIn(IndexinoInternalApi::class)
+    private fun snapshotWithRecords(vararg records: Pair<CodeIndexKey, CodeIndexRecord>): IndexSnapshot =
+        IndexSnapshot.create(
+            store = RecordsCodeIndexStore(records.asList()),
+            revision = workspaceRevision(),
+            generation = WorkspaceGenerationId.of("generation"),
+        )
+
+    @OptIn(IndexinoInternalApi::class)
+    private fun snapshotWithStreamingRecords(
+        vararg records: Pair<CodeIndexKey, CodeIndexRecord>,
+    ): IndexSnapshot =
+        IndexSnapshot.create(
+            store = StreamingRecordsCodeIndexStore(records.asList()),
+            revision = workspaceRevision(),
+            generation = WorkspaceGenerationId.of("generation"),
+        )
+
+    @OptIn(IndexinoInternalApi::class)
     private fun snapshotWithThrowingStore(): IndexSnapshot =
         IndexSnapshot.create(
             store = ThrowingCodeIndexStore(),
@@ -111,6 +387,99 @@ class IndexSnapshotStorageFailureTest {
                 ),
             generation = WorkspaceGenerationId.of("generation"),
         )
+
+    @OptIn(IndexinoInternalApi::class)
+    private fun workspaceRevision(): WorkspaceRevision =
+        WorkspaceRevision(
+            fingerprint = "fingerprint",
+            origins =
+                listOf(
+                    SourceOriginRevision(
+                        originId = SourceOriginId.of("workspace"),
+                        revision = "deadbeef",
+                        stateFingerprint = "state",
+                        expectedRevision = null,
+                    )
+                ),
+        )
+
+    private class RecordsCodeIndexStore(
+        private val records: List<Pair<CodeIndexKey, CodeIndexRecord>>,
+    ) : CodeIndexStore {
+        override fun get(key: CodeIndexKey): CodeIndexRecord? = records.firstOrNull { it.first == key }?.second
+
+        override fun put(key: CodeIndexKey, record: CodeIndexRecord) = unsupported()
+
+        override fun delete(key: CodeIndexKey) = unsupported()
+
+        override fun prefixScan(prefix: String): Sequence<Pair<CodeIndexKey, CodeIndexRecord>> =
+            records.asSequence().filter { it.first.value.startsWith(prefix) }
+
+        override fun <T> transaction(block: () -> T): T = block()
+
+        override fun close() = Unit
+
+        private fun unsupported(): Nothing =
+            throw UnsupportedOperationException("RecordsCodeIndexStore is read-only")
+    }
+
+    private class CountingRecordsCodeIndexStore(
+        private val records: List<Pair<CodeIndexKey, CodeIndexRecord>>,
+    ) : CodeIndexStore {
+        var forEachPrefixCalls: Int = 0
+            private set
+
+        override fun get(key: CodeIndexKey): CodeIndexRecord? = records.firstOrNull { it.first == key }?.second
+
+        override fun put(key: CodeIndexKey, record: CodeIndexRecord) = unsupported()
+
+        override fun delete(key: CodeIndexKey) = unsupported()
+
+        override fun prefixScan(prefix: String): Sequence<Pair<CodeIndexKey, CodeIndexRecord>> =
+            records.asSequence().filter { it.first.value.startsWith(prefix) }
+
+        override fun forEachPrefix(prefix: String, action: (CodeIndexKey, CodeIndexRecord) -> Boolean) {
+            forEachPrefixCalls += 1
+            for ((key, record) in records) {
+                if (key.value.startsWith(prefix) && !action(key, record)) return
+            }
+        }
+
+        override fun <T> transaction(block: () -> T): T = block()
+
+        override fun close() = Unit
+
+        private fun unsupported(): Nothing =
+            throw UnsupportedOperationException("CountingRecordsCodeIndexStore is read-only")
+    }
+
+    private class StreamingRecordsCodeIndexStore(
+        private val records: List<Pair<CodeIndexKey, CodeIndexRecord>>,
+    ) : CodeIndexStore {
+        override fun get(key: CodeIndexKey): CodeIndexRecord? = records.firstOrNull { it.first == key }?.second
+
+        override fun put(key: CodeIndexKey, record: CodeIndexRecord) = unsupported()
+
+        override fun delete(key: CodeIndexKey) = unsupported()
+
+        override fun prefixScan(prefix: String): Sequence<Pair<CodeIndexKey, CodeIndexRecord>> =
+            throw SimulatedStorageFailure("prefixScan must not be used")
+
+        override fun forEachPrefix(prefix: String, action: (CodeIndexKey, CodeIndexRecord) -> Boolean) {
+            for ((key, record) in records) {
+                if (key.value.startsWith(prefix) && !action(key, record)) {
+                    return
+                }
+            }
+        }
+
+        override fun <T> transaction(block: () -> T): T = block()
+
+        override fun close() = Unit
+
+        private fun unsupported(): Nothing =
+            throw UnsupportedOperationException("StreamingRecordsCodeIndexStore is read-only")
+    }
 
     private class ThrowingCodeIndexStore : CodeIndexStore {
         override fun get(key: CodeIndexKey): CodeIndexRecord? = unsupported()

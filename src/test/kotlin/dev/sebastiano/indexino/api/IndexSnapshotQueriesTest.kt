@@ -21,11 +21,11 @@ class IndexSnapshotQueriesTest {
             )
         val first =
             with(IndexSnapshotQueries(WorkspaceGenerationId.of("generation-a"))) {
-                reference.toPublicReference(emptyMap())
+                reference.toPublicReference(emptyList())
             }
         val second =
             with(IndexSnapshotQueries(WorkspaceGenerationId.of("generation-b"))) {
-                reference.toPublicReference(emptyMap())
+                reference.toPublicReference(emptyList())
             }
 
         assertNotEquals(first.symbolId, second.symbolId)
@@ -64,13 +64,12 @@ class IndexSnapshotQueriesTest {
                 column = 5,
                 arity = 1,
             )
-        val symbolsByName =
-            with(queries) { indexSymbolsByName(listOf(intOverload, stringOverload)) }
-        val public = with(queries) { reference.toPublicReference(symbolsByName) }
+        val candidates = listOf(intOverload, stringOverload)
+        val public = with(queries) { reference.toPublicReference(candidates) }
 
         assertTrue(public.symbolId.value.startsWith("indexino:ambiguous:v1:"))
         assertEquals(2, public.candidateSymbolIds.size)
-        assertTrue(with(queries) { reference.matchesSymbolId(public.symbolId, symbolsByName) })
+        assertTrue(with(queries) { reference.matchesSymbolId(public.symbolId, candidates) })
     }
 
     @Test
@@ -95,10 +94,10 @@ class IndexSnapshotQueriesTest {
                 arity = 1,
                 candidateSymbolFqns = listOf("missing.Shared", "local.Candidate"),
             )
-        val symbolsByName = with(queries) { indexSymbolsByName(listOf(localCandidate)) }
-        val public = with(queries) { reference.toPublicReference(symbolsByName) }
+        val candidates = listOf(localCandidate)
+        val public = with(queries) { reference.toPublicReference(candidates) }
 
         assertTrue(public.symbolId.value.startsWith("indexino:external:v1:"))
-        assertTrue(with(queries) { reference.matchesSymbolId(public.symbolId, symbolsByName) })
+        assertTrue(with(queries) { reference.matchesSymbolId(public.symbolId, candidates) })
     }
 }

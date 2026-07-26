@@ -94,6 +94,40 @@ private constructor(private val environment: Environment, private val readOnly: 
             )
             .asSequence()
 
+    override fun forEachPrefix(
+        prefix: String,
+        action: (CodeIndexKey, CodeIndexRecord) -> Boolean,
+    ) {
+        environment.computeInTransaction(
+            TransactionalComputable { txn ->
+                val cursor = store(txn).openCursor(txn)
+                try {
+                    val searchKey = StringBinding.stringToEntry(prefix)
+                    if (cursor.getSearchKeyRange(searchKey) != null) {
+                        var hasEntry = true
+                        while (hasEntry) {
+                            val rawKey = StringBinding.entryToString(cursor.key)
+                            if (!rawKey.startsWith(prefix)) {
+                                break
+                            }
+                            if (
+                                !action(
+                                    CodeIndexKey.parse(rawKey),
+                                    CodeIndexRecordCodec.decode(cursor.value.bytesUnsafe),
+                                )
+                            ) {
+                                break
+                            }
+                            hasEntry = cursor.getNext()
+                        }
+                    }
+                } finally {
+                    cursor.close()
+                }
+            }
+        )
+    }
+
     override fun <T> transaction(block: () -> T): T =
         environment.computeInTransaction(TransactionalComputable { block() })
 
