@@ -5,8 +5,9 @@ import java.security.MessageDigest
 import java.util.HexFormat
 
 internal object InProcessCacheLayout {
-    fun storeRoot(workspace: Path): Path =
-        cacheRoot().resolve("workspaces").resolve(workspaceId(workspace)).resolve("legacy-store")
+    /** Mutable refresh staging only; published facts live in packs and generation manifests. */
+    fun writerRoot(workspace: Path): Path =
+        workspaceRoot(workspace).resolve("staging").resolve("in-process-writer")
 
     fun generationStore(workspace: Path, clientId: String, generation: String): Path =
         workspaceRoot(workspace)

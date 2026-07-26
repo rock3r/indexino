@@ -33,7 +33,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 public class Indexino private constructor(private val workspace: Path) : AutoCloseable {
     private val closed = AtomicBoolean()
     private val clientId = UUID.randomUUID().toString()
-    private val storeRoot = InProcessCacheLayout.storeRoot(workspace)
+    private val storeRoot = InProcessCacheLayout.writerRoot(workspace)
     private val generationLock = Any()
     private val generationStores = mutableMapOf<WorkspaceGenerationId, Path>()
     private val snapshotPins = mutableMapOf<WorkspaceGenerationId, Int>()
