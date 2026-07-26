@@ -49,7 +49,10 @@ class MavenPublicationTest {
         val sourcesJar = requireArtifact("sources JAR", "$artifactStem-sources.jar")
         requireArtifact("javadoc JAR", "$artifactStem-javadoc.jar")
         val pomFile = requireArtifact("POM", "$artifactStem.pom")
-        val moduleFile = requireArtifact("Gradle module metadata", "$artifactStem.module")
+        assertTrue(
+            publishedFiles.none { it.name.endsWith(".module") },
+            "Dogfood S1 publication must not emit Gradle module metadata",
+        )
         assertEquals(
             setOf("$artifactStem.jar", "$artifactStem-sources.jar", "$artifactStem-javadoc.jar"),
             publishedFiles.filter { it.name.endsWith(".jar") }.map(File::getName).toSet(),
@@ -96,8 +99,7 @@ class MavenPublicationTest {
         )
 
         val pomText = pomFile.readText()
-        val moduleText = moduleFile.readText()
-        listOf(pomText, moduleText).forEach { metadata ->
+        listOf(pomText).forEach { metadata ->
             assertFalse(
                 metadata.contains("-shrunk.jar"),
                 "Shrunk JAR leaked into publication metadata",
@@ -107,16 +109,61 @@ class MavenPublicationTest {
                 "Shadow's optional runtime variant leaked into publication metadata",
             )
         }
+
+        assertSiblingCentralDependenciesAreReleasable(pomText, groupId)
     }
 
     @Test
-    fun `ordinary JVM 21 consumer resolves coordinates and launches the thin CLI`() {
+    fun `tag release cannot publish Central without every sibling POM dependency`() {
+        val releaseWorkflow = File(".github/workflows/release.yml").readText()
+        val modelBuild = File("indexino-model/build.gradle.kts").readText()
+        val modelHasCentralPublisher =
+            modelBuild.contains("com.vanniktech.maven.publish") ||
+                modelBuild.contains("publishToMavenCentral")
+        if (modelHasCentralPublisher) {
+            assertTrue(
+                releaseWorkflow.contains("publishToMavenCentral"),
+                "indexino-model is Central-configured; release.yml should publish it",
+            )
+        } else {
+            assertFalse(
+                releaseWorkflow.contains("publishToMavenCentral"),
+                "release.yml must not call publishToMavenCentral while indexino-model lacks Central config",
+            )
+            assertTrue(
+                releaseWorkflow.contains("blocked until S5"),
+                "release.yml must refuse incomplete Central coordinate sets until S5",
+            )
+        }
+    }
+
+    @Test
+    fun `ordinary JVM 25 consumer resolves coordinates and loads the public facade`() {
         val repository = requiredProperty("indexino.publicationRepository").let(::File)
         val groupId = requiredProperty("indexino.publicationGroup")
         val artifactId = requiredProperty("indexino.publicationArtifact")
         val version = requiredProperty("indexino.publicationVersion")
         val consumer = tempDir.resolve("consumer").apply(File::mkdirs)
         consumer.resolve("settings.gradle.kts").writeText("rootProject.name = \"consumer\"\n")
+        consumer.resolve("src/main/java/consumer/Consumer.java").apply {
+            parentFile.mkdirs()
+            writeText(
+                """
+                package consumer;
+
+                import dev.sebastiano.indexino.api.IndexScope;
+
+                public final class Consumer {
+                    private Consumer() {}
+
+                    public static void main(String[] args) {
+                        System.out.println(IndexScope.gradle(":"));
+                    }
+                }
+                """
+                    .trimIndent()
+            )
+        }
         consumer
             .resolve("build.gradle.kts")
             .writeText(
@@ -133,15 +180,11 @@ class MavenPublicationTest {
             }
 
             java {
-                toolchain.languageVersion.set(JavaLanguageVersion.of(21))
+                toolchain.languageVersion.set(JavaLanguageVersion.of(25))
             }
 
             application {
-                mainClass.set("dev.sebastiano.indexino.cli.MainCommandKt")
-            }
-
-            tasks.named<JavaExec>("run") {
-                args("--help")
+                mainClass.set("consumer.Consumer")
             }
             """
                     .trimIndent()
@@ -154,7 +197,35 @@ class MavenPublicationTest {
                 .forwardOutput()
                 .build()
 
-        assertTrue(result.output.contains("indexino", ignoreCase = true), result.output)
+        assertTrue(result.output.contains("GRADLE"), result.output)
+    }
+
+    private fun assertSiblingCentralDependenciesAreReleasable(pomText: String, groupId: String) {
+        val siblingArtifacts =
+            Regex(
+                    """<groupId>\s*${Regex.escape(groupId)}\s*</groupId>\s*<artifactId>\s*([^<]+)\s*</artifactId>"""
+                )
+                .findAll(pomText)
+                .map { it.groupValues[1].trim() }
+                .filter { it != "indexino" }
+                .toSet()
+        if (siblingArtifacts.isEmpty()) return
+
+        val releaseWorkflow = File(".github/workflows/release.yml").readText()
+        val modelBuild = File("indexino-model/build.gradle.kts").readText()
+        val modelHasCentralPublisher =
+            modelBuild.contains("com.vanniktech.maven.publish") ||
+                modelBuild.contains("publishToMavenCentral")
+        if ("indexino-model" in siblingArtifacts && !modelHasCentralPublisher) {
+            assertFalse(
+                releaseWorkflow.contains("publishToMavenCentral"),
+                "Facade POM depends on indexino-model but release.yml still publishes to Central",
+            )
+            assertTrue(
+                releaseWorkflow.contains("blocked until S5"),
+                "Release workflow must block incomplete Central publishes until S5",
+            )
+        }
     }
 
     private fun requiredProperty(name: String): String =

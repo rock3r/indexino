@@ -14,20 +14,27 @@ import dev.sebastiano.indexino.buildlogic.Sha256File
 import io.github.fourlastor.construo.Target
 import io.github.fourlastor.construo.task.PackageTask
 import io.github.fourlastor.construo.task.jvm.CreateRuntimeImageTask
+import java.io.File
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermissions
 import java.security.MessageDigest
 import java.util.HexFormat
 import java.util.Properties
 import org.gradle.api.file.DuplicatesStrategy
+import org.gradle.api.publish.maven.MavenPublication
+import org.gradle.api.publish.tasks.GenerateModuleMetadata
 import org.gradle.api.tasks.Delete
+import org.gradle.api.tasks.JavaExec
 import org.gradle.api.tasks.Sync
 import org.gradle.api.tasks.testing.Test
+import org.gradle.jvm.toolchain.JavaLanguageVersion
+import org.w3c.dom.Element
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.serialization)
     application
+    `java-library`
     alias(libs.plugins.shadow)
     alias(libs.plugins.detekt)
     alias(libs.plugins.ktfmt)
@@ -40,9 +47,10 @@ group = providers.gradleProperty("GROUP").get()
 version = providers.gradleProperty("VERSION_NAME").get()
 
 kotlin {
-    jvmToolchain(21)
+    jvmToolchain(25)
     explicitApi()
-    @OptIn(org.jetbrains.kotlin.gradle.dsl.abi.ExperimentalAbiValidation::class) abiValidation {}
+    // Public ABI is Metalava-only (api/<artifact>/current.txt). Do not re-enable KGP
+    // abiValidation — it duplicates Metalava and fights the reviewed dumps.
 }
 
 ktfmt { kotlinLangStyle() }
@@ -73,16 +81,113 @@ repositories {
     google()
 }
 
+val metalava by configurations.creating
+
 dependencies {
+    detektPlugins(project(":detekt-plugin"))
+    api(project(":indexino-model"))
     implementation(libs.kotlin.compiler.embeddable)
     implementation(libs.clikt)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.xodus.environment)
     implementation(libs.slf4j.nop)
     implementation(libs.jna)
+    metalava(libs.metalava)
 
     testImplementation(kotlin("test"))
     testImplementation(gradleTestKit())
+}
+
+val indexinoMetalavaOutput = layout.buildDirectory.file("metalava/indexino-current.txt")
+val reviewedIndexinoSignature = layout.projectDirectory.file("api/indexino/current.txt")
+val jdk25Launcher = javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) }
+
+val metalavaGenerateSignature by
+    tasks.registering(JavaExec::class) {
+        group = "verification"
+        description = "Generate the indexino facade Metalava signature"
+        // Metalava reads compile classpath class files; wait for them to be stable.
+        dependsOn(tasks.named("classes"), ":indexino-model:jar")
+        classpath = metalava
+        mainClass.set("com.android.tools.metalava.Driver")
+        javaLauncher.set(jdk25Launcher)
+        inputs.files(sourceSets.main.map { it.allSource })
+        inputs.files(sourceSets.main.map { it.compileClasspath })
+        outputs.file(indexinoMetalavaOutput)
+
+        doFirst {
+            val jdkHome = jdk25Launcher.get().metadata.installationPath.asFile
+            logger.lifecycle("[metalava] indexino jdk-home=${jdkHome.absolutePath}")
+            args =
+                listOf(
+                    "--source-path",
+                    layout.projectDirectory
+                        .dir("src/main/kotlin/dev/sebastiano/indexino/api")
+                        .asFile
+                        .absolutePath,
+                    "--classpath",
+                    sourceSets.main
+                        .get()
+                        .compileClasspath
+                        .files
+                        .filter { it.exists() }
+                        .joinToString(separator = File.pathSeparator),
+                    "--jdk-home",
+                    jdkHome.absolutePath,
+                    "--kotlin-source",
+                    "2.4",
+                    "--format=5.0",
+                    "--api",
+                    indexinoMetalavaOutput.get().asFile.absolutePath,
+                    "--api-lint",
+                    "--error",
+                    "ValueClassDefinition",
+                    "--error",
+                    "MissingJvmstatic",
+                    "--hide",
+                    "GetterSetterNames",
+                    "--hide",
+                    "AutoBoxing",
+                    "--hide",
+                    "UserHandleName",
+                    "--hide",
+                    "Enum",
+                )
+        }
+    }
+
+val metalavaUpdateSignature by tasks.registering {
+    group = "verification"
+    description =
+        "Copy the generated indexino facade signature into the reviewed api/indexino/current.txt"
+    dependsOn(metalavaGenerateSignature)
+    inputs.file(indexinoMetalavaOutput)
+    outputs.file(reviewedIndexinoSignature)
+
+    doLast {
+        val generated = indexinoMetalavaOutput.get().asFile
+        val reviewed = reviewedIndexinoSignature.asFile
+        reviewed.parentFile.mkdirs()
+        reviewed.writeText(generated.readText())
+    }
+}
+
+val metalavaCheckSignature by tasks.registering {
+    group = "verification"
+    description = "Check the generated indexino signature against the reviewed signature"
+    dependsOn(metalavaGenerateSignature)
+    mustRunAfter(metalavaUpdateSignature)
+    inputs.file(reviewedIndexinoSignature)
+    inputs.files(metalavaGenerateSignature)
+
+    doLast {
+        val generated = indexinoMetalavaOutput.get().asFile.readText()
+        val reviewed = reviewedIndexinoSignature.asFile.readText()
+        check(generated == reviewed) {
+            "Generated indexino signature differs from api/indexino/current.txt. " +
+                "Review the diff, then run :metalavaUpdateSignature if intentional."
+        }
+    }
 }
 
 val cliMainClass = "dev.sebastiano.indexino.cli.MainCommandKt"
@@ -425,6 +530,20 @@ mavenPublishing {
 }
 
 publishing {
+    publications.withType<MavenPublication>().configureEach {
+        pom.withXml {
+            val dependencyNodes = asElement().getElementsByTagName("dependency")
+            for (index in dependencyNodes.length - 1 downTo 0) {
+                val dependency = dependencyNodes.item(index) as Element
+                val artifactId =
+                    dependency.getElementsByTagName("artifactId").item(0)?.textContent.orEmpty()
+                if (artifactId in setOf("clikt-jvm", "jna", "slf4j-nop")) {
+                    dependency.parentNode.removeChild(dependency)
+                }
+            }
+        }
+    }
+
     repositories {
         maven {
             name = "Test"
@@ -433,13 +552,33 @@ publishing {
     }
 }
 
+// Dogfood S1: POM withXml cannot rewrite Gradle Module Metadata. Disable .module so Gradle
+// consumers resolve the stripped POM until the S5 library/CLI artifact split.
+tasks.withType<GenerateModuleMetadata>().configureEach { enabled = false }
+
 val cleanTestMavenRepository by tasks.registering(Delete::class) { delete(testMavenRepository) }
 
 tasks
     .matching { it.name.startsWith("publish") && it.name.endsWith("PublicationToTestRepository") }
     .configureEach { dependsOn(cleanTestMavenRepository) }
 
+project(":indexino-model")
+    .tasks
+    .matching { it.name.startsWith("publish") && it.name.endsWith("PublicationToTestRepository") }
+    .configureEach { dependsOn(cleanTestMavenRepository) }
+
 tasks.build { dependsOn(tasks.shadowJar) }
+
+tasks.check {
+    dependsOn(
+        "detektMain",
+        "detektTest",
+        "ktfmtCheckMain",
+        "ktfmtCheckScripts",
+        "ktfmtCheckTest",
+        metalavaCheckSignature,
+    )
+}
 
 tasks.register<JavaExec>("smokeSelectionWalker") {
     group = "verification"
@@ -476,6 +615,13 @@ tasks.test {
             excludedTags += "live"
         }
         excludeTags(*excludedTags.toTypedArray())
+    }
+    // Recreate after `clean` in the same Gradle invocation; configuration-time mkdirs alone
+    // is deleted by the clean task before tests execute.
+    doFirst {
+        ideaHomeDir.resolve("config").mkdirs()
+        ideaHomeDir.resolve("system").mkdirs()
+        ideaHomeDir.resolve("plugins").mkdirs()
     }
     systemProperty("idea.home.path", ideaHomeDir.absolutePath)
     systemProperty("idea.config.path", ideaHomeDir.resolve("config").absolutePath)
@@ -700,7 +846,10 @@ val verifyMavenPublication by
     tasks.registering(Test::class) {
         group = "verification"
         description = "Verify the thin Maven publication and Central-required metadata"
-        dependsOn("publishAllPublicationsToTestRepository")
+        dependsOn(
+            "publishAllPublicationsToTestRepository",
+            ":indexino-model:publishAllPublicationsToTestRepository",
+        )
         testClassesDirs = sourceSets.test.get().output.classesDirs
         classpath = sourceSets.test.get().runtimeClasspath
         inputs.dir(testMavenRepository).withPropertyName("testMavenRepository")
@@ -761,8 +910,4 @@ val generateBundledDependencyInventory by tasks.registering {
             }
         )
     }
-}
-
-tasks.check {
-    dependsOn("detektMain", "detektTest", "ktfmtCheckMain", "ktfmtCheckScripts", "ktfmtCheckTest")
 }

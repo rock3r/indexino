@@ -50,7 +50,7 @@ jobs:
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "25"
       - uses: gradle/actions/setup-gradle@v6
       - name: Run release checks and generate dependency inventory
         run: |
@@ -67,19 +67,12 @@ jobs:
           path: build/reports/release/bundled-dependencies.txt
           if-no-files-found: error
           retention-days: 7
-      - name: Publish signed artifacts to Sonatype Central Portal
-        env:
-          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
-          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
-          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.SIGNING_IN_MEMORY_KEY }}
-          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_IN_MEMORY_KEY_PASSWORD }}
+      # S5 must configure indexino-model for the same signed Central deployment before restoring
+      # the Central upload step. The facade POM already depends on indexino-model.
+      - name: Refuse incomplete Maven Central coordinate set
         run: |
-          test -n "$ORG_GRADLE_PROJECT_mavenCentralUsername"
-          test -n "$ORG_GRADLE_PROJECT_mavenCentralPassword"
-          test -n "$ORG_GRADLE_PROJECT_signingInMemoryKey"
-          test -n "$ORG_GRADLE_PROJECT_signingInMemoryKeyPassword"
-          ./gradlew publishToMavenCentral \
-            -PVERSION_NAME="${{ needs.readiness.outputs.version }}"
+          echo "::error::Maven Central publish is blocked until S5 configures indexino-model for the same signed Central deployment as indexino (facade POM depends on it). See docs/ARCHITECTURE.md."
+          exit 1
 
   native-distributions:
     name: Build final native release candidates

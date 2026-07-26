@@ -82,7 +82,13 @@ internal class StatusCommand : CliktCommand(name = "status") {
         }
 
         val manifest = ManifestIO.read(manifestPath)
-        val request = resolveRequestForManifest(topologyRequest, manifest.scope, manifest.topology)
+        val request =
+            resolveRequestForManifest(
+                topologyRequest,
+                manifest.scope,
+                manifest.topology,
+                manifest.includeDeps,
+            )
         val topologyResult =
             TopologyResolver.resolve(
                 project = project,
@@ -95,6 +101,9 @@ internal class StatusCommand : CliktCommand(name = "status") {
             ManifestFreshness.criteriaFrom(
                 commit = commit,
                 scope = manifest.scope,
+                // Omitted scope reconstructs the stored configuration. An explicit scope instead
+                // asks whether this manifest satisfies the caller's requested dependency policy.
+                includeDeps = request.includeDeps,
                 sourcesContentHash = currentHash,
                 applications = manifest.applications,
             )
@@ -124,6 +133,7 @@ internal class StatusCommand : CliktCommand(name = "status") {
         cli: TopologyRequest,
         manifestScope: String,
         manifestTopology: String,
+        manifestIncludeDeps: Boolean,
     ): TopologyRequest {
         if (cli.bazelTarget != null || cli.gradleModule != null) {
             return cli
@@ -132,10 +142,14 @@ internal class StatusCommand : CliktCommand(name = "status") {
             cli.copy(
                 buildSystem = BuildSystem.GRADLE,
                 gradleModule = manifestScope,
-                includeDeps = cli.includeDeps,
+                includeDeps = manifestIncludeDeps,
             )
         } else {
-            cli.copy(buildSystem = BuildSystem.BAZEL, bazelTarget = manifestScope)
+            cli.copy(
+                buildSystem = BuildSystem.BAZEL,
+                bazelTarget = manifestScope,
+                includeDeps = manifestIncludeDeps,
+            )
         }
     }
 

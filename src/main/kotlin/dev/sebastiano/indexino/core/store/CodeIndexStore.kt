@@ -12,6 +12,19 @@ internal interface CodeIndexStore {
 
     fun prefixScan(prefix: String): Sequence<Pair<CodeIndexKey, CodeIndexRecord>>
 
+    /**
+     * Visits prefix records while the store can retain its read transaction/cursor. Return false to
+     * stop scanning early. Implementations should override this when [prefixScan] materializes
+     * rows.
+     */
+    fun forEachPrefix(prefix: String, action: (CodeIndexKey, CodeIndexRecord) -> Boolean) {
+        for ((key, record) in prefixScan(prefix)) {
+            if (!action(key, record)) {
+                return
+            }
+        }
+    }
+
     fun <T> transaction(block: () -> T): T
 
     fun close()

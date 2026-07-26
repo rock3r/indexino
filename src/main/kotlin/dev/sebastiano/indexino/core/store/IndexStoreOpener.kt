@@ -5,8 +5,19 @@ import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import java.nio.file.Path
 
 internal object IndexStoreOpener {
+    fun openForQuery(storePath: Path): CodeIndexStore =
+        XodusCodeIndexStore.open(storePath, readOnly = true)
+
     fun openForQuery(project: Path, commit: String, sessionId: String? = null): CodeIndexStore {
         val resolver = IndexPathResolver(project)
+        return openForQuery(resolver, commit, sessionId)
+    }
+
+    fun openForQuery(
+        resolver: IndexPathResolver,
+        commit: String,
+        sessionId: String? = null,
+    ): CodeIndexStore {
         val basePath = resolver.resolveBaseStore(commit)
         if (sessionId.isNullOrBlank()) {
             return XodusCodeIndexStore.open(basePath, readOnly = true)

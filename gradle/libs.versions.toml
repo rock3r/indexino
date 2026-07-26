@@ -5,11 +5,12 @@ slf4j = "1.7.30"
 serialization = "1.8.0"
 shadow = "9.6.0"
 xodus = "2.0.1"
-detekt = "2.0.0-alpha.2"
+detekt = "2.0.0-alpha.3"
 ktfmt = "0.26.0"
 mavenPublish = "0.36.0"
 construo = "2.2.1"
 jna = "5.14.0"
+metalava = "1.0.0-alpha14"
 
 [libraries]
 kotlin-compiler-embeddable = { module = "org.jetbrains.kotlin:kotlin-compiler-embeddable", version.ref = "kotlin" }
@@ -18,6 +19,9 @@ slf4j-nop = { module = "org.slf4j:slf4j-nop", version.ref = "slf4j" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
 xodus-environment = { module = "org.jetbrains.xodus:xodus-environment", version.ref = "xodus" }
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
+detekt-api = { module = "dev.detekt:detekt-api", version.ref = "detekt" }
+detekt-test = { module = "dev.detekt:detekt-test", version.ref = "detekt" }
+metalava = { module = "com.android.tools.metalava:metalava", version.ref = "metalava" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

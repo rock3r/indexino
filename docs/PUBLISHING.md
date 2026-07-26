@@ -1,45 +1,48 @@
 # Publishing
 
-`indexino` is configured to publish a thin JVM artifact to the Sonatype Central Portal with the
+`indexino` is wired with
 [`com.vanniktech.maven.publish`](https://github.com/vanniktech/gradle-maven-publish-plugin)
-plugin. The Shadow `*-all.jar` remains the standalone CLI distribution and the `*-shrunk.jar`
-remains an internal native-packaging input. Both are deliberately excluded from the Maven
-publication.
+for a thin JVM artifact, but **tag releases to Maven Central are blocked until S5** configures
+`indexino-model` for the same signed Central path (the facade POM already depends on it). Until
+then, publish only to Maven Local for dogfood. Because the tag workflow's native-distribution and
+draft-release jobs need the publish job, that block intentionally stops the whole tag pipeline —
+not only Central upload — until S5 unblocks all three. The Shadow `*-all.jar` remains the
+standalone CLI distribution and the `*-shrunk.jar` remains an internal native-packaging input.
+Both are deliberately excluded from the Maven publication.
 
 ## API publication state
 
-No version has been published and the current snapshot deliberately has no supported embedded API.
-All implementation declarations are Kotlin `internal`, strict explicit API mode is enabled, and
-`api/indexino.api` is an empty ABI baseline. `checkKotlinAbi`, which is part of `check`, fails if a
-public declaration is added without an explicit baseline review.
+No version has been published. The current snapshot exposes the reviewed S1 API from
+`indexino-model` and `dev.sebastiano.indexino.api`; implementation packages remain unsupported.
+Metalava signature dumps under `api/<artifact>/`, detekt declaration rules, and external consumer
+fixtures enforce that boundary. See [API-STABILITY.md](API-STABILITY.md) and
+[PUBLIC-API-DESIGN.html](PUBLIC-API-DESIGN.html).
 
 The CLI remains executable from the Shadow and R8 artifacts. Presence of implementation bytecode
-in the thin JAR does not make packages outside the future `dev.sebastiano.indexino.api` namespace a
-supported API. See [API-STABILITY.md](API-STABILITY.md).
+in the thin JAR does not make packages outside the future public packages a supported API.
+
+Minimum JDK for published library artifacts is **25** (aligned with the JBR 25 native pin).
 
 ## Future consumer coordinates
 
-Consumers will need no publishing or Indexino-specific Gradle plugin. Add the artifact as a normal
-dependency after the first embedded API is defined:
+Consumers will need no publishing or Indexino-specific Gradle plugin. After the first embedded API:
 
 ```kotlin
 dependencies {
     implementation("dev.sebastiano.indexino:indexino:<version>")
+    // optional:
+    // implementation("dev.sebastiano.indexino:indexino-plugin-api:<version>")
+    // implementation("dev.sebastiano.indexino:indexino-script-host:<version>")
 }
 ```
 
-Maven consumers use the equivalent coordinates:
+Maven consumers use the equivalent coordinates for `indexino`, `indexino-model`,
+`indexino-plugin-api`, and optional `indexino-script-host`. A BOM may align versions on the same
+release train.
 
-```xml
-<dependency>
-  <groupId>dev.sebastiano.indexino</groupId>
-  <artifactId>indexino</artifactId>
-  <version>VERSION</version>
-</dependency>
-```
-
-The generated POM supplies Kotlin, Clikt, kotlinx.serialization, Xodus, and SLF4J runtime
-dependencies transitively. Consumers do not need to assemble a fat JAR or duplicate that list.
+The library POM must **not** expose Clikt. Coroutines are an `api` dependency of the client because
+`suspend`/`Flow` appear in signatures. Xodus, the Kotlin compiler embeddable, and serialization
+remain implementation dependencies of the engine/client JAR.
 
 ## Local verification
 

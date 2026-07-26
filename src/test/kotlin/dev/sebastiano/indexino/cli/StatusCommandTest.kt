@@ -1,5 +1,7 @@
 package dev.sebastiano.indexino.cli
 
+import dev.sebastiano.indexino.topology.BuildSystem
+import dev.sebastiano.indexino.topology.TopologyRequest
 import dev.sebastiano.indexino.topology.bazel.MockBazelQueryExecutor
 import java.nio.file.Files
 import kotlin.io.path.Path
@@ -8,6 +10,7 @@ import kotlin.io.path.readText
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class StatusCommandTest {
@@ -38,8 +41,13 @@ class StatusCommandTest {
             StatusCommand()
                 .runStatus(
                     project = workspace,
-                    bazelTarget = "//plugins/foo/ui:ui",
-                    queryExecutor = MockBazelQueryExecutor(mockOutput),
+                    topologyRequest =
+                        TopologyRequest(
+                            buildSystem = BuildSystem.BAZEL,
+                            bazelTarget = "//plugins/foo/ui:ui",
+                            includeDeps = true,
+                        ),
+                    bazelQueryExecutor = MockBazelQueryExecutor(mockOutput),
                     output = { output.appendLine(it) },
                 )
 
@@ -66,6 +74,76 @@ class StatusCommandTest {
         assertTrue(output.toString().contains("\"indexed\":false"))
     }
 
+    @Test
+    fun `status rehashes with stored includeDeps when reconstructing from the manifest`() {
+        val workspace = createGradleWorkspace()
+        val indexExit =
+            IndexCommand()
+                .runIndexedBuild(
+                    project = workspace,
+                    topologyRequest =
+                        TopologyRequest(
+                            buildSystem = BuildSystem.GRADLE,
+                            gradleModule = ":ui",
+                            includeDeps = true,
+                        ),
+                    applications = emptyList(),
+                )
+        assertEquals(0, indexExit)
+
+        val output = StringBuilder()
+        // Reconstruct from the stored manifest (no live --gradle-module). Default CLI
+        // includeDeps=false must not change the hashed source set away from the manifest's true.
+        val exitCode =
+            StatusCommand()
+                .runStatus(
+                    project = workspace,
+                    topologyRequest = TopologyRequest(buildSystem = BuildSystem.AUTO),
+                    output = { output.appendLine(it) },
+                )
+
+        assertEquals(0, exitCode)
+        val text = output.toString()
+        assertTrue(text.contains("\"fresh\":true"), text)
+        assertTrue(text.contains("\"scope\":\":ui\""), text)
+    }
+
+    @Test
+    fun `status marks explicit includeDeps mode changes stale`() {
+        val workspace = createGradleWorkspace()
+        assertEquals(
+            0,
+            IndexCommand()
+                .runIndexedBuild(
+                    project = workspace,
+                    topologyRequest =
+                        TopologyRequest(
+                            buildSystem = BuildSystem.GRADLE,
+                            gradleModule = ":ui",
+                            includeDeps = true,
+                        ),
+                    applications = emptyList(),
+                ),
+        )
+
+        val output = StringBuilder()
+        val exitCode =
+            StatusCommand()
+                .runStatus(
+                    project = workspace,
+                    topologyRequest =
+                        TopologyRequest(
+                            buildSystem = BuildSystem.GRADLE,
+                            gradleModule = ":ui",
+                            includeDeps = false,
+                        ),
+                    output = { output.appendLine(it) },
+                )
+
+        assertEquals(0, exitCode)
+        assertFalse(output.toString().contains("\"fresh\":true"), output.toString())
+    }
+
     private fun createGitWorkspace(): java.nio.file.Path {
         val workspace = createTempDirectory("status-cmd-test-")
         tempDirs.add(workspace)
@@ -88,9 +166,34 @@ class StatusCommandTest {
         return workspace
     }
 
+    private fun createGradleWorkspace(): java.nio.file.Path {
+        val workspace = createTempDirectory("status-gradle-")
+        tempDirs.add(workspace)
+        val fixtureRoot = Path("src/test/resources/gradle-fixtures/multi-module")
+        Files.walk(fixtureRoot).forEach { path ->
+            val relative = fixtureRoot.relativize(path)
+            val dest = workspace.resolve(relative)
+            if (Files.isDirectory(path)) {
+                Files.createDirectories(dest)
+            } else {
+                Files.createDirectories(dest.parent)
+                Files.copy(path, dest)
+            }
+        }
+        runGit(workspace, "init")
+        runGit(workspace, "config", "user.email", "test@example.com")
+        runGit(workspace, "config", "user.name", "Test User")
+        runGit(workspace, "add", ".")
+        runGit(workspace, "commit", "-m", "fixture")
+        return workspace
+    }
+
     private fun runGit(workspace: java.nio.file.Path, vararg args: String) {
         val process =
-            ProcessBuilder(*listOf("git", "-C", workspace.toString(), *args).toTypedArray())
+            ProcessBuilder(
+                    *listOf("git", "-C", workspace.toString(), "-c", "commit.gpgsign=false", *args)
+                        .toTypedArray()
+                )
                 .redirectErrorStream(true)
                 .start()
         val result = process.inputStream.bufferedReader().readText()

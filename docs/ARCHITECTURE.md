@@ -2,91 +2,149 @@
 
 ## Product shape
 
-**indexino** is a portable, **persistent** local code index shipped as a standalone fat
-CLI JAR, as a thin Maven artifact, and in self-contained native CLI ZIPs. The build also produces a
-separate R8-shrunk CLI JAR as the input to native packaging; it does not replace either public
-artifact. It is not a
-SelectionContainer one-off — **selection-context** is the first **application plugin** on top of
-shared storage and topology.
+**indexino** is a portable, **persistent** local code index shipped as:
+
+- a standalone fat CLI JAR (and R8-shrunk native-packaging input),
+- self-contained native CLI ZIPs, and
+- thin Maven artifacts for embedding (`indexino-model`, `indexino`, `indexino-plugin-api`,
+  optional `indexino-script-host`).
+
+It is not a SelectionContainer one-off — **selection-context** is the first **compiled plugin** on
+shared storage and topology. Binding product design:
+[PUBLIC-API-DESIGN.html](PUBLIC-API-DESIGN.html) (Accepted 2026-07-25).
 
 ```
-┌──────────────────┐     ┌─────────────────────────────┐
-│  Audit skills    │────▶│  CLI: index / query / status │
-└──────────────────┘     └──────────────┬──────────────┘
-                                        │
-                    ┌───────────────────┼───────────────────┐
-                    ▼                   ▼                   ▼
-            ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-            │ Application  │   │  Producers   │   │  Topology    │
-            │ selection-   │   │  (pluggable) │   │  Bazel /     │
-            │ context      │   │              │   │  Gradle      │
-            └──────┬───────┘   └──────┬───────┘   └──────┬───────┘
-                   │                  │                  │
-                   └──────────────────┼──────────────────┘
-                                      ▼
-                         ┌────────────────────────┐
-                         │  Xodus store           │
-                         │  .indexino/index/<commit>/│
-                         └────────────────────────┘
+┌──────────────────┐     ┌──────────────────────────────────────┐
+│  Audit skills    │────▶│  CLI adapter / embedded Indexino API │
+└──────────────────┘     └──────────────────┬───────────────────┘
+                                            │
+                         local AF_UNIX protocol (or in-process)
+                                            │
+                                            ▼
+                              ┌─────────────────────────┐
+                              │  Workspace runtime      │
+                              │  refresh registry       │
+                              │  watcher / budgets      │
+                              └───────────┬─────────────┘
+                    ┌─────────────────────┼─────────────────────┐
+                    ▼                     ▼                     ▼
+            ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+            │ Plugins      │     │ Producers    │     │ Topology     │
+            │ (SPI JAR)    │     │ core facts   │     │ Bazel/Gradle │
+            └──────┬───────┘     └──────┬───────┘     └──────┬───────┘
+                   │                    │                    │
+                   └────────────────────┼────────────────────┘
+                                        ▼
+                         ┌──────────────────────────────┐
+                         │  User-local content-addressed │
+                         │  packs + generation manifests │
+                         │  (not under the worktree)     │
+                         └──────────────────────────────┘
 ```
 
-## Layers
+## Layers and packages
 
-| Layer | Responsibility |
-|-------|----------------|
-| `cli/` | Clikt commands, progress, exit codes |
-| `application/` | Query plugins (`selection-context`, …) |
-| `producer/` | Index build: file hashes, Kotlin PSI, JDK Java trees, secure XML/resource walks |
-| `topology/` | Resolve source file set from Bazel/Gradle scope |
-| `core/` | Keys, records, Xodus store, manifest, query service |
+| Layer / artifact | Responsibility |
+|------------------|----------------|
+| `indexino-model` | Shared public types: IDs, locations, `QueryPage`, `Finding`, `BasicFactQueries`, `PluginFactValue`, `IndexinoInternalApi` |
+| `indexino` (`…api`) | Client facade: connect, refresh, snapshot, status, diagnostics |
+| `indexino-plugin-api` | Versioned SPI: analyzers, post-processors, checks, fact sink/view |
+| `indexino-script-host` | Optional Alpha `.indexino.kts` (non-suspend DSL) |
+| `engine` (internal) | Workspace runtime, refresh registry, coordinator, pack cache, GC |
+| `cli` (internal) | Clikt, daemon/cache commands, JSONL, exit codes |
+| `producer` / `topology` / `parse` / `core` (internal) | Analysis, Bazel/Gradle, PSI/Javac/StAX, keys |
+| `detekt-plugin` (build-only) | Enforces equality and no-data-class rules on public packages; targets JDK 17 so Gradle can load it while product artifacts target JDK 25 |
 
-Dependency direction: `cli` → `application` + `producer` → `topology` + `core`.
+Dependency direction (public):
+
+```text
+indexino ──────────► indexino-model ◄────────── indexino-plugin-api
+     │                      ▲
+     │                      │
+     └──── engine (impl) ───┘
+script-host ──► indexino + model
+```
+
+**Never** `indexino-plugin-api` → `indexino` or `indexino` → `api(indexino-plugin-api)` for shared
+types. Host constructs SPI contexts with public constructors annotated `@IndexinoInternalApi`.
+
+### S1 transitional boundaries
+
+The S1 in-process facade delegates refresh orchestration to internal `cli/IndexBuildRunner`. This is
+a tracer shortcut, not the target dependency direction. S3 extracts that orchestration into an
+internal `IndexingCoordinator` owned below both facade and CLI when the refresh registry lands; the
+CLI then becomes an adapter over the coordinator. The coordinator must return the exact manifest,
+changes, and outcome used by the completed run; callers must not re-resolve `HEAD` or re-derive a
+result from mutable storage.
+
+Until S2 lands content-addressed packs, the S1 writer uses `legacy-store` and atomically copies each
+completed generation into per-client immutable Xodus storage
+(`legacy-store/clients/<client-id>/generations/...`) beneath that bridge for snapshots. Superseded
+copies are reclaimed after their last in-process snapshot closes. The O(index-size) copy preserves
+incremental indexing and the public snapshot-pinning contract without treating the bridge as the
+target storage design; S6 later shares generations with on-disk `refs/` instead of per-client copies.
+
+The Maven Local `indexino` publication is dogfood-only until the S5 artifact split. Its generated
+library POM deliberately omits CLI-only Clikt, JNA, and `slf4j-nop`; Gradle Module Metadata is
+disabled for this publication so Gradle consumers resolve that stripped POM instead of the unfiltered
+`.module` graph. The fat CLI distribution still contains its runtime dependencies. S5 publishes
+separate thin library and CLI coordinates and replaces the no-op logging binding with the
+library-appropriate API dependency.
+
+Maven Central tag releases are **blocked until S5**: the facade POM already declares a compile
+dependency on `indexino-model`, but that module is not yet wired for the same signed
+`publishToMavenCentral` path as `indexino`. Cutting a Central release of the facade alone would
+publish an unresolvable coordinate set. Dogfood via Maven Local
+(`:indexino-model:publishToMavenLocal` then `:publishToMavenLocal`) until S5 lands the multi-artifact
+Central configuration.
 
 ## Embedded API boundary
 
-There is no supported embedded API yet. All current layers are implementation details and their
-Kotlin declarations are `internal`; the committed ABI baseline is empty. The first supported API
-will be introduced deliberately under `dev.sebastiano.indexino.api`. See
-[API-STABILITY.md](API-STABILITY.md).
+Supported packages are only those listed in [API-STABILITY.md](API-STABILITY.md). Implementation
+remains `internal` until deliberately published. Target tooling: Metalava + detekt + consumer
+fixtures.
+
+JDK floor for library artifacts: **25**.
 
 ## Persistence (why it exists)
 
-Large Bazel monorepos may take **minutes** to index. The store under `.indexino/index/<commit>/` amortizes that cost:
+Large Bazel monorepos may take **minutes** to index. User-local packs + generation manifests
+amortize that cost:
 
-- First `index`: build base.xodus
-- Subsequent `query`: read keys only
-- New commit: new base directory; old bases can be garbage-collected
+- First refresh: analyze and publish a generation
+- Subsequent open with no changes: **zero analyzers**
+- Incremental refresh: work proportional to invalidation closure
+- Sibling worktrees share content-addressed packs on the same machine
 
-See [INDEX-STORAGE.md](INDEX-STORAGE.md) and
-[.plans/kotlin-code-index-core.md](../.plans/kotlin-code-index-core.md).
+See [INDEX-STORAGE.md](INDEX-STORAGE.md). Commit is provenance, not the primary cache key.
 
-## selection-context application
+## Workspace runtime
 
-Lexical PSI walk at index time → `compose:selection-site:*` records. Queries scan Xodus, not source trees.
+A long-lived **local** workspace runtime (normally a daemon) owns refresh work, watchers, plugin
+classloaders, and budgets. CLI and embedded clients attach over AF_UNIX. Early tracer slices may
+run in-process with the same public types. This is **not** an IDE/MCP requirement — it is a local
+process for durable indexing.
 
-Limits: [application-selection-context.md](../.plans/application-selection-context.md).
+## selection-context
+
+Lexical PSI walk at index time → plugin-namespaced facts. Queries use checks / typed wrappers, not
+source tree walks. Extraction to `indexino-selection-context` is slice S4.
 
 ## Topology
 
 - **Primary:** Bazel — [BAZEL-TOPOLOGY.md](BAZEL-TOPOLOGY.md)
 - **Secondary:** Gradle — [GRADLE-TOPOLOGY.md](GRADLE-TOPOLOGY.md)
-
-## Upstream relationship
-
-Storage contracts align with in-app code-index work (epic #812, issues #814–#818). This repo is
-the **standalone CLI track**. Kotlin uses embedded PSI, Java uses JDK 21 `JavacTask.parse()`, and
-XML uses JDK StAX plus Android resource-path conventions. A Tree-sitter runtime is not required
-for these languages. ASM dependency producers remain a later core milestone.
+- Public scopes: `IndexScope.bazel` / `gradle` (+ `includingDependencies`); non-Git single root from S2
 
 ## Technology
 
 - **kotlin-compiler-embeddable** — PSI for Kotlin/Compose (Detekt-independent)
-- **JDK compiler trees** — parse-only Java declaration/reference extraction
-- **JDK StAX** — namespace-aware XML/resource extraction with DTD and external entities disabled
-- **Xodus** — embedded persistent store
-- **Clikt** — CLI
-- **Shadow + R8** — reproducible standalone JARs; the shrunk variant retains manifest launch,
-  embedded PSI/Xodus reflection contracts, and merged service providers
+- **JDK compiler trees** — parse-only Java extraction
+- **JDK StAX** — XML/resource extraction (resources public API in S10)
+- **Xodus** — generation-local indexes referencing content-addressed packs
+- **Clikt** — CLI only (not on library POM)
+- **Shadow + R8** — standalone / native-packaging inputs
+- **kotlinx-coroutines** — `api` of the client (suspend / Flow)
 - **Future:** ASM dependency indexing (#817)
 
 ## Distribution build outputs
@@ -101,7 +159,7 @@ for these languages. ASM dependency producers remain a later core milestone.
 | `indexino-*-macos-arm64.zip` | Flat macOS arm64 CLI with the same installation layout | No |
 | `indexino-*-windows-x64.zip` | Windows x64 console launcher with the same installation layout | No |
 | `indexino-*-<target>.zip.sha256` | Portable checksum for the finalized native ZIP | No |
-| ordinary JVM JAR | Thin dependency artifact with transitive runtime dependencies | Yes |
+| thin JARs | `indexino-model`, `indexino`, `indexino-plugin-api`, optional `indexino-script-host` | Yes |
 
 `shadowJar` and `shrunkCliJar` share explicit main output, runtime classpath, manifest, service
 merge, duplicate handling, and reproducibility settings. The shrunk task adds only the checked-in
@@ -176,11 +234,14 @@ the finalized ZIP, checksum, reports, test results, and console log for seven da
 
 ## Phased delivery
 
-[.plans/master-plan.md](../.plans/master-plan.md)
+Tracer-bullet slices **S0–S11** in [PUBLIC-API-DESIGN.html](PUBLIC-API-DESIGN.html). Historical
+C*/A* labels in older plan notes are superseded for product delivery planning.
 
 ## Out of scope
 
 - Target-repo Gradle/Bazel plugins
 - Full type resolution across classpath
 - A generalized IntelliJ PSI host for arbitrary languages
-- IDE daemon / MCP requirement for queries
+- **IDE / MCP daemon as a requirement** for queries (local workspace runtime is in scope)
+- Sandboxed untrusted plugins (v1 is trusted local code)
+- Migrating pre-contract in-worktree store layouts

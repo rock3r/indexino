@@ -240,7 +240,10 @@ class IndexMachineProgressCliTest {
 
     private fun runGit(workspace: Path, vararg args: String) {
         val process =
-            ProcessBuilder(*listOf("git", "-C", workspace.toString(), *args).toTypedArray())
+            ProcessBuilder(
+                    *listOf("git", "-C", workspace.toString(), "-c", "commit.gpgsign=false", *args)
+                        .toTypedArray()
+                )
                 .redirectErrorStream(true)
                 .start()
         check(process.waitFor() == 0)

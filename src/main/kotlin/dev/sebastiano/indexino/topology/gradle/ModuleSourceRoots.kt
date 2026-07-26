@@ -11,12 +11,21 @@ internal object ModuleSourceRoots {
 
     fun moduleDirectory(workspace: Path, modulePath: String): Path {
         val segments = modulePath.removePrefix(":").split(":").filter { it.isNotBlank() }
+        // Topology discovery must never return paths that escape a root via ".." (contract).
+        // This check is load-bearing for the CLI, which never constructs IndexScope. Also reject
+        // '/' and '\\' inside a colon-segment so values like ":../../outside" cannot slip through.
+        require(segments.all(::isSafeModuleSegment)) {
+            "Gradle module path must not contain '.', '..', or path-separator segments: $modulePath"
+        }
         return if (segments.isEmpty()) {
             workspace
         } else {
             workspace.resolve(segments.joinToString("/"))
         }
     }
+
+    private fun isSafeModuleSegment(segment: String): Boolean =
+        segment != "." && segment != ".." && '/' !in segment && '\\' !in segment
 
     fun collectKotlinSources(moduleDir: Path, workspace: Path): List<String> {
         if (!moduleDir.exists()) {

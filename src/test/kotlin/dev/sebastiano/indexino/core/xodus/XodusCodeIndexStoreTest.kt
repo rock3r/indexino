@@ -60,6 +60,22 @@ class XodusCodeIndexStoreTest {
         assertEquals("Later", (scanned[1].second as ComposeSelectionSiteRecord).callee)
     }
 
+    @Test
+    fun `forEachPrefix stops without materializing the remaining cursor rows`() {
+        val prefix = "compose:selection-site:ui/Panel.kt:"
+        val first = CodeIndexKey.composeSelectionSite("ui/Panel.kt", 10, 1)
+        store.put(first, composeRecord("First"))
+        store.put(CodeIndexKey.composeSelectionSite("ui/Panel.kt", 20, 1), composeRecord("Second"))
+
+        val visited = mutableListOf<CodeIndexKey>()
+        store.forEachPrefix(prefix) { key, _ ->
+            visited += key
+            false
+        }
+
+        assertEquals(listOf(first), visited)
+    }
+
     private fun composeRecord(callee: String): ComposeSelectionSiteRecord =
         ComposeSelectionSiteRecord(
             callee = callee,

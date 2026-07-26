@@ -67,4 +67,13 @@ class GradleTopologyTest {
             result.sourceFiles,
         )
     }
+
+    @Test
+    fun `root scope reports includeDeps true even when the request asked for false`() {
+        // Root selection always walks every included module; reporting the requested false would
+        // publish a false provenance record and defeat facade mismatch checks.
+        val result = GradleTopology.resolveSources(":", fixtureRoot, includeDeps = false)
+        assertTrue(result.includeDeps)
+        assertEquals(":", result.scope)
+    }
 }

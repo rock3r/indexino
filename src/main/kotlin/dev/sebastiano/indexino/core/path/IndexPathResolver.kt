@@ -5,8 +5,9 @@ import java.nio.file.Path
 internal class IndexPathResolver(
     private val workspaceRoot: Path,
     private val storeDirName: String = IndexPaths.STORE_DIR_NAME,
+    private val storeRootOverride: Path? = null,
 ) {
-    fun storeRoot(): Path = workspaceRoot.resolve(storeDirName)
+    fun storeRoot(): Path = storeRootOverride ?: workspaceRoot.resolve(storeDirName)
 
     fun resolveIndexDirectory(commitHash: String): Path =
         storeRoot().resolve(IndexPaths.INDEX_DIR_NAME).resolve(commitHash)

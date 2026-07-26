@@ -2,109 +2,143 @@
 
 Persistent on-disk layout for **indexino**.
 
-## Why `.indexino/` (not `.agent/` or `.agents/`)
+> **Binding contract:** This document matches
+> [PUBLIC-API-DESIGN.html](PUBLIC-API-DESIGN.html) (Accepted 2026-07-25).
+> Pre-contract layouts under `<project>/.indexino/index/<commit>/` are a **non-goal to migrate** —
+> wipe and rebuild. Implementation still shipping that layout must treat it as transitional and
+> must not extend it.
 
-| Path | Purpose |
-|------|---------|
-| **`.indexino/`** | This tool's index store in a workspace being indexed |
-| **`.agents/`** | Agent skills in the **tool repo** (unrelated) |
+## Cache is out of the worktree
 
-Upstream in-app code-index (#814) uses `.agent/` — we deliberately use a **distinct directory** to avoid confusion. Key schema and record shapes stay compatible; only the root folder name differs. Optional future: `--store-dir` override or import from `.agent/` if both exist.
+Nothing Indexino writes belongs inside the checkout. Cache, generation manifests, staging, runtime
+sockets, leases, journals, and tombstones live under a **user-local root**:
 
-## Workspace layout
+| Resolution order | Path |
+|------------------|------|
+| 1. Explicit | `$INDEXINO_CACHE_DIR` |
+| 2. XDG | `$XDG_CACHE_HOME/indexino` |
+| 3. macOS default | `~/Library/Caches/indexino` |
+| 4. Other | `~/.cache/indexino` |
+
+Indices are **per-machine**. Do not gitignore a project-local store for the product layout — there
+is none. `git clean -xdf` on a worktree must not delete the user-local cache.
+
+### Why not `.indexino/` in the project?
+
+| Concern | Project-local `.indexino/` | User-local cache |
+|---------|---------------------------|------------------|
+| `git status` dirt | Requires gitignore / exclude | Never |
+| AF_UNIX path length | Worktree paths often exceed 102 chars | Short fixed root |
+| Sibling worktrees | Separate copies | Shared content-addressed chunks |
+| `git clean` | Destroys index | Manifest rebuild only |
+
+Upstream in-app work (#814) used `.agent/`; this CLI deliberately does **not** write into the
+worktree for product storage.
+
+## Layout
 
 ```
-<project-root>/
-  .indexino/
-    index/
-      <git-commit-hash>/
-        base.xodus/       # immutable after seal
-        manifest.json     # scope, hashes, indexer version
-    sessions/
-      <session-id>/
-        delta.xodus/      # optional overlay (future)
+<cache-root>/                          # see resolution order above
+  chunks/<ab>/<cd>/<content-key>       # immutable packs (two-level fanout)
+  origins/<origin-cache-id>/inventory
+  workspaces/<workspace-id>/
+    generations/<generation>/manifest
+    staging/<refresh-id>/manifest
+    current                            # atomic pointer
+    refs/<runtime-or-snapshot-id>
+    change-journal
+    legacy-store/                      # S1 bridge; removed as one unit in S2
+      index/<commit>/                  # mutable incremental writer
+      clients/<client-id>/generations/<generation-id>/store/ # per-client immutable snapshot copy
+  registry/workspaces.json             # path → fs identity, generations, last-used
+  registry/tombstones/
+  runtime/<workspace-id>.sock          # AF_UNIX (all platforms)
+  runtime/<workspace-id>.lease.json
 ```
 
-**Gitignore:** add `.indexino/` to audited monorepos (CLI prints a hint on first `index`).
+### What a chunk is
 
-## Manifest
+A **chunk** is an immutable content-addressed **pack** of related analysis facts for one
+analysis-key + content-key, stored as a file under the fanout directory—not one Xodus environment
+per source file. Xodus (or equivalent) may hold generation-local indexes that **reference** chunk
+IDs. Put-if-absent installs packs; readers open by content key.
 
-See [kotlin-code-index-core.md](../.plans/kotlin-code-index-core.md). Skip rebuild when commit,
-scope, sources hash, and indexer version match.
+Plugin facts are the same mechanism under plugin analysis identity (see plugin SPI in the design
+doc). Payload values use the durable `PluginFactValue` model in `indexino-model`.
 
-## Key namespaces
+### Workspace identity
 
-| Prefix | Owner | Purpose |
-|--------|-------|---------|
-| `sym:` | Core | Kotlin/Java symbol definitions |
-| `ref:` | Core | Kotlin/Java calls/imports and XML resource references |
-| `res:` | Core | Android XML resources by type and name |
-| `file:` | Core | Path + content hash |
-| `compose:` | selection-context | Selection site facts |
-| `meta:` | Core | Indexer metadata |
+- `<workspace-id>` is the first 16 hexadecimal characters of SHA-256 over the canonical workspace
+  path. The fixed 64-bit identifier keeps the S6 runtime socket below macOS's 102-character budget.
+- **Not** “one Git commit = one store directory”.
+- A workspace generation is a **composite** manifest pinning topology + origin shards + link
+  generation (public types are composite even when the first engine is one-shard).
+- Git commit is **provenance** for a Git origin and a delta anchor, not the primary cache key.
+- Non-Git origins use a durable filesystem-origin identity.
 
-All keys via `CodeIndexKey` — no ad hoc concatenation.
+### Runtime (not storage API)
 
-Definitions use location-qualified keys so overloads and duplicate resource configurations do
-not overwrite one another:
+AF_UNIX socket path budget is **102 characters** on macOS (bind fails at 103). Paths must stay
+under the short user-local root. Peer identity comes from the lease file.
 
-```text
-sym:<language-neutral-id>:<relative-file>:<line>:<column>
-ref:<target-id>:<relative-file>:<line>:<column>
-res:<type>:<name>:<relative-file>:<line>
-```
+## Logical fact namespaces
 
-`SymbolRecord.fqn` is the stable lookup identity. Types use `package.Type`; members use
-`package.Type#member`; local Android resources use `res:type:name`. References to resources from
-another package retain that namespace as `res:package:type:name` (for example,
-`res:android:color:white`) so they cannot be mistaken for same-named local resources. Callable records retain source
-signature and arity metadata while their persisted key preserves every overload.
+Logical key prefixes remain useful for mental models and generation-local indexes:
 
-`ReferenceRecord` stores the source language, referenced name, source qualifier, call arity, and
-candidate language-neutral target IDs. This lets clients reconstruct Java-to-Kotlin and
-Kotlin-to-Java edges without requiring classpath attribution. Syntactically recoverable receiver
-types (parameters, locals, constructors, imports, and package-local types) produce the same
-`Owner#member` identity in both language producers.
+| Prefix / family | Owner | Purpose |
+|-----------------|-------|---------|
+| symbols / calls / refs | Core | Kotlin/Java definitions, call graph, references |
+| resources | Core (S10) | Android/CMP resource identity (deferred public API) |
+| file hashes | Core | Content-key inputs for packs |
+| plugin namespaces | Plugins | Namespaced facts under plugin ID + `PluginFactSchemaVersion` |
+| meta | Core | Indexer / schema versions, generation metadata |
 
-## Xodus
+Definitions remain location-qualified so overloads and duplicate configurations do not collide.
+`BasicFactSchemaVersion` is the core schema coordinate; plugin schemas are per-plugin integers
+(`PluginFactSchemaVersion`).
 
-Embedded store (v2.0.1 via `xodus-environment`); `prefixScan` for preset queries. Dependency in Core C0:
+## Query path (product)
 
-```kotlin
-// gradle/libs.versions.toml
-xodus = "2.0.1"
-// build.gradle.kts
-implementation(libs.xodus.environment)
-```
+1. Connect to the workspace runtime (or in-process engine in early slices).
+2. Pin a published generation (`snapshot(PUBLISHED)` or after refresh / `AWAIT_CURRENT`).
+3. Query through `IndexSnapshot` / `BasicFactQueries` — never by opening raw packs from callers.
 
-Store opens use a bounded 30-second Xodus log-lock wait. Concurrent CLI processes therefore
-serialize briefly at the environment boundary instead of failing immediately when agent tools
-query the same base index at once.
-
-## Default path constant
-
-```kotlin
-object IndexPaths {
-    const val STORE_DIR_NAME = ".indexino"
-}
-```
-
-## Query path
-
-1. Resolve manifest for commit + scope
-2. Open `base.xodus` read-only
-3. Application scans keys
-
-## Invalidation
+## Invalidation and reuse
 
 | Event | Action |
 |-------|--------|
-| New `git commit` | new `index/<hash>/` |
-| File edit | re-run producers for changed files |
-| Scope change | rebuild with new manifest |
-| Indexer version bump | rebuild |
+| Unchanged inputs | Reopen published generation; zero analyzers |
+| File edit | Recompute invalidated packs + declared post-process closure |
+| Schema / plugin / analyzer bump | Invalidate affected analysis keys |
+| New worktree, same machine | Share chunks; new workspace id + current pointer |
+| Confirmed workspace loss | Tombstone; abandon worktree staging/refs; keep shared chunks until GC |
 
-## Deprecated paths
+### Reclamation
 
-- `.compose-selection-index/` — early sketch, do not use
-- `.agent/` — upstream #814 name only; not used by this CLI unless `--store-dir .agent` added later
+1. **Reference-based** — never drop packs reachable from `current`, pinned snapshots, or staging.
+2. **Age** — unreferenced packs / dead workspaces ~30 days.
+3. **Quota** — backstop; never below one complete generation per live worktree without force.
+
+CLI-only operators: `indexino cache status|gc|forget` and `daemon stop --purge`. Explicit
+last-used in the registry (not filesystem `atime`). GC grace window + re-verify before unlink.
+
+## Transitional implementation note
+
+S1 writes through the existing commit-addressed Xodus layout beneath
+`workspaces/<workspace-id>/legacy-store/`, then atomically copies each completed generation to
+`legacy-store/clients/<client-id>/generations/<generation-id>/store/` so open snapshots retain
+immutable backing data. Copies are **per client instance** in S1: in-process refcounts reclaim only
+directories that client created, which prevents an uncoordinated peer from deleting a store another
+client still pins. S6 replaces this with shared generations plus on-disk `refs/`. Superseded copies
+are deleted when their last in-process snapshot closes. The full copy preserves incremental indexing
+but costs O(index size) per publish; it is an explicit S1 trade-off, not the large-repository design.
+These are user-local production bridges, not the product pack layout and not temporary test stores.
+S2 removes `legacy-store` as one unit and replaces it with generation manifests, reference tracking,
+and content-addressed packs. Do **not** extend `<project>/.indexino/index/<commit>/`; new features
+must assume user-local composite storage.
+
+## Deprecated / rejected paths
+
+- `<project>/.indexino/` as product cache or runtime root
+- `.compose-selection-index/` — early sketch
+- `.agent/` — upstream #814 name only; not used by this CLI

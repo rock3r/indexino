@@ -1,6 +1,57 @@
 # CLI
 
-Commands for **indexino**. Persistent store lives at `<project>/.indexino/index/<commit>/`.
+Commands for **indexino**. The CLI is an adapter over the workspace runtime and public API
+described in [PUBLIC-API-DESIGN.html](PUBLIC-API-DESIGN.html) (Accepted 2026-07-25).
+
+## Storage (product vs transitional)
+
+| | Product contract | Transitional (current shipping CLI) |
+|--|------------------|-------------------------------------|
+| Location | User-local cache root (`$INDEXINO_CACHE_DIR` / XDG / `~/Library/Caches/indexino`) | May still open `<project>/.indexino/index/<commit>/` until S2 |
+| Migration | Non-goal — wipe and rebuild | Do not extend the in-worktree layout |
+| Details | [INDEX-STORAGE.md](INDEX-STORAGE.md) | Implementation debt only |
+
+Do **not** document new features as depending on project-local `.indexino/` stores.
+
+## Lifecycle commands (product surface)
+
+These map to the embedded API; land with slices S6–S7 (daemon) and cache operators.
+
+### `daemon`
+
+```bash
+indexino daemon start  --project /path/to/repo
+indexino daemon status --project /path/to/repo
+indexino daemon stop   --project /path/to/repo [--purge]
+indexino daemon run    --project /path/to/repo   # foreground owner; used by auto-spawn
+```
+
+| Command | Maps to | Notes |
+|---------|---------|--------|
+| `start` / `run` | Runtime attach / owner process | One AF_UNIX runtime per workspace identity |
+| `status` | Lease + liveness | Reports tombstones if the workspace was lost |
+| `stop` | `shutdownRuntime()` | Explicit shared shutdown — not client disconnect. `--purge` drops reclaimable cache for this workspace |
+
+Before deleting or moving a daemon-owned worktree, run `daemon stop`. Deleting the bound workspace
+while the daemon is alive yields terminal **`WORKSPACE_LOST`** (loud diagnostic + external tombstone).
+
+### `cache` (operators only)
+
+```bash
+indexino cache status [--project /path/to/repo]
+indexino cache gc
+indexino cache forget --project /path/to/repo
+```
+
+Not an agent-query API. Reclamation policy: [INDEX-STORAGE.md](INDEX-STORAGE.md).
+
+### Shared flags (product)
+
+| Flag | Meaning |
+|------|---------|
+| `--no-auto-refresh` | `AutoRefreshMode.DISABLED` (meaningful from S7; earlier slices are manual-only) |
+| `--plugin /path/to.jar` | Explicit trusted plugin JAR (repeatable); maps to `withPlugin` |
+| `--project` | Workspace root (identity binding) |
 
 Examples use `indexino` as the command name. For a native ZIP, that means
 `/path/to/indexino/indexino` on Linux/macOS or `C:\path\to\indexino\indexino.exe` on Windows. The
@@ -11,13 +62,16 @@ and AOT cache beside the launcher. See [DISTRIBUTIONS.md](DISTRIBUTIONS.md).
 
 ### `index`
 
-Build or refresh the persistent base index for a scope.
+Build or refresh the persistent base index for a scope. Product mapping:
+`refresh(RefreshRequest)` + await on the workspace runtime (joins an existing daemon when present).
 
 ```bash
 indexino index \
   --project /path/to/monorepo \
   --bazel-target //plugins/foo/ui:ui \
-  [--applications selection-context]
+  [--applications selection-context] \
+  [--plugin /path/to/extra.jar] \
+  [--no-auto-refresh]
 ```
 
 Gradle-backed repos (no Bazel at project root):
@@ -33,14 +87,14 @@ indexino index \
 
 When `--build-system auto` (default), Bazel is chosen if `MODULE.bazel` / `WORKSPACE` exists;
 otherwise Gradle when `settings.gradle(.kts)` is present. Pass `--bazel-target` or
-`--gradle-module` for the scope.
+`--gradle-module` for the scope. Embedded API scopes stay explicit (`IndexScope.bazel` /
+`gradle`); CLI may keep auto-detect.
 
-On first run, resolves `git rev-parse HEAD` in `--project`, discovers Kotlin, Java, and Android XML sources via Bazel
-query (with `labels(srcs, …)` fallback when `deps()` fails on partial checkouts), BUILD-file
-parse when `bazel` is unavailable, opens `<project>/.indexino/index/<commit>/base.xodus`,
-runs core `FileHashProducer` plus any requested application producers, and writes `manifest.json`.
-Core producers always build Kotlin/Java symbols, cross-language references, and XML resources;
-`--applications` selects additional application facts such as `selection-context`.
+**Current shipping behaviour (transitional):** resolves `git rev-parse HEAD`, discovers sources via
+Bazel/Gradle, may open a commit-addressed store under the project, runs core producers plus
+`--applications`. **Product behaviour:** publishes a generation under the user-local cache;
+commit is provenance only. Core producers build Kotlin/Java symbols, references, and XML facts;
+plugins (e.g. selection-context) are loaded explicitly or bundled in the fat JAR.
 
 Progress lines (producer names and `[N/M] file` per source file) go to stderr.
 
@@ -121,18 +175,30 @@ First run on a large repo may take minutes; subsequent queries read Xodus.
 
 ### `status`
 
+Cheap product mapping: manifest + last known freshness (not a full rehash by default).
+
 ```bash
 indexino status --project /path/to/monorepo [--bazel-target //pkg:ui]
 indexino status --project /path/to/gradle-repo --gradle-module :ui
 ```
 
-When scope flags are omitted, freshness is checked against the scope stored in the manifest
-(Bazel target or Gradle module path).
+When scope flags are omitted, freshness is checked against the scope and `includeDeps` stored in the
+generation manifest (whether the index is still current for its own configuration). May include
+reclaimable-cache hints for operators. **Transitional shipping CLI** may still re-resolve topology
+and rehash — that is a bug relative to the product contract, not a feature to preserve.
+
+### `script` (Alpha; requires script-host on the distribution)
+
+```bash
+indexino script --project /path/to/repo path/to/query.indexino.kts
+```
+
+Maps to `IndexinoScriptHost.run`. Non-suspend DSL. See design doc script contract.
 
 ### Session overlay
 
-Query with `--session-id <id>` reads base index plus session delta at
-`.indexino/sessions/<id>/delta.xodus` (delta overrides base keys).
+Query with `--session-id <id>` is a **transitional** CLI feature reading a delta store. Product
+storage does not use project-local session paths; do not extend this layout.
 
 ### `find-symbol`
 

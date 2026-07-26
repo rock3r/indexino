@@ -1,7 +1,7 @@
 # Native distributions
 
 Indexino native distributions are self-contained command-line installations built around the same
-JVM 21 bytecode as the thin Maven and fat-JAR variants. Each target ZIP contains a Roast launcher,
+JVM 25 bytecode as the thin Maven and fat-JAR variants. Each target ZIP contains a Roast launcher,
 a stripped JBR 25 runtime, the R8 application JAR, a target-trained AOT cache, and the applicable
 license files. Native ZIPs are CI artifacts while Indexino remains pre-release; no native release
 has been published.

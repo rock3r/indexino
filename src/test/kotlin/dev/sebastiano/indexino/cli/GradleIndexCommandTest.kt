@@ -94,7 +94,10 @@ class GradleIndexCommandTest {
 
     private fun runGit(workspace: java.nio.file.Path, vararg args: String) {
         check(
-            ProcessBuilder(*listOf("git", "-C", workspace.toString(), *args).toTypedArray())
+            ProcessBuilder(
+                    *listOf("git", "-C", workspace.toString(), "-c", "commit.gpgsign=false", *args)
+                        .toTypedArray()
+                )
                 .redirectErrorStream(true)
                 .start()
                 .waitFor() == 0
