@@ -15,6 +15,7 @@ import dev.sebastiano.indexino.model.SymbolId
 import dev.sebastiano.indexino.model.SymbolQuery
 import dev.sebastiano.indexino.model.WorkspaceGenerationId
 import dev.sebastiano.indexino.model.WorkspaceRevision
+import java.util.Locale
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.startCoroutine
@@ -345,7 +346,7 @@ class IndexSnapshotStorageFailureTest {
     fun `queries fail rather than expose an unusable cursor beyond the host window`() {
         val records =
             (0..10_000).map { index ->
-                val name = "demo.%05d".format(index)
+                val name = "demo.%05d".format(Locale.ROOT, index)
                 CodeIndexKey.symbolDefinition(name, "$index.kt", 1, 1) to
                     SymbolRecord(
                         fqn = name,
