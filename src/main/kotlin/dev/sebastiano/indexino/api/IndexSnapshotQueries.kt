@@ -88,7 +88,12 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
                     }
                     .distinct(),
             receiver = receiver,
-            enclosingSymbolId = enclosingSymbolFqn?.let(::externalSymbolId),
+            enclosingSymbolId =
+                enclosingSymbolFqn?.let { enclosing ->
+                    candidates
+                        .firstOrNull { it.fqn == enclosing || enclosing in it.aliases }
+                        ?.let { symbol -> symbol.definitionId() } ?: externalSymbolId(enclosing)
+                },
             parentCallId = parentCallIdentity?.let { identity -> callSiteId(identity) },
             range =
                 sourceRange(

@@ -164,7 +164,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                     startOffset = call.textRange.startOffset,
                     endLine = call.endLineNumber(),
                     endColumn = call.endColumnNumber(),
-                    endOffset = call.textRange.endOffset,
+                    endOffset = call.inclusiveEndOffset(),
                     arguments = callArguments(call, relativePath, resolvedSymbol),
                     confidence = if (target == null) "UNRESOLVED" else "RESOLVED",
                 ),
@@ -223,7 +223,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             startOffset = textRange.startOffset,
             endLine = endLineNumber(),
             endColumn = endColumnNumber(),
-            endOffset = textRange.endOffset,
+            endOffset = inclusiveEndOffset(),
             nestedCallIdentities =
                 collectDescendantsOfType<KtCallExpression>().map { call ->
                     callIdentity(relativePath, call)
@@ -578,6 +578,9 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         val line = document.getLineNumber(textRange.startOffset)
         return textRange.startOffset - document.getLineStartOffset(line) + 1
     }
+
+    private fun KtElement.inclusiveEndOffset(): Int =
+        (textRange.endOffset - 1).coerceAtLeast(textRange.startOffset)
 
     private fun KtElement.endLineNumber(): Int {
         val document = containingFile.viewProvider.document ?: return lineNumber()

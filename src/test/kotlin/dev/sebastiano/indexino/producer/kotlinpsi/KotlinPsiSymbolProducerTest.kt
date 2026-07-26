@@ -72,6 +72,7 @@ class KotlinPsiSymbolProducerTest {
         assertEquals(container.identity, child.parentCallIdentity)
         assertEquals("content", container.arguments.single().resolvedName)
         assertEquals("LAMBDA", container.arguments.single().kind)
+        assertEquals(')', source[container.endOffset])
     }
 
     private lateinit var store: XodusCodeIndexStore

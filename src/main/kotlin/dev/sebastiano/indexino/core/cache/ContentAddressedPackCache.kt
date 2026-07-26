@@ -54,26 +54,38 @@ internal class ContentAddressedPackCache(private val cacheRoot: Path) {
         return contentKey
     }
 
+    @Suppress("NestedBlockDepth")
     fun materializeDirectory(contentKey: String, destination: Path) {
         val pack = packPath(contentKey)
         require(Files.isRegularFile(pack)) { "Content pack does not exist: $contentKey" }
-        Files.createDirectories(destination)
-        val normalizedDestination = destination.toAbsolutePath().normalize()
-        ZipFile(pack.toFile()).use { zip ->
-            zip.entries().asSequence().forEach { entry ->
-                val target = normalizedDestination.resolve(entry.name).normalize()
-                require(target.startsWith(normalizedDestination)) {
-                    "Pack entry escapes destination"
-                }
-                if (entry.isDirectory) {
-                    Files.createDirectories(target)
-                } else {
-                    Files.createDirectories(target.parent)
-                    zip.getInputStream(entry).use { input ->
-                        Files.newOutputStream(target).use { output -> input.copyTo(output) }
+        if (Files.isDirectory(destination)) return
+        Files.createDirectories(destination.parent)
+        val staging = destination.resolveSibling("${destination.fileName}.tmp-${UUID.randomUUID()}")
+        try {
+            Files.createDirectories(staging)
+            val normalizedDestination = staging.toAbsolutePath().normalize()
+            ZipFile(pack.toFile()).use { zip ->
+                zip.entries().asSequence().forEach { entry ->
+                    val target = normalizedDestination.resolve(entry.name).normalize()
+                    require(target.startsWith(normalizedDestination)) {
+                        "Pack entry escapes destination"
+                    }
+                    if (entry.isDirectory) Files.createDirectories(target)
+                    else {
+                        Files.createDirectories(target.parent)
+                        zip.getInputStream(entry).use { input ->
+                            Files.newOutputStream(target).use { output -> input.copyTo(output) }
+                        }
                     }
                 }
             }
+            try {
+                Files.move(staging, destination, StandardCopyOption.ATOMIC_MOVE)
+            } catch (_: java.nio.file.FileAlreadyExistsException) {
+                // Another client materialized the immutable pack first.
+            }
+        } finally {
+            if (Files.exists(staging)) staging.toFile().deleteRecursively()
         }
     }
 

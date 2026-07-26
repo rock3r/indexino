@@ -242,28 +242,34 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
     public suspend fun snapshot(): IndexSnapshot {
         ensureOpen()
         val generation =
-            synchronized(generationLock) {
-                // Prefer CLOSED over INDEX_NOT_FOUND if close() raced after ensureOpen().
-                if (closed.get()) {
-                    throw failure(
-                        category = IndexFailureCategory.CLOSED,
-                        code = "client_closed",
-                        message = "Indexino client is closed",
-                        retryable = false,
-                    )
-                }
-                val current =
-                    published
-                        ?: restorePublishedGeneration()
-                        ?: throw failure(
-                            category = IndexFailureCategory.INDEX_NOT_FOUND,
-                            code = "index_not_found",
-                            message = "No published index exists; call refresh first",
-                            retryable = true,
+            try {
+                synchronized(generationLock) {
+                    // Prefer CLOSED over INDEX_NOT_FOUND if close() raced after ensureOpen().
+                    if (closed.get()) {
+                        throw failure(
+                            category = IndexFailureCategory.CLOSED,
+                            code = "client_closed",
+                            message = "Indexino client is closed",
+                            retryable = false,
                         )
-                snapshotPins[current.generation] =
-                    snapshotPins.getOrDefault(current.generation, 0) + 1
-                current
+                    }
+                    val current =
+                        published
+                            ?: restorePublishedGeneration()
+                            ?: throw failure(
+                                category = IndexFailureCategory.INDEX_NOT_FOUND,
+                                code = "index_not_found",
+                                message = "No published index exists; call refresh first",
+                                retryable = true,
+                            )
+                    snapshotPins[current.generation] =
+                        snapshotPins.getOrDefault(current.generation, 0) + 1
+                    current
+                }
+            } catch (thrown: IndexinoException) {
+                throw thrown
+            } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
+                throw mapUnexpectedFailure(thrown)
             }
         val openedStore =
             try {

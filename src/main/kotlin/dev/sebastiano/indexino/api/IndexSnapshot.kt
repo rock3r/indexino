@@ -126,6 +126,7 @@ private constructor(
         validateQueryOptions(options)
         return mapUnexpectedFailures {
             val enclosing = query.enclosingSymbolId?.let(::findSymbolById)
+            val unresolvedEnclosingId = query.enclosingSymbolId != null && enclosing == null
             orderedPage(
                 options = options,
                 comparator =
@@ -137,10 +138,12 @@ private constructor(
                         CallSiteRecord::identity,
                     ),
                 scan = { accept ->
-                    store.forEachPrefix("call:") { _, record ->
-                        if (record is CallSiteRecord && record.matches(query, enclosing))
-                            accept(record)
-                        true
+                    if (!unresolvedEnclosingId) {
+                        store.forEachPrefix("call:") { _, record ->
+                            if (record is CallSiteRecord && record.matches(query, enclosing))
+                                accept(record)
+                            true
+                        }
                     }
                 },
                 transform = { records ->
@@ -263,9 +266,15 @@ private constructor(
         calls: List<CallSiteRecord>
     ): Map<CallSiteRecord, List<SymbolRecord>> {
         val candidatesByName =
-            candidatesByName(calls.flatMapTo(LinkedHashSet()) { it.candidateSymbolFqns })
+            candidatesByName(
+                calls.flatMapTo(LinkedHashSet()) {
+                    it.candidateSymbolFqns + listOfNotNull(it.enclosingSymbolFqn)
+                }
+            )
         return calls.associateWith { call ->
-            call.candidateSymbolFqns.flatMap { candidatesByName[it].orEmpty() }.distinct()
+            (call.candidateSymbolFqns + listOfNotNull(call.enclosingSymbolFqn))
+                .flatMap { candidatesByName[it].orEmpty() }
+                .distinct()
         }
     }
 

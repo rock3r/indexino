@@ -101,6 +101,7 @@ class JavaSourceProducerTest {
             val child = calls.first { it.calleeName == "child" }
             assertEquals(listOf(child.identity), outer.arguments.single().nestedCallIdentities)
             assertTrue(outer.startOffset < outer.endOffset)
+            assertEquals(')', source[outer.endOffset])
         }
     }
 
