@@ -1,0 +1,87 @@
+package dev.sebastiano.indexino.core.cache
+
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
+import java.util.HexFormat
+import java.util.UUID
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
+
+/** Installs immutable analysis packs under the cache-root two-level content-key fanout. */
+internal class ContentAddressedPackCache(private val cacheRoot: Path) {
+    fun installDirectory(directory: Path): String {
+        val entries =
+            Files.walk(directory).use { paths ->
+                paths
+                    .filter(Files::isRegularFile)
+                    .map { path ->
+                        directory.relativize(path).toString().replace('\\', '/') to path
+                    }
+                    .sorted { left, right -> left.first.compareTo(right.first) }
+                    .toList()
+            }
+        val contentKey = contentKey(entries)
+        val destination = packPath(contentKey)
+        if (Files.isRegularFile(destination)) return contentKey
+
+        Files.createDirectories(destination.parent)
+        val staging = destination.resolveSibling("$contentKey.tmp-${UUID.randomUUID()}")
+        try {
+            ZipOutputStream(Files.newOutputStream(staging)).use { zip ->
+                entries.forEach { (relativePath, path) ->
+                    zip.putNextEntry(ZipEntry(relativePath))
+                    Files.newInputStream(path).use { input -> input.copyTo(zip) }
+                    zip.closeEntry()
+                }
+            }
+            try {
+                Files.move(staging, destination, StandardCopyOption.ATOMIC_MOVE)
+            } catch (_: java.nio.file.FileAlreadyExistsException) {
+                // A concurrent writer installed the same immutable key first.
+            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                try {
+                    Files.move(staging, destination)
+                } catch (_: java.nio.file.FileAlreadyExistsException) {
+                    // A concurrent writer installed the same immutable key first.
+                }
+            }
+        } finally {
+            Files.deleteIfExists(staging)
+        }
+        return contentKey
+    }
+
+    fun packPath(contentKey: String): Path {
+        require(contentKey.length >= FANOUT_PREFIX_LENGTH * 2) { "Content key is too short" }
+        return cacheRoot
+            .resolve("chunks")
+            .resolve(contentKey.take(2))
+            .resolve(contentKey.substring(2, 4))
+            .resolve(contentKey)
+    }
+
+    private fun contentKey(entries: List<Pair<String, Path>>): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        entries.forEach { (relativePath, path) ->
+            digest.update(relativePath.toByteArray())
+            digest.update(0)
+            Files.newInputStream(path).use { input ->
+                val buffer = ByteArray(BUFFER_SIZE)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    digest.update(buffer, 0, read)
+                }
+            }
+            digest.update(0)
+        }
+        return HexFormat.of().formatHex(digest.digest())
+    }
+
+    private companion object {
+        const val FANOUT_PREFIX_LENGTH: Int = 2
+        const val BUFFER_SIZE: Int = 8_192
+    }
+}
