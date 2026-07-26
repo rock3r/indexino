@@ -10,6 +10,7 @@ import kotlin.io.path.readText
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class StatusCommandTest {
@@ -40,8 +41,13 @@ class StatusCommandTest {
             StatusCommand()
                 .runStatus(
                     project = workspace,
-                    bazelTarget = "//plugins/foo/ui:ui",
-                    queryExecutor = MockBazelQueryExecutor(mockOutput),
+                    topologyRequest =
+                        TopologyRequest(
+                            buildSystem = BuildSystem.BAZEL,
+                            bazelTarget = "//plugins/foo/ui:ui",
+                            includeDeps = true,
+                        ),
+                    bazelQueryExecutor = MockBazelQueryExecutor(mockOutput),
                     output = { output.appendLine(it) },
                 )
 
@@ -100,6 +106,42 @@ class StatusCommandTest {
         val text = output.toString()
         assertTrue(text.contains("\"fresh\":true"), text)
         assertTrue(text.contains("\"scope\":\":ui\""), text)
+    }
+
+    @Test
+    fun `status marks explicit includeDeps mode changes stale`() {
+        val workspace = createGradleWorkspace()
+        assertEquals(
+            0,
+            IndexCommand()
+                .runIndexedBuild(
+                    project = workspace,
+                    topologyRequest =
+                        TopologyRequest(
+                            buildSystem = BuildSystem.GRADLE,
+                            gradleModule = ":ui",
+                            includeDeps = true,
+                        ),
+                    applications = emptyList(),
+                ),
+        )
+
+        val output = StringBuilder()
+        val exitCode =
+            StatusCommand()
+                .runStatus(
+                    project = workspace,
+                    topologyRequest =
+                        TopologyRequest(
+                            buildSystem = BuildSystem.GRADLE,
+                            gradleModule = ":ui",
+                            includeDeps = false,
+                        ),
+                    output = { output.appendLine(it) },
+                )
+
+        assertEquals(0, exitCode)
+        assertFalse(output.toString().contains("\"fresh\":true"), output.toString())
     }
 
     private fun createGitWorkspace(): java.nio.file.Path {

@@ -101,10 +101,9 @@ internal class StatusCommand : CliktCommand(name = "status") {
             ManifestFreshness.criteriaFrom(
                 commit = commit,
                 scope = manifest.scope,
-                // Match neighbouring reconstructed fields: status answers whether the index is
-                // still current for its own stored configuration, not whether a live re-resolve
-                // would choose a different dependency closure.
-                includeDeps = manifest.includeDeps,
+                // Omitted scope reconstructs the stored configuration. An explicit scope instead
+                // asks whether this manifest satisfies the caller's requested dependency policy.
+                includeDeps = request.includeDeps,
                 sourcesContentHash = currentHash,
                 applications = manifest.applications,
             )
