@@ -7,6 +7,7 @@ import java.security.MessageDigest
 import java.util.HexFormat
 import java.util.UUID
 import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 
 /** Installs immutable analysis packs under the cache-root two-level content-key fanout. */
@@ -51,6 +52,29 @@ internal class ContentAddressedPackCache(private val cacheRoot: Path) {
             Files.deleteIfExists(staging)
         }
         return contentKey
+    }
+
+    fun materializeDirectory(contentKey: String, destination: Path) {
+        val pack = packPath(contentKey)
+        require(Files.isRegularFile(pack)) { "Content pack does not exist: $contentKey" }
+        Files.createDirectories(destination)
+        val normalizedDestination = destination.toAbsolutePath().normalize()
+        ZipFile(pack.toFile()).use { zip ->
+            zip.entries().asSequence().forEach { entry ->
+                val target = normalizedDestination.resolve(entry.name).normalize()
+                require(target.startsWith(normalizedDestination)) {
+                    "Pack entry escapes destination"
+                }
+                if (entry.isDirectory) {
+                    Files.createDirectories(target)
+                } else {
+                    Files.createDirectories(target.parent)
+                    zip.getInputStream(entry).use { input ->
+                        Files.newOutputStream(target).use { output -> input.copyTo(output) }
+                    }
+                }
+            }
+        }
     }
 
     fun packPath(contentKey: String): Path {

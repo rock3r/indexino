@@ -39,6 +39,10 @@ class ContentAddressedPackCacheTest {
         assertEquals(first, second)
         assertEquals(timestamp, Files.getLastModifiedTime(pack))
         assertTrue(Files.isRegularFile(pack))
+        val restored = createTempDirectory("indexino-pack-restored-").also(tempDirs::add)
+        cache.materializeDirectory(first, restored)
+        assertEquals("facts", Files.readString(restored.resolve("facts.json")))
+        assertEquals("meta", Files.readString(restored.resolve("nested/meta.txt")))
         ZipFile(pack.toFile()).use { zip ->
             assertEquals(
                 "facts",
