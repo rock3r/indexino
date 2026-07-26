@@ -1,6 +1,91 @@
 // Signature format: 5.0
 package dev.sebastiano.indexino.model {
 
+  public final class ArgumentKind {
+    method @InaccessibleFromKotlin public String getValue();
+    property public String value;
+    field public static final dev.sebastiano.indexino.model.ArgumentKind.Companion Companion;
+    field public static final dev.sebastiano.indexino.model.ArgumentKind LAMBDA;
+    field public static final dev.sebastiano.indexino.model.ArgumentKind TRAILING_LAMBDA;
+    field public static final dev.sebastiano.indexino.model.ArgumentKind VALUE;
+  }
+
+  public static final class ArgumentKind.Companion {
+    property public dev.sebastiano.indexino.model.ArgumentKind LAMBDA;
+    property public dev.sebastiano.indexino.model.ArgumentKind TRAILING_LAMBDA;
+    property public dev.sebastiano.indexino.model.ArgumentKind VALUE;
+  }
+
+  public final class CallArgument {
+    ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public CallArgument(int position, String? resolvedName, dev.sebastiano.indexino.model.ArgumentKind kind, dev.sebastiano.indexino.model.SourceRange range, java.util.List<dev.sebastiano.indexino.model.CallSiteId> nestedCallIds);
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.ArgumentKind getKind();
+    method @InaccessibleFromKotlin public java.util.List<dev.sebastiano.indexino.model.CallSiteId> getNestedCallIds();
+    method @InaccessibleFromKotlin public int getPosition();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceRange getRange();
+    method @InaccessibleFromKotlin public String? getResolvedName();
+    property public dev.sebastiano.indexino.model.ArgumentKind kind;
+    property public java.util.List<dev.sebastiano.indexino.model.CallSiteId> nestedCallIds;
+    property public int position;
+    property public dev.sebastiano.indexino.model.SourceRange range;
+    property public String? resolvedName;
+  }
+
+  public final class CallQuery {
+    method public static dev.sebastiano.indexino.model.CallQuery byId(dev.sebastiano.indexino.model.CallSiteId callSiteId);
+    method public static dev.sebastiano.indexino.model.CallQuery enclosedBy(dev.sebastiano.indexino.model.SymbolId symbolId);
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.CallSiteId? getCallSiteId();
+    method @InaccessibleFromKotlin public String? getCalleeName();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SymbolId? getEnclosingSymbolId();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceFile? getFile();
+    method public static dev.sebastiano.indexino.model.CallQuery inFile(dev.sebastiano.indexino.model.SourceFile file);
+    method public static dev.sebastiano.indexino.model.CallQuery to(String calleeName);
+    property public dev.sebastiano.indexino.model.CallSiteId? callSiteId;
+    property public String? calleeName;
+    property public dev.sebastiano.indexino.model.SymbolId? enclosingSymbolId;
+    property public dev.sebastiano.indexino.model.SourceFile? file;
+    field public static final dev.sebastiano.indexino.model.CallQuery.Companion Companion;
+  }
+
+  public static final class CallQuery.Companion {
+    method public dev.sebastiano.indexino.model.CallQuery byId(dev.sebastiano.indexino.model.CallSiteId callSiteId);
+    method public dev.sebastiano.indexino.model.CallQuery enclosedBy(dev.sebastiano.indexino.model.SymbolId symbolId);
+    method public dev.sebastiano.indexino.model.CallQuery inFile(dev.sebastiano.indexino.model.SourceFile file);
+    method public dev.sebastiano.indexino.model.CallQuery to(String calleeName);
+  }
+
+  public final class CallSite {
+    ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public CallSite(dev.sebastiano.indexino.model.CallSiteId id, String calleeName, java.util.List<dev.sebastiano.indexino.model.SymbolId> candidateSymbolIds, String? receiver, dev.sebastiano.indexino.model.SymbolId? enclosingSymbolId, dev.sebastiano.indexino.model.CallSiteId? parentCallId, dev.sebastiano.indexino.model.SourceRange range, java.util.List<dev.sebastiano.indexino.model.CallArgument> arguments, dev.sebastiano.indexino.model.ResolutionConfidence confidence);
+    method @InaccessibleFromKotlin public java.util.List<dev.sebastiano.indexino.model.CallArgument> getArguments();
+    method @InaccessibleFromKotlin public String getCalleeName();
+    method @InaccessibleFromKotlin public java.util.List<dev.sebastiano.indexino.model.SymbolId> getCandidateSymbolIds();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.ResolutionConfidence getConfidence();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SymbolId? getEnclosingSymbolId();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.CallSiteId getId();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.CallSiteId? getParentCallId();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceRange getRange();
+    method @InaccessibleFromKotlin public String? getReceiver();
+    property public java.util.List<dev.sebastiano.indexino.model.CallArgument> arguments;
+    property public String calleeName;
+    property public java.util.List<dev.sebastiano.indexino.model.SymbolId> candidateSymbolIds;
+    property public dev.sebastiano.indexino.model.ResolutionConfidence confidence;
+    property public dev.sebastiano.indexino.model.SymbolId? enclosingSymbolId;
+    property public dev.sebastiano.indexino.model.CallSiteId id;
+    property public dev.sebastiano.indexino.model.CallSiteId? parentCallId;
+    property public dev.sebastiano.indexino.model.SourceRange range;
+    property public String? receiver;
+  }
+
+  public final class CallSiteId {
+    method @InaccessibleFromKotlin public String getValue();
+    method public static dev.sebastiano.indexino.model.CallSiteId of(String value);
+    property public String value;
+    field public static final dev.sebastiano.indexino.model.CallSiteId.Companion Companion;
+  }
+
+  public static final class CallSiteId.Companion {
+    method public dev.sebastiano.indexino.model.CallSiteId of(String value);
+  }
+
   @kotlin.annotation.Retention(kotlin.annotation.AnnotationRetention.BINARY) @kotlin.annotation.Target(allowedTargets=kotlin.annotation.AnnotationTarget.PROPERTY) public @interface ExcludeFromEquality {
   }
 
@@ -145,6 +230,21 @@ package dev.sebastiano.indexino.model {
 
   public static final class RefreshId.Companion {
     method public dev.sebastiano.indexino.model.RefreshId of(String value);
+  }
+
+  public final class ResolutionConfidence {
+    method @InaccessibleFromKotlin public String getValue();
+    property public String value;
+    field public static final dev.sebastiano.indexino.model.ResolutionConfidence.Companion Companion;
+    field public static final dev.sebastiano.indexino.model.ResolutionConfidence HEURISTIC;
+    field public static final dev.sebastiano.indexino.model.ResolutionConfidence RESOLVED;
+    field public static final dev.sebastiano.indexino.model.ResolutionConfidence UNRESOLVED;
+  }
+
+  public static final class ResolutionConfidence.Companion {
+    property public dev.sebastiano.indexino.model.ResolutionConfidence HEURISTIC;
+    property public dev.sebastiano.indexino.model.ResolutionConfidence RESOLVED;
+    property public dev.sebastiano.indexino.model.ResolutionConfidence UNRESOLVED;
   }
 
   public final class SourceFile {
