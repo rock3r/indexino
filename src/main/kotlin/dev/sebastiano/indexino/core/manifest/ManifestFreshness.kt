@@ -6,6 +6,7 @@ internal data class ManifestFreshnessCriteria(
     val commit: String,
     val indexerVersion: String,
     val scope: String,
+    val includeDeps: Boolean,
     val sourcesContentHash: String,
     val applications: List<String>,
 )
@@ -15,12 +16,14 @@ internal object ManifestFreshness {
         manifest.commit == criteria.commit &&
             manifest.indexerVersion == criteria.indexerVersion &&
             manifest.scope == criteria.scope &&
+            manifest.includeDeps == criteria.includeDeps &&
             manifest.sourcesContentHash == criteria.sourcesContentHash &&
             manifest.applications.sorted() == criteria.applications.sorted()
 
     fun criteriaFrom(
         commit: String,
         scope: String,
+        includeDeps: Boolean,
         sourcesContentHash: String,
         applications: List<String>,
     ): ManifestFreshnessCriteria =
@@ -28,6 +31,7 @@ internal object ManifestFreshness {
             commit = commit,
             indexerVersion = Version.NAME,
             scope = scope,
+            includeDeps = includeDeps,
             sourcesContentHash = sourcesContentHash,
             applications = applications,
         )

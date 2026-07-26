@@ -78,6 +78,7 @@ internal class IndexBuildRunner(
             ManifestFreshness.criteriaFrom(
                 commit = commit,
                 scope = topologyResult.scope,
+                includeDeps = topologyResult.includeDeps,
                 sourcesContentHash = previewHash,
                 applications = applications,
             )

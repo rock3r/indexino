@@ -42,6 +42,12 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
      */
     @Volatile internal var afterPublishGenerationStoreForTests: (() -> Unit)? = null
 
+    /**
+     * Test-only seam: when non-null, compared against [IndexScope.includesDependencies] instead of
+     * the manifest's observed `includeDeps`. Production leaves this null.
+     */
+    @Volatile internal var observedIncludeDepsOverrideForTests: Boolean? = null
+
     public companion object {
         private val workspaceRefreshLocks = ConcurrentHashMap<Path, Any>()
 
@@ -86,50 +92,63 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         // Serialize in-process peers across run+copy so a shared commit writer cannot mutate while
         // another client copies it. Cross-process single-writer election remains S6.
         synchronized(refreshLockFor(workspace)) {
-            val execution =
-                IndexBuildRunner(
-                        project = workspace,
-                        topologyRequest = request.scope.toTopologyRequest(),
-                        applications = applications,
-                        bazelQueryExecutor = null,
-                        bazelProcessRunner = null,
-                        progress = {},
-                        machineProgress = null,
-                        storeRootOverride = storeRoot,
-                    )
-                    .runDetailed()
-            val manifest =
-                execution.manifest
-                    ?: throw buildFailure(
-                        execution,
-                        "Refresh failed while resolving or indexing ${request.scope.value}",
-                    )
-            val revision = manifest.toWorkspaceRevision()
-            val generation = manifest.toGenerationId(revision)
-            publishGenerationOrAbortIfClosed(manifest.commit, generation, revision)
-            val changedFileCount = execution.changes?.changedFiles?.size ?: 0
-            val removedFileCount = execution.changes?.deletedFiles?.size ?: 0
-            val result =
-                RefreshResult(
-                    refreshId = refreshId,
-                    outcome =
-                        if (execution.reusedFreshIndex) {
-                            RefreshOutcome.UNCHANGED
-                        } else {
-                            RefreshOutcome.UPDATED
-                        },
-                    generation = generation,
-                    revision = revision,
+            try {
+                val execution =
+                    IndexBuildRunner(
+                            project = workspace,
+                            topologyRequest = request.scope.toTopologyRequest(),
+                            applications = applications,
+                            bazelQueryExecutor = null,
+                            bazelProcessRunner = null,
+                            progress = {},
+                            machineProgress = null,
+                            storeRootOverride = storeRoot,
+                        )
+                        .runDetailed()
+                val manifest =
+                    execution.manifest
+                        ?: throw buildFailure(
+                            execution,
+                            "Refresh failed while resolving or indexing ${request.scope.value}",
+                        )
+                requireScopeMatchesManifest(
                     scope = request.scope,
-                    changes =
-                        IndexChanges(
-                            changedFileCount = changedFileCount,
-                            unchangedFileCount =
-                                (manifest.sourceFileCount - changedFileCount).coerceAtLeast(0),
-                            removedFileCount = removedFileCount,
-                        ),
+                    observedIncludeDeps = manifest.includeDeps,
+                    observedOverride = observedIncludeDepsOverrideForTests,
                 )
-            return RefreshHandle(refreshId, result)
+                val revision = manifest.toWorkspaceRevision()
+                val generation = manifest.toGenerationId(revision)
+                publishGenerationOrAbortIfClosed(manifest.commit, generation, revision)
+                val changedFileCount = execution.changes?.changedFiles?.size ?: 0
+                val removedFileCount = execution.changes?.deletedFiles?.size ?: 0
+                val result =
+                    RefreshResult(
+                        refreshId = refreshId,
+                        outcome =
+                            if (execution.reusedFreshIndex) {
+                                RefreshOutcome.UNCHANGED
+                            } else {
+                                RefreshOutcome.UPDATED
+                            },
+                        generation = generation,
+                        revision = revision,
+                        scope = request.scope,
+                        changes =
+                            IndexChanges(
+                                changedFileCount = changedFileCount,
+                                unchangedFileCount =
+                                    (manifest.sourceFileCount - changedFileCount).coerceAtLeast(0),
+                                removedFileCount = removedFileCount,
+                            ),
+                    )
+                return RefreshHandle(refreshId, result)
+            } catch (thrown: IndexinoException) {
+                throw thrown
+            } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
+                // Contract: unexpected throwables become IndexinoException INTERNAL/TOPOLOGY with
+                // the original retained as cause — never leak internal exception types.
+                throw mapRefreshFailure(thrown)
+            }
         }
     }
 
@@ -383,5 +402,38 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         val storePath: Path,
         val revision: WorkspaceRevision,
         val generation: WorkspaceGenerationId,
+    )
+}
+
+private fun requireScopeMatchesManifest(
+    scope: IndexScope,
+    observedIncludeDeps: Boolean,
+    observedOverride: Boolean?,
+) {
+    val observed = observedOverride ?: observedIncludeDeps
+    if (observed != scope.includesDependencies) {
+        // S1 has no RefreshWarningEvent channel yet (S3). Fail rather than publish an index
+        // whose closure does not match the requested scope; revisit as a warning in S3.
+        throw indexinoFailure(
+            category = IndexFailureCategory.TOPOLOGY,
+            code = "scope_include_deps_mismatch",
+            message =
+                "Resolved includeDeps=$observed but scope requested " +
+                    "includesDependencies=${scope.includesDependencies}",
+            retryable = true,
+        )
+    }
+}
+
+private fun mapRefreshFailure(thrown: Throwable): IndexinoException {
+    // Unexpected throwables map to INTERNAL; structural TOPOLOGY classification stays on
+    // CliExitCodes.TOPOLOGY_FAILED via buildFailure. Typed topology throws can land with #26.
+    val message = thrown.message?.takeIf { it.isNotBlank() } ?: thrown.javaClass.simpleName
+    return indexinoFailure(
+        category = IndexFailureCategory.INTERNAL,
+        code = "internal",
+        message = message,
+        retryable = false,
+        cause = thrown,
     )
 }

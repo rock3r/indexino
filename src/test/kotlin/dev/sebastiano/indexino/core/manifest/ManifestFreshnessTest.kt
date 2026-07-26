@@ -24,6 +24,7 @@ class ManifestFreshnessTest {
                 commit = "abc",
                 indexerVersion = "0.1.0",
                 scope = "//ui:ui",
+                includeDeps = true,
                 sourcesContentHash = "sha256:dead",
                 applications = listOf("selection-context"),
             )
@@ -45,6 +46,13 @@ class ManifestFreshnessTest {
     }
 
     @Test
+    fun `stale when includeDeps differs`() {
+        val manifest = sampleManifest(includeDeps = false)
+        val criteria = sampleCriteria(includeDeps = true)
+        assertFalse(ManifestFreshness.isFresh(manifest, criteria))
+    }
+
+    @Test
     fun `stale when applications differ`() {
         val manifest = sampleManifest(applications = listOf("selection-context"))
         val criteria = sampleCriteria(applications = emptyList())
@@ -53,6 +61,7 @@ class ManifestFreshnessTest {
 
     private fun sampleManifest(
         scope: String = "//ui:ui",
+        includeDeps: Boolean = true,
         sourcesContentHash: String = "sha256:dead",
         applications: List<String> = listOf("selection-context"),
     ) =
@@ -61,7 +70,7 @@ class ManifestFreshnessTest {
             indexerVersion = "0.1.0",
             scope = scope,
             topology = "bazel-query",
-            includeDeps = true,
+            includeDeps = includeDeps,
             sourceFileCount = 2,
             sourcesContentHash = sourcesContentHash,
             builtAt = "2026-01-01T00:00:00Z",
@@ -70,6 +79,7 @@ class ManifestFreshnessTest {
 
     private fun sampleCriteria(
         scope: String = "//ui:ui",
+        includeDeps: Boolean = true,
         sourcesContentHash: String = "sha256:dead",
         applications: List<String> = listOf("selection-context"),
     ) =
@@ -77,6 +87,7 @@ class ManifestFreshnessTest {
             commit = "abc",
             indexerVersion = "0.1.0",
             scope = scope,
+            includeDeps = includeDeps,
             sourcesContentHash = sourcesContentHash,
             applications = applications,
         )

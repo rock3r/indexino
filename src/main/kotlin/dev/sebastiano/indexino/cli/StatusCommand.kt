@@ -95,6 +95,7 @@ internal class StatusCommand : CliktCommand(name = "status") {
             ManifestFreshness.criteriaFrom(
                 commit = commit,
                 scope = manifest.scope,
+                includeDeps = topologyResult.includeDeps,
                 sourcesContentHash = currentHash,
                 applications = manifest.applications,
             )

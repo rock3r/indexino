@@ -83,6 +83,87 @@ class InProcessIndexinoTest {
     }
 
     @Test
+    fun `refresh maps topology resolution failures to IndexinoException`() {
+        val workspace = createTempDirectory("indexino-no-topology-")
+        tempDirs.add(workspace)
+        // Minimal git metadata so connect succeeds; no Gradle/Bazel project files.
+        Files.writeString(workspace.resolve("README"), "x")
+        runGit(workspace, "init")
+        runGit(workspace, "config", "user.email", "test@example.com")
+        runGit(workspace, "config", "user.name", "Test")
+        runGit(workspace, "add", "README")
+        runGit(workspace, "commit", "-m", "init")
+
+        val cacheDirectory = createTempDirectory("indexino-topology-map-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            val indexino = Indexino.connectBlocking(workspace)
+            try {
+                val failure =
+                    assertFailsWith<IndexinoException> {
+                        runSuspend {
+                            indexino
+                                .refresh(RefreshRequest.forScope(IndexScope.gradle(":ui")))
+                                .await()
+                        }
+                    }
+                assertEquals("INTERNAL", failure.failure.category.value)
+                assertEquals("internal", failure.failure.code)
+                assertTrue(failure.cause != null)
+            } finally {
+                indexino.close()
+            }
+        } finally {
+            if (previousCacheDirectory == null) {
+                System.clearProperty("indexino.cache.dir")
+            } else {
+                System.setProperty("indexino.cache.dir", previousCacheDirectory)
+            }
+        }
+    }
+
+    @Test
+    fun `refresh fails when observed includeDeps mismatches the requested scope`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-include-deps-mismatch-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            val indexino = Indexino.connectBlocking(workspace)
+            indexino.observedIncludeDepsOverrideForTests = false
+            try {
+                val failure =
+                    assertFailsWith<IndexinoException> {
+                        runSuspend {
+                            indexino
+                                .refresh(
+                                    RefreshRequest.forScope(
+                                        IndexScope.gradle(":ui").includingDependencies()
+                                    )
+                                )
+                                .await()
+                        }
+                    }
+                assertEquals("TOPOLOGY", failure.failure.category.value)
+                assertEquals("scope_include_deps_mismatch", failure.failure.code)
+                assertTrue(failure.failure.retryable)
+            } finally {
+                indexino.observedIncludeDepsOverrideForTests = null
+                indexino.close()
+            }
+        } finally {
+            if (previousCacheDirectory == null) {
+                System.clearProperty("indexino.cache.dir")
+            } else {
+                System.setProperty("indexino.cache.dir", previousCacheDirectory)
+            }
+        }
+    }
+
+    @Test
     fun `bazel scopes without includingDependencies fail rather than silently expanding deps`() {
         val workspace = createGitWorkspace()
         val cacheDirectory = createTempDirectory("indexino-bazel-deps-required-cache-")
