@@ -58,7 +58,7 @@ internal class ContentAddressedPackCache(private val cacheRoot: Path) {
         return cacheRoot
             .resolve("chunks")
             .resolve(contentKey.take(2))
-            .resolve(contentKey.substring(2, 4))
+            .resolve(contentKey.substring(FANOUT_PREFIX_LENGTH, FANOUT_PREFIX_LENGTH * 2))
             .resolve(contentKey)
     }
 

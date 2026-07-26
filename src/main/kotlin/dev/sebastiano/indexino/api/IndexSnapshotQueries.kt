@@ -1,3 +1,5 @@
+@file:Suppress("TooManyFunctions")
+
 package dev.sebastiano.indexino.api
 
 import dev.sebastiano.indexino.core.record.CallArgumentRecord

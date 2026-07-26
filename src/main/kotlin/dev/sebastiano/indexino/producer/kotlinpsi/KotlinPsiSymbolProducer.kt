@@ -36,6 +36,7 @@ import org.jetbrains.kotlin.psi.KtSuperTypeCallEntry
 import org.jetbrains.kotlin.psi.KtThisExpression
 import org.jetbrains.kotlin.psi.KtUnaryExpression
 
+@Suppress("TooManyFunctions")
 internal class KotlinPsiSymbolProducer : IndexProducer {
     override val id: String = "kotlin-psi-symbols"
     override val namespace: String = "sym"

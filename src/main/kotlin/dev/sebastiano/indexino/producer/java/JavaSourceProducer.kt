@@ -87,6 +87,7 @@ internal class JavaSourceProducer : IndexProducer {
         override fun getCharContent(ignoreEncodingErrors: Boolean): CharSequence = source
     }
 
+    @Suppress("TooManyFunctions")
     private class JavaRecordScanner(
         private val relativePath: String,
         private val unit: CompilationUnitTree,
