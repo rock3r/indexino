@@ -28,8 +28,12 @@ internal object GradleTopology {
         }
 
         val graph = GradleModuleGraph(workspace, includes)
+        val rootScope = normalizedModule == ":"
         val modules =
-            if (normalizedModule == ":") {
+            if (rootScope) {
+                // Whole-build selection (root + every included module). Do not change this to
+                // honour includeDeps=false — that would shrink CLI `index --gradle-module :` to
+                // nearly empty for typical multi-module repos.
                 listOf(":") + includes
             } else {
                 graph.closure(normalizedModule, includeDeps)
@@ -49,7 +53,11 @@ internal object GradleTopology {
         return TopologyResult(
             sourceFiles = sourceFiles,
             topology = "gradle-parse",
-            includeDeps = includeDeps,
+            // Root selection is a superset of the root project's dependency closure, so report
+            // includeDeps=true even when the request asked for false. Over-reporting inclusion is
+            // the safe direction for facade mismatch checks; under-reporting would publish a false
+            // provenance record.
+            includeDeps = if (rootScope) true else includeDeps,
             scope = normalizedModule,
         )
     }

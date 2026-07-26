@@ -197,6 +197,57 @@ class InProcessIndexinoTest {
     }
 
     @Test
+    fun `gradle root scopes without includingDependencies fail rather than misreporting whole-repo`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-gradle-root-deps-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            val indexino = Indexino.connectBlocking(workspace)
+            try {
+                val failure =
+                    assertFailsWith<IndexinoException> {
+                        runSuspend {
+                            indexino
+                                .refresh(RefreshRequest.forScope(IndexScope.gradle(":")))
+                                .await()
+                        }
+                    }
+                assertEquals("TOPOLOGY", failure.failure.category.value)
+                assertEquals("scope_include_deps_mismatch", failure.failure.code)
+                assertTrue(failure.failure.retryable)
+            } finally {
+                indexino.close()
+            }
+        } finally {
+            if (previousCacheDirectory == null) {
+                System.clearProperty("indexino.cache.dir")
+            } else {
+                System.setProperty("indexino.cache.dir", previousCacheDirectory)
+            }
+        }
+    }
+
+    @Test
+    fun `connect maps unresolvable workspace paths to IO IndexinoException`() {
+        val workspace = createTempDirectory("indexino-unresolvable-workspace-")
+        tempDirs.add(workspace)
+        Indexino.canonicalWorkspacePathForTests = {
+            throw java.io.IOException("simulated unresolvable workspace")
+        }
+        try {
+            val failure = assertFailsWith<IndexinoException> { Indexino.connectBlocking(workspace) }
+            assertEquals("IO", failure.failure.category.value)
+            assertEquals("workspace_path_unresolvable", failure.failure.code)
+            assertTrue(failure.failure.retryable)
+            assertTrue(failure.cause is java.io.IOException)
+        } finally {
+            Indexino.canonicalWorkspacePathForTests = null
+        }
+    }
+
+    @Test
     fun `close reclaims unpinned client generation copies`() {
         val workspace = createGitWorkspace()
         val cacheDirectory = createTempDirectory("indexino-close-reclaim-cache-")

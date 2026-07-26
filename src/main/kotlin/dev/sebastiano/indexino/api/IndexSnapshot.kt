@@ -33,24 +33,26 @@ private constructor(
     public suspend fun findSymbols(query: SymbolQuery, options: QueryOptions): QueryPage<Symbol> {
         ensureOpen()
         validateQueryOptions(options)
-        val symbols = symbolRecords()
-        val symbolsByName = queries.indexSymbolsByName(symbols)
-        val records =
-            symbols
-                .asSequence()
-                .filter { it.matches(query) }
-                .sortedWith(
-                    compareBy(
-                        SymbolRecord::fqn,
-                        SymbolRecord::relativeFile,
-                        SymbolRecord::line,
-                        { it.signature.orEmpty() },
-                        SymbolRecord::name,
+        return mapUnexpectedFailures {
+            val symbols = symbolRecords()
+            val symbolsByName = queries.indexSymbolsByName(symbols)
+            val records =
+                symbols
+                    .asSequence()
+                    .filter { it.matches(query) }
+                    .sortedWith(
+                        compareBy(
+                            SymbolRecord::fqn,
+                            SymbolRecord::relativeFile,
+                            SymbolRecord::line,
+                            { it.signature.orEmpty() },
+                            SymbolRecord::name,
+                        )
                     )
-                )
-                .map { with(queries) { it.toPublicSymbol(symbolsByName) } }
-                .toList()
-        return records.page(options)
+                    .map { with(queries) { it.toPublicSymbol(symbolsByName) } }
+                    .toList()
+            records.page(options)
+        }
     }
 
     public suspend fun findReferences(
@@ -59,43 +61,47 @@ private constructor(
     ): QueryPage<Reference> {
         ensureOpen()
         validateQueryOptions(options)
-        val symbols = symbolRecords()
-        val symbolsByName = queries.indexSymbolsByName(symbols)
-        val targetSymbol =
-            with(queries) { symbols.firstOrNull { it.definitionId() == query.symbolId } }
-        val records =
-            store
-                .prefixScan("ref:")
-                .map { it.second }
-                .filterIsInstance<ReferenceRecord>()
-                .filter { reference ->
-                    with(queries) {
-                        if (targetSymbol != null) {
-                            reference.canTarget(targetSymbol)
-                        } else {
-                            reference.matchesSymbolId(query.symbolId, symbolsByName)
+        return mapUnexpectedFailures {
+            val symbols = symbolRecords()
+            val symbolsByName = queries.indexSymbolsByName(symbols)
+            val targetSymbol =
+                with(queries) { symbols.firstOrNull { it.definitionId() == query.symbolId } }
+            val records =
+                store
+                    .prefixScan("ref:")
+                    .map { it.second }
+                    .filterIsInstance<ReferenceRecord>()
+                    .filter { reference ->
+                        with(queries) {
+                            if (targetSymbol != null) {
+                                reference.canTarget(targetSymbol)
+                            } else {
+                                reference.matchesSymbolId(query.symbolId, symbolsByName)
+                            }
                         }
                     }
-                }
-                .sortedWith(
-                    compareBy(
-                        ReferenceRecord::relativeFile,
-                        ReferenceRecord::line,
-                        ReferenceRecord::column,
-                        ReferenceRecord::referencedName,
-                        ReferenceRecord::symbolFqn,
+                    .sortedWith(
+                        compareBy(
+                            ReferenceRecord::relativeFile,
+                            ReferenceRecord::line,
+                            ReferenceRecord::column,
+                            ReferenceRecord::referencedName,
+                            ReferenceRecord::symbolFqn,
+                        )
                     )
-                )
-                .map { with(queries) { it.toPublicReference(symbolsByName) } }
-                .toList()
-        return records.page(options)
+                    .map { with(queries) { it.toPublicReference(symbolsByName) } }
+                    .toList()
+            records.page(options)
+        }
     }
 
     override fun close() {
         if (closed.compareAndSet(false, true)) {
             try {
-                store.close()
+                mapUnexpectedFailures { store.close() }
             } finally {
+                // Unpin even when store.close fails — a leaked generation pin is worse than a
+                // mapped close failure.
                 onClose()
             }
         }
@@ -137,6 +143,24 @@ private constructor(
         // Resource definitions stay in producer storage for the CLI, but the embedded API must not
         // expose them through Symbol queries before the S10 resource model lands.
         store.prefixScan("sym:").map { it.second }.filterIsInstance<SymbolRecord>().toList()
+
+    private fun <T> mapUnexpectedFailures(block: () -> T): T =
+        try {
+            block()
+        } catch (thrown: IndexinoException) {
+            throw thrown
+        } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
+            // Public entry points throw final IndexinoException. Unexpected failures map to
+            // INTERNAL with cause retained — do not classify by exception message/type. Specific
+            // codes (e.g. workspace_path_unresolvable at connect) are for known failure modes.
+            throw indexinoFailure(
+                category = IndexFailureCategory.INTERNAL,
+                code = "internal",
+                message = thrown.message?.takeIf { it.isNotBlank() } ?: thrown.javaClass.simpleName,
+                retryable = false,
+                cause = thrown,
+            )
+        }
 
     @OptIn(IndexinoInternalApi::class)
     private fun validateQueryOptions(options: QueryOptions) {

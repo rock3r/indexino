@@ -17,6 +17,7 @@ import dev.sebastiano.indexino.model.WorkspaceGenerationId
 import dev.sebastiano.indexino.model.WorkspaceRevision
 import dev.sebastiano.indexino.topology.BuildSystem as InternalBuildSystem
 import dev.sebastiano.indexino.topology.TopologyRequest
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -54,6 +55,12 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         private fun refreshLockFor(workspace: Path): Any =
             workspaceRefreshLocks.computeIfAbsent(workspace) { Any() }
 
+        /**
+         * Test-only seam: replaces [Path.toRealPath] during [connectBlocking]. Production leaves
+         * this null.
+         */
+        @Volatile internal var canonicalWorkspacePathForTests: ((Path) -> Path)? = null
+
         @JvmStatic
         public suspend fun connect(workspace: Path): Indexino = connectBlocking(workspace)
 
@@ -67,7 +74,23 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                     retryable = false,
                 )
             }
-            return Indexino(workspace.toRealPath())
+            val canonical =
+                try {
+                    canonicalWorkspacePathForTests?.invoke(workspace) ?: workspace.toRealPath()
+                } catch (thrown: IOException) {
+                    // Connect-time path resolution failures are IO (retryable). WORKSPACE_LOST is
+                    // reserved for an already-bound workspace disappearing after connect.
+                    throw indexinoFailure(
+                        category = IndexFailureCategory.IO,
+                        code = "workspace_path_unresolvable",
+                        message =
+                            thrown.message?.takeIf { it.isNotBlank() }
+                                ?: "Workspace path could not be resolved",
+                        retryable = true,
+                        cause = thrown,
+                    )
+                }
+            return Indexino(canonical)
         }
     }
 
