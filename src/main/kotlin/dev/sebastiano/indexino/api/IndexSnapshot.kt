@@ -2,9 +2,14 @@
 
 package dev.sebastiano.indexino.api
 
+import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
+import dev.sebastiano.indexino.model.BasicFactQueries
+import dev.sebastiano.indexino.model.BasicFactSchemaVersion
+import dev.sebastiano.indexino.model.CallQuery
+import dev.sebastiano.indexino.model.CallSite
 import dev.sebastiano.indexino.model.IndexFailureCategory
 import dev.sebastiano.indexino.model.IndexinoInternalApi
 import dev.sebastiano.indexino.model.NameMatchMode
@@ -25,14 +30,15 @@ public class IndexSnapshot
 private constructor(
     private val store: CodeIndexStore,
     public val revision: WorkspaceRevision,
-    public val generation: WorkspaceGenerationId,
+    override val generation: WorkspaceGenerationId,
+    override val basicFactSchemaVersion: BasicFactSchemaVersion = BasicFactSchemaVersion.of(1),
     public val freshnessAtAcquisition: SnapshotFreshness,
     private val onClose: () -> Unit,
-) : AutoCloseable {
+) : BasicFactQueries, AutoCloseable {
     private val closed = AtomicBoolean()
     private val queries = IndexSnapshotQueries(generation)
 
-    public suspend fun findSymbols(query: SymbolQuery, options: QueryOptions): QueryPage<Symbol> {
+    override suspend fun findSymbols(query: SymbolQuery, options: QueryOptions): QueryPage<Symbol> {
         ensureOpen()
         validateQueryOptions(options)
         return mapUnexpectedFailures {
@@ -64,7 +70,7 @@ private constructor(
         }
     }
 
-    public suspend fun findReferences(
+    override suspend fun findReferences(
         query: ReferenceQuery,
         options: QueryOptions,
     ): QueryPage<Reference> {
@@ -118,6 +124,41 @@ private constructor(
         }
     }
 
+    override suspend fun findCalls(query: CallQuery, options: QueryOptions): QueryPage<CallSite> {
+        ensureOpen()
+        validateQueryOptions(options)
+        return mapUnexpectedFailures {
+            val enclosing = query.enclosingSymbolId?.let(::findSymbolById)
+            val unresolvedEnclosingId = query.enclosingSymbolId != null && enclosing == null
+            orderedPage(
+                options = options,
+                comparator =
+                    compareBy(
+                        CallSiteRecord::relativeFile,
+                        CallSiteRecord::startOffset,
+                        CallSiteRecord::endOffset,
+                        CallSiteRecord::calleeName,
+                        CallSiteRecord::identity,
+                    ),
+                scan = { accept ->
+                    if (!unresolvedEnclosingId) {
+                        store.forEachPrefix("call:") { _, record ->
+                            if (record is CallSiteRecord && record.matches(query, enclosing))
+                                accept(record)
+                            true
+                        }
+                    }
+                },
+                transform = { records ->
+                    val candidates = callCandidatesFor(records)
+                    records.map { record ->
+                        with(queries) { record.toPublicCallSite(candidates.getValue(record)) }
+                    }
+                },
+            )
+        }
+    }
+
     override fun close() {
         if (closed.compareAndSet(false, true)) {
             try {
@@ -160,6 +201,21 @@ private constructor(
                     NameMatchMode.FQN -> fqn == requestedName
                 }
         return fileMatches && kindMatches && languageMatches && nameMatches
+    }
+
+    private fun CallSiteRecord.matches(query: CallQuery, enclosing: SymbolRecord?): Boolean {
+        val requestedFile = query.file
+        val fileMatches =
+            requestedFile == null ||
+                (requestedFile.originId == WORKSPACE_ORIGIN && relativeFile == requestedFile.path)
+        val enclosingMatches =
+            enclosing == null ||
+                enclosingSymbolFqn == enclosing.fqn ||
+                enclosingSymbolFqn in enclosing.aliases
+        return fileMatches &&
+            (query.calleeName == null || calleeName == query.calleeName) &&
+            (query.callSiteId == null || with(queries) { callSiteId() == query.callSiteId }) &&
+            enclosingMatches
     }
 
     private fun findSymbolById(symbolId: SymbolId): SymbolRecord? {
@@ -207,6 +263,22 @@ private constructor(
             true
         }
         return candidates
+    }
+
+    private fun callCandidatesFor(
+        calls: List<CallSiteRecord>
+    ): Map<CallSiteRecord, List<SymbolRecord>> {
+        val candidatesByName =
+            candidatesByName(
+                calls.flatMapTo(LinkedHashSet()) {
+                    it.candidateSymbolFqns + listOfNotNull(it.enclosingSymbolFqn)
+                }
+            )
+        return calls.associateWith { call ->
+            (call.candidateSymbolFqns + listOfNotNull(call.enclosingSymbolFqn))
+                .flatMap { candidatesByName[it].orEmpty() }
+                .distinct()
+        }
     }
 
     private fun ReferenceRecord.matchesUnknownSymbolId(

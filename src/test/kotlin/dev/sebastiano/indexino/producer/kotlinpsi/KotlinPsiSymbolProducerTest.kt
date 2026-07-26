@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.producer.kotlinpsi
 
+import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
@@ -17,8 +18,9 @@ class KotlinPsiSymbolProducerTest {
     fun `incremental callers resolve unchanged same-package declarations`() {
         val sources =
             mapOf(
-                "src/main/kotlin/sample/Helpers.kt" to "package sample\nfun helper() {}",
-                "src/main/kotlin/sample/Caller.kt" to "package sample\nfun call() { helper() }",
+                "src/main/kotlin/sample/Helpers.kt" to
+                    "package sample\nfun helper(content: () -> Unit) = content()",
+                "src/main/kotlin/sample/Caller.kt" to "package sample\nfun call() { helper({}) }",
             )
         val producer = checkNotNull(ProducerRegistry.get("kotlin-psi-symbols"))
         producer.produce(IndexBuildContext.forInlineSources(store, "first", sources), store)
@@ -40,6 +42,45 @@ class KotlinPsiSymbolProducerTest {
                 .filterIsInstance<ReferenceRecord>()
                 .toList()
         assertTrue(references.any { it.relativeFile.endsWith("Caller.kt") })
+        val call =
+            store
+                .prefixScan("call:")
+                .map { it.second }
+                .filterIsInstance<CallSiteRecord>()
+                .single { it.relativeFile.endsWith("Caller.kt") }
+        assertEquals("content", call.arguments.single().resolvedName)
+    }
+
+    @Test
+    fun `indexes lexical call containment inside trailing lambdas`() {
+        val source =
+            """
+            package sample
+            fun Container(content: () -> Unit) = content()
+            fun Child() {}
+            fun Panel() { Container({ Child() }) }
+            """
+                .trimIndent()
+        val context =
+            IndexBuildContext.forInlineSources(
+                store = store,
+                commitHash = "calls",
+                sourceFiles = mapOf("Panel.kt" to source),
+            )
+
+        checkNotNull(ProducerRegistry.get("kotlin-psi-symbols")).produce(context, store)
+
+        val calls =
+            store.prefixScan("call:").map { it.second }.filterIsInstance<CallSiteRecord>().toList()
+        val container = calls.first { it.calleeName == "Container" && it.arguments.isNotEmpty() }
+        val child = calls.first {
+            it.calleeName == "Child" && it.parentCallIdentity == container.identity
+        }
+        assertEquals(listOf(child.identity), container.arguments.single().nestedCallIdentities)
+        assertEquals(container.identity, child.parentCallIdentity)
+        assertEquals("content", container.arguments.single().resolvedName)
+        assertEquals("LAMBDA", container.arguments.single().kind)
+        assertEquals(')', source[container.endOffset])
     }
 
     private lateinit var store: XodusCodeIndexStore

@@ -5,6 +5,10 @@ package dev.sebastiano.indexino.api
 import dev.sebastiano.indexino.cli.CliExitCodes
 import dev.sebastiano.indexino.cli.IndexBuildExecution
 import dev.sebastiano.indexino.cli.IndexBuildRunner
+import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
+import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifest
+import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
+import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.IndexManifest
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.core.store.IndexStoreOpener
@@ -20,17 +24,19 @@ import dev.sebastiano.indexino.topology.TopologyRequest
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.HexFormat
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
+private const val BASIC_FACT_SCHEMA_VERSION = 1
+
+@Suppress("TooManyFunctions")
 public class Indexino private constructor(private val workspace: Path) : AutoCloseable {
     private val closed = AtomicBoolean()
     private val clientId = UUID.randomUUID().toString()
-    private val storeRoot = InProcessCacheLayout.storeRoot(workspace)
+    private val storeRoot = InProcessCacheLayout.writerRoot(workspace)
     private val generationLock = Any()
     private val generationStores = mutableMapOf<WorkspaceGenerationId, Path>()
     private val snapshotPins = mutableMapOf<WorkspaceGenerationId, Int>()
@@ -206,7 +212,7 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                 retryable = false,
             )
         }
-        val publishedStore = publishGenerationStore(commit, generation)
+        val publishedStore = publishGenerationStore(commit, generation, revision)
         afterPublishGenerationStoreForTests?.invoke()
         synchronized(generationLock) {
             // Mirror snapshot(): close may have raced during the long index+copy while
@@ -238,27 +244,36 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
     public suspend fun snapshot(): IndexSnapshot {
         ensureOpen()
         val generation =
-            synchronized(generationLock) {
-                // Prefer CLOSED over INDEX_NOT_FOUND if close() raced after ensureOpen().
-                if (closed.get()) {
-                    throw failure(
-                        category = IndexFailureCategory.CLOSED,
-                        code = "client_closed",
-                        message = "Indexino client is closed",
-                        retryable = false,
-                    )
-                }
-                val current =
-                    published
-                        ?: throw failure(
-                            category = IndexFailureCategory.INDEX_NOT_FOUND,
-                            code = "index_not_found",
-                            message = "No published index exists; call refresh first",
-                            retryable = true,
+            try {
+                synchronized(generationLock) {
+                    // Prefer CLOSED over INDEX_NOT_FOUND if close() raced after ensureOpen().
+                    if (closed.get()) {
+                        throw failure(
+                            category = IndexFailureCategory.CLOSED,
+                            code = "client_closed",
+                            message = "Indexino client is closed",
+                            retryable = false,
                         )
-                snapshotPins[current.generation] =
-                    snapshotPins.getOrDefault(current.generation, 0) + 1
-                current
+                    }
+                    val sharedGeneration = currentPublishedGenerationId()
+                    val current =
+                        published?.takeIf { it.generation == sharedGeneration }
+                            ?: restorePublishedGeneration()
+                            ?: published
+                            ?: throw failure(
+                                category = IndexFailureCategory.INDEX_NOT_FOUND,
+                                code = "index_not_found",
+                                message = "No published index exists; call refresh first",
+                                retryable = true,
+                            )
+                    snapshotPins[current.generation] =
+                        snapshotPins.getOrDefault(current.generation, 0) + 1
+                    current
+                }
+            } catch (thrown: IndexinoException) {
+                throw thrown
+            } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
+                throw mapUnexpectedFailure(thrown)
             }
         val openedStore =
             try {
@@ -325,7 +340,7 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         val origin =
             SourceOriginRevision(
                 originId = SourceOriginId.of("workspace"),
-                revision = commit,
+                revision = commit.takeUnless(GitHeadResolver::isFilesystemRevision),
                 stateFingerprint = sourcesContentHash,
                 expectedRevision = null,
             )
@@ -338,6 +353,7 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                 // BasicFactSchemaVersion joins these inputs when the S2 generation manifest lands.
                 listOf(
                         revision.fingerprint,
+                        BASIC_FACT_SCHEMA_VERSION.toString(),
                         indexerVersion,
                         applications.sorted().joinToString("\u0001"),
                     )
@@ -348,36 +364,75 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
     private fun publishGenerationStore(
         commit: String,
         generation: WorkspaceGenerationId,
+        revision: WorkspaceRevision,
     ): PublishedStore {
         val destination =
             InProcessCacheLayout.generationStore(workspace, clientId, generation.value)
-        if (Files.isDirectory(destination)) {
-            return PublishedStore(path = destination, created = false)
-        }
-
+        val alreadyMaterialized = Files.isDirectory(destination)
         val source =
             IndexPathResolver(workspace, storeRootOverride = storeRoot).resolveBaseStore(commit)
-        Files.createDirectories(destination.parent)
-        val staging = destination.resolveSibling("${destination.fileName}.tmp-${UUID.randomUUID()}")
-        try {
-            Files.walk(source).use { paths ->
-                paths.forEach { path ->
-                    val target = staging.resolve(source.relativize(path).toString())
-                    if (Files.isDirectory(path)) {
-                        Files.createDirectories(target)
-                    } else {
-                        Files.createDirectories(target.parent)
-                        Files.copy(path, target, StandardCopyOption.COPY_ATTRIBUTES)
-                    }
-                }
-            }
-            Files.move(staging, destination, StandardCopyOption.ATOMIC_MOVE)
-        } finally {
-            if (Files.exists(staging)) {
-                staging.toFile().deleteRecursively()
-            }
+        val cacheRoot = InProcessCacheLayout.cacheRoot()
+        val packKey =
+            ContentAddressedPackCache(cacheRoot).installDirectory(source, BASIC_FACT_SCHEMA_VERSION)
+        WorkspaceGenerationManifestStore(cacheRoot, InProcessCacheLayout.workspaceId(workspace))
+            .publish(
+                WorkspaceGenerationManifest(
+                    basicFactSchemaVersion = BASIC_FACT_SCHEMA_VERSION,
+                    generation = generation.value,
+                    workspaceRevisionFingerprint = revision.fingerprint,
+                    originId = revision.origins.single().originId.value,
+                    revision = revision.origins.single().revision,
+                    stateFingerprint = revision.origins.single().stateFingerprint,
+                    packKeys = listOf(packKey),
+                )
+            )
+        ContentAddressedPackCache(cacheRoot).materializeDirectory(packKey, destination)
+        return PublishedStore(path = destination, created = !alreadyMaterialized)
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    private fun currentPublishedGenerationId(): WorkspaceGenerationId? {
+        val manifest =
+            WorkspaceGenerationManifestStore(
+                    InProcessCacheLayout.cacheRoot(),
+                    InProcessCacheLayout.workspaceId(workspace),
+                )
+                .current() ?: return null
+        return manifest
+            .takeIf { it.basicFactSchemaVersion == BASIC_FACT_SCHEMA_VERSION }
+            ?.generation
+            ?.let(WorkspaceGenerationId::of)
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    private fun restorePublishedGeneration(): PublishedGeneration? {
+        val cacheRoot = InProcessCacheLayout.cacheRoot()
+        val manifest =
+            WorkspaceGenerationManifestStore(cacheRoot, InProcessCacheLayout.workspaceId(workspace))
+                .current() ?: return null
+        if (manifest.basicFactSchemaVersion != BASIC_FACT_SCHEMA_VERSION) return null
+        val generation = WorkspaceGenerationId.of(manifest.generation)
+        val storePath = InProcessCacheLayout.generationStore(workspace, clientId, generation.value)
+        if (!Files.isDirectory(storePath)) {
+            ContentAddressedPackCache(cacheRoot)
+                .materializeDirectory(manifest.packKeys.single(), storePath)
         }
-        return PublishedStore(path = destination, created = true)
+        val revision =
+            WorkspaceRevision(
+                manifest.workspaceRevisionFingerprint,
+                listOf(
+                    SourceOriginRevision(
+                        originId = SourceOriginId.of(manifest.originId),
+                        revision = manifest.revision,
+                        stateFingerprint = manifest.stateFingerprint,
+                        expectedRevision = null,
+                    )
+                ),
+            )
+        val restored = PublishedGeneration(storePath, revision, generation)
+        generationStores[generation] = storePath
+        published = restored
+        return restored
     }
 
     private fun releaseGeneration(generation: WorkspaceGenerationId) {

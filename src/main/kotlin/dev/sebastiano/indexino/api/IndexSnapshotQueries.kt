@@ -1,12 +1,22 @@
+@file:Suppress("TooManyFunctions")
+
 package dev.sebastiano.indexino.api
 
+import dev.sebastiano.indexino.core.record.CallArgumentRecord
+import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
+import dev.sebastiano.indexino.model.ArgumentKind
+import dev.sebastiano.indexino.model.CallArgument
+import dev.sebastiano.indexino.model.CallSite
+import dev.sebastiano.indexino.model.CallSiteId
 import dev.sebastiano.indexino.model.IndexinoInternalApi
 import dev.sebastiano.indexino.model.Reference
+import dev.sebastiano.indexino.model.ResolutionConfidence
 import dev.sebastiano.indexino.model.SourceFile
 import dev.sebastiano.indexino.model.SourceLocation
 import dev.sebastiano.indexino.model.SourceOriginId
+import dev.sebastiano.indexino.model.SourceRange
 import dev.sebastiano.indexino.model.Symbol
 import dev.sebastiano.indexino.model.SymbolId
 import dev.sebastiano.indexino.model.WorkspaceGenerationId
@@ -57,6 +67,92 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
             aliases = aliases,
         )
     }
+
+    fun CallSiteRecord.callSiteId(): CallSiteId =
+        CallSiteId.of(
+            "indexino:call:v1:" + sha256(listOf(generation.value, identity).joinToString("\u0000"))
+        )
+
+    @OptIn(IndexinoInternalApi::class)
+    fun CallSiteRecord.toPublicCallSite(candidates: List<SymbolRecord>): CallSite =
+        CallSite(
+            id = callSiteId(),
+            calleeName = calleeName,
+            candidateSymbolIds =
+                candidateSymbolFqns
+                    .flatMap { name ->
+                        candidates
+                            .filter {
+                                (it.fqn == name || name in it.aliases) &&
+                                    (it.arity == null ||
+                                        it.arity == arguments.size ||
+                                        (it.language == "kotlin" && it.arity > arguments.size) ||
+                                        (it.isVararg && it.arity - 1 <= arguments.size))
+                            }
+                            .map { symbol -> symbol.definitionId() }
+                            .ifEmpty { listOf(externalSymbolId(name)) }
+                    }
+                    .distinct(),
+            receiver = receiver,
+            enclosingSymbolId =
+                enclosingSymbolFqn?.let { enclosing ->
+                    candidates
+                        .firstOrNull {
+                            it.relativeFile == relativeFile &&
+                                (it.fqn == enclosing || enclosing in it.aliases)
+                        }
+                        ?.let { symbol -> symbol.definitionId() } ?: externalSymbolId(enclosing)
+                },
+            parentCallId = parentCallIdentity?.let { identity -> callSiteId(identity) },
+            range =
+                sourceRange(
+                    relativeFile,
+                    startLine,
+                    startColumn,
+                    startOffset,
+                    endLine,
+                    endColumn,
+                    endOffset,
+                ),
+            arguments = arguments.map { it.toPublicCallArgument(relativeFile) },
+            confidence = confidence(),
+        )
+
+    @OptIn(IndexinoInternalApi::class)
+    private fun CallArgumentRecord.toPublicCallArgument(relativeFile: String): CallArgument =
+        CallArgument(
+            position = position,
+            resolvedName = resolvedName,
+            kind =
+                when (kind) {
+                    "LAMBDA" -> ArgumentKind.LAMBDA
+                    "TRAILING_LAMBDA" -> ArgumentKind.TRAILING_LAMBDA
+                    else -> ArgumentKind.VALUE
+                },
+            range =
+                sourceRange(
+                    relativeFile,
+                    startLine,
+                    startColumn,
+                    startOffset,
+                    endLine,
+                    endColumn,
+                    endOffset,
+                ),
+            nestedCallIds = nestedCallIdentities.map(::callSiteId),
+        )
+
+    private fun CallSiteRecord.confidence(): ResolutionConfidence =
+        when (confidence) {
+            "RESOLVED" -> ResolutionConfidence.RESOLVED
+            "HEURISTIC" -> ResolutionConfidence.HEURISTIC
+            else -> ResolutionConfidence.UNRESOLVED
+        }
+
+    private fun callSiteId(identity: String): CallSiteId =
+        CallSiteId.of(
+            "indexino:call:v1:" + sha256(listOf(generation.value, identity).joinToString("\u0000"))
+        )
 
     fun externalSymbolId(fqn: String): SymbolId = externalId(fqn)
 
@@ -136,6 +232,22 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
 
     private fun sha256(value: String): String =
         HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.toByteArray()))
+
+    private fun sourceRange(
+        path: String,
+        startLine: Int,
+        startColumn: Int,
+        startOffset: Int,
+        endLine: Int,
+        endColumn: Int,
+        endOffset: Int,
+    ): SourceRange {
+        val file = SourceFile.of(WORKSPACE_ORIGIN, path, path)
+        return SourceRange.of(
+            SourceLocation.of(file, startLine, startColumn, startOffset),
+            SourceLocation.of(file, endLine, endColumn, endOffset),
+        )
+    }
 
     private fun sourceLocation(path: String, line: Int, column: Int?): SourceLocation {
         val file = SourceFile.of(WORKSPACE_ORIGIN, path, path)

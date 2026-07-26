@@ -35,6 +35,8 @@ internal value class CodeIndexKey(val value: String) {
         fun ref(symbolFqn: String, relativeFile: String, line: Int, column: Int): CodeIndexKey =
             CodeIndexKey("ref:$symbolFqn:$relativeFile:$line:$column")
 
+        fun call(identity: String): CodeIndexKey = CodeIndexKey("call:$identity")
+
         fun resource(type: String, name: String, relativeFile: String, line: Int): CodeIndexKey =
             CodeIndexKey("res:$type:$name:$relativeFile:$line")
 

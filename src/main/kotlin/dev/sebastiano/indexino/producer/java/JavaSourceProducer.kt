@@ -5,6 +5,7 @@ import com.sun.source.tree.CatchTree
 import com.sun.source.tree.ClassTree
 import com.sun.source.tree.CompilationUnitTree
 import com.sun.source.tree.EnhancedForLoopTree
+import com.sun.source.tree.ExpressionTree
 import com.sun.source.tree.ForLoopTree
 import com.sun.source.tree.IdentifierTree
 import com.sun.source.tree.ImportTree
@@ -18,8 +19,11 @@ import com.sun.source.tree.TryTree
 import com.sun.source.tree.VariableTree
 import com.sun.source.util.JavacTask
 import com.sun.source.util.TreePathScanner
+import com.sun.source.util.TreeScanner
 import com.sun.source.util.Trees
 import dev.sebastiano.indexino.core.key.CodeIndexKey
+import dev.sebastiano.indexino.core.record.CallArgumentRecord
+import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
@@ -51,6 +55,12 @@ internal class JavaSourceProducer : IndexProducer {
         SourceRecordCleanup.deleteLanguageRecords(store, LANGUAGE, ".java", affectedFiles)
         val javaFiles =
             context.sourceFiles.filter { it.endsWith(".java") && it in context.changedSourceFiles }
+        // Seed declarations from every changed file before final call materialization. The parser
+        // writes deterministic keys, so the final pass overwrites equivalent symbol/reference facts
+        // while letting caller files resolve parameter names from callees later in source order.
+        javaFiles.forEach { relativePath ->
+            parse(relativePath, context.readSource(relativePath), store)
+        }
         javaFiles.forEachIndexed { index, relativePath ->
             context.reportFileProgress(index + 1, javaFiles.size, relativePath)
             parse(relativePath, context.readSource(relativePath), store)
@@ -85,6 +95,7 @@ internal class JavaSourceProducer : IndexProducer {
         override fun getCharContent(ignoreEncodingErrors: Boolean): CharSequence = source
     }
 
+    @Suppress("TooManyFunctions")
     private class JavaRecordScanner(
         private val relativePath: String,
         private val unit: CompilationUnitTree,
@@ -101,6 +112,7 @@ internal class JavaSourceProducer : IndexProducer {
         private val classNestedTypes = ArrayDeque<Map<String, String>>()
         private val classSuperTypes = ArrayDeque<String>()
         private val variableScopes = ArrayDeque<MutableMap<String, String>>()
+        private val methodOwners = ArrayDeque<String>()
 
         override fun visitImport(node: ImportTree, data: Unit?) {
             val imported = node.qualifiedIdentifier.toString()
@@ -134,6 +146,19 @@ internal class JavaSourceProducer : IndexProducer {
                 }
             if (name.isNotBlank()) {
                 symbol(fqn, name, classKind(node.kind), node, ownerFqn = owner)
+                if (
+                    node.kind == Tree.Kind.CLASS &&
+                        node.members.none { it is MethodTree && it.name.contentEquals("<init>") }
+                ) {
+                    symbol(
+                        fqn = "$fqn#<init>",
+                        name = name,
+                        kind = "constructor",
+                        tree = node,
+                        ownerFqn = fqn,
+                        arity = 0,
+                    )
+                }
             }
             classOwners.addLast(fqn)
             classMethodNames.addLast(
@@ -190,14 +215,18 @@ internal class JavaSourceProducer : IndexProducer {
                 ownerFqn = owner,
                 signature = signature,
                 arity = node.parameters.size,
+                parameterNames = node.parameters.map { it.name.toString() },
+                isVararg = node.parameters.lastOrNull()?.toString()?.contains("...") == true,
             )
             variableScopes.addLast(mutableMapOf())
             node.parameters.forEach {
                 variableScopes.last()[it.name.toString()] = it.type.toString()
             }
+            methodOwners.addLast(fqn)
             try {
                 super.visitMethod(node, data)
             } finally {
+                methodOwners.removeLast()
                 variableScopes.removeLast()
             }
         }
@@ -274,7 +303,112 @@ internal class JavaSourceProducer : IndexProducer {
                     candidates = target.candidates,
                 )
             }
+            call(node, node.arguments, target, node.methodSelect.toString().substringAfterLast('.'))
             super.visitMethodInvocation(node, data)
+        }
+
+        override fun visitNewClass(node: NewClassTree, data: Unit?) {
+            val owner = qualifyConstructorType(node.identifier.toString())
+            val target =
+                InvocationTarget(
+                    "$owner#<init>",
+                    node.identifier.toString().substringAfterLast('.'),
+                    null,
+                    listOf("$owner#<init>"),
+                )
+            reference(
+                target = target.symbolFqn,
+                name = target.name,
+                qualifier = null,
+                tree = node,
+                context = "call",
+                arity = node.arguments.size,
+                candidates = target.candidates,
+            )
+            call(node, node.arguments, target, target.name)
+            super.visitNewClass(node, data)
+        }
+
+        private fun call(
+            node: Tree,
+            arguments: List<ExpressionTree>,
+            target: InvocationTarget?,
+            fallbackName: String,
+        ) {
+            val start = position(node)
+            val end = endPosition(node)
+            val identity = callIdentity(start)
+            val parameterNames =
+                target?.let { storedParameterNames(it.symbolFqn, arguments.size) }.orEmpty()
+            val parent =
+                generateSequence(currentPath.parentPath) { it.parentPath }
+                    .map { it.leaf }
+                    .firstOrNull { it is MethodInvocationTree || it is NewClassTree }
+                    ?.let { parentNode -> callIdentity(position(parentNode)) }
+            store.put(
+                CodeIndexKey.call(identity),
+                CallSiteRecord(
+                    identity = identity,
+                    calleeName = target?.name ?: fallbackName,
+                    candidateSymbolFqns = target?.candidates.orEmpty(),
+                    receiver = target?.qualifier,
+                    enclosingSymbolFqn = methodOwners.lastOrNull(),
+                    parentCallIdentity = parent,
+                    relativeFile = relativePath,
+                    startLine = start.line,
+                    startColumn = start.column,
+                    startOffset = start.offset,
+                    endLine = end.line,
+                    endColumn = end.column,
+                    endOffset = end.offset,
+                    arguments =
+                        arguments.mapIndexed { index, argument ->
+                            val argumentStart = position(argument)
+                            val argumentEnd = endPosition(argument)
+                            CallArgumentRecord(
+                                position = index,
+                                kind = if (argument is LambdaExpressionTree) "LAMBDA" else "VALUE",
+                                resolvedName = parameterNames.getOrNull(index),
+                                startLine = argumentStart.line,
+                                startColumn = argumentStart.column,
+                                startOffset = argumentStart.offset,
+                                endLine = argumentEnd.line,
+                                endColumn = argumentEnd.column,
+                                endOffset = argumentEnd.offset,
+                                nestedCallIdentities = nestedCallIdentities(argument),
+                            )
+                        },
+                    confidence = if (target == null) "UNRESOLVED" else "HEURISTIC",
+                ),
+            )
+        }
+
+        private fun nestedCallIdentities(argument: Tree): List<String> {
+            val identities = mutableListOf<String>()
+            object : TreeScanner<Unit, Unit>() {
+                    override fun visitMethodInvocation(node: MethodInvocationTree, data: Unit?) {
+                        identities += callIdentity(position(node))
+                        return super.visitMethodInvocation(node, data)
+                    }
+
+                    override fun visitNewClass(node: NewClassTree, data: Unit?) {
+                        identities += callIdentity(position(node))
+                        return super.visitNewClass(node, data)
+                    }
+                }
+                .scan(argument, Unit)
+            return identities
+        }
+
+        private fun storedParameterNames(fqn: String, argumentCount: Int): List<String> {
+            val candidates = mutableListOf<SymbolRecord>()
+            store.forEachPrefix("sym:$fqn:") { _, record ->
+                if (record is SymbolRecord && record.fqn == fqn && record.arity == argumentCount) {
+                    candidates += record
+                }
+                true
+            }
+            return candidates.singleOrNull()?.parameterNames.orEmpty()
         }
 
         private fun resolveInvocation(select: Tree): InvocationTarget? =
@@ -356,6 +490,19 @@ internal class JavaSourceProducer : IndexProducer {
                 else -> null
             }
 
+        private fun qualifyConstructorType(raw: String): String {
+            val type = raw.substringBefore('<').removeSuffix("[]").trim()
+            val outer = type.substringBefore('.')
+            return if ('.' in type && outer.firstOrNull()?.isUpperCase() == true) {
+                val suffix = type.removePrefix(outer)
+                (imports[outer]
+                    ?: classNestedTypes.reversed().firstNotNullOfOrNull { it[outer] }
+                    ?: qualify(outer)) + suffix
+            } else {
+                qualifyType(type)
+            }
+        }
+
         private fun qualifyType(raw: String): String {
             val type = raw.substringBefore('<').removeSuffix("[]").trim()
             imports[type]?.let {
@@ -402,6 +549,8 @@ internal class JavaSourceProducer : IndexProducer {
             ownerFqn: String? = null,
             signature: String? = null,
             arity: Int? = null,
+            parameterNames: List<String> = emptyList(),
+            isVararg: Boolean = false,
         ) {
             val position = position(tree)
             store.put(
@@ -416,6 +565,8 @@ internal class JavaSourceProducer : IndexProducer {
                     ownerFqn = ownerFqn,
                     signature = signature,
                     arity = arity,
+                    parameterNames = parameterNames,
+                    isVararg = isVararg,
                 ),
             )
         }
@@ -447,18 +598,29 @@ internal class JavaSourceProducer : IndexProducer {
             )
         }
 
-        private fun position(tree: Tree): SourcePosition {
-            val offset = trees.sourcePositions.getStartPosition(unit, tree)
-            if (offset < 0) {
-                return SourcePosition(1, 1)
-            }
+        private fun position(tree: Tree): SourcePosition =
+            sourcePosition(trees.sourcePositions.getStartPosition(unit, tree))
+
+        private fun endPosition(tree: Tree): SourcePosition =
+            sourcePosition(
+                (trees.sourcePositions.getEndPosition(unit, tree) - 1).coerceAtLeast(
+                    trees.sourcePositions.getStartPosition(unit, tree)
+                )
+            )
+
+        private fun sourcePosition(offset: Long): SourcePosition {
+            if (offset < 0) return SourcePosition(1, 1, 0)
             return SourcePosition(
                 unit.lineMap.getLineNumber(offset).toInt(),
                 unit.lineMap.getColumnNumber(offset).toInt(),
+                offset.toInt(),
             )
         }
 
-        private data class SourcePosition(val line: Int, val column: Int)
+        private fun callIdentity(position: SourcePosition): String =
+            "$relativePath:${position.offset}"
+
+        private data class SourcePosition(val line: Int, val column: Int, val offset: Int)
 
         private data class InvocationTarget(
             val symbolFqn: String,

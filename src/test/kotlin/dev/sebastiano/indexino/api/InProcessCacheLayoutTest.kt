@@ -13,7 +13,7 @@ class InProcessCacheLayoutTest {
         try {
             System.setProperty("indexino.cache.dir", cache.toString())
 
-            val workspaceId = InProcessCacheLayout.storeRoot(workspace).parent.fileName.toString()
+            val workspaceId = InProcessCacheLayout.workspaceRoot(workspace).fileName.toString()
 
             assertEquals(16, workspaceId.length)
         } finally {

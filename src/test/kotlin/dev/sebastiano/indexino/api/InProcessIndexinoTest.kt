@@ -83,6 +83,70 @@ class InProcessIndexinoTest {
     }
 
     @Test
+    fun `refreshes a non-Git Gradle workspace`() {
+        val workspace = createGitWorkspace()
+        workspace.resolve(".git").toFile().deleteRecursively()
+        val cacheDirectory = createTempDirectory("indexino-nongit-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            val indexino = Indexino.connectBlocking(workspace)
+            try {
+                val result = runSuspend {
+                    indexino.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui"))).await()
+                }
+                assertTrue(result.revision.origins.single().revision == null)
+                assertTrue(result.revision.origins.single().stateFingerprint.isNotBlank())
+            } finally {
+                indexino.close()
+            }
+        } finally {
+            if (previousCacheDirectory == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheDirectory)
+        }
+    }
+
+    @Test
+    fun `a second client reopens the published pack snapshot`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-reopen-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            val first = Indexino.connectBlocking(workspace)
+            try {
+                runSuspend {
+                    first.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui"))).await()
+                }
+            } finally {
+                first.close()
+            }
+            val second = Indexino.connectBlocking(workspace)
+            try {
+                val snapshot = runSuspend { second.snapshot() }
+                try {
+                    val symbols = runSuspend {
+                        snapshot.findSymbols(
+                            SymbolQuery.named("ActionButton"),
+                            QueryOptions.page(1),
+                        )
+                    }
+                    assertEquals(1, symbols.items.size)
+                } finally {
+                    snapshot.close()
+                }
+            } finally {
+                second.close()
+            }
+        } finally {
+            if (previousCacheDirectory == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheDirectory)
+        }
+    }
+
+    @Test
     fun `refresh maps topology resolution failures to IndexinoException`() {
         val workspace = createTempDirectory("indexino-no-topology-")
         tempDirs.add(workspace)
@@ -967,9 +1031,9 @@ class InProcessIndexinoTest {
     }
 
     private fun generationCopyExists(workspace: java.nio.file.Path, generation: String?): Boolean {
-        val clientsRoot = InProcessCacheLayout.storeRoot(workspace.toRealPath()).resolve("clients")
-        if (!Files.isDirectory(clientsRoot)) return false
-        return Files.walk(clientsRoot).use { paths ->
+        val refsRoot = InProcessCacheLayout.workspaceRoot(workspace.toRealPath()).resolve("refs")
+        if (!Files.isDirectory(refsRoot)) return false
+        return Files.walk(refsRoot).use { paths ->
             paths.anyMatch { path ->
                 if (!Files.isDirectory(path)) return@anyMatch false
                 if (generation == null) {

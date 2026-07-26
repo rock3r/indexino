@@ -599,7 +599,7 @@ class NativeDistributionTest {
     }
 
     @Test
-    fun `missing git reports the external tool requirement`() {
+    fun `missing git falls back to a filesystem revision`() {
         val target = requiredProperty("indexino.nativeTarget")
         val installation = extractArchive(requiredFile("indexino.nativeArchive"), target, "no-git")
         val launcher = installation.resolve(launcherRelativePath(target))
@@ -618,9 +618,7 @@ class NativeDistributionTest {
                 ":app",
                 environment = mapOf("PATH" to emptyPath.toString()),
             )
-        assertTrue(result.exitCode != 0, result.diagnostic())
-        assertContains(result.stdout + result.stderr, "git")
-        assertContains(result.stdout + result.stderr, "Cannot run program")
+        assertEquals(0, result.exitCode, result.diagnostic())
     }
 
     @Test

@@ -26,6 +26,8 @@ internal data class SymbolRecord(
     val ownerFqn: String? = null,
     val signature: String? = null,
     val arity: Int? = null,
+    val parameterNames: List<String> = emptyList(),
+    val isVararg: Boolean = false,
     val aliases: List<String> = emptyList(),
 ) : CodeIndexRecord
 
@@ -42,6 +44,40 @@ internal data class ReferenceRecord(
     val qualifier: String? = null,
     val candidateSymbolFqns: List<String> = listOf(symbolFqn),
     val arity: Int? = null,
+) : CodeIndexRecord
+
+@Serializable
+internal data class CallArgumentRecord(
+    val position: Int,
+    val resolvedName: String? = null,
+    val kind: String,
+    val startLine: Int,
+    val startColumn: Int,
+    val startOffset: Int,
+    val endLine: Int,
+    val endColumn: Int,
+    val endOffset: Int,
+    val nestedCallIdentities: List<String> = emptyList(),
+)
+
+@Serializable
+@SerialName("call_site")
+internal data class CallSiteRecord(
+    val identity: String,
+    val calleeName: String,
+    val candidateSymbolFqns: List<String>,
+    val receiver: String? = null,
+    val enclosingSymbolFqn: String? = null,
+    val parentCallIdentity: String? = null,
+    val relativeFile: String,
+    val startLine: Int,
+    val startColumn: Int,
+    val startOffset: Int,
+    val endLine: Int,
+    val endColumn: Int,
+    val endOffset: Int,
+    val arguments: List<CallArgumentRecord> = emptyList(),
+    val confidence: String,
 ) : CodeIndexRecord
 
 @Serializable
