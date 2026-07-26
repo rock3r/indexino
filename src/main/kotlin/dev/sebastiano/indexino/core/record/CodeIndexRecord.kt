@@ -45,6 +45,40 @@ internal data class ReferenceRecord(
 ) : CodeIndexRecord
 
 @Serializable
+internal data class CallArgumentRecord(
+    val position: Int,
+    val resolvedName: String? = null,
+    val kind: String,
+    val startLine: Int,
+    val startColumn: Int,
+    val startOffset: Int,
+    val endLine: Int,
+    val endColumn: Int,
+    val endOffset: Int,
+    val nestedCallIdentities: List<String> = emptyList(),
+)
+
+@Serializable
+@SerialName("call_site")
+internal data class CallSiteRecord(
+    val identity: String,
+    val calleeName: String,
+    val candidateSymbolFqns: List<String>,
+    val receiver: String? = null,
+    val enclosingSymbolFqn: String? = null,
+    val parentCallIdentity: String? = null,
+    val relativeFile: String,
+    val startLine: Int,
+    val startColumn: Int,
+    val startOffset: Int,
+    val endLine: Int,
+    val endColumn: Int,
+    val endOffset: Int,
+    val arguments: List<CallArgumentRecord> = emptyList(),
+    val confidence: String,
+) : CodeIndexRecord
+
+@Serializable
 internal data class SelectionContainerRef(val file: String, val line: Int, val function: String)
 
 @Serializable

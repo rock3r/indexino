@@ -1,10 +1,13 @@
 package dev.sebastiano.indexino.api
 
 import dev.sebastiano.indexino.core.key.CodeIndexKey
+import dev.sebastiano.indexino.core.record.CallArgumentRecord
+import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.CodeIndexRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
+import dev.sebastiano.indexino.model.CallQuery
 import dev.sebastiano.indexino.model.IndexinoInternalApi
 import dev.sebastiano.indexino.model.NameMatchMode
 import dev.sebastiano.indexino.model.QueryOptions
@@ -399,6 +402,78 @@ class IndexSnapshotStorageFailureTest {
         assertEquals("INTERNAL", failure.failure.category.value)
         assertEquals("internal", failure.failure.code)
         assertTrue(failure.cause is SimulatedStorageFailure)
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    @Test
+    fun `findCalls preserves nested call containment and resolves call IDs`() {
+        val outer = "App.kt:0"
+        val inner = "App.kt:20"
+        val snapshot =
+            snapshotWithRecords(
+                CodeIndexKey.call(outer) to
+                    CallSiteRecord(
+                        identity = outer,
+                        calleeName = "Container",
+                        candidateSymbolFqns = listOf("sample.Container"),
+                        relativeFile = "App.kt",
+                        startLine = 1,
+                        startColumn = 1,
+                        startOffset = 0,
+                        endLine = 3,
+                        endColumn = 2,
+                        endOffset = 40,
+                        arguments =
+                            listOf(
+                                CallArgumentRecord(
+                                    position = 0,
+                                    resolvedName = "content",
+                                    kind = "TRAILING_LAMBDA",
+                                    startLine = 1,
+                                    startColumn = 12,
+                                    startOffset = 11,
+                                    endLine = 3,
+                                    endColumn = 1,
+                                    endOffset = 39,
+                                    nestedCallIdentities = listOf(inner),
+                                )
+                            ),
+                        confidence = "RESOLVED",
+                    ),
+                CodeIndexKey.call(inner) to
+                    CallSiteRecord(
+                        identity = inner,
+                        calleeName = "Child",
+                        candidateSymbolFqns = listOf("sample.Child"),
+                        parentCallIdentity = outer,
+                        relativeFile = "App.kt",
+                        startLine = 2,
+                        startColumn = 3,
+                        startOffset = 20,
+                        endLine = 2,
+                        endColumn = 10,
+                        endOffset = 27,
+                        confidence = "HEURISTIC",
+                    ),
+            )
+        try {
+            val containers = runSuspend {
+                snapshot.findCalls(CallQuery.to("Container"), QueryOptions.page(10))
+            }
+            val container = containers.items.single()
+            assertEquals(
+                listOf("Child"),
+                container.arguments.single().nestedCallIds.map { id ->
+                    runSuspend { snapshot.findCalls(CallQuery.byId(id), QueryOptions.page(1)) }
+                        .items
+                        .single()
+                        .calleeName
+                },
+            )
+            assertEquals("content", container.arguments.single().resolvedName)
+        } finally {
+            snapshot.close()
+        }
     }
 
     @OptIn(IndexinoInternalApi::class)

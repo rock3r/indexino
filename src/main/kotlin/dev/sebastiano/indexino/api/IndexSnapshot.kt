@@ -2,9 +2,12 @@
 
 package dev.sebastiano.indexino.api
 
+import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
+import dev.sebastiano.indexino.model.CallQuery
+import dev.sebastiano.indexino.model.CallSite
 import dev.sebastiano.indexino.model.IndexFailureCategory
 import dev.sebastiano.indexino.model.IndexinoInternalApi
 import dev.sebastiano.indexino.model.NameMatchMode
@@ -118,6 +121,33 @@ private constructor(
         }
     }
 
+    public suspend fun findCalls(query: CallQuery, options: QueryOptions): QueryPage<CallSite> {
+        ensureOpen()
+        validateQueryOptions(options)
+        return mapUnexpectedFailures {
+            val enclosing = query.enclosingSymbolId?.let(::findSymbolById)
+            orderedPage(
+                options = options,
+                comparator =
+                    compareBy(
+                        CallSiteRecord::relativeFile,
+                        CallSiteRecord::startOffset,
+                        CallSiteRecord::endOffset,
+                        CallSiteRecord::calleeName,
+                        CallSiteRecord::identity,
+                    ),
+                scan = { accept ->
+                    store.forEachPrefix("call:") { _, record ->
+                        if (record is CallSiteRecord && record.matches(query, enclosing))
+                            accept(record)
+                        true
+                    }
+                },
+                transform = { records -> records.map { with(queries) { it.toPublicCallSite() } } },
+            )
+        }
+    }
+
     override fun close() {
         if (closed.compareAndSet(false, true)) {
             try {
@@ -160,6 +190,21 @@ private constructor(
                     NameMatchMode.FQN -> fqn == requestedName
                 }
         return fileMatches && kindMatches && languageMatches && nameMatches
+    }
+
+    private fun CallSiteRecord.matches(query: CallQuery, enclosing: SymbolRecord?): Boolean {
+        val requestedFile = query.file
+        val fileMatches =
+            requestedFile == null ||
+                (requestedFile.originId == WORKSPACE_ORIGIN && relativeFile == requestedFile.path)
+        val enclosingMatches =
+            enclosing == null ||
+                enclosingSymbolFqn == enclosing.fqn ||
+                enclosingSymbolFqn in enclosing.aliases
+        return fileMatches &&
+            (query.calleeName == null || calleeName == query.calleeName) &&
+            (query.callSiteId == null || with(queries) { callSiteId() == query.callSiteId }) &&
+            enclosingMatches
     }
 
     private fun findSymbolById(symbolId: SymbolId): SymbolRecord? {
