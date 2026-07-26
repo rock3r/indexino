@@ -91,7 +91,10 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
             enclosingSymbolId =
                 enclosingSymbolFqn?.let { enclosing ->
                     candidates
-                        .firstOrNull { it.fqn == enclosing || enclosing in it.aliases }
+                        .firstOrNull {
+                            it.relativeFile == relativeFile &&
+                                (it.fqn == enclosing || enclosing in it.aliases)
+                        }
                         ?.let { symbol -> symbol.definitionId() } ?: externalSymbolId(enclosing)
                 },
             parentCallId = parentCallIdentity?.let { identity -> callSiteId(identity) },
