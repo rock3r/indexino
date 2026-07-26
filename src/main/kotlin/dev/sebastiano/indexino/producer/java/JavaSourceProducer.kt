@@ -288,7 +288,7 @@ internal class JavaSourceProducer : IndexProducer {
         }
 
         override fun visitNewClass(node: NewClassTree, data: Unit?) {
-            val owner = qualifyType(node.identifier.toString())
+            val owner = qualifyConstructorType(node.identifier.toString())
             val target =
                 InvocationTarget(
                     "$owner#<init>",
@@ -469,6 +469,17 @@ internal class JavaSourceProducer : IndexProducer {
                 }
                 else -> null
             }
+
+        private fun qualifyConstructorType(raw: String): String {
+            val type = raw.substringBefore('<').removeSuffix("[]").trim()
+            val outer = type.substringBefore('.')
+            return if ('.' in type && outer.firstOrNull()?.isUpperCase() == true) {
+                val suffix = type.removePrefix(outer)
+                (imports[outer] ?: qualify(outer)) + suffix
+            } else {
+                qualifyType(type)
+            }
+        }
 
         private fun qualifyType(raw: String): String {
             val type = raw.substringBefore('<').removeSuffix("[]").trim()
