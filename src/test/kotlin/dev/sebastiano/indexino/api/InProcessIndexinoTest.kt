@@ -83,6 +83,31 @@ class InProcessIndexinoTest {
     }
 
     @Test
+    fun `refreshes a non-Git Gradle workspace`() {
+        val workspace = createGitWorkspace()
+        workspace.resolve(".git").toFile().deleteRecursively()
+        val cacheDirectory = createTempDirectory("indexino-nongit-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            val indexino = Indexino.connectBlocking(workspace)
+            try {
+                val result = runSuspend {
+                    indexino.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui"))).await()
+                }
+                assertTrue(result.revision.origins.single().revision == null)
+                assertTrue(result.revision.origins.single().stateFingerprint.isNotBlank())
+            } finally {
+                indexino.close()
+            }
+        } finally {
+            if (previousCacheDirectory == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheDirectory)
+        }
+    }
+
+    @Test
     fun `refresh maps topology resolution failures to IndexinoException`() {
         val workspace = createTempDirectory("indexino-no-topology-")
         tempDirs.add(workspace)

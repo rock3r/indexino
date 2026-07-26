@@ -5,6 +5,7 @@ package dev.sebastiano.indexino.api
 import dev.sebastiano.indexino.cli.CliExitCodes
 import dev.sebastiano.indexino.cli.IndexBuildExecution
 import dev.sebastiano.indexino.cli.IndexBuildRunner
+import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.IndexManifest
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.core.store.IndexStoreOpener
@@ -325,7 +326,7 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         val origin =
             SourceOriginRevision(
                 originId = SourceOriginId.of("workspace"),
-                revision = commit,
+                revision = commit.takeUnless(GitHeadResolver::isFilesystemRevision),
                 stateFingerprint = sourcesContentHash,
                 expectedRevision = null,
             )
