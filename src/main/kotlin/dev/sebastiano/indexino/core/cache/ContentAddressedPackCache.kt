@@ -81,6 +81,12 @@ internal class ContentAddressedPackCache(private val cacheRoot: Path) {
             }
             try {
                 Files.move(staging, destination, StandardCopyOption.ATOMIC_MOVE)
+            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                try {
+                    Files.move(staging, destination)
+                } catch (_: java.nio.file.FileAlreadyExistsException) {
+                    // Another client materialized the immutable pack first.
+                }
             } catch (_: java.nio.file.FileAlreadyExistsException) {
                 // Another client materialized the immutable pack first.
             }
