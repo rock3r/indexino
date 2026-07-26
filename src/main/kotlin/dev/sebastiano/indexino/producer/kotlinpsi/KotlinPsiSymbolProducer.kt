@@ -26,6 +26,7 @@ import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtForExpression
 import org.jetbrains.kotlin.psi.KtFunctionLiteral
+import org.jetbrains.kotlin.psi.KtLambdaExpression
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
 import org.jetbrains.kotlin.psi.KtNamedFunction
 import org.jetbrains.kotlin.psi.KtProperty
@@ -184,7 +185,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                     resolvedName =
                         argument.getArgumentName()?.asName?.identifier
                             ?: target?.parameterNames?.getOrNull(position),
-                    kind = if (expression is KtFunctionLiteral) "LAMBDA" else "VALUE",
+                    kind = if (expression is KtLambdaExpression) "LAMBDA" else "VALUE",
                     relativePath = relativePath,
                 )
             )

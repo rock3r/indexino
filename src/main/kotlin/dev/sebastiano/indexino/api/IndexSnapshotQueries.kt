@@ -74,11 +74,19 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
         )
 
     @OptIn(IndexinoInternalApi::class)
-    fun CallSiteRecord.toPublicCallSite(): CallSite =
+    fun CallSiteRecord.toPublicCallSite(candidates: List<SymbolRecord>): CallSite =
         CallSite(
             id = callSiteId(),
             calleeName = calleeName,
-            candidateSymbolIds = candidateSymbolFqns.map(::externalSymbolId),
+            candidateSymbolIds =
+                candidateSymbolFqns
+                    .flatMap { name ->
+                        candidates
+                            .filter { it.fqn == name || name in it.aliases }
+                            .map { symbol -> symbol.definitionId() }
+                            .ifEmpty { listOf(externalSymbolId(name)) }
+                    }
+                    .distinct(),
             receiver = receiver,
             enclosingSymbolId = enclosingSymbolFqn?.let(::externalSymbolId),
             parentCallId = parentCallIdentity?.let { identity -> callSiteId(identity) },

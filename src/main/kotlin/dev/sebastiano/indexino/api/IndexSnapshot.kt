@@ -143,7 +143,12 @@ private constructor(
                         true
                     }
                 },
-                transform = { records -> records.map { with(queries) { it.toPublicCallSite() } } },
+                transform = { records ->
+                    val candidates = callCandidatesFor(records)
+                    records.map { record ->
+                        with(queries) { record.toPublicCallSite(candidates.getValue(record)) }
+                    }
+                },
             )
         }
     }
@@ -252,6 +257,16 @@ private constructor(
             true
         }
         return candidates
+    }
+
+    private fun callCandidatesFor(
+        calls: List<CallSiteRecord>
+    ): Map<CallSiteRecord, List<SymbolRecord>> {
+        val candidatesByName =
+            candidatesByName(calls.flatMapTo(LinkedHashSet()) { it.candidateSymbolFqns })
+        return calls.associateWith { call ->
+            call.candidateSymbolFqns.flatMap { candidatesByName[it].orEmpty() }.distinct()
+        }
     }
 
     private fun ReferenceRecord.matchesUnknownSymbolId(

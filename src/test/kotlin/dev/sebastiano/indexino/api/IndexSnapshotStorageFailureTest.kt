@@ -411,6 +411,15 @@ class IndexSnapshotStorageFailureTest {
         val inner = "App.kt:20"
         val snapshot =
             snapshotWithRecords(
+                CodeIndexKey.symbolDefinition("sample.Container", "App.kt", 1, 1) to
+                    SymbolRecord(
+                        fqn = "sample.Container",
+                        relativeFile = "App.kt",
+                        line = 1,
+                        kind = "function",
+                        name = "Container",
+                        language = "kotlin",
+                    ),
                 CodeIndexKey.call(outer) to
                     CallSiteRecord(
                         identity = outer,
@@ -461,6 +470,13 @@ class IndexSnapshotStorageFailureTest {
                 snapshot.findCalls(CallQuery.to("Container"), QueryOptions.page(10))
             }
             val container = containers.items.single()
+            val localContainer =
+                runSuspend {
+                        snapshot.findSymbols(SymbolQuery.named("Container"), QueryOptions.page(1))
+                    }
+                    .items
+                    .single()
+            assertEquals(listOf(localContainer.id), container.candidateSymbolIds)
             assertEquals(
                 listOf("Child"),
                 container.arguments.single().nestedCallIds.map { id ->

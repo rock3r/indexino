@@ -50,7 +50,7 @@ class KotlinPsiSymbolProducerTest {
             package sample
             fun Container(content: () -> Unit) = content()
             fun Child() {}
-            fun Panel() { Container { Child() } }
+            fun Panel() { Container({ Child() }) }
             """
                 .trimIndent()
         val context =
@@ -71,6 +71,7 @@ class KotlinPsiSymbolProducerTest {
         assertEquals(listOf(child.identity), container.arguments.single().nestedCallIdentities)
         assertEquals(container.identity, child.parentCallIdentity)
         assertEquals("content", container.arguments.single().resolvedName)
+        assertEquals("LAMBDA", container.arguments.single().kind)
     }
 
     private lateinit var store: XodusCodeIndexStore
