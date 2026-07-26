@@ -97,6 +97,9 @@ class JavaSourceProducerTest {
             val outer = calls.first { it.calleeName == "outer" }
             assertEquals(1, outer.arguments.size)
             assertEquals("LAMBDA", outer.arguments.single().kind)
+            assertEquals("sample.Calls#render", outer.enclosingSymbolFqn)
+            val child = calls.first { it.calleeName == "child" }
+            assertEquals(listOf(child.identity), outer.arguments.single().nestedCallIdentities)
             assertTrue(outer.startOffset < outer.endOffset)
         }
     }

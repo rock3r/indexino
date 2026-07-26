@@ -18,6 +18,7 @@ import com.sun.source.tree.TryTree
 import com.sun.source.tree.VariableTree
 import com.sun.source.util.JavacTask
 import com.sun.source.util.TreePathScanner
+import com.sun.source.util.TreeScanner
 import com.sun.source.util.Trees
 import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.CallArgumentRecord
@@ -104,6 +105,7 @@ internal class JavaSourceProducer : IndexProducer {
         private val classNestedTypes = ArrayDeque<Map<String, String>>()
         private val classSuperTypes = ArrayDeque<String>()
         private val variableScopes = ArrayDeque<MutableMap<String, String>>()
+        private val methodOwners = ArrayDeque<String>()
 
         override fun visitImport(node: ImportTree, data: Unit?) {
             val imported = node.qualifiedIdentifier.toString()
@@ -198,9 +200,11 @@ internal class JavaSourceProducer : IndexProducer {
             node.parameters.forEach {
                 variableScopes.last()[it.name.toString()] = it.type.toString()
             }
+            methodOwners.addLast(fqn)
             try {
                 super.visitMethod(node, data)
             } finally {
+                methodOwners.removeLast()
                 variableScopes.removeLast()
             }
         }
@@ -299,6 +303,7 @@ internal class JavaSourceProducer : IndexProducer {
                         target?.name ?: node.methodSelect.toString().substringAfterLast('.'),
                     candidateSymbolFqns = target?.candidates.orEmpty(),
                     receiver = target?.qualifier,
+                    enclosingSymbolFqn = methodOwners.lastOrNull(),
                     parentCallIdentity = parent,
                     relativeFile = relativePath,
                     startLine = start.line,
@@ -320,11 +325,24 @@ internal class JavaSourceProducer : IndexProducer {
                                 endLine = argumentEnd.line,
                                 endColumn = argumentEnd.column,
                                 endOffset = argumentEnd.offset,
+                                nestedCallIdentities = nestedCallIdentities(argument),
                             )
                         },
                     confidence = if (target == null) "UNRESOLVED" else "RESOLVED",
                 ),
             )
+        }
+
+        private fun nestedCallIdentities(argument: Tree): List<String> {
+            val identities = mutableListOf<String>()
+            object : TreeScanner<Unit, Unit>() {
+                    override fun visitMethodInvocation(node: MethodInvocationTree, data: Unit?) {
+                        identities += callIdentity(position(node))
+                        return super.visitMethodInvocation(node, data)
+                    }
+                }
+                .scan(argument, Unit)
+            return identities
         }
 
         private fun resolveInvocation(select: Tree): InvocationTarget? =
