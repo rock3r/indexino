@@ -5,6 +5,9 @@ package dev.sebastiano.indexino.api
 import dev.sebastiano.indexino.cli.CliExitCodes
 import dev.sebastiano.indexino.cli.IndexBuildExecution
 import dev.sebastiano.indexino.cli.IndexBuildRunner
+import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
+import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifest
+import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.IndexManifest
 import dev.sebastiano.indexino.core.path.IndexPathResolver
@@ -21,7 +24,6 @@ import dev.sebastiano.indexino.topology.TopologyRequest
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.HexFormat
 import java.util.UUID
@@ -358,26 +360,19 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
 
         val source =
             IndexPathResolver(workspace, storeRootOverride = storeRoot).resolveBaseStore(commit)
-        Files.createDirectories(destination.parent)
-        val staging = destination.resolveSibling("${destination.fileName}.tmp-${UUID.randomUUID()}")
-        try {
-            Files.walk(source).use { paths ->
-                paths.forEach { path ->
-                    val target = staging.resolve(source.relativize(path).toString())
-                    if (Files.isDirectory(path)) {
-                        Files.createDirectories(target)
-                    } else {
-                        Files.createDirectories(target.parent)
-                        Files.copy(path, target, StandardCopyOption.COPY_ATTRIBUTES)
-                    }
-                }
-            }
-            Files.move(staging, destination, StandardCopyOption.ATOMIC_MOVE)
-        } finally {
-            if (Files.exists(staging)) {
-                staging.toFile().deleteRecursively()
-            }
-        }
+        val cacheRoot = InProcessCacheLayout.cacheRoot()
+        val packKey = ContentAddressedPackCache(cacheRoot).installDirectory(source)
+        WorkspaceGenerationManifestStore(cacheRoot, InProcessCacheLayout.workspaceId(workspace))
+            .publish(
+                WorkspaceGenerationManifest(
+                    generation = generation.value,
+                    originId = "workspace",
+                    revision = commit.takeUnless(GitHeadResolver::isFilesystemRevision),
+                    stateFingerprint = packKey,
+                    packKeys = listOf(packKey),
+                )
+            )
+        ContentAddressedPackCache(cacheRoot).materializeDirectory(packKey, destination)
         return PublishedStore(path = destination, created = true)
     }
 

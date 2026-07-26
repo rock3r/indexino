@@ -992,9 +992,9 @@ class InProcessIndexinoTest {
     }
 
     private fun generationCopyExists(workspace: java.nio.file.Path, generation: String?): Boolean {
-        val clientsRoot = InProcessCacheLayout.storeRoot(workspace.toRealPath()).resolve("clients")
-        if (!Files.isDirectory(clientsRoot)) return false
-        return Files.walk(clientsRoot).use { paths ->
+        val refsRoot = InProcessCacheLayout.workspaceRoot(workspace.toRealPath()).resolve("refs")
+        if (!Files.isDirectory(refsRoot)) return false
+        return Files.walk(refsRoot).use { paths ->
             paths.anyMatch { path ->
                 if (!Files.isDirectory(path)) return@anyMatch false
                 if (generation == null) {

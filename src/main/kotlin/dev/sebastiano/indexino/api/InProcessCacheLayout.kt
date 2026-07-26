@@ -9,14 +9,16 @@ internal object InProcessCacheLayout {
         cacheRoot().resolve("workspaces").resolve(workspaceId(workspace)).resolve("legacy-store")
 
     fun generationStore(workspace: Path, clientId: String, generation: String): Path =
-        storeRoot(workspace)
-            .resolve("clients")
+        workspaceRoot(workspace)
+            .resolve("refs")
             .resolve(clientId)
-            .resolve("generations")
             .resolve(generation)
             .resolve("store")
 
-    private fun cacheRoot(): Path {
+    fun workspaceRoot(workspace: Path): Path =
+        cacheRoot().resolve("workspaces").resolve(workspaceId(workspace))
+
+    fun cacheRoot(): Path {
         val explicit =
             System.getProperty(TEST_CACHE_PROPERTY)?.takeIf(String::isNotBlank)
                 ?: System.getenv("INDEXINO_CACHE_DIR")?.takeIf(String::isNotBlank)
@@ -33,7 +35,7 @@ internal object InProcessCacheLayout {
         }
     }
 
-    private fun workspaceId(workspace: Path): String {
+    fun workspaceId(workspace: Path): String {
         // Indexino canonicalizes the workspace once at connection entry. Repeating toRealPath()
         // here would create a second unwrapped I/O failure window during construction.
         val digest = MessageDigest.getInstance("SHA-256").digest(workspace.toString().toByteArray())
