@@ -82,7 +82,10 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
         )
     }
 
-    fun ReferenceRecord.matchesSymbolId(symbolId: SymbolId, candidates: List<SymbolRecord>): Boolean {
+    fun ReferenceRecord.matchesSymbolId(
+        symbolId: SymbolId,
+        candidates: List<SymbolRecord>,
+    ): Boolean {
         // Match the IDs materialization would actually emit so external directs still round-trip
         // when other candidate names resolve locally (S9 may later rank multi-origin duplicates).
         val materialized = toPublicReference(candidates)

@@ -73,7 +73,8 @@ private constructor(
         return mapUnexpectedFailures {
             val targetSymbol = findSymbolById(query.symbolId)
             val externalCandidates =
-                if (targetSymbol == null) externalReferenceCandidates(query.symbolId) else emptySet()
+                if (targetSymbol == null) externalReferenceCandidates(query.symbolId)
+                else emptySet()
             val localExternalCandidates = localExternalCandidates(externalCandidates)
             orderedPage(
                 options = options,
@@ -214,7 +215,9 @@ private constructor(
                 localCandidates[symbolFqn].orEmpty().none { arity.matches(it) }
         if (directIsExternal) return true
 
-        val hasResolvedCandidate = names.any { localCandidates[it].orEmpty().any { arity.matches(it) } }
+        val hasResolvedCandidate = names.any {
+            localCandidates[it].orEmpty().any { arity.matches(it) }
+        }
         return !hasResolvedCandidate && names.any { it in externalCandidates }
     }
 
@@ -225,10 +228,13 @@ private constructor(
             else -> this == symbolArity
         }
 
-    private fun candidatesFor(references: List<ReferenceRecord>): Map<ReferenceRecord, List<SymbolRecord>> {
+    private fun candidatesFor(
+        references: List<ReferenceRecord>
+    ): Map<ReferenceRecord, List<SymbolRecord>> {
         if (references.isEmpty()) return emptyMap()
         val namesByReference = references.associateWith { it.candidateSymbolFqns + it.symbolFqn }
-        val matchesByReference = LinkedHashMap<ReferenceRecord, LinkedHashMap<String, MutableList<SymbolRecord>>>()
+        val matchesByReference =
+            LinkedHashMap<ReferenceRecord, LinkedHashMap<String, MutableList<SymbolRecord>>>()
         store.forEachPrefix("sym:") { _, record ->
             if (record is SymbolRecord) {
                 for ((reference, names) in namesByReference) {
@@ -257,7 +263,9 @@ private constructor(
 
     private fun ownerIdsFor(symbols: List<SymbolRecord>): Map<SymbolRecord, SymbolId?> {
         val symbolsByOwner =
-            symbols.mapNotNull { symbol -> symbol.ownerFqn?.let { it to symbol } }.groupBy({ it.first }, { it.second })
+            symbols
+                .mapNotNull { symbol -> symbol.ownerFqn?.let { it to symbol } }
+                .groupBy({ it.first }, { it.second })
         if (symbolsByOwner.isEmpty()) return symbols.associateWith { null }
 
         val candidates: MutableMap<SymbolRecord, OwnerCandidates> =
@@ -278,7 +286,9 @@ private constructor(
         }
         return symbols.associateWith { symbol ->
             symbol.ownerFqn?.let { owner ->
-                with(queries) { candidates.getValue(symbol).best()?.definitionId() ?: externalSymbolId(owner) }
+                with(queries) {
+                    candidates.getValue(symbol).best()?.definitionId() ?: externalSymbolId(owner)
+                }
             }
         }
     }
@@ -359,7 +369,8 @@ private constructor(
             throw indexinoFailure(
                 category = IndexFailureCategory.INVALID_REQUEST,
                 code = "result_window_exceeds_maximum",
-                message = "Query result window exceeds the host maximum of $HOST_QUERY_WINDOW_MAXIMUM",
+                message =
+                    "Query result window exceeds the host maximum of $HOST_QUERY_WINDOW_MAXIMUM",
                 retryable = false,
             )
         }

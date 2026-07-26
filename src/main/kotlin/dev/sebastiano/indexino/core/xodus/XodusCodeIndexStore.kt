@@ -94,10 +94,7 @@ private constructor(private val environment: Environment, private val readOnly: 
             )
             .asSequence()
 
-    override fun forEachPrefix(
-        prefix: String,
-        action: (CodeIndexKey, CodeIndexRecord) -> Boolean,
-    ) {
+    override fun forEachPrefix(prefix: String, action: (CodeIndexKey, CodeIndexRecord) -> Boolean) {
         environment.computeInTransaction(
             TransactionalComputable { txn ->
                 val cursor = store(txn).openCursor(txn)
