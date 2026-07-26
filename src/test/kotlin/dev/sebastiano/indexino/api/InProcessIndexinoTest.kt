@@ -230,6 +230,74 @@ class InProcessIndexinoTest {
     }
 
     @Test
+    fun `gradle root scopes refresh when includingDependencies matches whole-build topology`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-gradle-root-ok-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            val indexino = Indexino.connectBlocking(workspace)
+            try {
+                val result = runSuspend {
+                    indexino
+                        .refresh(
+                            RefreshRequest.forScope(IndexScope.gradle(":").includingDependencies())
+                        )
+                        .await()
+                }
+                assertTrue(result.generation.value.isNotBlank())
+            } finally {
+                indexino.close()
+            }
+        } finally {
+            if (previousCacheDirectory == null) {
+                System.clearProperty("indexino.cache.dir")
+            } else {
+                System.setProperty("indexino.cache.dir", previousCacheDirectory)
+            }
+        }
+    }
+
+    @Test
+    fun `snapshot maps store open failures to IndexinoException INTERNAL`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-snapshot-open-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            val indexino = Indexino.connectBlocking(workspace)
+            try {
+                runSuspend {
+                    indexino.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui"))).await()
+                }
+                val storeDirs =
+                    Files.walk(cacheDirectory).use { paths ->
+                        paths
+                            .filter { Files.isDirectory(it) && it.fileName.toString() == "store" }
+                            .toList()
+                    }
+                assertTrue(storeDirs.isNotEmpty())
+                storeDirs.forEach { it.toFile().deleteRecursively() }
+                val failure =
+                    assertFailsWith<IndexinoException> { runSuspend { indexino.snapshot() } }
+                assertEquals("INTERNAL", failure.failure.category.value)
+                assertEquals("internal", failure.failure.code)
+                assertTrue(failure.cause != null)
+            } finally {
+                indexino.close()
+            }
+        } finally {
+            if (previousCacheDirectory == null) {
+                System.clearProperty("indexino.cache.dir")
+            } else {
+                System.setProperty("indexino.cache.dir", previousCacheDirectory)
+            }
+        }
+    }
+
+    @Test
     fun `connect maps unresolvable workspace paths to IO IndexinoException`() {
         val workspace = createTempDirectory("indexino-unresolvable-workspace-")
         tempDirs.add(workspace)

@@ -260,13 +260,19 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                     snapshotPins.getOrDefault(current.generation, 0) + 1
                 current
             }
-        val openedStore = runCatching { IndexStoreOpener.openForQuery(generation.storePath) }
-        if (openedStore.isFailure) {
-            releaseGeneration(generation.generation)
-        }
-        val store = openedStore.getOrThrow()
+        val openedStore =
+            try {
+                IndexStoreOpener.openForQuery(generation.storePath)
+            } catch (thrown: IndexinoException) {
+                releaseGeneration(generation.generation)
+                throw thrown
+            } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
+                // Release the pin before mapping/throwing so a failed open cannot leak disk.
+                releaseGeneration(generation.generation)
+                throw mapUnexpectedFailure(thrown)
+            }
         return IndexSnapshot.create(
-            store = store,
+            store = openedStore,
             revision = generation.revision,
             generation = generation.generation,
             onClose = { releaseGeneration(generation.generation) },
@@ -462,9 +468,14 @@ private fun requireScopeMatchesManifest(
     }
 }
 
-private fun mapRefreshFailure(thrown: Throwable): IndexinoException {
-    // Unexpected throwables map to INTERNAL; structural TOPOLOGY classification stays on
-    // CliExitCodes.TOPOLOGY_FAILED via buildFailure. Typed topology throws can land with #26.
+private fun mapRefreshFailure(thrown: Throwable): IndexinoException = mapUnexpectedFailure(thrown)
+
+private fun mapUnexpectedFailure(thrown: Throwable): IndexinoException {
+    // Unexpected throwables map to INTERNAL with cause retained. Do not classify by exception
+    // type/message. Specific codes are only for known failure modes (e.g. connect path IO).
+    if (thrown is IndexinoException) {
+        return thrown
+    }
     val message = thrown.message?.takeIf { it.isNotBlank() } ?: thrown.javaClass.simpleName
     return indexinoFailure(
         category = IndexFailureCategory.INTERNAL,

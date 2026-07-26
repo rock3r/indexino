@@ -20,6 +20,13 @@ private constructor(
             return IndexScope(BuildSystem.BAZEL, target, false)
         }
 
+        /**
+         * Gradle module scope without the dependency closure.
+         *
+         * The root module `":"` always resolves the whole build in topology; call
+         * [includingDependencies] for that scope so the published provenance matches. A dedicated
+         * whole-workspace scope is a later topology product decision.
+         */
         @JvmStatic
         public fun gradle(module: String): IndexScope {
             require(module.isNotBlank()) { "Gradle module must not be blank" }
@@ -28,20 +35,24 @@ private constructor(
         }
 
         private fun requireValidGradleModulePath(module: String) {
-            // Colon-separated Gradle module identifiers never use filesystem "." / ".." segments.
+            // Colon-separated Gradle module identifiers never use filesystem path segments.
             // Reject them here as a structural factory invariant (same shape as SourceFile paths).
             val body = module.removePrefix(":")
             if (body.isEmpty()) {
                 return
             }
-            require(
-                body.split(':').all { segment ->
-                    segment.isNotEmpty() && segment != "." && segment != ".."
-                }
-            ) {
-                "Gradle module path must not contain empty, '.', or '..' segments: $module"
+            require(body.split(':').all(::isValidGradleModuleSegment)) {
+                "Gradle module path must not contain empty, '.', '..', or path-separator " +
+                    "segments: $module"
             }
         }
+
+        private fun isValidGradleModuleSegment(segment: String): Boolean =
+            segment.isNotEmpty() &&
+                segment != "." &&
+                segment != ".." &&
+                '/' !in segment &&
+                '\\' !in segment
     }
 
     /** Include the build-system dependency closure of [value] when resolving sources. */

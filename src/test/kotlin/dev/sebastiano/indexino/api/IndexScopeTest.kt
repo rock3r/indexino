@@ -17,6 +17,12 @@ class IndexScopeTest {
     }
 
     @Test
+    fun `gradle rejects slash-delimited parent escapes inside a segment`() {
+        assertFailsWith<IllegalArgumentException> { IndexScope.gradle(":../../outside") }
+        assertFailsWith<IllegalArgumentException> { IndexScope.gradle(":foo/../bar") }
+    }
+
+    @Test
     fun `gradle accepts ordinary module paths`() {
         val scope = IndexScope.gradle(":ui")
         assertEquals(":ui", scope.value)

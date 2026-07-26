@@ -23,6 +23,16 @@ class ModuleSourceRootsTest {
     }
 
     @Test
+    fun `moduleDirectory rejects slash-delimited parent escapes inside a segment`() {
+        assertFailsWith<IllegalArgumentException> {
+            ModuleSourceRoots.moduleDirectory(workspace, ":../../outside")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ModuleSourceRoots.moduleDirectory(workspace, ":foo/../bar")
+        }
+    }
+
+    @Test
     fun `moduleDirectory resolves ordinary modules under the workspace`() {
         val directory = ModuleSourceRoots.moduleDirectory(workspace, ":ui")
         assertEquals(workspace.resolve("ui"), directory)

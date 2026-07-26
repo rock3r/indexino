@@ -8,7 +8,11 @@ import java.nio.file.Path
 public suspend fun main(args: Array<String>) {
     ConsumerProbe().touch()
     Indexino.connectBlocking(Path.of(args.single())).use { indexino ->
-        indexino.refresh(RefreshRequest.forScope(IndexScope.gradle(":"))).await()
+        // Root Gradle scopes always resolve the whole build; the facade requires an explicit
+        // includingDependencies() so the published provenance matches the observed closure.
+        indexino
+            .refresh(RefreshRequest.forScope(IndexScope.gradle(":").includingDependencies()))
+            .await()
         indexino.snapshot().use { snapshot ->
             val symbols =
                 snapshot.findSymbols(JavaModelProbe.touchSymbol(), JavaModelProbe.firstPage())
