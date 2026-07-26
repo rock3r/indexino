@@ -55,6 +55,12 @@ internal class JavaSourceProducer : IndexProducer {
         SourceRecordCleanup.deleteLanguageRecords(store, LANGUAGE, ".java", affectedFiles)
         val javaFiles =
             context.sourceFiles.filter { it.endsWith(".java") && it in context.changedSourceFiles }
+        // Seed declarations from every changed file before final call materialization. The parser
+        // writes deterministic keys, so the final pass overwrites equivalent symbol/reference facts
+        // while letting caller files resolve parameter names from callees later in source order.
+        javaFiles.forEach { relativePath ->
+            parse(relativePath, context.readSource(relativePath), store)
+        }
         javaFiles.forEachIndexed { index, relativePath ->
             context.reportFileProgress(index + 1, javaFiles.size, relativePath)
             parse(relativePath, context.readSource(relativePath), store)
@@ -140,7 +146,10 @@ internal class JavaSourceProducer : IndexProducer {
                 }
             if (name.isNotBlank()) {
                 symbol(fqn, name, classKind(node.kind), node, ownerFqn = owner)
-                if (node.members.none { it is MethodTree && it.name.contentEquals("<init>") }) {
+                if (
+                    node.kind == Tree.Kind.CLASS &&
+                        node.members.none { it is MethodTree && it.name.contentEquals("<init>") }
+                ) {
                     symbol(
                         fqn = "$fqn#<init>",
                         name = name,

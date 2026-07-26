@@ -255,9 +255,11 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                             retryable = false,
                         )
                     }
+                    val sharedGeneration = currentPublishedGenerationId()
                     val current =
-                        published
+                        published?.takeIf { it.generation == sharedGeneration }
                             ?: restorePublishedGeneration()
+                            ?: published
                             ?: throw failure(
                                 category = IndexFailureCategory.INDEX_NOT_FOUND,
                                 code = "index_not_found",
@@ -386,6 +388,20 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
             )
         ContentAddressedPackCache(cacheRoot).materializeDirectory(packKey, destination)
         return PublishedStore(path = destination, created = !alreadyMaterialized)
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    private fun currentPublishedGenerationId(): WorkspaceGenerationId? {
+        val manifest =
+            WorkspaceGenerationManifestStore(
+                    InProcessCacheLayout.cacheRoot(),
+                    InProcessCacheLayout.workspaceId(workspace),
+                )
+                .current() ?: return null
+        return manifest
+            .takeIf { it.basicFactSchemaVersion == BASIC_FACT_SCHEMA_VERSION }
+            ?.generation
+            ?.let(WorkspaceGenerationId::of)
     }
 
     @OptIn(IndexinoInternalApi::class)
