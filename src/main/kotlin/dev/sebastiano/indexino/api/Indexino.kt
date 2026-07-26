@@ -68,21 +68,7 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
     @OptIn(IndexinoInternalApi::class)
     public suspend fun refresh(request: RefreshRequest): RefreshHandle {
         ensureOpen()
-        if (
-            request.scope.buildSystem == BuildSystem.BAZEL && !request.scope.includesDependencies
-        ) {
-            // BazelTopology currently always expands deps(); honouring includeDeps=false would
-            // silently flip CLI defaults. Until that topology work lands, require an explicit
-            // includingDependencies() so the facade does not pretend target-only scopes work.
-            throw failure(
-                category = IndexFailureCategory.INVALID_REQUEST,
-                code = "bazel_dependencies_required",
-                message =
-                    "Bazel scopes always include dependencies in S1; call " +
-                        "IndexScope.bazel(target).includingDependencies()",
-                retryable = false,
-            )
-        }
+        requireSupportedScope(request.scope)
         val refreshId = RefreshId.of(UUID.randomUUID().toString())
         val applications =
             request.plugins.map { plugin ->
@@ -120,42 +106,7 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                     )
             val revision = manifest.toWorkspaceRevision()
             val generation = manifest.toGenerationId(revision)
-            // Optional optimisation only — the under-lock check below remains load-bearing.
-            if (closed.get()) {
-                throw failure(
-                    category = IndexFailureCategory.CLOSED,
-                    code = "client_closed",
-                    message = "Indexino client is closed",
-                    retryable = false,
-                )
-            }
-            val publishedStore = publishGenerationStore(manifest.commit, generation)
-            afterPublishGenerationStoreForTests?.invoke()
-            synchronized(generationLock) {
-                // Mirror snapshot(): close may have raced during the long index+copy while
-                // generationLock was free. Never publish onto a closed client (CAS close will not
-                // run again to reclaim this copy).
-                if (closed.get()) {
-                    // Undo exactly what this publish did: delete only a directory we created.
-                    if (publishedStore.created) {
-                        publishedStore.path.parent.toFile().deleteRecursively()
-                    }
-                    throw failure(
-                        category = IndexFailureCategory.CLOSED,
-                        code = "client_closed",
-                        message = "Indexino client is closed",
-                        retryable = false,
-                    )
-                }
-                generationStores[generation] = publishedStore.path
-                published =
-                    PublishedGeneration(
-                        storePath = publishedStore.path,
-                        revision = revision,
-                        generation = generation,
-                    )
-                reclaimUnpinnedGenerations()
-            }
+            publishGenerationOrAbortIfClosed(manifest.commit, generation, revision)
             val changedFileCount = execution.changes?.changedFiles?.size ?: 0
             val removedFileCount = execution.changes?.deletedFiles?.size ?: 0
             val result =
@@ -179,6 +130,65 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                         ),
                 )
             return RefreshHandle(refreshId, result)
+        }
+    }
+
+    private fun requireSupportedScope(scope: IndexScope) {
+        if (scope.buildSystem == BuildSystem.BAZEL && !scope.includesDependencies) {
+            // BazelTopology currently always expands deps(); honouring includeDeps=false would
+            // silently flip CLI defaults. Until that topology work lands, require an explicit
+            // includingDependencies() so the facade does not pretend target-only scopes work.
+            throw failure(
+                category = IndexFailureCategory.INVALID_REQUEST,
+                code = "bazel_dependencies_required",
+                message =
+                    "Bazel scopes always include dependencies in S1; call " +
+                        "IndexScope.bazel(target).includingDependencies()",
+                retryable = false,
+            )
+        }
+    }
+
+    private fun publishGenerationOrAbortIfClosed(
+        commit: String,
+        generation: WorkspaceGenerationId,
+        revision: WorkspaceRevision,
+    ) {
+        // Optional optimisation only — the under-lock check below remains load-bearing.
+        if (closed.get()) {
+            throw failure(
+                category = IndexFailureCategory.CLOSED,
+                code = "client_closed",
+                message = "Indexino client is closed",
+                retryable = false,
+            )
+        }
+        val publishedStore = publishGenerationStore(commit, generation)
+        afterPublishGenerationStoreForTests?.invoke()
+        synchronized(generationLock) {
+            // Mirror snapshot(): close may have raced during the long index+copy while
+            // generationLock was free. Never publish onto a closed client (CAS close will not
+            // run again to reclaim this copy).
+            if (closed.get()) {
+                // Undo exactly what this publish did: delete only a directory we created.
+                if (publishedStore.created) {
+                    publishedStore.path.parent.toFile().deleteRecursively()
+                }
+                throw failure(
+                    category = IndexFailureCategory.CLOSED,
+                    code = "client_closed",
+                    message = "Indexino client is closed",
+                    retryable = false,
+                )
+            }
+            generationStores[generation] = publishedStore.path
+            published =
+                PublishedGeneration(
+                    storePath = publishedStore.path,
+                    revision = revision,
+                    generation = generation,
+                )
+            reclaimUnpinnedGenerations()
         }
     }
 
