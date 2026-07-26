@@ -9,9 +9,13 @@ internal object GitHeadResolver {
 
     fun resolve(workspaceRoot: Path): String {
         val process =
-            ProcessBuilder("git", "-C", workspaceRoot.toString(), "rev-parse", "HEAD")
-                .redirectErrorStream(true)
-                .start()
+            try {
+                ProcessBuilder("git", "-C", workspaceRoot.toString(), "rev-parse", "HEAD")
+                    .redirectErrorStream(true)
+                    .start()
+            } catch (_: java.io.IOException) {
+                return filesystemRevision(workspaceRoot)
+            }
         val output = process.inputStream.bufferedReader().readText().trim()
         return if (process.waitFor() == 0) output else filesystemRevision(workspaceRoot)
     }

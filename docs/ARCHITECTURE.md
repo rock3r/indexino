@@ -77,12 +77,11 @@ CLI then becomes an adapter over the coordinator. The coordinator must return th
 changes, and outcome used by the completed run; callers must not re-resolve `HEAD` or re-derive a
 result from mutable storage.
 
-Until S2 lands content-addressed packs, the S1 writer uses `legacy-store` and atomically copies each
-completed generation into per-client immutable Xodus storage
-(`legacy-store/clients/<client-id>/generations/...`) beneath that bridge for snapshots. Superseded
-copies are reclaimed after their last in-process snapshot closes. The O(index-size) copy preserves
-incremental indexing and the public snapshot-pinning contract without treating the bridge as the
-target storage design; S6 later shares generations with on-disk `refs/` instead of per-client copies.
+S2 publishes refresh output as immutable content-addressed packs with generation manifests and an
+atomic workspace `current` pointer. Mutable incremental writer state is confined to workspace
+`staging/in-process-writer`; each client atomically materializes a referenced pack into its own
+on-disk `refs/<client>/<generation>/store` snapshot directory. Snapshot pins reclaim only those
+client-owned refs after close, while shared packs are retained by manifest reachability and cache GC.
 
 The Maven Local `indexino` publication is dogfood-only until the S5 artifact split. Its generated
 library POM deliberately omits CLI-only Clikt, JNA, and `slf4j-nop`; Gradle Module Metadata is

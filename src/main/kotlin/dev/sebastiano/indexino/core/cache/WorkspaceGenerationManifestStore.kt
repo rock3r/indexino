@@ -9,6 +9,7 @@ import kotlinx.serialization.json.Json
 
 @Serializable
 internal data class WorkspaceGenerationManifest(
+    val basicFactSchemaVersion: Int = 1,
     val generation: String,
     val workspaceRevisionFingerprint: String,
     val originId: String,

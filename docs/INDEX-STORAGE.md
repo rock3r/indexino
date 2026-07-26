@@ -122,20 +122,20 @@ Definitions remain location-qualified so overloads and duplicate configurations 
 CLI-only operators: `indexino cache status|gc|forget` and `daemon stop --purge`. Explicit
 last-used in the registry (not filesystem `atime`). GC grace window + re-verify before unlink.
 
-## Transitional implementation note
+## S2 implementation layout
 
-S1 writes through the existing commit-addressed Xodus layout beneath
-`workspaces/<workspace-id>/legacy-store/`, then atomically copies each completed generation to
-`legacy-store/clients/<client-id>/generations/<generation-id>/store/` so open snapshots retain
-immutable backing data. Copies are **per client instance** in S1: in-process refcounts reclaim only
-directories that client created, which prevents an uncoordinated peer from deleting a store another
-client still pins. S6 replaces this with shared generations plus on-disk `refs/`. Superseded copies
-are deleted when their last in-process snapshot closes. The full copy preserves incremental indexing
-but costs O(index size) per publish; it is an explicit S1 trade-off, not the large-repository design.
-These are user-local production bridges, not the product pack layout and not temporary test stores.
-S2 removes `legacy-store` as one unit and replaces it with generation manifests, reference tracking,
-and content-addressed packs. Do **not** extend `<project>/.indexino/index/<commit>/`; new features
-must assume user-local composite storage.
+Refresh writes mutable incremental output only beneath
+`workspaces/<workspace-id>/staging/in-process-writer/`. On a completed refresh, indexino installs an
+immutable content-addressed pack in `chunks/<ab>/<cd>/<content-key>`, writes a generation manifest
+under `workspaces/<workspace-id>/generations/<generation-id>/manifest.json`, then atomically updates
+that workspace's `current` pointer. The manifest records the basic-fact schema coordinate, revision
+identity, and pack keys.
+
+Each client materializes a referenced immutable pack atomically into its own
+`workspaces/<workspace-id>/refs/<client-id>/<generation-id>/store/` directory before opening a
+snapshot. Snapshot pins retain those caller-owned refs until close; shared packs remain immutable and
+are reclaimed only by reachability/age/quota GC. There is no runtime `legacy-store` layout. Do **not**
+extend `<project>/.indexino/index/<commit>/`; new features must assume user-local composite storage.
 
 ## Deprecated / rejected paths
 

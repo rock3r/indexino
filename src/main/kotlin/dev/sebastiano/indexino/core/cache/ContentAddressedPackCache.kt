@@ -12,7 +12,7 @@ import java.util.zip.ZipOutputStream
 
 /** Installs immutable analysis packs under the cache-root two-level content-key fanout. */
 internal class ContentAddressedPackCache(private val cacheRoot: Path) {
-    fun installDirectory(directory: Path): String {
+    fun installDirectory(directory: Path, basicFactSchemaVersion: Int = 1): String {
         val entries =
             Files.walk(directory).use { paths ->
                 paths
@@ -23,7 +23,7 @@ internal class ContentAddressedPackCache(private val cacheRoot: Path) {
                     .sorted { left, right -> left.first.compareTo(right.first) }
                     .toList()
             }
-        val contentKey = contentKey(entries)
+        val contentKey = contentKey(entries, basicFactSchemaVersion)
         val destination = packPath(contentKey)
         if (Files.isRegularFile(destination)) return contentKey
 
@@ -98,8 +98,10 @@ internal class ContentAddressedPackCache(private val cacheRoot: Path) {
             .resolve(contentKey)
     }
 
-    private fun contentKey(entries: List<Pair<String, Path>>): String {
+    private fun contentKey(entries: List<Pair<String, Path>>, basicFactSchemaVersion: Int): String {
         val digest = MessageDigest.getInstance("SHA-256")
+        digest.update("basic-fact-schema:$basicFactSchemaVersion".toByteArray())
+        digest.update(0)
         entries.forEach { (relativePath, path) ->
             digest.update(relativePath.toByteArray())
             digest.update(0)

@@ -30,6 +30,8 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
+private const val BASIC_FACT_SCHEMA_VERSION = 1
+
 @Suppress("TooManyFunctions")
 public class Indexino private constructor(private val workspace: Path) : AutoCloseable {
     private val closed = AtomicBoolean()
@@ -349,6 +351,7 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                 // BasicFactSchemaVersion joins these inputs when the S2 generation manifest lands.
                 listOf(
                         revision.fingerprint,
+                        BASIC_FACT_SCHEMA_VERSION.toString(),
                         indexerVersion,
                         applications.sorted().joinToString("\u0001"),
                     )
@@ -370,10 +373,12 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         val source =
             IndexPathResolver(workspace, storeRootOverride = storeRoot).resolveBaseStore(commit)
         val cacheRoot = InProcessCacheLayout.cacheRoot()
-        val packKey = ContentAddressedPackCache(cacheRoot).installDirectory(source)
+        val packKey =
+            ContentAddressedPackCache(cacheRoot).installDirectory(source, BASIC_FACT_SCHEMA_VERSION)
         WorkspaceGenerationManifestStore(cacheRoot, InProcessCacheLayout.workspaceId(workspace))
             .publish(
                 WorkspaceGenerationManifest(
+                    basicFactSchemaVersion = BASIC_FACT_SCHEMA_VERSION,
                     generation = generation.value,
                     workspaceRevisionFingerprint = revision.fingerprint,
                     originId = revision.origins.single().originId.value,
