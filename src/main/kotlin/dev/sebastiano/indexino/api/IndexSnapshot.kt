@@ -2,14 +2,18 @@
 
 package dev.sebastiano.indexino.api
 
+import dev.sebastiano.indexino.core.plugin.StorePluginFactView
 import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
+import dev.sebastiano.indexino.engine.PluginRegistry
 import dev.sebastiano.indexino.model.BasicFactQueries
 import dev.sebastiano.indexino.model.BasicFactSchemaVersion
 import dev.sebastiano.indexino.model.CallQuery
 import dev.sebastiano.indexino.model.CallSite
+import dev.sebastiano.indexino.model.CheckRequest
+import dev.sebastiano.indexino.model.Finding
 import dev.sebastiano.indexino.model.IndexFailureCategory
 import dev.sebastiano.indexino.model.IndexinoInternalApi
 import dev.sebastiano.indexino.model.NameMatchMode
@@ -23,7 +27,9 @@ import dev.sebastiano.indexino.model.SymbolId
 import dev.sebastiano.indexino.model.SymbolQuery
 import dev.sebastiano.indexino.model.WorkspaceGenerationId
 import dev.sebastiano.indexino.model.WorkspaceRevision
+import dev.sebastiano.indexino.plugin.api.CheckContextV1
 import java.util.PriorityQueue
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 public class IndexSnapshot
@@ -34,9 +40,11 @@ private constructor(
     override val basicFactSchemaVersion: BasicFactSchemaVersion = BasicFactSchemaVersion.of(1),
     public val freshnessAtAcquisition: SnapshotFreshness,
     private val onClose: () -> Unit,
+    private val pluginRegistry: PluginRegistry,
 ) : BasicFactQueries, AutoCloseable {
     private val closed = AtomicBoolean()
     private val queries = IndexSnapshotQueries(generation)
+    private val checkResults = ConcurrentHashMap<CheckRequest, List<Finding>>()
 
     override suspend fun findSymbols(query: SymbolQuery, options: QueryOptions): QueryPage<Symbol> {
         ensureOpen()
@@ -157,6 +165,47 @@ private constructor(
                 },
             )
         }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    public suspend fun runCheck(request: CheckRequest, options: QueryOptions): QueryPage<Finding> {
+        ensureOpen()
+        validateQueryOptions(options)
+        val findings =
+            checkResults[request]
+                ?: run {
+                    val registered =
+                        pluginRegistry.checks.firstOrNull {
+                            it.pluginId == request.pluginId && it.check.id == request.checkId
+                        }
+                            ?: return QueryPage(
+                                items = emptyList(),
+                                offset = options.offset,
+                                limit = options.limit,
+                                hasMore = false,
+                                nextCursor = null,
+                                totalCount = 0,
+                            )
+                    val computed =
+                        registered.check.run(
+                            CheckContextV1(
+                                queries = this,
+                                facts = StorePluginFactView(store, request.pluginId.value),
+                                active = { !closed.get() },
+                            )
+                        )
+                    checkResults.putIfAbsent(request, computed) ?: computed
+                }
+        val start = options.offset.coerceAtMost(findings.size)
+        val end = (start + options.limit).coerceAtMost(findings.size)
+        return QueryPage(
+            items = findings.subList(start, end),
+            offset = options.offset,
+            limit = options.limit,
+            hasMore = end < findings.size,
+            nextCursor = null,
+            totalCount = findings.size,
+        )
     }
 
     override fun close() {
@@ -516,6 +565,7 @@ private constructor(
                 generation = generation,
                 freshnessAtAcquisition = freshnessAtAcquisition,
                 onClose = onClose,
+                pluginRegistry = PluginRegistry.load(IndexSnapshot::class.java.classLoader),
             )
     }
 }

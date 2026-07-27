@@ -7,6 +7,8 @@ import dev.sebastiano.indexino.core.manifest.ManifestFreshness
 import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
+import dev.sebastiano.indexino.engine.PluginAnalyzerRunner
+import dev.sebastiano.indexino.engine.PluginRegistry
 import dev.sebastiano.indexino.producer.FileHashProducer
 import dev.sebastiano.indexino.producer.IndexBuildContext
 import dev.sebastiano.indexino.producer.IndexBuildProgressReporter
@@ -153,6 +155,8 @@ internal class IndexBuildRunner(
                 producer.produce(context.copy(activePhase = producer.id), store)
                 machineProgress?.phaseCompleted(producer.id, phaseTotal)
             }
+            PluginAnalyzerRunner(PluginRegistry.load(javaClass.classLoader))
+                .analyze(context, applications.toSet())
             val manifest =
                 IndexManifest(
                     commit = commit,

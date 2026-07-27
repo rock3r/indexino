@@ -8,7 +8,6 @@ internal object ProducerRegistry {
         register(dev.sebastiano.indexino.producer.java.JavaSourceProducer())
         register(dev.sebastiano.indexino.producer.kotlinpsi.KotlinPsiSymbolProducer())
         register(dev.sebastiano.indexino.producer.xml.XmlResourceProducer())
-        register(dev.sebastiano.indexino.producer.selectioncontext.SelectionContextProducer())
     }
 
     fun register(producer: IndexProducer) {

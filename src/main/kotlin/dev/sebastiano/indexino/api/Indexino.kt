@@ -14,6 +14,7 @@ import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.core.store.IndexStoreOpener
 import dev.sebastiano.indexino.engine.InFlightRefresh
 import dev.sebastiano.indexino.engine.IndexingCoordinator
+import dev.sebastiano.indexino.engine.PluginRegistry
 import dev.sebastiano.indexino.model.IndexFailureCategory
 import dev.sebastiano.indexino.model.IndexinoInternalApi
 import dev.sebastiano.indexino.model.RefreshId
@@ -221,19 +222,20 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         }
     }
 
-    private fun applicationsFor(request: RefreshRequest): List<String> =
-        request.plugins.map { plugin ->
-            when (plugin.value) {
-                "dev.sebastiano.selection-context" -> "selection-context"
-                else ->
-                    throw failure(
-                        category = IndexFailureCategory.INVALID_REQUEST,
-                        code = "unknown_plugin",
-                        message = "Plugin ${plugin.value} is not loaded",
-                        retryable = false,
-                    )
+    private fun applicationsFor(request: RefreshRequest): List<String> {
+        val registry = PluginRegistry.load(Indexino::class.java.classLoader)
+        return request.plugins.map { plugin ->
+            if (registry.descriptor(plugin) == null) {
+                throw failure(
+                    category = IndexFailureCategory.INVALID_REQUEST,
+                    code = "unknown_plugin",
+                    message = "Plugin ${plugin.value} is not loaded",
+                    retryable = false,
+                )
             }
+            plugin.value
         }
+    }
 
     private fun requireSupportedScope(scope: IndexScope) {
         if (scope.buildSystem == BuildSystem.BAZEL && !scope.includesDependencies) {

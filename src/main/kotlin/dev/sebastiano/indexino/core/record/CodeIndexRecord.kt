@@ -81,20 +81,16 @@ internal data class CallSiteRecord(
 ) : CodeIndexRecord
 
 @Serializable
-internal data class SelectionContainerRef(val file: String, val line: Int, val function: String)
-
-@Serializable
-internal data class DisableSelectionRef(val file: String, val line: Int, val function: String)
-
-@Serializable
-@SerialName("compose_selection_site")
-internal data class ComposeSelectionSiteRecord(
-    val callee: String,
-    val inSelectionContainer: Boolean,
-    val selectionContainerCount: Int,
-    val excludedByDisableSelection: Boolean,
-    val selectionContainers: List<SelectionContainerRef>,
-    val disableSelection: DisableSelectionRef? = null,
-    val confidence: String = "lexical",
-    val indexedFromCommit: String? = null,
+@SerialName("plugin_fact")
+internal data class PluginFactRecord(
+    val pluginId: String,
+    val relativeFile: String,
+    val factKey: String,
+    val rangeStartLine: Int? = null,
+    val rangeStartColumn: Int? = null,
+    val rangeStartOffset: Int? = null,
+    val rangeEndLine: Int? = null,
+    val rangeEndColumn: Int? = null,
+    val rangeEndOffset: Int? = null,
+    val encodedValue: String,
 ) : CodeIndexRecord

@@ -86,6 +86,8 @@ val metalava by configurations.creating
 dependencies {
     detektPlugins(project(":detekt-plugin"))
     api(project(":indexino-model"))
+    implementation(project(":indexino-plugin-api"))
+    implementation(project(":indexino-selection-context"))
     api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
     implementation(libs.kotlin.compiler.embeddable)
     implementation(libs.clikt)
@@ -96,6 +98,7 @@ dependencies {
     metalava(libs.metalava)
 
     testImplementation(kotlin("test"))
+    testImplementation(project(":indexino-selection-context"))
     testImplementation(gradleTestKit())
 }
 
@@ -579,20 +582,6 @@ tasks.check {
         "ktfmtCheckTest",
         metalavaCheckSignature,
     )
-}
-
-tasks.register<JavaExec>("smokeSelectionWalker") {
-    group = "verification"
-    description = "Run SelectionWalker against intellij-community (pass path as first arg)"
-    classpath = sourceSets["main"].runtimeClasspath
-    mainClass.set("dev.sebastiano.indexino.smoke.SelectionWalkerSmokeKt")
-    systemProperty("idea.home.path", ideaHomeDir.absolutePath)
-    systemProperty("idea.config.path", ideaHomeDir.resolve("config").absolutePath)
-    systemProperty("idea.system.path", ideaHomeDir.resolve("system").absolutePath)
-    systemProperty("idea.plugins.path", ideaHomeDir.resolve("plugins").absolutePath)
-    if (project.hasProperty("intellijCommunityPath")) {
-        args = listOf(project.property("intellijCommunityPath") as String)
-    }
 }
 
 val ideaHomeDir =

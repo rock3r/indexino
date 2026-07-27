@@ -107,7 +107,34 @@ package dev.sebastiano.indexino.model {
     method public dev.sebastiano.indexino.model.CallSiteId of(String value);
   }
 
+  public final class CheckRequest {
+    method @InaccessibleFromKotlin public String getCheckId();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.PluginId getPluginId();
+    method public static dev.sebastiano.indexino.model.CheckRequest of(dev.sebastiano.indexino.model.PluginId pluginId, String checkId);
+    property public String checkId;
+    property public dev.sebastiano.indexino.model.PluginId pluginId;
+    field public static final dev.sebastiano.indexino.model.CheckRequest.Companion Companion;
+  }
+
+  public static final class CheckRequest.Companion {
+    method public dev.sebastiano.indexino.model.CheckRequest of(dev.sebastiano.indexino.model.PluginId pluginId, String checkId);
+  }
+
   @kotlin.annotation.Retention(kotlin.annotation.AnnotationRetention.BINARY) @kotlin.annotation.Target(allowedTargets=kotlin.annotation.AnnotationTarget.PROPERTY) public @interface ExcludeFromEquality {
+  }
+
+  public final class Finding {
+    ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public Finding(dev.sebastiano.indexino.model.PluginId plugin, String checkId, String message, dev.sebastiano.indexino.model.SourceRange? range, java.util.Map<java.lang.String,java.lang.String> properties);
+    method @InaccessibleFromKotlin public String getCheckId();
+    method @InaccessibleFromKotlin public String getMessage();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.PluginId getPlugin();
+    method @InaccessibleFromKotlin public java.util.Map<java.lang.String,java.lang.String> getProperties();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceRange? getRange();
+    property public String checkId;
+    property public String message;
+    property public dev.sebastiano.indexino.model.PluginId plugin;
+    property public java.util.Map<java.lang.String,java.lang.String> properties;
+    property public dev.sebastiano.indexino.model.SourceRange? range;
   }
 
   public final class IndexFailure {
@@ -165,6 +192,95 @@ package dev.sebastiano.indexino.model {
     enum_constant public static final dev.sebastiano.indexino.model.NameMatchMode EXACT;
     enum_constant public static final dev.sebastiano.indexino.model.NameMatchMode FQN;
     enum_constant public static final dev.sebastiano.indexino.model.NameMatchMode PREFIX;
+  }
+
+  public final class PluginFactEntry {
+    ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public PluginFactEntry(String key, dev.sebastiano.indexino.model.SourceRange? range, dev.sebastiano.indexino.model.PluginFactValue value);
+    method @InaccessibleFromKotlin public String getKey();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceRange? getRange();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.PluginFactValue getValue();
+    property public String key;
+    property public dev.sebastiano.indexino.model.SourceRange? range;
+    property public dev.sebastiano.indexino.model.PluginFactValue value;
+  }
+
+  public final class PluginFactSchemaVersion {
+    method @InaccessibleFromKotlin public int getValue();
+    method public static dev.sebastiano.indexino.model.PluginFactSchemaVersion of(int value);
+    property public int value;
+    field public static final dev.sebastiano.indexino.model.PluginFactSchemaVersion.Companion Companion;
+  }
+
+  public static final class PluginFactSchemaVersion.Companion {
+    method public dev.sebastiano.indexino.model.PluginFactSchemaVersion of(int value);
+  }
+
+  public sealed exhaustive interface PluginFactValue {
+    field public static final dev.sebastiano.indexino.model.PluginFactValue.Companion Companion;
+    field public static final int MAX_STRUCT_FIELDS = 64; // 0x40
+    field public static final int MAX_TEXT_LIST_SIZE = 256; // 0x100
+  }
+
+  public static final class PluginFactValue.Bool implements dev.sebastiano.indexino.model.PluginFactValue {
+    method @InaccessibleFromKotlin public boolean getValue();
+    method public static dev.sebastiano.indexino.model.PluginFactValue.Bool of(boolean value);
+    property public boolean value;
+    field public static final dev.sebastiano.indexino.model.PluginFactValue.Bool.Companion Companion;
+  }
+
+  public static final class PluginFactValue.Bool.Companion {
+    method public dev.sebastiano.indexino.model.PluginFactValue.Bool of(boolean value);
+  }
+
+  public static final class PluginFactValue.Companion {
+    property public static int MAX_STRUCT_FIELDS;
+    property public static int MAX_TEXT_LIST_SIZE;
+    field public static final int MAX_STRUCT_FIELDS = 64; // 0x40
+    field public static final int MAX_TEXT_LIST_SIZE = 256; // 0x100
+  }
+
+  public static final class PluginFactValue.Integer implements dev.sebastiano.indexino.model.PluginFactValue {
+    method @InaccessibleFromKotlin public long getValue();
+    method public static dev.sebastiano.indexino.model.PluginFactValue.Integer of(long value);
+    property public long value;
+    field public static final dev.sebastiano.indexino.model.PluginFactValue.Integer.Companion Companion;
+  }
+
+  public static final class PluginFactValue.Integer.Companion {
+    method public dev.sebastiano.indexino.model.PluginFactValue.Integer of(long value);
+  }
+
+  public static final class PluginFactValue.Struct implements dev.sebastiano.indexino.model.PluginFactValue {
+    method @InaccessibleFromKotlin public java.util.Map<java.lang.String,dev.sebastiano.indexino.model.PluginFactValue> getFields();
+    method public static dev.sebastiano.indexino.model.PluginFactValue.Struct of(java.util.Map<java.lang.String,? extends dev.sebastiano.indexino.model.PluginFactValue> fields);
+    property public java.util.Map<java.lang.String,dev.sebastiano.indexino.model.PluginFactValue> fields;
+    field public static final dev.sebastiano.indexino.model.PluginFactValue.Struct.Companion Companion;
+  }
+
+  public static final class PluginFactValue.Struct.Companion {
+    method public dev.sebastiano.indexino.model.PluginFactValue.Struct of(java.util.Map<java.lang.String,? extends dev.sebastiano.indexino.model.PluginFactValue> fields);
+  }
+
+  public static final class PluginFactValue.Text implements dev.sebastiano.indexino.model.PluginFactValue {
+    method @InaccessibleFromKotlin public String getValue();
+    method public static dev.sebastiano.indexino.model.PluginFactValue.Text of(String value);
+    property public String value;
+    field public static final dev.sebastiano.indexino.model.PluginFactValue.Text.Companion Companion;
+  }
+
+  public static final class PluginFactValue.Text.Companion {
+    method public dev.sebastiano.indexino.model.PluginFactValue.Text of(String value);
+  }
+
+  public static final class PluginFactValue.TextList implements dev.sebastiano.indexino.model.PluginFactValue {
+    method @InaccessibleFromKotlin public java.util.List<java.lang.String> getValues();
+    method public static dev.sebastiano.indexino.model.PluginFactValue.TextList of(java.util.List<java.lang.String> values);
+    property public java.util.List<java.lang.String> values;
+    field public static final dev.sebastiano.indexino.model.PluginFactValue.TextList.Companion Companion;
+  }
+
+  public static final class PluginFactValue.TextList.Companion {
+    method public dev.sebastiano.indexino.model.PluginFactValue.TextList of(java.util.List<java.lang.String> values);
   }
 
   public final class PluginId {

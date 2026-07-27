@@ -69,7 +69,7 @@ Build or refresh the persistent base index for a scope. Product mapping:
 indexino index \
   --project /path/to/monorepo \
   --bazel-target //plugins/foo/ui:ui \
-  [--applications selection-context] \
+  [--applications dev.sebastiano.selection-context] \
   [--plugin /path/to/extra.jar] \
   [--no-auto-refresh]
 ```
@@ -82,7 +82,7 @@ indexino index \
   --build-system gradle \
   --gradle-module :plugin:ui \
   [--include-deps] \
-  [--applications selection-context]
+  [--applications dev.sebastiano.selection-context]
 ```
 
 When `--build-system auto` (default), Bazel is chosen if `MODULE.bazel` / `WORKSPACE` exists;
@@ -275,27 +275,20 @@ indexino resolve-resource \
 
 ### `query`
 
-Read precomputed facts from the store (fast).
+Run a loaded plugin check against the published snapshot. The CLI passes the plugin ID and check ID
+to `IndexSnapshot.runCheck`; plugin facts remain private, namespaced storage details.
 
 ```bash
-# Application: selection-context
+# selection-context's interactive-in-selection check
 indexino query \
   --project /path/to/monorepo \
-  --application selection-context \
-  --preset interactive-in-sc \
+  --application dev.sebastiano.selection-context \
+  --preset interactive-in-selection \
   --format jsonl
-
-# Point query (single site)
-indexino query \
-  --project /path/to/monorepo \
-  --application selection-context \
-  --file plugins/foo/ui/src/.../Panel.kt \
-  --line 142 \
-  [--column 8]
 ```
 
-Point queries read `compose:selection-site:{file}:{line}:{column}` from the store for the
-current git commit. When multiple call sites share a line, pass `--column` to disambiguate.
+The `--application` value is a plugin ID and `--preset` is its plugin-defined check ID. Point
+queries and direct plugin-fact reads are intentionally not a core CLI contract.
 
 ## Common Flags
 
@@ -308,11 +301,8 @@ current git commit. When multiple call sites share a line, pass `--column` to di
 | `--include-deps` | Include dependency target/module sources |
 | `--progress-format` | `index` / lookup commands: `text` (default) or JSONL machine progress; `index` uses stdout and lookups use stderr |
 | `--format` | `jsonl`, `json`, `text` |
-| `--application` | Query plugin, e.g. `selection-context` |
-| `--preset` | Application preset, e.g. `interactive-in-sc` |
-| `--file` | Point query: relative source path |
-| `--line` | Point query: 1-based line number |
-| `--column` | Point query: optional 1-based column disambiguator |
+| `--application` | Plugin ID, e.g. `dev.sebastiano.selection-context` |
+| `--preset` | Plugin-defined check ID, e.g. `interactive-in-selection` |
 | `--session-id` | Optional session delta overlay for query |
 
 ## JSONL Row Schema
@@ -321,43 +311,16 @@ One JSON object per line:
 
 ```json
 {
-  "target": "//plugins/foo/ui:ui",
-  "file": "plugins/foo/ui/src/.../Panel.kt",
-  "line": 142,
-  "column": 8,
-  "callee": "ActionButton",
-  "inSelectionContainer": true,
-  "selectionContainerCount": 1,
-  "excludedByDisableSelection": false,
-  "selectionContainers": [
-    {"file": "plugins/foo/ui/src/.../Panel.kt", "line": 138, "function": "ToolWindowPanel"}
-  ],
-  "disableSelection": null,
-  "confidence": "lexical",
-  "topology": "bazel-query"
+  "plugin": "dev.sebastiano.selection-context",
+  "checkId": "interactive-in-selection",
+  "message": "ActionButton is interactive inside SelectionContainer",
+  "range": {"file": "plugins/foo/ui/src/.../Panel.kt", "line": 142, "column": 8},
+  "properties": {"callee": "ActionButton", "factKey": "selection-site:142:8"}
 }
 ```
 
-Gradle-scoped indexes add `"module": ":plugin:ui"` when `topology` starts with `gradle`.
-
-Field notes:
-
-- `selectionContainers` — innermost first
-- `excludedByDisableSelection` — `true` when `DisableSelection` sits between the call site and
-  the nearest ancestor SC
-- `confidence` — `lexical` | `caller-chain` (future)
-- `topology` — `bazel-query` | `build-parse` | `gradle-parse` | `idea`
-
-## Presets (initial)
-
-| Preset | Intent |
-|--------|--------|
-| `interactive-in-sc` | Interactive composables inside SC without `DisableSelection` |
-| `nested-selection-container` | `selectionContainerCount > 1` |
-| `all-call-sites` | Every `@Composable` call site with context (no policy filter) |
-
-Preset callee lists live in `config/presets/` (e.g. `interactive-in-sc.json`); the CLI applies
-structural filters only unless `--preset-config` points at a JSON file.
+Finding fields are stable model values. Plugin-specific fields belong in `properties`; callers must
+not depend on the plugin's durable fact layout.
 
 ## Exit Codes
 
