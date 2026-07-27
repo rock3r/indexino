@@ -55,16 +55,36 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                             )
                         }
                     }
+                    registry.postProcessors
+                        .filter {
+                            it.pluginId.value == pluginId &&
+                                it.processor.level == PostProcessLevelV1.SHARD
+                        }
+                        .forEach { registered ->
+                            runBlocking {
+                                registered.processor.process(
+                                    PostProcessContextV1(
+                                        facts =
+                                            StorePluginFactSink(
+                                                context.store,
+                                                pluginId,
+                                                relativeFile,
+                                            ),
+                                        active = { true },
+                                    )
+                                )
+                            }
+                        }
                 }
             } finally {
                 analyzers.forEach { (it.analyzer as? AutoCloseable)?.close() }
             }
             registry.postProcessors
-                .filter { it.pluginId.value == pluginId }
+                .filter {
+                    it.pluginId.value == pluginId &&
+                        it.processor.level == PostProcessLevelV1.COMPOSITE
+                }
                 .forEach { registered ->
-                    check(registered.processor.level == PostProcessLevelV1.COMPOSITE) {
-                        "Shard post-processors are not supported by the current build runner"
-                    }
                     runBlocking {
                         registered.processor.process(
                             PostProcessContextV1(
