@@ -7,6 +7,9 @@ import dev.sebastiano.indexino.core.manifest.ManifestFreshness
 import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
+import dev.sebastiano.indexino.engine.PluginAnalyzerRunner
+import dev.sebastiano.indexino.engine.PluginRegistry
+import dev.sebastiano.indexino.model.PluginId
 import dev.sebastiano.indexino.producer.FileHashProducer
 import dev.sebastiano.indexino.producer.IndexBuildContext
 import dev.sebastiano.indexino.producer.IndexBuildProgressReporter
@@ -69,6 +72,17 @@ internal class IndexBuildRunner(
         }
 
         val sourceFiles = topologyResult.sourceFiles
+        val pluginRegistry = PluginRegistry.load(javaClass.classLoader)
+        val unknownApplications = applications.filter {
+            PluginId.of(it) !in pluginRegistry.pluginIds()
+        }
+        if (unknownApplications.isNotEmpty()) {
+            val message = "unknown application(s): ${unknownApplications.joinToString()}"
+            progress(message)
+            machineProgress?.failed(CliExitCodes.INVALID_ARGUMENTS, message)
+            return CliExitCodes.INVALID_ARGUMENTS
+        }
+        val pluginCoordinates = pluginRegistry.selectedCoordinates(applications)
         machineProgress?.discoveryCompleted(sourceFiles.size)
         val commit = GitHeadResolver.resolve(project)
         val resolver = IndexPathResolver(project, storeRootOverride = storeRootOverride)
@@ -81,6 +95,7 @@ internal class IndexBuildRunner(
                 includeDeps = topologyResult.includeDeps,
                 sourcesContentHash = previewHash,
                 applications = applications,
+                pluginCoordinates = pluginCoordinates,
             )
         val existingManifest = manifestPath.takeIf { it.exists() }?.let(ManifestIO::read)
         if (existingManifest != null && ManifestFreshness.isFresh(existingManifest, criteria)) {
@@ -99,6 +114,8 @@ internal class IndexBuildRunner(
             includeDeps = topologyResult.includeDeps,
             sourceFiles = sourceFiles,
             previewHash = previewHash,
+            pluginRegistry = pluginRegistry,
+            pluginCoordinates = pluginCoordinates,
             forceFullRebuild =
                 existingManifest == null || existingManifest.indexerVersion != Version.NAME,
         )
@@ -128,9 +145,12 @@ internal class IndexBuildRunner(
         includeDeps: Boolean,
         sourceFiles: List<String>,
         previewHash: String,
+        pluginRegistry: PluginRegistry,
+        pluginCoordinates: Map<String, String>,
         forceFullRebuild: Boolean,
     ) {
         val store = XodusCodeIndexStore.open(resolver.resolveBaseStore(commit))
+        val previousRecords = store.prefixScan("").toList()
         try {
             val changes = detectChanges(store, sourceFiles, forceFullRebuild)
             latestChanges = changes
@@ -153,6 +173,7 @@ internal class IndexBuildRunner(
                 producer.produce(context.copy(activePhase = producer.id), store)
                 machineProgress?.phaseCompleted(producer.id, phaseTotal)
             }
+            PluginAnalyzerRunner(pluginRegistry).analyze(context, applications.toSet())
             val manifest =
                 IndexManifest(
                     commit = commit,
@@ -164,9 +185,14 @@ internal class IndexBuildRunner(
                     sourcesContentHash = previewHash,
                     builtAt = Instant.now().toString(),
                     applications = applications,
+                    pluginCoordinates = pluginCoordinates,
                 )
             ManifestIO.write(resolver.resolveManifest(commit), manifest)
             latestManifest = manifest
+        } catch (@Suppress("TooGenericExceptionCaught") failure: Throwable) {
+            store.prefixScan("").forEach { (key, _) -> store.delete(key) }
+            previousRecords.forEach { (key, record) -> store.put(key, record) }
+            throw failure
         } finally {
             store.close()
         }

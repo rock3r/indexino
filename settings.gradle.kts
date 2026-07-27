@@ -4,4 +4,8 @@ rootProject.name = "indexino"
 
 include(":indexino-model")
 
+include(":indexino-plugin-api")
+
+include(":indexino-selection-context")
+
 include(":detekt-plugin")

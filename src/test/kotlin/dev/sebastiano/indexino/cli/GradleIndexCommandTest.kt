@@ -2,7 +2,7 @@ package dev.sebastiano.indexino.cli
 
 import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
-import dev.sebastiano.indexino.core.record.ComposeSelectionSiteRecord
+import dev.sebastiano.indexino.core.record.PluginFactRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.topology.BuildSystem
 import dev.sebastiano.indexino.topology.TopologyRequest
@@ -36,7 +36,7 @@ class GradleIndexCommandTest {
                             gradleModule = ":ui",
                             includeDeps = false,
                         ),
-                    applications = listOf("selection-context"),
+                    applications = listOf("dev.sebastiano.selection-context"),
                 )
         assertEquals(0, exitCode)
 
@@ -51,11 +51,12 @@ class GradleIndexCommandTest {
                 readOnly = true,
             )
         try {
-            val sites = store.prefixScan("compose:selection-site:").toList()
-            assertTrue(sites.isNotEmpty())
-            val record = sites.first().second as ComposeSelectionSiteRecord
-            assertEquals("ActionButton", record.callee)
-            assertTrue(record.inSelectionContainer)
+            val facts =
+                store
+                    .prefixScan("plugin:dev.sebastiano.selection-context:")
+                    .map { it.second as PluginFactRecord }
+                    .toList()
+            assertTrue(facts.any { it.factKey.startsWith("selection-site:") })
         } finally {
             store.close()
         }

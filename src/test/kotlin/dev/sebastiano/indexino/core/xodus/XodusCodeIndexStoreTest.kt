@@ -1,9 +1,8 @@
 package dev.sebastiano.indexino.core.xodus
 
 import dev.sebastiano.indexino.core.key.CodeIndexKey
-import dev.sebastiano.indexino.core.record.ComposeSelectionSiteRecord
 import dev.sebastiano.indexino.core.record.MetaIndexerVersionRecord
-import dev.sebastiano.indexino.core.record.SelectionContainerRef
+import dev.sebastiano.indexino.core.record.PluginFactRecord
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
@@ -44,28 +43,32 @@ class XodusCodeIndexStoreTest {
 
     @Test
     fun `prefix scan returns keys in lexicographic order`() {
-        val prefix = "compose:selection-site:ui/Panel.kt:"
-        val key1 = CodeIndexKey.composeSelectionSite("ui/Panel.kt", 10, 1)
-        val key2 = CodeIndexKey.composeSelectionSite("ui/Panel.kt", 20, 1)
-        val keyOther = CodeIndexKey.composeSelectionSite("ui/Other.kt", 10, 1)
+        val pluginId = "dev.example.plugin"
+        val prefix = CodeIndexKey.pluginFactFilePrefix(pluginId, "ui/Panel.kt")
+        val key1 = CodeIndexKey.pluginFact(pluginId, "ui/Panel.kt", "site:10:1")
+        val key2 = CodeIndexKey.pluginFact(pluginId, "ui/Panel.kt", "site:20:1")
+        val keyOther = CodeIndexKey.pluginFact(pluginId, "ui/Other.kt", "site:10:1")
 
-        store.put(key2, composeRecord("Later"))
-        store.put(key1, composeRecord("Earlier"))
-        store.put(keyOther, composeRecord("Other"))
+        store.put(key2, pluginFact("Later"))
+        store.put(key1, pluginFact("Earlier"))
+        store.put(keyOther, pluginFact("Other"))
 
         val scanned = store.prefixScan(prefix).toList()
-        assertEquals(2, scanned.size)
         assertEquals(listOf(key1, key2), scanned.map { it.first })
-        assertEquals("Earlier", (scanned[0].second as ComposeSelectionSiteRecord).callee)
-        assertEquals("Later", (scanned[1].second as ComposeSelectionSiteRecord).callee)
+        assertEquals("Earlier", (scanned[0].second as PluginFactRecord).encodedValue)
+        assertEquals("Later", (scanned[1].second as PluginFactRecord).encodedValue)
     }
 
     @Test
-    fun `forEachPrefix stops without materializing the remaining cursor rows`() {
-        val prefix = "compose:selection-site:ui/Panel.kt:"
-        val first = CodeIndexKey.composeSelectionSite("ui/Panel.kt", 10, 1)
-        store.put(first, composeRecord("First"))
-        store.put(CodeIndexKey.composeSelectionSite("ui/Panel.kt", 20, 1), composeRecord("Second"))
+    fun `forEachPrefix stops without materializing remaining cursor rows`() {
+        val pluginId = "dev.example.plugin"
+        val prefix = CodeIndexKey.pluginFactFilePrefix(pluginId, "ui/Panel.kt")
+        val first = CodeIndexKey.pluginFact(pluginId, "ui/Panel.kt", "site:10:1")
+        store.put(first, pluginFact("First"))
+        store.put(
+            CodeIndexKey.pluginFact(pluginId, "ui/Panel.kt", "site:20:1"),
+            pluginFact("Second"),
+        )
 
         val visited = mutableListOf<CodeIndexKey>()
         store.forEachPrefix(prefix) { key, _ ->
@@ -76,13 +79,11 @@ class XodusCodeIndexStoreTest {
         assertEquals(listOf(first), visited)
     }
 
-    private fun composeRecord(callee: String): ComposeSelectionSiteRecord =
-        ComposeSelectionSiteRecord(
-            callee = callee,
-            inSelectionContainer = true,
-            selectionContainerCount = 1,
-            excludedByDisableSelection = false,
-            selectionContainers =
-                listOf(SelectionContainerRef(file = "ui/Panel.kt", line = 5, function = "Panel")),
+    private fun pluginFact(value: String): PluginFactRecord =
+        PluginFactRecord(
+            pluginId = "dev.example.plugin",
+            relativeFile = "ui/Panel.kt",
+            factKey = "site",
+            encodedValue = value,
         )
 }

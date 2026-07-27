@@ -71,6 +71,119 @@ class InProcessIndexinoTest {
     }
 
     @Test
+    fun `selection plugin persists ranged findings and pages memoized check results`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-selection-plugin-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        val indexino = Indexino.connectBlocking(workspace)
+        try {
+            runSuspend {
+                indexino
+                    .refresh(
+                        RefreshRequest.forScope(IndexScope.gradle(":ui"))
+                            .withPlugin(PluginId.of("dev.sebastiano.selection-context"))
+                    )
+                    .await()
+            }
+            runSuspend { indexino.snapshot() }
+                .use { snapshot ->
+                    val request =
+                        dev.sebastiano.indexino.model.CheckRequest.of(
+                            PluginId.of("dev.sebastiano.selection-context"),
+                            "interactive-in-selection",
+                        )
+                    val first = runSuspend {
+                        snapshot.runCheck(request, QueryOptions.page(limit = 1))
+                    }
+                    val second = runSuspend {
+                        snapshot.runCheck(request, QueryOptions.page(limit = 1, offset = 1))
+                    }
+                    assertEquals(1, first.items.size)
+                    assertEquals(first.totalCount, first.items.size + second.items.size)
+                    assertEquals("ActionButton", first.items.single().properties["callee"])
+                    assertEquals(
+                        "ui/src/main/kotlin/Panel.kt",
+                        first.items.single().range?.start?.file?.path,
+                    )
+                    assertTrue(first.items.single().range?.start?.line != null)
+                }
+        } finally {
+            indexino.close()
+            if (previousCacheDirectory == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheDirectory)
+        }
+    }
+
+    @Test
+    fun `plugins do not analyze unless selected for refresh`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-unselected-plugin-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        val indexino = Indexino.connectBlocking(workspace)
+        try {
+            runSuspend {
+                indexino.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui"))).await()
+            }
+            runSuspend { indexino.snapshot() }
+                .use { snapshot ->
+                    val findings = runSuspend {
+                        snapshot.runCheck(
+                            dev.sebastiano.indexino.model.CheckRequest.of(
+                                PluginId.of("dev.sebastiano.selection-context"),
+                                "interactive-in-selection",
+                            ),
+                            QueryOptions.page(limit = 10),
+                        )
+                    }
+                    assertTrue(findings.items.isEmpty())
+                }
+        } finally {
+            indexino.close()
+            if (previousCacheDirectory == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheDirectory)
+        }
+    }
+
+    @Test
+    fun `refresh removes plugin findings for deleted source files`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-deleted-plugin-fact-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        val indexino = Indexino.connectBlocking(workspace)
+        val request =
+            RefreshRequest.forScope(IndexScope.gradle(":ui"))
+                .withPlugin(PluginId.of("dev.sebastiano.selection-context"))
+        try {
+            runSuspend { indexino.refresh(request).await() }
+            Files.delete(workspace.resolve("ui/src/main/kotlin/Panel.kt"))
+            runSuspend { indexino.refresh(request).await() }
+            runSuspend { indexino.snapshot() }
+                .use { snapshot ->
+                    val findings = runSuspend {
+                        snapshot.runCheck(
+                            dev.sebastiano.indexino.model.CheckRequest.of(
+                                PluginId.of("dev.sebastiano.selection-context"),
+                                "interactive-in-selection",
+                            ),
+                            QueryOptions.page(limit = 10),
+                        )
+                    }
+                    assertTrue(findings.items.isEmpty())
+                }
+        } finally {
+            indexino.close()
+            if (previousCacheDirectory == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheDirectory)
+        }
+    }
+
+    @Test
     fun `stopping a refresh is idempotent and replays stopped terminal event`() {
         val workspace = createGitWorkspace()
         val cacheDirectory = createTempDirectory("indexino-stop-refresh-cache-")

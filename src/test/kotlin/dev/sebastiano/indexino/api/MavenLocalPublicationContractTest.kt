@@ -92,6 +92,8 @@ class MavenLocalPublicationContractTest {
                 .withProjectDir(projectDirectory)
                 .withArguments(
                     ":indexino-model:publishToMavenLocal",
+                    ":indexino-plugin-api:publishToMavenLocal",
+                    ":indexino-selection-context:publishToMavenLocal",
                     ":publishToMavenLocal",
                     "-Dmaven.repo.local=${localRepository.absolutePath}",
                     "--stacktrace",

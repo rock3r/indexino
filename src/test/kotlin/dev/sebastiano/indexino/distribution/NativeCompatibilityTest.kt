@@ -317,9 +317,9 @@ class NativeCompatibilityTest {
                         "--project",
                         workspace.toString(),
                         "--application",
-                        "selection-context",
+                        "dev.sebastiano.selection-context",
                         "--preset",
-                        "interactive-in-sc",
+                        "interactive-in-selection",
                         "--format",
                         "jsonl",
                     ),
@@ -358,6 +358,7 @@ class NativeCompatibilityTest {
                 "sourcesContentHash",
                 "builtAt",
                 "applications",
+                "pluginCoordinates",
             ),
             json.keys,
         )
@@ -377,7 +378,7 @@ class NativeCompatibilityTest {
             "--gradle-module",
             ":app",
             "--applications",
-            "selection-context",
+            "dev.sebastiano.selection-context",
         )
 
     private fun createFixtureWorkspace(): Path {

@@ -49,7 +49,7 @@ class ShrunkCliDistributionTest {
                 "--gradle-module",
                 ":app",
                 "--applications",
-                "selection-context",
+                "dev.sebastiano.selection-context",
             )
         assertEquals(0, index.exitCode, index.diagnostic())
 
@@ -69,7 +69,7 @@ class ShrunkCliDistributionTest {
                 "--gradle-module",
                 ":app",
                 "--applications",
-                "selection-context",
+                "dev.sebastiano.selection-context",
             )
         assertEquals(0, freshIndex.exitCode, freshIndex.diagnostic())
         assertContains(freshIndex.stderr, "index fresh")
@@ -108,9 +108,9 @@ class ShrunkCliDistributionTest {
                 "--project",
                 workspace.toString(),
                 "--application",
-                "selection-context",
+                "dev.sebastiano.selection-context",
                 "--preset",
-                "interactive-in-sc",
+                "interactive-in-selection",
                 "--format",
                 "jsonl",
             )
@@ -325,6 +325,8 @@ class ShrunkCliDistributionTest {
         const val SERVICE_PREFIX = "META-INF/services/"
         val EXPECTED_SERVICES =
             mapOf(
+                "dev.sebastiano.indexino.plugin.api.IndexinoPluginProvider" to
+                    setOf("dev.sebastiano.indexino.plugin.selection.SelectionContextPlugin"),
                 "kotlin.reflect.jvm.internal.impl.builtins.BuiltInsLoader" to
                     setOf(
                         "kotlin.reflect.jvm.internal.impl.serialization.deserialization.builtins.BuiltInsLoaderImpl"

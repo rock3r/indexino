@@ -35,7 +35,7 @@ indexino index \
   --build-system gradle \
   --gradle-module :plugin:ui \
   [--include-deps] \
-  [--applications selection-context]
+  [--applications dev.sebastiano.selection-context]
 
 indexino status \
   --project . \

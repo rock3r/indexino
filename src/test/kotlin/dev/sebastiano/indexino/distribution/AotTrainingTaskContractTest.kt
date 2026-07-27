@@ -121,7 +121,7 @@ class AotTrainingTaskContractTest {
                 "--gradle-module",
                 ":app",
                 "--applications",
-                "selection-context",
+                "dev.sebastiano.selection-context",
             ),
             arguments.drop(7),
         )
@@ -184,7 +184,7 @@ class AotTrainingTaskContractTest {
                         listOf(
                             "index", "--project", "training-workspace",
                             "--build-system", "gradle", "--gradle-module", ":app",
-                            "--applications", "selection-context",
+                            "--applications", "dev.sebastiano.selection-context",
                         )
                     )
                     minimumHeap.set("64m")

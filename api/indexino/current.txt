@@ -56,6 +56,7 @@ package dev.sebastiano.indexino.api {
     method @InaccessibleFromKotlin public dev.sebastiano.indexino.api.SnapshotFreshness getFreshnessAtAcquisition();
     method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.WorkspaceGenerationId getGeneration();
     method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.WorkspaceRevision getRevision();
+    method public suspend Object? runCheck(dev.sebastiano.indexino.model.CheckRequest request, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.Finding>>);
     property public dev.sebastiano.indexino.model.BasicFactSchemaVersion basicFactSchemaVersion;
     property public dev.sebastiano.indexino.api.SnapshotFreshness freshnessAtAcquisition;
     property public dev.sebastiano.indexino.model.WorkspaceGenerationId generation;

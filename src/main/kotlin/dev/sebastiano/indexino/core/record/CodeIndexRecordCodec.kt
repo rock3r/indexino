@@ -12,7 +12,7 @@ internal object CodeIndexRecordCodec {
             subclass(FileHashRecord::class)
             subclass(SymbolRecord::class)
             subclass(ReferenceRecord::class)
-            subclass(ComposeSelectionSiteRecord::class)
+            subclass(PluginFactRecord::class)
         }
     }
 

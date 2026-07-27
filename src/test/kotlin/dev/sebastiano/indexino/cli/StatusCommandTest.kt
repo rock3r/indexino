@@ -32,7 +32,7 @@ class StatusCommandTest {
             .runIndexedBuild(
                 project = workspace,
                 bazelTarget = "//plugins/foo/ui:ui",
-                applications = listOf("selection-context"),
+                applications = listOf("dev.sebastiano.selection-context"),
                 queryExecutor = MockBazelQueryExecutor(mockOutput),
             )
 

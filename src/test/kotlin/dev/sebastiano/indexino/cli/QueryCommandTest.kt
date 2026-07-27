@@ -24,7 +24,7 @@ class QueryCommandTest {
             .runIndexedBuild(
                 project = workspace,
                 bazelTarget = "//plugins/foo/ui:ui",
-                applications = listOf("selection-context"),
+                applications = listOf("dev.sebastiano.selection-context"),
                 queryExecutor =
                     MockBazelQueryExecutor(listOf("//plugins/foo/ui:src/main/kotlin/Panel.kt")),
             )
@@ -33,15 +33,18 @@ class QueryCommandTest {
             QueryCommand()
                 .runQuery(
                     project = workspace,
-                    application = "selection-context",
-                    preset = "all-call-sites",
+                    application = "dev.sebastiano.selection-context",
+                    checkId = "interactive-in-selection",
                     output = { appendLine(it) },
                 )
         }
 
-        assertTrue(output.lines().any { it.contains("\"callee\":") })
-        assertTrue(output.lines().any { it.contains("\"target\":\"//plugins/foo/ui:ui\"") })
-        assertTrue(output.lines().any { it.contains("\"topology\":\"bazel-query\"") })
+        assertTrue(output.lines().any { it.contains("\"checkId\":\"interactive-in-selection\"") })
+        assertTrue(
+            output.lines().any {
+                it.contains("ActionButton is interactive inside SelectionContainer")
+            }
+        )
     }
 
     @Test
@@ -52,8 +55,8 @@ class QueryCommandTest {
             QueryCommand()
                 .runQuery(
                     project = workspace,
-                    application = "selection-context",
-                    preset = "all-call-sites",
+                    application = "dev.sebastiano.selection-context",
+                    checkId = "interactive-in-selection",
                 )
         }
     }

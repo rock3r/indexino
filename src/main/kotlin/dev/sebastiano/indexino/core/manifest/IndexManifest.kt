@@ -16,6 +16,7 @@ internal data class IndexManifest(
     val sourcesContentHash: String,
     val builtAt: String,
     val applications: List<String> = emptyList(),
+    val pluginCoordinates: Map<String, String> = emptyMap(),
 )
 
 internal object ManifestIO {

@@ -43,11 +43,13 @@ internal value class CodeIndexKey(val value: String) {
         fun file(relativeFile: String, contentHash: String): CodeIndexKey =
             CodeIndexKey("file:$relativeFile:$contentHash")
 
-        fun composeSelectionSite(relativeFile: String, line: Int, column: Int): CodeIndexKey =
-            CodeIndexKey("compose:selection-site:$relativeFile:$line:$column")
+        fun pluginFact(pluginId: String, relativeFile: String, factKey: String): CodeIndexKey =
+            CodeIndexKey("plugin:$pluginId:$relativeFile:$factKey")
 
-        fun composeSelectionSiteFilePrefix(relativeFile: String): String =
-            "compose:selection-site:$relativeFile:"
+        fun pluginFactFilePrefix(pluginId: String, relativeFile: String): String =
+            "plugin:$pluginId:$relativeFile:"
+
+        fun pluginFactPluginPrefix(pluginId: String): String = "plugin:$pluginId:"
 
         fun metaIndexerVersion(): CodeIndexKey = CodeIndexKey("meta:indexer:version")
     }

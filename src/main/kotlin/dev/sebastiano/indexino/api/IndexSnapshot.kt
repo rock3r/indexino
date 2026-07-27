@@ -2,14 +2,18 @@
 
 package dev.sebastiano.indexino.api
 
+import dev.sebastiano.indexino.core.plugin.StorePluginFactView
 import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
+import dev.sebastiano.indexino.engine.PluginRegistry
 import dev.sebastiano.indexino.model.BasicFactQueries
 import dev.sebastiano.indexino.model.BasicFactSchemaVersion
 import dev.sebastiano.indexino.model.CallQuery
 import dev.sebastiano.indexino.model.CallSite
+import dev.sebastiano.indexino.model.CheckRequest
+import dev.sebastiano.indexino.model.Finding
 import dev.sebastiano.indexino.model.IndexFailureCategory
 import dev.sebastiano.indexino.model.IndexinoInternalApi
 import dev.sebastiano.indexino.model.NameMatchMode
@@ -23,8 +27,11 @@ import dev.sebastiano.indexino.model.SymbolId
 import dev.sebastiano.indexino.model.SymbolQuery
 import dev.sebastiano.indexino.model.WorkspaceGenerationId
 import dev.sebastiano.indexino.model.WorkspaceRevision
+import dev.sebastiano.indexino.plugin.api.CheckContextV1
 import java.util.PriorityQueue
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CompletableDeferred
 
 public class IndexSnapshot
 private constructor(
@@ -34,9 +41,11 @@ private constructor(
     override val basicFactSchemaVersion: BasicFactSchemaVersion = BasicFactSchemaVersion.of(1),
     public val freshnessAtAcquisition: SnapshotFreshness,
     private val onClose: () -> Unit,
+    private val pluginRegistry: PluginRegistry,
 ) : BasicFactQueries, AutoCloseable {
     private val closed = AtomicBoolean()
     private val queries = IndexSnapshotQueries(generation)
+    private val checkResults = ConcurrentHashMap<CheckRequest, CompletableDeferred<List<Finding>>>()
 
     override suspend fun findSymbols(query: SymbolQuery, options: QueryOptions): QueryPage<Symbol> {
         ensureOpen()
@@ -155,6 +164,56 @@ private constructor(
                         with(queries) { record.toPublicCallSite(candidates.getValue(record)) }
                     }
                 },
+            )
+        }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    public suspend fun runCheck(request: CheckRequest, options: QueryOptions): QueryPage<Finding> {
+        ensureOpen()
+        validateCheckQueryOptions(options)
+        return mapUnexpectedFailuresSuspend {
+            val candidate = CompletableDeferred<List<Finding>>()
+            val deferred = checkResults.putIfAbsent(request, candidate) ?: candidate
+            if (deferred === candidate) {
+                try {
+                    val registered =
+                        pluginRegistry.checks.firstOrNull {
+                            it.pluginId == request.pluginId && it.check.id == request.checkId
+                        }
+                            ?: throw indexinoFailure(
+                                category = IndexFailureCategory.INVALID_REQUEST,
+                                code = "unknown_check",
+                                message =
+                                    "No check '${request.checkId}' is registered for ${request.pluginId.value}",
+                                retryable = false,
+                            )
+                    candidate.complete(
+                        registered.check
+                            .run(
+                                CheckContextV1(
+                                    queries = this,
+                                    facts = StorePluginFactView(store, request.pluginId.value),
+                                    active = { !closed.get() },
+                                )
+                            )
+                            .toList()
+                    )
+                } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
+                    candidate.completeExceptionally(thrown)
+                    checkResults.remove(request, candidate)
+                }
+            }
+            val findings = deferred.await()
+            val start = options.offset.coerceAtMost(findings.size)
+            val end = (start + options.limit).coerceAtMost(findings.size)
+            QueryPage(
+                items = findings.subList(start, end),
+                offset = options.offset,
+                limit = options.limit,
+                hasMore = end < findings.size,
+                nextCursor = null,
+                totalCount = findings.size,
             )
         }
     }
@@ -387,23 +446,46 @@ private constructor(
         fun best(): SymbolRecord? = sameFileExact ?: sameFileAlias ?: exact ?: alias
     }
 
+    private suspend fun <T> mapUnexpectedFailuresSuspend(block: suspend () -> T): T =
+        try {
+            block()
+        } catch (thrown: IndexinoException) {
+            throw thrown
+        } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
+            throw unexpectedFailure(thrown)
+        }
+
     private fun <T> mapUnexpectedFailures(block: () -> T): T =
         try {
             block()
         } catch (thrown: IndexinoException) {
             throw thrown
         } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
-            // Public entry points throw final IndexinoException. Unexpected failures map to
-            // INTERNAL with cause retained — do not classify by exception message/type. Specific
-            // codes (e.g. workspace_path_unresolvable at connect) are for known failure modes.
+            throw unexpectedFailure(thrown)
+        }
+
+    private fun unexpectedFailure(thrown: Throwable): IndexinoException =
+        indexinoFailure(
+            category = IndexFailureCategory.INTERNAL,
+            code = "internal",
+            message = thrown.message?.takeIf { it.isNotBlank() } ?: thrown.javaClass.simpleName,
+            retryable = false,
+            cause = thrown,
+        )
+
+    @OptIn(IndexinoInternalApi::class)
+    private fun validateCheckQueryOptions(options: QueryOptions) {
+        if (options.limit > HOST_QUERY_LIMIT_MAXIMUM) {
             throw indexinoFailure(
-                category = IndexFailureCategory.INTERNAL,
-                code = "internal",
-                message = thrown.message?.takeIf { it.isNotBlank() } ?: thrown.javaClass.simpleName,
+                category = IndexFailureCategory.INVALID_REQUEST,
+                code = "limit_exceeds_maximum",
+                message =
+                    "limit ${options.limit} exceeds the host maximum of $HOST_QUERY_LIMIT_MAXIMUM",
                 retryable = false,
-                cause = thrown,
             )
         }
+        parsePageOffset(options)
+    }
 
     @OptIn(IndexinoInternalApi::class)
     private fun validateQueryOptions(options: QueryOptions) {
@@ -516,6 +598,7 @@ private constructor(
                 generation = generation,
                 freshnessAtAcquisition = freshnessAtAcquisition,
                 onClose = onClose,
+                pluginRegistry = PluginRegistry.load(IndexSnapshot::class.java.classLoader),
             )
     }
 }

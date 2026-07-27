@@ -11,9 +11,11 @@ import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.IndexManifest
 import dev.sebastiano.indexino.core.path.IndexPathResolver
+import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.store.IndexStoreOpener
 import dev.sebastiano.indexino.engine.InFlightRefresh
 import dev.sebastiano.indexino.engine.IndexingCoordinator
+import dev.sebastiano.indexino.engine.PluginRegistry
 import dev.sebastiano.indexino.model.IndexFailureCategory
 import dev.sebastiano.indexino.model.IndexinoInternalApi
 import dev.sebastiano.indexino.model.RefreshId
@@ -221,19 +223,20 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         }
     }
 
-    private fun applicationsFor(request: RefreshRequest): List<String> =
-        request.plugins.map { plugin ->
-            when (plugin.value) {
-                "dev.sebastiano.selection-context" -> "selection-context"
-                else ->
-                    throw failure(
-                        category = IndexFailureCategory.INVALID_REQUEST,
-                        code = "unknown_plugin",
-                        message = "Plugin ${plugin.value} is not loaded",
-                        retryable = false,
-                    )
+    private fun applicationsFor(request: RefreshRequest): List<String> {
+        val registry = PluginRegistry.load(Indexino::class.java.classLoader)
+        return request.plugins.map { plugin ->
+            if (registry.descriptor(plugin) == null) {
+                throw failure(
+                    category = IndexFailureCategory.INVALID_REQUEST,
+                    code = "unknown_plugin",
+                    message = "Plugin ${plugin.value} is not loaded",
+                    retryable = false,
+                )
             }
+            plugin.value
         }
+    }
 
     private fun requireSupportedScope(scope: IndexScope) {
         if (scope.buildSystem == BuildSystem.BAZEL && !scope.includesDependencies) {
@@ -339,18 +342,26 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                 releaseGeneration(generation.generation)
                 throw mapUnexpectedFailure(thrown)
             }
-        return IndexSnapshot.create(
-            store = openedStore,
-            revision = generation.revision,
-            generation = generation.generation,
-            freshnessAtAcquisition =
-                if (freshness == FreshnessPolicy.AWAIT_CURRENT) {
-                    SnapshotFreshness.CURRENT
-                } else {
-                    SnapshotFreshness.UNKNOWN
-                },
-            onClose = { releaseGeneration(generation.generation) },
-        )
+        try {
+            return IndexSnapshot.create(
+                store = openedStore,
+                revision = generation.revision,
+                generation = generation.generation,
+                freshnessAtAcquisition =
+                    if (freshness == FreshnessPolicy.AWAIT_CURRENT) {
+                        SnapshotFreshness.CURRENT
+                    } else {
+                        SnapshotFreshness.UNKNOWN
+                    },
+                onClose = { releaseGeneration(generation.generation) },
+            )
+        } catch (thrown: IndexinoException) {
+            closeStoreAndReleaseGeneration(openedStore, generation.generation, thrown)
+            throw thrown
+        } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
+            closeStoreAndReleaseGeneration(openedStore, generation.generation, thrown)
+            throw mapUnexpectedFailure(thrown)
+        }
     }
 
     override fun close() {
@@ -415,6 +426,10 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                         BASIC_FACT_SCHEMA_VERSION.toString(),
                         indexerVersion,
                         applications.sorted().joinToString("\u0001"),
+                        pluginCoordinates.toSortedMap().entries.joinToString("\u0001") {
+                            (pluginId, coordinate) ->
+                            "$pluginId=$coordinate"
+                        },
                     )
                     .joinToString("\u0000")
             )
@@ -492,6 +507,20 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         generationStores[generation] = storePath
         published = restored
         return restored
+    }
+
+    private fun closeStoreAndReleaseGeneration(
+        store: CodeIndexStore,
+        generation: WorkspaceGenerationId,
+        failure: Throwable,
+    ) {
+        try {
+            store.close()
+        } catch (@Suppress("TooGenericExceptionCaught") closeFailure: Throwable) {
+            failure.addSuppressed(closeFailure)
+        } finally {
+            releaseGeneration(generation)
+        }
     }
 
     private fun releaseGeneration(generation: WorkspaceGenerationId) {

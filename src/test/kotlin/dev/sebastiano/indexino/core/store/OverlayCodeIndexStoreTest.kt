@@ -1,9 +1,8 @@
 package dev.sebastiano.indexino.core.store
 
 import dev.sebastiano.indexino.core.key.CodeIndexKey
-import dev.sebastiano.indexino.core.record.ComposeSelectionSiteRecord
 import dev.sebastiano.indexino.core.record.MetaIndexerVersionRecord
-import dev.sebastiano.indexino.core.record.SelectionContainerRef
+import dev.sebastiano.indexino.core.record.PluginFactRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
@@ -48,8 +47,8 @@ class OverlayCodeIndexStoreTest {
 
     @Test
     fun `put writes to delta only`() {
-        val key = CodeIndexKey.composeSelectionSite("Panel.kt", 1, 1)
-        val record = composeRecord("New")
+        val key = pluginKey("Panel.kt", "site:1:1")
+        val record = pluginFact("New")
         overlay.put(key, record)
         assertEquals(record, overlay.get(key))
         assertNull(base.get(key))
@@ -57,21 +56,23 @@ class OverlayCodeIndexStoreTest {
 
     @Test
     fun `prefixScan merges delta over base`() {
-        val prefix = "compose:selection-site:ui/"
-        val baseKey = CodeIndexKey.composeSelectionSite("ui/A.kt", 1, 1)
-        val deltaKey = CodeIndexKey.composeSelectionSite("ui/B.kt", 2, 1)
-        base.put(baseKey, composeRecord("Base"))
-        delta.put(deltaKey, composeRecord("Delta"))
+        val prefix = "plugin:dev.example.plugin:ui/"
+        val baseKey = pluginKey("ui/A.kt", "site:1:1")
+        val deltaKey = pluginKey("ui/B.kt", "site:2:1")
+        base.put(baseKey, pluginFact("Base"))
+        delta.put(deltaKey, pluginFact("Delta"))
         val keys = overlay.prefixScan(prefix).map { it.first }.toSet()
         assertEquals(setOf(baseKey, deltaKey), keys)
     }
 
-    private fun composeRecord(callee: String): ComposeSelectionSiteRecord =
-        ComposeSelectionSiteRecord(
-            callee = callee,
-            inSelectionContainer = false,
-            selectionContainerCount = 0,
-            excludedByDisableSelection = false,
-            selectionContainers = listOf(SelectionContainerRef("ui/A.kt", 1, "Fn")),
+    private fun pluginKey(relativeFile: String, factKey: String): CodeIndexKey =
+        CodeIndexKey.pluginFact("dev.example.plugin", relativeFile, factKey)
+
+    private fun pluginFact(value: String): PluginFactRecord =
+        PluginFactRecord(
+            pluginId = "dev.example.plugin",
+            relativeFile = "ui/A.kt",
+            factKey = "site",
+            encodedValue = value,
         )
 }
