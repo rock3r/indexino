@@ -39,11 +39,11 @@ docker run --rm \
       --project /tmp/indexino-project \
       --build-system gradle \
       --gradle-module :app \
-      --applications selection-context
+      --applications dev.sebastiano.selection-context
     /tmp/indexino-install/indexino/indexino query \
       --project /tmp/indexino-project \
-      --application selection-context \
-      --preset interactive-in-sc \
+      --application dev.sebastiano.selection-context \
+      --preset interactive-in-selection \
       --format jsonl > /tmp/query.jsonl
     test -s /tmp/query.jsonl
   '
