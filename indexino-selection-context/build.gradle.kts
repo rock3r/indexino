@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.detekt)
     alias(libs.plugins.ktfmt)
     `java-library`
+    `maven-publish`
 }
 
 group = providers.gradleProperty("GROUP").get()
@@ -115,3 +116,18 @@ val metalavaCheckSignature by tasks.registering {
 }
 
 tasks.named("check") { dependsOn(metalavaCheckSignature) }
+
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            artifactId = "indexino-selection-context"
+            from(components["java"])
+        }
+    }
+    repositories {
+        maven {
+            name = "Test"
+            url = uri(rootProject.layout.buildDirectory.dir("test-maven-repository"))
+        }
+    }
+}

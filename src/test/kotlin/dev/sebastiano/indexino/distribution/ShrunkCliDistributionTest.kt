@@ -325,6 +325,8 @@ class ShrunkCliDistributionTest {
         const val SERVICE_PREFIX = "META-INF/services/"
         val EXPECTED_SERVICES =
             mapOf(
+                "dev.sebastiano.indexino.plugin.api.IndexinoPluginProvider" to
+                    setOf("dev.sebastiano.indexino.plugin.selection.SelectionContextPlugin"),
                 "kotlin.reflect.jvm.internal.impl.builtins.BuiltInsLoader" to
                     setOf(
                         "kotlin.reflect.jvm.internal.impl.serialization.deserialization.builtins.BuiltInsLoaderImpl"

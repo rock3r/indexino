@@ -5,6 +5,7 @@ plugins {
     alias(libs.plugins.detekt)
     alias(libs.plugins.ktfmt)
     `java-library`
+    `maven-publish`
 }
 
 group = providers.gradleProperty("GROUP").get()
@@ -33,6 +34,21 @@ dependencies {
     api(project(":indexino-model"))
     api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
     testImplementation(kotlin("test"))
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            artifactId = "indexino-plugin-api"
+            from(components["java"])
+        }
+    }
+    repositories {
+        maven {
+            name = "Test"
+            url = uri(rootProject.layout.buildDirectory.dir("test-maven-repository"))
+        }
+    }
 }
 
 tasks.test { useJUnitPlatform() }

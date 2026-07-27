@@ -571,10 +571,14 @@ tasks
     .matching { it.name.startsWith("publish") && it.name.endsWith("PublicationToTestRepository") }
     .configureEach { dependsOn(cleanTestMavenRepository) }
 
-project(":indexino-model")
-    .tasks
-    .matching { it.name.startsWith("publish") && it.name.endsWith("PublicationToTestRepository") }
-    .configureEach { dependsOn(cleanTestMavenRepository) }
+listOf(":indexino-model", ":indexino-plugin-api", ":indexino-selection-context").forEach {
+    project(it)
+        .tasks
+        .matching { task ->
+            task.name.startsWith("publish") && task.name.endsWith("PublicationToTestRepository")
+        }
+        .configureEach { dependsOn(cleanTestMavenRepository) }
+}
 
 tasks.build { dependsOn(tasks.shadowJar) }
 
@@ -844,6 +848,8 @@ val verifyMavenPublication by
         dependsOn(
             "publishAllPublicationsToTestRepository",
             ":indexino-model:publishAllPublicationsToTestRepository",
+            ":indexino-plugin-api:publishAllPublicationsToTestRepository",
+            ":indexino-selection-context:publishAllPublicationsToTestRepository",
         )
         testClassesDirs = sourceSets.test.get().output.classesDirs
         classpath = sourceSets.test.get().runtimeClasspath

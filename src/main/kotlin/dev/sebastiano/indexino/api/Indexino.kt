@@ -417,6 +417,10 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                         BASIC_FACT_SCHEMA_VERSION.toString(),
                         indexerVersion,
                         applications.sorted().joinToString("\u0001"),
+                        pluginCoordinates.toSortedMap().entries.joinToString("\u0001") {
+                            (pluginId, coordinate) ->
+                            "$pluginId=$coordinate"
+                        },
                     )
                     .joinToString("\u0000")
             )
