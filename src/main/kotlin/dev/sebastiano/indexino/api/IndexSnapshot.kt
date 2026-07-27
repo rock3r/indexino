@@ -171,7 +171,7 @@ private constructor(
     @OptIn(IndexinoInternalApi::class)
     public suspend fun runCheck(request: CheckRequest, options: QueryOptions): QueryPage<Finding> {
         ensureOpen()
-        validateQueryOptions(options)
+        validateCheckQueryOptions(options)
         return mapUnexpectedFailuresSuspend {
             val candidate = CompletableDeferred<List<Finding>>()
             val deferred = checkResults.putIfAbsent(request, candidate) ?: candidate
@@ -195,7 +195,7 @@ private constructor(
                                 facts = StorePluginFactView(store, request.pluginId.value),
                                 active = { !closed.get() },
                             )
-                        )
+                        ).toList()
                     )
                 } catch (thrown: Throwable) {
                     candidate.completeExceptionally(thrown)
@@ -470,6 +470,20 @@ private constructor(
             retryable = false,
             cause = thrown,
         )
+
+    @OptIn(IndexinoInternalApi::class)
+    private fun validateCheckQueryOptions(options: QueryOptions) {
+        if (options.limit > HOST_QUERY_LIMIT_MAXIMUM) {
+            throw indexinoFailure(
+                category = IndexFailureCategory.INVALID_REQUEST,
+                code = "limit_exceeds_maximum",
+                message =
+                    "limit ${options.limit} exceeds the host maximum of $HOST_QUERY_LIMIT_MAXIMUM",
+                retryable = false,
+            )
+        }
+        parsePageOffset(options)
+    }
 
     @OptIn(IndexinoInternalApi::class)
     private fun validateQueryOptions(options: QueryOptions) {
