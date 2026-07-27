@@ -9,6 +9,7 @@ import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.engine.PluginAnalyzerRunner
 import dev.sebastiano.indexino.engine.PluginRegistry
+import dev.sebastiano.indexino.model.PluginId
 import dev.sebastiano.indexino.producer.FileHashProducer
 import dev.sebastiano.indexino.producer.IndexBuildContext
 import dev.sebastiano.indexino.producer.IndexBuildProgressReporter
@@ -72,6 +73,13 @@ internal class IndexBuildRunner(
 
         val sourceFiles = topologyResult.sourceFiles
         val pluginRegistry = PluginRegistry.load(javaClass.classLoader)
+        val unknownApplications = applications.filter { PluginId.of(it) !in pluginRegistry.pluginIds() }
+        if (unknownApplications.isNotEmpty()) {
+            val message = "unknown application(s): ${unknownApplications.joinToString()}"
+            progress(message)
+            machineProgress?.failed(CliExitCodes.INVALID_ARGUMENTS, message)
+            return CliExitCodes.INVALID_ARGUMENTS
+        }
         val pluginCoordinates = pluginRegistry.selectedCoordinates(applications)
         machineProgress?.discoveryCompleted(sourceFiles.size)
         val commit = GitHeadResolver.resolve(project)
