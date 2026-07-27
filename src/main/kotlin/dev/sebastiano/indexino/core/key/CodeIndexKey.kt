@@ -49,6 +49,8 @@ internal value class CodeIndexKey(val value: String) {
         fun pluginFactFilePrefix(pluginId: String, relativeFile: String): String =
             "plugin:$pluginId:$relativeFile:"
 
+        fun pluginFactPluginPrefix(pluginId: String): String = "plugin:$pluginId:"
+
         fun metaIndexerVersion(): CodeIndexKey = CodeIndexKey("meta:indexer:version")
     }
 }

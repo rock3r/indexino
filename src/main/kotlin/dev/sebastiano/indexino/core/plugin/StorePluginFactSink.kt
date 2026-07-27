@@ -17,6 +17,9 @@ internal class StorePluginFactSink(
     }
 
     override suspend fun putAt(key: String, range: SourceRange?, value: PluginFactValue) {
+        require(value.depth() <= PluginFactValue.MAX_DEPTH) {
+            "Plugin fact nesting exceeds maximum depth of ${PluginFactValue.MAX_DEPTH}"
+        }
         store.put(
             CodeIndexKey.pluginFact(pluginId, relativeFile, key),
             PluginFactRecord(
@@ -33,4 +36,12 @@ internal class StorePluginFactSink(
             ),
         )
     }
+
+    private fun PluginFactValue.depth(): Int =
+        when (this) {
+            is PluginFactValue.Struct -> 1 + fields.values.maxOfOrNull { it.depth() }.orEmpty()
+            else -> 1
+        }
+
+    private fun Int?.orEmpty(): Int = this ?: 0
 }

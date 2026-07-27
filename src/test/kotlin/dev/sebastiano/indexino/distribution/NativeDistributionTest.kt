@@ -278,9 +278,9 @@ class NativeDistributionTest {
                 "--project",
                 workspace.toString(),
                 "--application",
-                "selection-context",
+                "dev.sebastiano.selection-context",
                 "--preset",
-                "interactive-in-sc",
+                "interactive-in-selection",
                 "--format",
                 "jsonl",
             )
@@ -848,9 +848,9 @@ class NativeDistributionTest {
                 "--project",
                 workspace.toString(),
                 "--application",
-                "selection-context",
+                "dev.sebastiano.selection-context",
                 "--preset",
-                "interactive-in-sc",
+                "interactive-in-selection",
                 "--format",
                 "jsonl",
             )

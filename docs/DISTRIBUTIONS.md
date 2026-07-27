@@ -39,12 +39,12 @@ need to be the current working directory.
     /path/to/indexino/indexino index \
       --project /path/to/repository \
       --bazel-target //plugins/example:ui \
-      --applications selection-context
+      --applications dev.sebastiano.selection-context
 
     /path/to/indexino/indexino query \
       --project /path/to/repository \
-      --application selection-context \
-      --preset interactive-in-sc \
+      --application dev.sebastiano.selection-context \
+      --preset interactive-in-selection \
       --format jsonl
 
 Use `indexino.exe` in PowerShell or Command Prompt. All paths accepted by the JAR CLI are accepted by

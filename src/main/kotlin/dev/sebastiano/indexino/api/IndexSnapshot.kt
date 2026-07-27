@@ -171,41 +171,42 @@ private constructor(
     public suspend fun runCheck(request: CheckRequest, options: QueryOptions): QueryPage<Finding> {
         ensureOpen()
         validateQueryOptions(options)
-        val findings =
-            checkResults[request]
-                ?: run {
-                    val registered =
-                        pluginRegistry.checks.firstOrNull {
-                            it.pluginId == request.pluginId && it.check.id == request.checkId
-                        }
-                            ?: return QueryPage(
-                                items = emptyList(),
-                                offset = options.offset,
-                                limit = options.limit,
-                                hasMore = false,
-                                nextCursor = null,
-                                totalCount = 0,
+        return mapUnexpectedFailuresSuspend {
+            val findings =
+                checkResults[request]
+                    ?: run {
+                        val registered =
+                            pluginRegistry.checks.firstOrNull {
+                                it.pluginId == request.pluginId && it.check.id == request.checkId
+                            }
+                                ?: throw indexinoFailure(
+                                    category = IndexFailureCategory.INVALID_REQUEST,
+                                    code = "unknown_check",
+                                    message =
+                                        "No check '${request.checkId}' is registered for ${request.pluginId.value}",
+                                    retryable = false,
+                                )
+                        val computed =
+                            registered.check.run(
+                                CheckContextV1(
+                                    queries = this,
+                                    facts = StorePluginFactView(store, request.pluginId.value),
+                                    active = { !closed.get() },
+                                )
                             )
-                    val computed =
-                        registered.check.run(
-                            CheckContextV1(
-                                queries = this,
-                                facts = StorePluginFactView(store, request.pluginId.value),
-                                active = { !closed.get() },
-                            )
-                        )
-                    checkResults.putIfAbsent(request, computed) ?: computed
-                }
-        val start = options.offset.coerceAtMost(findings.size)
-        val end = (start + options.limit).coerceAtMost(findings.size)
-        return QueryPage(
-            items = findings.subList(start, end),
-            offset = options.offset,
-            limit = options.limit,
-            hasMore = end < findings.size,
-            nextCursor = null,
-            totalCount = findings.size,
-        )
+                        checkResults.putIfAbsent(request, computed) ?: computed
+                    }
+            val start = options.offset.coerceAtMost(findings.size)
+            val end = (start + options.limit).coerceAtMost(findings.size)
+            QueryPage(
+                items = findings.subList(start, end),
+                offset = options.offset,
+                limit = options.limit,
+                hasMore = end < findings.size,
+                nextCursor = null,
+                totalCount = findings.size,
+            )
+        }
     }
 
     override fun close() {
@@ -436,23 +437,32 @@ private constructor(
         fun best(): SymbolRecord? = sameFileExact ?: sameFileAlias ?: exact ?: alias
     }
 
+    private suspend fun <T> mapUnexpectedFailuresSuspend(block: suspend () -> T): T =
+        try {
+            block()
+        } catch (thrown: IndexinoException) {
+            throw thrown
+        } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
+            throw unexpectedFailure(thrown)
+        }
+
     private fun <T> mapUnexpectedFailures(block: () -> T): T =
         try {
             block()
         } catch (thrown: IndexinoException) {
             throw thrown
         } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
-            // Public entry points throw final IndexinoException. Unexpected failures map to
-            // INTERNAL with cause retained — do not classify by exception message/type. Specific
-            // codes (e.g. workspace_path_unresolvable at connect) are for known failure modes.
-            throw indexinoFailure(
-                category = IndexFailureCategory.INTERNAL,
-                code = "internal",
-                message = thrown.message?.takeIf { it.isNotBlank() } ?: thrown.javaClass.simpleName,
-                retryable = false,
-                cause = thrown,
-            )
+            throw unexpectedFailure(thrown)
         }
+
+    private fun unexpectedFailure(thrown: Throwable): IndexinoException =
+        indexinoFailure(
+            category = IndexFailureCategory.INTERNAL,
+            code = "internal",
+            message = thrown.message?.takeIf { it.isNotBlank() } ?: thrown.javaClass.simpleName,
+            retryable = false,
+            cause = thrown,
+        )
 
     @OptIn(IndexinoInternalApi::class)
     private fun validateQueryOptions(options: QueryOptions) {

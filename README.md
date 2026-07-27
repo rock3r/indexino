@@ -51,13 +51,13 @@ JAR=build/libs/indexino-0.2.0-SNAPSHOT-all.jar
 java -jar "$JAR" index \
   --project /path/to/monorepo \
   --bazel-target //plugins/foo/ui:ui \
-  --applications selection-context
+  --applications dev.sebastiano.selection-context
 
 # Query precomputed selection-context facts
 java -jar "$JAR" query \
   --project /path/to/monorepo \
-  --application selection-context \
-  --preset interactive-in-sc \
+  --application dev.sebastiano.selection-context \
+  --preset interactive-in-selection \
   --format jsonl
 
 # Language-neutral symbol and reference lookups
@@ -71,8 +71,8 @@ java -jar "$JAR" resolve-resource --project /path/to/repo --type string --name t
 Equivalent Gradle invocations:
 
 ```bash
-./gradlew run --args="index --project /path/to/monorepo --bazel-target //pkg:ui --applications selection-context"
-./gradlew run --args="query --project /path/to/monorepo --application selection-context --preset interactive-in-sc --format jsonl"
+./gradlew run --args="index --project /path/to/monorepo --bazel-target //pkg:ui --applications dev.sebastiano.selection-context"
+./gradlew run --args="query --project /path/to/monorepo --application dev.sebastiano.selection-context --preset interactive-in-selection --format jsonl"
 ```
 
 Run tests:

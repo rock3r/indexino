@@ -19,6 +19,8 @@ private constructor(
 ) {
     internal fun descriptor(id: PluginId): PluginDescriptor? = descriptors[id]
 
+    internal fun pluginIds(): Set<PluginId> = descriptors.keys
+
     internal data class RegisteredFileAnalyzer(val pluginId: PluginId, val analyzer: FileAnalyzerV1)
 
     internal data class RegisteredCheck(val pluginId: PluginId, val check: IndexinoCheckV1)

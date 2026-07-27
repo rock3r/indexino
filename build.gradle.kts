@@ -290,7 +290,7 @@ val aotTrainingArguments =
         "--gradle-module",
         ":app",
         "--applications",
-        "selection-context",
+        "dev.sebastiano.selection-context",
     )
 
 fun registerAotTraining(

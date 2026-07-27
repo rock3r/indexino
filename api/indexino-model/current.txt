@@ -217,6 +217,7 @@ package dev.sebastiano.indexino.model {
 
   public sealed exhaustive interface PluginFactValue {
     field public static final dev.sebastiano.indexino.model.PluginFactValue.Companion Companion;
+    field public static final int MAX_DEPTH = 4; // 0x4
     field public static final int MAX_STRUCT_FIELDS = 64; // 0x40
     field public static final int MAX_TEXT_LIST_SIZE = 256; // 0x100
   }
@@ -233,8 +234,10 @@ package dev.sebastiano.indexino.model {
   }
 
   public static final class PluginFactValue.Companion {
+    property public static int MAX_DEPTH;
     property public static int MAX_STRUCT_FIELDS;
     property public static int MAX_TEXT_LIST_SIZE;
+    field public static final int MAX_DEPTH = 4; // 0x4
     field public static final int MAX_STRUCT_FIELDS = 64; // 0x40
     field public static final int MAX_TEXT_LIST_SIZE = 256; // 0x100
   }

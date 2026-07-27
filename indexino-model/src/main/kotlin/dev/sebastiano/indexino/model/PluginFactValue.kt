@@ -73,5 +73,6 @@ public sealed interface PluginFactValue {
     public companion object {
         public const val MAX_TEXT_LIST_SIZE: Int = 256
         public const val MAX_STRUCT_FIELDS: Int = 64
+        public const val MAX_DEPTH: Int = 4
     }
 }

@@ -13,6 +13,19 @@ internal class SelectionContextCheck : IndexinoCheckV1 {
 
     private companion object {
         const val MAX_FINDINGS_PER_RUN: Int = 10_000
+        val INTERACTIVE_CALLEES: Set<String> =
+            setOf(
+                "ActionButton",
+                "IconButton",
+                "TextButton",
+                "OutlinedButton",
+                "FloatingActionButton",
+                "IconToggleButton",
+                "Checkbox",
+                "Switch",
+                "RadioButton",
+                "Slider",
+            )
     }
 
     override suspend fun run(context: CheckContextV1): List<Finding> =
@@ -28,6 +41,7 @@ internal class SelectionContextCheck : IndexinoCheckV1 {
                     (fields["excludedByDisableSelection"] as? PluginFactValue.Bool)?.value ?: false
                 if (!inSelection || excluded) return@mapNotNull null
                 val callee = (fields["callee"] as? PluginFactValue.Text)?.value ?: "<unknown>"
+                if (callee !in INTERACTIVE_CALLEES) return@mapNotNull null
                 Finding(
                     plugin = PluginId.of("dev.sebastiano.selection-context"),
                     checkId = id,

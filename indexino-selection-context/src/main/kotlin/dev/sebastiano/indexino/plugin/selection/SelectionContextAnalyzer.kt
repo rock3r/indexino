@@ -15,40 +15,44 @@ import org.jetbrains.kotlin.psi.KtSimpleNameExpression
 
 @OptIn(dev.sebastiano.indexino.model.IndexinoInternalApi::class)
 internal class SelectionContextAnalyzer(private val walker: SelectionWalker = SelectionWalker()) :
-    FileAnalyzerV1 {
+    FileAnalyzerV1, AutoCloseable {
     override val id: String = "selection-context"
+    private var parser: KotlinPsiParser? = null
 
     override suspend fun analyze(context: FileAnalysisContextV1) {
         if (!context.file.path.endsWith(".kt")) return
-        KotlinPsiParser().use { parser ->
-            val file = parser.parseFile(context.file.path, context.sourceText)
-            for (call in enumerateComposableCallSites(file)) {
-                context.ensureActive()
-                val result = walker.analyzeCallSite(call, context.file.path)
-                val line = call.lineNumber()
-                val column = call.columnNumber()
-                context.facts.putAt(
-                    key = "selection-site:$line:$column",
-                    range = call.toSourceRange(context, line, column),
-                    value =
-                        PluginFactValue.Struct.of(
-                            mapOf(
-                                "callee" to PluginFactValue.Text.of(result.callee),
-                                "inSelectionContainer" to
-                                    PluginFactValue.Bool.of(result.inSelectionContainer),
-                                "selectionContainerCount" to
-                                    PluginFactValue.Integer.of(
-                                        result.selectionContainerCount.toLong()
-                                    ),
-                                "excludedByDisableSelection" to
-                                    PluginFactValue.Bool.of(result.excludedByDisableSelection),
-                                "confidence" to PluginFactValue.Text.of(result.confidence),
-                            )
-                        ),
-                )
-            }
+        val file = parser().parseFile(context.file.path, context.sourceText)
+        for (call in enumerateComposableCallSites(file)) {
+            context.ensureActive()
+            val result = walker.analyzeCallSite(call, context.file.path)
+            val line = call.lineNumber()
+            val column = call.columnNumber()
+            context.facts.putAt(
+                key = "selection-site:$line:$column",
+                range = call.toSourceRange(context, line, column),
+                value =
+                    PluginFactValue.Struct.of(
+                        mapOf(
+                            "callee" to PluginFactValue.Text.of(result.callee),
+                            "inSelectionContainer" to
+                                PluginFactValue.Bool.of(result.inSelectionContainer),
+                            "selectionContainerCount" to
+                                PluginFactValue.Integer.of(result.selectionContainerCount.toLong()),
+                            "excludedByDisableSelection" to
+                                PluginFactValue.Bool.of(result.excludedByDisableSelection),
+                            "confidence" to PluginFactValue.Text.of(result.confidence),
+                        )
+                    ),
+            )
         }
     }
+
+    override fun close() {
+        parser?.close()
+        parser = null
+    }
+
+    private fun parser(): KotlinPsiParser = parser ?: KotlinPsiParser().also { parser = it }
 
     private fun enumerateComposableCallSites(file: KtFile): List<KtCallExpression> {
         val scNames = SelectionWalker.DEFAULT_SELECTION_CONTAINER_NAMES
