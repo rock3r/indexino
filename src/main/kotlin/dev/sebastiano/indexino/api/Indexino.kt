@@ -341,18 +341,28 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                 releaseGeneration(generation.generation)
                 throw mapUnexpectedFailure(thrown)
             }
-        return IndexSnapshot.create(
-            store = openedStore,
-            revision = generation.revision,
-            generation = generation.generation,
-            freshnessAtAcquisition =
-                if (freshness == FreshnessPolicy.AWAIT_CURRENT) {
-                    SnapshotFreshness.CURRENT
-                } else {
-                    SnapshotFreshness.UNKNOWN
-                },
-            onClose = { releaseGeneration(generation.generation) },
-        )
+        try {
+            return IndexSnapshot.create(
+                store = openedStore,
+                revision = generation.revision,
+                generation = generation.generation,
+                freshnessAtAcquisition =
+                    if (freshness == FreshnessPolicy.AWAIT_CURRENT) {
+                        SnapshotFreshness.CURRENT
+                    } else {
+                        SnapshotFreshness.UNKNOWN
+                    },
+                onClose = { releaseGeneration(generation.generation) },
+            )
+        } catch (thrown: IndexinoException) {
+            openedStore.close()
+            releaseGeneration(generation.generation)
+            throw thrown
+        } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
+            openedStore.close()
+            releaseGeneration(generation.generation)
+            throw mapUnexpectedFailure(thrown)
+        }
     }
 
     override fun close() {
