@@ -7,9 +7,6 @@ import dev.sebastiano.indexino.model.SourceFile
 import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.SymbolQuery
 import java.nio.file.Files
-import kotlin.coroutines.Continuation
-import kotlin.coroutines.EmptyCoroutineContext
-import kotlin.coroutines.startCoroutine
 import kotlin.io.path.Path
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
@@ -19,6 +16,8 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.runBlocking
 
 class InProcessIndexinoTest {
     private val tempDirs = mutableListOf<java.nio.file.Path>()
@@ -68,6 +67,59 @@ class InProcessIndexinoTest {
             } else {
                 System.setProperty("indexino.cache.dir", previousCacheDirectory)
             }
+        }
+    }
+
+    @Test
+    fun `stopping a refresh is idempotent and replays stopped terminal event`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-stop-refresh-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        val indexino = Indexino.connectBlocking(workspace)
+        try {
+            val handle = runSuspend {
+                indexino.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui")))
+            }
+            runSuspend { handle.stop() }
+            runSuspend { handle.stop() }
+            assertFailsWith<java.util.concurrent.CancellationException> {
+                runSuspend { handle.await() }
+            }
+            val events = runBlocking { handle.events().toList() }
+            assertEquals(2, events.size)
+            assertTrue(events.first() is RefreshStarted)
+            assertEquals(RefreshStopped::class, events.last()::class)
+        } finally {
+            indexino.close()
+            if (previousCacheDirectory == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheDirectory)
+        }
+    }
+
+    @Test
+    fun `completed refresh events replay to each collector`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-refresh-events-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        val indexino = Indexino.connectBlocking(workspace)
+        try {
+            val handle = runSuspend {
+                indexino.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui")))
+            }
+            val first = runBlocking { handle.events().toList() }
+            val second = runBlocking { handle.events().toList() }
+            assertEquals(first, second)
+            assertEquals(2, first.size)
+            assertTrue(first.first() is RefreshStarted)
+            assertTrue(first.last() is RefreshCompleted)
+        } finally {
+            indexino.close()
+            if (previousCacheDirectory == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheDirectory)
         }
     }
 
@@ -407,7 +459,7 @@ class InProcessIndexinoTest {
     }
 
     @Test
-    fun `refresh finishing after close fails closed and leaves no generation copies`() {
+    fun `refresh continues after initiator close and another client reopens it`() {
         val workspace = createGitWorkspace()
         val cacheDirectory = createTempDirectory("indexino-close-during-refresh-cache-")
         tempDirs.add(cacheDirectory)
@@ -417,17 +469,16 @@ class InProcessIndexinoTest {
             val indexino = Indexino.connectBlocking(workspace)
             indexino.afterPublishGenerationStoreForTests = { indexino.close() }
             try {
-                val failure =
-                    assertFailsWith<IndexinoException> {
-                        runSuspend {
-                            indexino
-                                .refresh(RefreshRequest.forScope(IndexScope.gradle(":ui")))
-                                .await()
-                        }
-                    }
-                assertEquals("CLOSED", failure.failure.category.value)
-                assertEquals("client_closed", failure.failure.code)
-                assertFalse(generationCopyExists(workspace, null))
+                val result = runSuspend {
+                    indexino.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui"))).await()
+                }
+                val reattached = Indexino.connectBlocking(workspace)
+                try {
+                    runSuspend { reattached.snapshot() }
+                        .use { snapshot -> assertEquals(result.generation, snapshot.generation) }
+                } finally {
+                    reattached.close()
+                }
             } finally {
                 indexino.afterPublishGenerationStoreForTests = null
                 indexino.close()
@@ -456,16 +507,10 @@ class InProcessIndexinoTest {
             val pinned = runSuspend { indexino.snapshot() }
             try {
                 indexino.afterPublishGenerationStoreForTests = { indexino.close() }
-                val failure =
-                    assertFailsWith<IndexinoException> {
-                        runSuspend {
-                            indexino
-                                .refresh(RefreshRequest.forScope(IndexScope.gradle(":ui")))
-                                .await()
-                        }
-                    }
-                assertEquals("CLOSED", failure.failure.category.value)
-                assertTrue(generationCopyExists(workspace, first.generation.value))
+                val refreshed = runSuspend {
+                    indexino.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui"))).await()
+                }
+                assertEquals(first.generation, refreshed.generation)
                 val symbols = runSuspend {
                     pinned.findSymbols(
                         SymbolQuery.named("ActionButton"),
@@ -521,7 +566,7 @@ class InProcessIndexinoTest {
     }
 
     @Test
-    fun `concurrent refreshes on one workspace both publish openable generations`() {
+    fun `equal concurrent refresh requests join one shared handle`() {
         val workspace = createGitWorkspace()
         val cacheDirectory = createTempDirectory("indexino-lock-cache-")
         tempDirs.add(cacheDirectory)
@@ -549,6 +594,7 @@ class InProcessIndexinoTest {
             assertTrue(errors.isEmpty(), errors.joinToString())
             val first = requireNotNull(resultA[0])
             val second = requireNotNull(resultB[0])
+            assertEquals(first.refreshId, second.refreshId)
             runSuspend { clientA.snapshot() }
                 .use { snapshot ->
                     assertEquals(first.generation, snapshot.generation)
@@ -1080,17 +1126,5 @@ class InProcessIndexinoTest {
         check(process.waitFor() == 0) { "git ${args.joinToString(" ")} failed: $output" }
     }
 
-    private fun <T> runSuspend(block: suspend () -> T): T {
-        var outcome: Result<T>? = null
-        block.startCoroutine(
-            object : Continuation<T> {
-                override val context = EmptyCoroutineContext
-
-                override fun resumeWith(result: Result<T>) {
-                    outcome = result
-                }
-            }
-        )
-        return checkNotNull(outcome).getOrThrow()
-    }
+    private fun <T> runSuspend(block: suspend () -> T): T = runBlocking { block() }
 }

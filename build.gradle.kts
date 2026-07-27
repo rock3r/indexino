@@ -86,6 +86,7 @@ val metalava by configurations.creating
 dependencies {
     detektPlugins(project(":detekt-plugin"))
     api(project(":indexino-model"))
+    api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
     implementation(libs.kotlin.compiler.embeddable)
     implementation(libs.clikt)
     implementation(libs.kotlinx.serialization.json)

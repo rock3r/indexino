@@ -14,6 +14,11 @@ package dev.sebastiano.indexino.api {
     property public dev.sebastiano.indexino.api.BuildSystem GRADLE;
   }
 
+  public enum FreshnessPolicy {
+    enum_constant public static final dev.sebastiano.indexino.api.FreshnessPolicy AWAIT_CURRENT;
+    enum_constant public static final dev.sebastiano.indexino.api.FreshnessPolicy PUBLISHED;
+  }
+
   public final class IndexChanges {
     ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public IndexChanges(int changedFileCount, int unchangedFileCount, int removedFileCount);
     method @InaccessibleFromKotlin public int getChangedFileCount();
@@ -58,10 +63,12 @@ package dev.sebastiano.indexino.api {
   }
 
   public final class Indexino implements java.lang.AutoCloseable {
+    method public suspend Object? activeRefreshes(kotlin.coroutines.Continuation<? super java.util.List<dev.sebastiano.indexino.api.RefreshSummary>>);
     method public void close();
     method public static suspend Object? connect(java.nio.file.Path workspace, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.api.Indexino>);
     method public static dev.sebastiano.indexino.api.Indexino connectBlocking(java.nio.file.Path workspace);
     method public suspend Object? refresh(dev.sebastiano.indexino.api.RefreshRequest request, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.api.RefreshHandle>);
+    method public suspend Object? snapshot(dev.sebastiano.indexino.api.FreshnessPolicy freshness, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.api.IndexSnapshot>);
     method public suspend Object? snapshot(kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.api.IndexSnapshot>);
     field public static final dev.sebastiano.indexino.api.Indexino.Companion Companion;
   }
@@ -76,10 +83,33 @@ package dev.sebastiano.indexino.api {
     property public dev.sebastiano.indexino.model.IndexFailure failure;
   }
 
+  public final class RefreshCompleted implements dev.sebastiano.indexino.api.RefreshEvent {
+    ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public RefreshCompleted(dev.sebastiano.indexino.model.RefreshId refreshId, dev.sebastiano.indexino.api.RefreshResult result);
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.RefreshId getRefreshId();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.api.RefreshResult getResult();
+    property public dev.sebastiano.indexino.model.RefreshId refreshId;
+    property public dev.sebastiano.indexino.api.RefreshResult result;
+  }
+
+  public sealed exhaustive interface RefreshEvent {
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.RefreshId getRefreshId();
+    property public abstract dev.sebastiano.indexino.model.RefreshId refreshId;
+  }
+
+  public final class RefreshFailed implements dev.sebastiano.indexino.api.RefreshEvent {
+    ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public RefreshFailed(dev.sebastiano.indexino.model.RefreshId refreshId, dev.sebastiano.indexino.model.IndexFailure failure);
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.IndexFailure getFailure();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.RefreshId getRefreshId();
+    property public dev.sebastiano.indexino.model.IndexFailure failure;
+    property public dev.sebastiano.indexino.model.RefreshId refreshId;
+  }
+
   public final class RefreshHandle {
     ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public RefreshHandle(dev.sebastiano.indexino.model.RefreshId id, dev.sebastiano.indexino.api.RefreshResult result);
     method public suspend Object? await(kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.api.RefreshResult>);
+    method public kotlinx.coroutines.flow.Flow<dev.sebastiano.indexino.api.RefreshEvent> events();
     method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.RefreshId getId();
+    method public suspend Object? stop(kotlin.coroutines.Continuation<? super kotlin.Unit>);
     property public dev.sebastiano.indexino.model.RefreshId id;
   }
 
@@ -124,6 +154,28 @@ package dev.sebastiano.indexino.api {
     property public dev.sebastiano.indexino.model.RefreshId refreshId;
     property public dev.sebastiano.indexino.model.WorkspaceRevision revision;
     property public dev.sebastiano.indexino.api.IndexScope scope;
+  }
+
+  public final class RefreshStarted implements dev.sebastiano.indexino.api.RefreshEvent {
+    ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public RefreshStarted(dev.sebastiano.indexino.model.RefreshId refreshId);
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.RefreshId getRefreshId();
+    property public dev.sebastiano.indexino.model.RefreshId refreshId;
+  }
+
+  public final class RefreshStopped implements dev.sebastiano.indexino.api.RefreshEvent {
+    ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public RefreshStopped(dev.sebastiano.indexino.model.RefreshId refreshId, boolean resumable);
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.RefreshId getRefreshId();
+    method @InaccessibleFromKotlin public boolean getResumable();
+    property public dev.sebastiano.indexino.model.RefreshId refreshId;
+    property public boolean resumable;
+  }
+
+  public final class RefreshSummary {
+    ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public RefreshSummary(dev.sebastiano.indexino.model.RefreshId id, dev.sebastiano.indexino.api.RefreshRequest request);
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.RefreshId getId();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.api.RefreshRequest getRequest();
+    property public dev.sebastiano.indexino.model.RefreshId id;
+    property public dev.sebastiano.indexino.api.RefreshRequest request;
   }
 
   public final class SnapshotFreshness {

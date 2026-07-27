@@ -507,16 +507,14 @@ private constructor(
             store: CodeIndexStore,
             revision: WorkspaceRevision,
             generation: WorkspaceGenerationId,
+            freshnessAtAcquisition: SnapshotFreshness = SnapshotFreshness.UNKNOWN,
             onClose: () -> Unit = {},
         ): IndexSnapshot =
             IndexSnapshot(
                 store = store,
                 revision = revision,
                 generation = generation,
-                // S1 has no watcher / acquisition-time rehash, so currency cannot be proven.
-                // CURRENT becomes reportable with AWAIT_CURRENT (S3) and watcher reconciliation
-                // (S7).
-                freshnessAtAcquisition = SnapshotFreshness.UNKNOWN,
+                freshnessAtAcquisition = freshnessAtAcquisition,
                 onClose = onClose,
             )
     }
