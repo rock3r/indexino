@@ -16,7 +16,7 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
         val previousPluginFacts = context.store.prefixScan("plugin:").toList()
         try {
             analyzeMutable(context, selectedPluginIds)
-        } catch (failure: Throwable) {
+        } catch (@Suppress("TooGenericExceptionCaught") failure: Throwable) {
             context.store.prefixScan("plugin:").forEach { (key, _) -> context.store.delete(key) }
             previousPluginFacts.forEach { (key, record) -> context.store.put(key, record) }
             throw failure
@@ -72,8 +72,7 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
             }
             registry.postProcessors
                 .filter {
-                    it.pluginId.value == pluginId &&
-                        it.processor.level == PostProcessLevelV1.SHARD
+                    it.pluginId.value == pluginId && it.processor.level == PostProcessLevelV1.SHARD
                 }
                 .forEach { registered ->
                     runBlocking {

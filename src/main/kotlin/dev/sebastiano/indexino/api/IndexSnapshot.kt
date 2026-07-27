@@ -189,15 +189,17 @@ private constructor(
                                 retryable = false,
                             )
                     candidate.complete(
-                        registered.check.run(
-                            CheckContextV1(
-                                queries = this,
-                                facts = StorePluginFactView(store, request.pluginId.value),
-                                active = { !closed.get() },
+                        registered.check
+                            .run(
+                                CheckContextV1(
+                                    queries = this,
+                                    facts = StorePluginFactView(store, request.pluginId.value),
+                                    active = { !closed.get() },
+                                )
                             )
-                        ).toList()
+                            .toList()
                     )
-                } catch (thrown: Throwable) {
+                } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
                     candidate.completeExceptionally(thrown)
                     checkResults.remove(request, candidate)
                 }

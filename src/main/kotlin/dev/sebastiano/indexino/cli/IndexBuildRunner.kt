@@ -73,7 +73,9 @@ internal class IndexBuildRunner(
 
         val sourceFiles = topologyResult.sourceFiles
         val pluginRegistry = PluginRegistry.load(javaClass.classLoader)
-        val unknownApplications = applications.filter { PluginId.of(it) !in pluginRegistry.pluginIds() }
+        val unknownApplications = applications.filter {
+            PluginId.of(it) !in pluginRegistry.pluginIds()
+        }
         if (unknownApplications.isNotEmpty()) {
             val message = "unknown application(s): ${unknownApplications.joinToString()}"
             progress(message)
