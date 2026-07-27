@@ -11,6 +11,7 @@ import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.IndexManifest
 import dev.sebastiano.indexino.core.path.IndexPathResolver
+import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.store.IndexStoreOpener
 import dev.sebastiano.indexino.engine.InFlightRefresh
 import dev.sebastiano.indexino.engine.IndexingCoordinator
@@ -355,12 +356,10 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                 onClose = { releaseGeneration(generation.generation) },
             )
         } catch (thrown: IndexinoException) {
-            openedStore.close()
-            releaseGeneration(generation.generation)
+            closeStoreAndReleaseGeneration(openedStore, generation.generation, thrown)
             throw thrown
         } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
-            openedStore.close()
-            releaseGeneration(generation.generation)
+            closeStoreAndReleaseGeneration(openedStore, generation.generation, thrown)
             throw mapUnexpectedFailure(thrown)
         }
     }
@@ -508,6 +507,20 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         generationStores[generation] = storePath
         published = restored
         return restored
+    }
+
+    private fun closeStoreAndReleaseGeneration(
+        store: CodeIndexStore,
+        generation: WorkspaceGenerationId,
+        failure: Throwable,
+    ) {
+        try {
+            store.close()
+        } catch (@Suppress("TooGenericExceptionCaught") closeFailure: Throwable) {
+            failure.addSuppressed(closeFailure)
+        } finally {
+            releaseGeneration(generation)
+        }
     }
 
     private fun releaseGeneration(generation: WorkspaceGenerationId) {
