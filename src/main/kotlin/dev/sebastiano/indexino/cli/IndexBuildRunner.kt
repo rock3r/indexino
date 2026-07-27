@@ -150,6 +150,7 @@ internal class IndexBuildRunner(
         forceFullRebuild: Boolean,
     ) {
         val store = XodusCodeIndexStore.open(resolver.resolveBaseStore(commit))
+        val previousRecords = store.prefixScan("").toList()
         try {
             val changes = detectChanges(store, sourceFiles, forceFullRebuild)
             latestChanges = changes
@@ -188,6 +189,10 @@ internal class IndexBuildRunner(
                 )
             ManifestIO.write(resolver.resolveManifest(commit), manifest)
             latestManifest = manifest
+        } catch (@Suppress("TooGenericExceptionCaught") failure: Throwable) {
+            store.prefixScan("").forEach { (key, _) -> store.delete(key) }
+            previousRecords.forEach { (key, record) -> store.put(key, record) }
+            throw failure
         } finally {
             store.close()
         }
