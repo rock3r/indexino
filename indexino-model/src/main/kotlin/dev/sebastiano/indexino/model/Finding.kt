@@ -7,8 +7,10 @@ public constructor(
     public val checkId: String,
     public val message: String,
     public val range: SourceRange?,
-    public val properties: Map<String, String>,
+    properties: Map<String, String>,
 ) {
+    public val properties: Map<String, String> = properties.toMap()
+
     init {
         require(checkId.isNotBlank()) { "Check ID must not be blank" }
         require(message.isNotBlank()) { "Finding message must not be blank" }
