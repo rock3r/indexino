@@ -68,7 +68,9 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                     }
                 }
             } finally {
-                analyzers.forEach { (it.analyzer as? AutoCloseable)?.close() }
+                analyzers.forEach { analyzer ->
+                    runCatching { (analyzer.analyzer as? AutoCloseable)?.close() }
+                }
             }
             registry.postProcessors
                 .filter {
