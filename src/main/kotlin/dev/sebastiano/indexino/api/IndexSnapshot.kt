@@ -31,6 +31,7 @@ import dev.sebastiano.indexino.plugin.api.CheckContextV1
 import java.util.PriorityQueue
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CompletableDeferred
 
 public class IndexSnapshot
 private constructor(
@@ -44,7 +45,7 @@ private constructor(
 ) : BasicFactQueries, AutoCloseable {
     private val closed = AtomicBoolean()
     private val queries = IndexSnapshotQueries(generation)
-    private val checkResults = ConcurrentHashMap<CheckRequest, List<Finding>>()
+    private val checkResults = ConcurrentHashMap<CheckRequest, CompletableDeferred<List<Finding>>>()
 
     override suspend fun findSymbols(query: SymbolQuery, options: QueryOptions): QueryPage<Symbol> {
         ensureOpen()
@@ -172,30 +173,36 @@ private constructor(
         ensureOpen()
         validateQueryOptions(options)
         return mapUnexpectedFailuresSuspend {
-            val findings =
-                checkResults[request]
-                    ?: run {
-                        val registered =
-                            pluginRegistry.checks.firstOrNull {
-                                it.pluginId == request.pluginId && it.check.id == request.checkId
-                            }
-                                ?: throw indexinoFailure(
-                                    category = IndexFailureCategory.INVALID_REQUEST,
-                                    code = "unknown_check",
-                                    message =
-                                        "No check '${request.checkId}' is registered for ${request.pluginId.value}",
-                                    retryable = false,
-                                )
-                        val computed =
-                            registered.check.run(
-                                CheckContextV1(
-                                    queries = this,
-                                    facts = StorePluginFactView(store, request.pluginId.value),
-                                    active = { !closed.get() },
-                                )
+            val candidate = CompletableDeferred<List<Finding>>()
+            val deferred = checkResults.putIfAbsent(request, candidate) ?: candidate
+            if (deferred === candidate) {
+                try {
+                    val registered =
+                        pluginRegistry.checks.firstOrNull {
+                            it.pluginId == request.pluginId && it.check.id == request.checkId
+                        }
+                            ?: throw indexinoFailure(
+                                category = IndexFailureCategory.INVALID_REQUEST,
+                                code = "unknown_check",
+                                message =
+                                    "No check '${request.checkId}' is registered for ${request.pluginId.value}",
+                                retryable = false,
                             )
-                        checkResults.putIfAbsent(request, computed) ?: computed
-                    }
+                    candidate.complete(
+                        registered.check.run(
+                            CheckContextV1(
+                                queries = this,
+                                facts = StorePluginFactView(store, request.pluginId.value),
+                                active = { !closed.get() },
+                            )
+                        )
+                    )
+                } catch (thrown: Throwable) {
+                    candidate.completeExceptionally(thrown)
+                    checkResults.remove(request, candidate)
+                }
+            }
+            val findings = deferred.await()
             val start = options.offset.coerceAtMost(findings.size)
             val end = (start + options.limit).coerceAtMost(findings.size)
             QueryPage(

@@ -83,13 +83,22 @@ internal class QueryCommand : CliktCommand(name = "query") {
                 freshnessAtAcquisition = SnapshotFreshness.UNKNOWN,
             )
         try {
-            val findings = runBlocking {
-                snapshot.runCheck(
-                    CheckRequest.of(PluginId.of(application), checkId),
-                    QueryOptions.page(limit = QUERY_LIMIT),
-                )
+            runBlocking {
+                val request = CheckRequest.of(PluginId.of(application), checkId)
+                var offset = 0
+                do {
+                    val findings =
+                        snapshot.runCheck(
+                            request,
+                            QueryOptions.page(limit = QUERY_LIMIT, offset = offset),
+                        )
+                    findings.items.map(::toJsonl).forEach(output)
+                    check(!findings.hasMore || findings.items.isNotEmpty()) {
+                        "Check '${checkId}' returned an empty page with more results"
+                    }
+                    offset += findings.items.size
+                } while (findings.hasMore)
             }
-            findings.items.map(::toJsonl).forEach(output)
         } finally {
             snapshot.close()
         }
