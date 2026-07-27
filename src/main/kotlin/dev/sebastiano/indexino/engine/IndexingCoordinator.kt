@@ -14,7 +14,10 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
-internal class InFlightRefresh(internal val id: RefreshId, private val onStop: () -> Unit) {
+internal class InFlightRefresh(
+    internal val id: RefreshId,
+    private val onStop: (InFlightRefresh) -> Unit,
+) {
     internal val result: CompletableFuture<RefreshResult> = CompletableFuture()
     internal val terminalEvent: CompletableFuture<RefreshEvent> = CompletableFuture()
     private val stopped = AtomicBoolean()
@@ -29,13 +32,13 @@ internal class InFlightRefresh(internal val id: RefreshId, private val onStop: (
         if (stopped.compareAndSet(false, true)) {
             terminalEvent.complete(RefreshStopped(id, resumable = true))
             result.cancel(false)
-            onStop()
+            onStop(this)
             worker.get()?.interrupt()
         }
     }
 
     internal fun checkActive() {
-        if (stopped.get() || Thread.currentThread().isInterrupted) {
+        if (stopped.get()) {
             throw CancellationException("Refresh was stopped")
         }
     }
@@ -62,8 +65,8 @@ internal object IndexingCoordinator {
     ): InFlightRefresh =
         activeRefreshes.computeIfAbsent(RefreshKey(workspace, request)) { key ->
             val operation =
-                InFlightRefresh(RefreshId.of(java.util.UUID.randomUUID().toString())) {
-                    activeRefreshes.remove(key)
+                InFlightRefresh(RefreshId.of(java.util.UUID.randomUUID().toString())) { operation ->
+                    activeRefreshes.remove(key, operation)
                 }
             refreshExecutor.execute {
                 operation.bindWorker(Thread.currentThread())

@@ -138,12 +138,14 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
     }
 
     @OptIn(IndexinoInternalApi::class)
-    public suspend fun activeRefreshes(): List<RefreshSummary> =
-        IndexingCoordinator.active(workspace)
+    public suspend fun activeRefreshes(): List<RefreshSummary> {
+        ensureOpen()
+        return IndexingCoordinator.active(workspace)
             .asSequence()
             .map { (request, operation) -> RefreshSummary(operation.id, request) }
             .sortedBy { summary -> summary.id.value }
             .toList()
+    }
 
     @OptIn(IndexinoInternalApi::class)
     private fun runRefresh(
@@ -259,7 +261,9 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         synchronized(generationLock) {
             if (closed.get()) {
                 // Publication is workspace-owned, but this closed client no longer owns a ref.
-                publishedStore.path.parent.toFile().deleteRecursively()
+                if (publishedStore.created) {
+                    publishedStore.path.parent.toFile().deleteRecursively()
+                }
                 return
             }
             generationStores[generation] = publishedStore.path
