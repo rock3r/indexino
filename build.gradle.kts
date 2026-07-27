@@ -74,7 +74,12 @@ tasks
     .matching { it.name.startsWith("ktfmtCheck") || it.name.startsWith("ktfmtFormat") }
     .configureEach { (this as? org.gradle.api.tasks.SourceTask)?.exclude(*generatedSourceExcludes) }
 
-sourceSets.main { resources.srcDir("config") }
+sourceSets.main {
+    resources.srcDir("config")
+    // Selection-context owns these runtime resources; keeping legacy root copies makes the
+    // reproducible CLI archive reject duplicate entries when the plugin is bundled.
+    resources.exclude("idea-home/**", "presets/known-wrappers.json")
+}
 
 repositories {
     mavenCentral()

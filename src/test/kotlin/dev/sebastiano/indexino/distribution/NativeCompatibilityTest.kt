@@ -358,6 +358,7 @@ class NativeCompatibilityTest {
                 "sourcesContentHash",
                 "builtAt",
                 "applications",
+                "pluginCoordinates",
             ),
             json.keys,
         )
