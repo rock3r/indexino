@@ -38,24 +38,47 @@ internal class SelectionContextCheck : IndexinoCheckV1 {
                     QueryOptions.page(MAX_FINDINGS_PER_RUN, offset),
                 )
             findings +=
-                page.items.mapNotNull { entry ->
+                page.items.flatMap { entry ->
                     val fields =
-                        (entry.value as? PluginFactValue.Struct)?.fields ?: return@mapNotNull null
+                        (entry.value as? PluginFactValue.Struct)?.fields
+                            ?: return@flatMap emptyList()
                     val inSelection =
                         (fields["inSelectionContainer"] as? PluginFactValue.Bool)?.value ?: false
                     val excluded =
                         (fields["excludedByDisableSelection"] as? PluginFactValue.Bool)?.value
                             ?: false
-                    if (!inSelection || excluded) return@mapNotNull null
+                    if (!inSelection || excluded) return@flatMap emptyList()
                     val callee = (fields["callee"] as? PluginFactValue.Text)?.value ?: "<unknown>"
-                    if (callee !in INTERACTIVE_CALLEES) return@mapNotNull null
-                    Finding(
-                        plugin = PluginId.of("dev.sebastiano.selection-context"),
-                        checkId = id,
-                        message = "$callee is interactive inside SelectionContainer",
-                        range = entry.range,
-                        properties = mapOf("factKey" to entry.key, "callee" to callee),
-                    )
+                    val findings = mutableListOf<Finding>()
+                    val selectionContainerCount =
+                        (fields["selectionContainerCount"] as? PluginFactValue.Integer)?.value ?: 0
+                    if (selectionContainerCount > 1) {
+                        findings +=
+                            Finding(
+                                plugin = PluginId.of("dev.sebastiano.selection-context"),
+                                checkId = id,
+                                message = "$callee is inside nested SelectionContainers",
+                                range = entry.range,
+                                properties =
+                                    mapOf(
+                                        "factKey" to entry.key,
+                                        "callee" to callee,
+                                        "selectionContainerCount" to
+                                            selectionContainerCount.toString(),
+                                    ),
+                            )
+                    }
+                    if (callee in INTERACTIVE_CALLEES) {
+                        findings +=
+                            Finding(
+                                plugin = PluginId.of("dev.sebastiano.selection-context"),
+                                checkId = id,
+                                message = "$callee is interactive inside SelectionContainer",
+                                range = entry.range,
+                                properties = mapOf("factKey" to entry.key, "callee" to callee),
+                            )
+                    }
+                    findings
                 }
             offset += page.items.size
             if (page.items.isEmpty()) break

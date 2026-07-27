@@ -52,18 +52,7 @@ the index supplies **facts** from `.indexino/index/<commit>/` (persistent — bu
      --format jsonl
    ```
 
-5. **Point query** for a diff line:
-
-   ```bash
-   java -jar /path/to/indexino-*-all.jar query \
-     --project /path/to/target-repo \
-     --application dev.sebastiano.selection-context \
-     --file relative/path/Panel.kt \
-     --line 142 \
-     --format jsonl
-   ```
-
-6. **Session overlay** (optional — reads base + delta when agent edited files in-session):
+5. **Session overlay** (optional — reads base + delta when agent edited files in-session):
 
    ```bash
    java -jar /path/to/indexino-*-all.jar query \
