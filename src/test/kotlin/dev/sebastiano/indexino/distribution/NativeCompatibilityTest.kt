@@ -377,7 +377,7 @@ class NativeCompatibilityTest {
             "--gradle-module",
             ":app",
             "--applications",
-            "selection-context",
+            "dev.sebastiano.selection-context",
         )
 
     private fun createFixtureWorkspace(): Path {

@@ -28,26 +28,38 @@ internal class SelectionContextCheck : IndexinoCheckV1 {
             )
     }
 
-    override suspend fun run(context: CheckContextV1): List<Finding> =
-        context.facts
-            .entries("selection-site:", QueryOptions.page(MAX_FINDINGS_PER_RUN))
-            .items
-            .mapNotNull { entry ->
-                val fields =
-                    (entry.value as? PluginFactValue.Struct)?.fields ?: return@mapNotNull null
-                val inSelection =
-                    (fields["inSelectionContainer"] as? PluginFactValue.Bool)?.value ?: false
-                val excluded =
-                    (fields["excludedByDisableSelection"] as? PluginFactValue.Bool)?.value ?: false
-                if (!inSelection || excluded) return@mapNotNull null
-                val callee = (fields["callee"] as? PluginFactValue.Text)?.value ?: "<unknown>"
-                if (callee !in INTERACTIVE_CALLEES) return@mapNotNull null
-                Finding(
-                    plugin = PluginId.of("dev.sebastiano.selection-context"),
-                    checkId = id,
-                    message = "$callee is interactive inside SelectionContainer",
-                    range = entry.range,
-                    properties = mapOf("factKey" to entry.key, "callee" to callee),
+    override suspend fun run(context: CheckContextV1): List<Finding> {
+        val findings = mutableListOf<Finding>()
+        var offset = 0
+        do {
+            val page =
+                context.facts.entries(
+                    "selection-site:",
+                    QueryOptions.page(MAX_FINDINGS_PER_RUN, offset),
                 )
-            }
+            findings +=
+                page.items.mapNotNull { entry ->
+                    val fields =
+                        (entry.value as? PluginFactValue.Struct)?.fields ?: return@mapNotNull null
+                    val inSelection =
+                        (fields["inSelectionContainer"] as? PluginFactValue.Bool)?.value ?: false
+                    val excluded =
+                        (fields["excludedByDisableSelection"] as? PluginFactValue.Bool)?.value
+                            ?: false
+                    if (!inSelection || excluded) return@mapNotNull null
+                    val callee = (fields["callee"] as? PluginFactValue.Text)?.value ?: "<unknown>"
+                    if (callee !in INTERACTIVE_CALLEES) return@mapNotNull null
+                    Finding(
+                        plugin = PluginId.of("dev.sebastiano.selection-context"),
+                        checkId = id,
+                        message = "$callee is interactive inside SelectionContainer",
+                        range = entry.range,
+                        properties = mapOf("factKey" to entry.key, "callee" to callee),
+                    )
+                }
+            offset += page.items.size
+            if (page.items.isEmpty()) break
+        } while (page.hasMore)
+        return findings
+    }
 }

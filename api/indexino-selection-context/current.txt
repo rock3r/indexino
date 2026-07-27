@@ -1,0 +1,10 @@
+// Signature format: 5.0
+package dev.sebastiano.indexino.plugin.selection {
+
+  public final class SelectionContextPlugin implements dev.sebastiano.indexino.plugin.api.IndexinoPluginProvider {
+    ctor public SelectionContextPlugin();
+    method public void install(dev.sebastiano.indexino.plugin.api.IndexinoPluginRegistrar registrar);
+  }
+
+}
+

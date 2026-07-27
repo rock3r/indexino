@@ -1,3 +1,5 @@
+import java.io.File
+
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.detekt)
@@ -34,3 +36,78 @@ dependencies {
 }
 
 tasks.test { useJUnitPlatform() }
+
+val metalava by configurations.creating
+
+dependencies { metalava(libs.metalava) }
+
+val metalavaOutput = layout.buildDirectory.file("metalava/indexino-plugin-api-current.txt")
+val reviewedMetalavaSignature =
+    rootProject.layout.projectDirectory.file("api/indexino-plugin-api/current.txt")
+val jdk25Launcher = javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) }
+
+val metalavaGenerateSignature by
+    tasks.registering(JavaExec::class) {
+        dependsOn(tasks.named("classes"))
+        classpath = metalava
+        mainClass.set("com.android.tools.metalava.Driver")
+        javaLauncher.set(jdk25Launcher)
+        outputs.file(metalavaOutput)
+        doFirst {
+            args =
+                listOf(
+                    "--source-path",
+                    layout.projectDirectory.dir("src/main/kotlin").asFile.absolutePath,
+                    "--classpath",
+                    sourceSets.main
+                        .get()
+                        .compileClasspath
+                        .files
+                        .filter { it.exists() }
+                        .joinToString(File.pathSeparator),
+                    "--jdk-home",
+                    jdk25Launcher.get().metadata.installationPath.asFile.absolutePath,
+                    "--kotlin-source",
+                    "2.4",
+                    "--format=5.0",
+                    "--api",
+                    metalavaOutput.get().asFile.absolutePath,
+                    "--api-lint",
+                    "--error",
+                    "ValueClassDefinition",
+                    "--error",
+                    "MissingJvmstatic",
+                    "--hide",
+                    "GetterSetterNames",
+                    "--hide",
+                    "AutoBoxing",
+                    "--hide",
+                    "UserHandleName",
+                    "--hide",
+                    "Enum",
+                )
+        }
+    }
+
+val metalavaUpdateSignature by tasks.registering {
+    dependsOn(metalavaGenerateSignature)
+    doLast {
+        reviewedMetalavaSignature.asFile.apply {
+            parentFile.mkdirs()
+            writeText(metalavaOutput.get().asFile.readText())
+        }
+    }
+}
+
+val metalavaCheckSignature by tasks.registering {
+    dependsOn(metalavaGenerateSignature)
+    doLast {
+        check(
+            metalavaOutput.get().asFile.readText() == reviewedMetalavaSignature.asFile.readText()
+        ) {
+            "Generated signature differs from api/indexino-plugin-api/current.txt"
+        }
+    }
+}
+
+tasks.named("check") { dependsOn(metalavaCheckSignature) }

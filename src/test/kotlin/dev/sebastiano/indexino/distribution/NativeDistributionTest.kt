@@ -764,7 +764,7 @@ class NativeDistributionTest {
                 "--gradle-module",
                 ":app",
                 "--applications",
-                "selection-context",
+                "dev.sebastiano.selection-context",
             )
         assertEquals(0, index.exitCode, index.diagnostic())
 
@@ -784,7 +784,7 @@ class NativeDistributionTest {
                 "--gradle-module",
                 ":app",
                 "--applications",
-                "selection-context",
+                "dev.sebastiano.selection-context",
             )
         assertEquals(0, freshIndex.exitCode, freshIndex.diagnostic())
         assertContains(freshIndex.stderr, "index fresh")

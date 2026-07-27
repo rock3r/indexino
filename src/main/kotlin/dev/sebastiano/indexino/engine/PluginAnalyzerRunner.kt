@@ -5,6 +5,8 @@ import dev.sebastiano.indexino.core.plugin.StorePluginFactSink
 import dev.sebastiano.indexino.model.SourceFile
 import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.plugin.api.FileAnalysisContextV1
+import dev.sebastiano.indexino.plugin.api.PostProcessContextV1
+import dev.sebastiano.indexino.plugin.api.PostProcessLevelV1
 import dev.sebastiano.indexino.producer.IndexBuildContext
 import kotlinx.coroutines.runBlocking
 
@@ -25,7 +27,8 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
             .filter { it.pluginId.value in selectedPluginIds }
             .groupBy { it.pluginId.value }
             .forEach { (pluginId, analyzers) ->
-                (context.sourceFiles + context.deletedSourceFiles).forEach { relativeFile ->
+                (context.sourceFiles + context.deletedSourceFiles + POST_PROCESSOR_FILE).forEach {
+                    relativeFile ->
                     context.store
                         .prefixScan(CodeIndexKey.pluginFactFilePrefix(pluginId, relativeFile))
                         .forEach { (key, _) -> context.store.delete(key) }
@@ -58,6 +61,30 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                 } finally {
                     analyzers.forEach { (it.analyzer as? AutoCloseable)?.close() }
                 }
+                registry.postProcessors
+                    .filter { it.pluginId.value == pluginId }
+                    .forEach { registered ->
+                        check(registered.processor.level == PostProcessLevelV1.COMPOSITE) {
+                            "Shard post-processors are not supported by the current build runner"
+                        }
+                        runBlocking {
+                            registered.processor.process(
+                                PostProcessContextV1(
+                                    facts =
+                                        StorePluginFactSink(
+                                            context.store,
+                                            pluginId,
+                                            POST_PROCESSOR_FILE,
+                                        ),
+                                    active = { true },
+                                )
+                            )
+                        }
+                    }
             }
+    }
+
+    private companion object {
+        const val POST_PROCESSOR_FILE: String = "__postprocess__"
     }
 }

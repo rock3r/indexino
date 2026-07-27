@@ -106,6 +106,7 @@ internal class StatusCommand : CliktCommand(name = "status") {
                 includeDeps = request.includeDeps,
                 sourcesContentHash = currentHash,
                 applications = manifest.applications,
+                pluginCoordinates = manifest.pluginCoordinates,
             )
         val fresh = ManifestFreshness.isFresh(manifest, criteria)
 
