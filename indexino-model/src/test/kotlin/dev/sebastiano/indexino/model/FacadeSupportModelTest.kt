@@ -40,6 +40,27 @@ class FacadeSupportModelTest {
 
     @OptIn(IndexinoInternalApi::class)
     @Test
+    fun `findings snapshot immutable properties`() {
+        val mutableProperties = linkedMapOf("severity" to "warning")
+        val finding =
+            Finding(
+                plugin = PluginId.of("dev.sebastiano.selection-context"),
+                checkId = "interactive-in-selection",
+                message = "Interactive call is selectable",
+                range = null,
+                properties = mutableProperties,
+            )
+        mutableProperties["severity"] = "error"
+
+        assertEquals(mapOf("severity" to "warning"), finding.properties)
+        assertFailsWith<UnsupportedOperationException> {
+            @Suppress("UNCHECKED_CAST")
+            (finding.properties as MutableMap<String, String>)["severity"] = "error"
+        }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    @Test
     fun `workspace provenance and failures are engine produced structural values`() {
         val originId = SourceOriginId.of("workspace")
         val originRevision =
