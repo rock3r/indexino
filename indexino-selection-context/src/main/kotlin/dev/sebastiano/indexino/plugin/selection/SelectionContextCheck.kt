@@ -47,7 +47,7 @@ internal class SelectionContextCheck : IndexinoCheckV1 {
                     val excluded =
                         (fields["excludedByDisableSelection"] as? PluginFactValue.Bool)?.value
                             ?: false
-                    if (!inSelection || excluded) return@flatMap emptyList()
+                    if (!inSelection) return@flatMap emptyList()
                     val callee = (fields["callee"] as? PluginFactValue.Text)?.value ?: "<unknown>"
                     val findings = mutableListOf<Finding>()
                     val selectionContainerCount =
@@ -68,7 +68,7 @@ internal class SelectionContextCheck : IndexinoCheckV1 {
                                     ),
                             )
                     }
-                    if (callee in INTERACTIVE_CALLEES) {
+                    if (!excluded && callee in INTERACTIVE_CALLEES) {
                         findings +=
                             Finding(
                                 plugin = PluginId.of("dev.sebastiano.selection-context"),
