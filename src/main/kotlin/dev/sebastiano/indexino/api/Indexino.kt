@@ -12,6 +12,8 @@ import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.IndexManifest
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.core.store.IndexStoreOpener
+import dev.sebastiano.indexino.engine.InFlightRefresh
+import dev.sebastiano.indexino.engine.IndexingCoordinator
 import dev.sebastiano.indexino.model.IndexFailureCategory
 import dev.sebastiano.indexino.model.IndexinoInternalApi
 import dev.sebastiano.indexino.model.RefreshId
@@ -27,7 +29,7 @@ import java.nio.file.Path
 import java.security.MessageDigest
 import java.util.HexFormat
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
 
 private const val BASIC_FACT_SCHEMA_VERSION = 1
@@ -56,11 +58,6 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
     @Volatile internal var observedIncludeDepsOverrideForTests: Boolean? = null
 
     public companion object {
-        private val workspaceRefreshLocks = ConcurrentHashMap<Path, Any>()
-
-        private fun refreshLockFor(workspace: Path): Any =
-            workspaceRefreshLocks.computeIfAbsent(workspace) { Any() }
-
         /**
          * Test-only seam: replaces [Path.toRealPath] during [connectBlocking]. Production leaves
          * this null.
@@ -104,24 +101,62 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
     public suspend fun refresh(request: RefreshRequest): RefreshHandle {
         ensureOpen()
         requireSupportedScope(request.scope)
-        val refreshId = RefreshId.of(UUID.randomUUID().toString())
-        val applications =
-            request.plugins.map { plugin ->
-                when (plugin.value) {
-                    "dev.sebastiano.selection-context" -> "selection-context"
-                    else ->
-                        throw failure(
-                            category = IndexFailureCategory.INVALID_REQUEST,
-                            code = "unknown_plugin",
-                            message = "Plugin ${plugin.value} is not loaded",
-                            retryable = false,
+        val applications = applicationsFor(request)
+        val operation =
+            IndexingCoordinator.start(workspace, request) { created ->
+                try {
+                    val result = runRefresh(request, created.id, applications, created)
+                    if (!created.isStopped()) {
+                        created.result.complete(result)
+                        created.terminalEvent.complete(RefreshCompleted(created.id, result))
+                    }
+                } catch (cancelled: CancellationException) {
+                    if (!created.isStopped()) {
+                        val failure = mapRefreshFailure(cancelled)
+                        created.result.completeExceptionally(failure)
+                        created.terminalEvent.complete(
+                            RefreshHandle.failed(created.id, failure.failure)
                         )
+                    }
+                } catch (thrown: IndexinoException) {
+                    created.result.completeExceptionally(thrown)
+                    created.terminalEvent.complete(RefreshHandle.failed(created.id, thrown.failure))
+                } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
+                    val failure = mapRefreshFailure(thrown)
+                    created.result.completeExceptionally(failure)
+                    created.terminalEvent.complete(
+                        RefreshHandle.failed(created.id, failure.failure)
+                    )
                 }
             }
+        return RefreshHandle.inFlight(
+            operation.id,
+            operation.result,
+            operation.terminalEvent,
+            operation::stop,
+        )
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    public suspend fun activeRefreshes(): List<RefreshSummary> =
+        IndexingCoordinator.active(workspace)
+            .asSequence()
+            .map { (request, operation) -> RefreshSummary(operation.id, request) }
+            .sortedBy { summary -> summary.id.value }
+            .toList()
+
+    @OptIn(IndexinoInternalApi::class)
+    private fun runRefresh(
+        request: RefreshRequest,
+        refreshId: RefreshId,
+        applications: List<String>,
+        operation: InFlightRefresh,
+    ): RefreshResult {
         // Serialize in-process peers across run+copy so a shared commit writer cannot mutate while
         // another client copies it. Cross-process single-writer election remains S6.
-        synchronized(refreshLockFor(workspace)) {
+        synchronized(IndexingCoordinator.refreshLockFor(workspace)) {
             try {
+                operation.checkActive()
                 val execution =
                     IndexBuildRunner(
                             project = workspace,
@@ -129,11 +164,12 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                             applications = applications,
                             bazelQueryExecutor = null,
                             bazelProcessRunner = null,
-                            progress = {},
+                            progress = { operation.checkActive() },
                             machineProgress = null,
                             storeRootOverride = storeRoot,
                         )
                         .runDetailed()
+                operation.checkActive()
                 val manifest =
                     execution.manifest
                         ?: throw buildFailure(
@@ -148,6 +184,7 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                 )
                 val revision = manifest.toWorkspaceRevision()
                 val generation = manifest.toGenerationId(revision)
+                operation.checkActive()
                 publishGenerationOrAbortIfClosed(manifest.commit, generation, revision)
                 val changedFileCount = execution.changes?.changedFiles?.size ?: 0
                 val removedFileCount = execution.changes?.deletedFiles?.size ?: 0
@@ -171,7 +208,7 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                                 removedFileCount = removedFileCount,
                             ),
                     )
-                return RefreshHandle(refreshId, result)
+                return result
             } catch (thrown: IndexinoException) {
                 throw thrown
             } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
@@ -181,6 +218,20 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
             }
         }
     }
+
+    private fun applicationsFor(request: RefreshRequest): List<String> =
+        request.plugins.map { plugin ->
+            when (plugin.value) {
+                "dev.sebastiano.selection-context" -> "selection-context"
+                else ->
+                    throw failure(
+                        category = IndexFailureCategory.INVALID_REQUEST,
+                        code = "unknown_plugin",
+                        message = "Plugin ${plugin.value} is not loaded",
+                        retryable = false,
+                    )
+            }
+        }
 
     private fun requireSupportedScope(scope: IndexScope) {
         if (scope.buildSystem == BuildSystem.BAZEL && !scope.includesDependencies) {
@@ -203,32 +254,13 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         generation: WorkspaceGenerationId,
         revision: WorkspaceRevision,
     ) {
-        // Optional optimisation only — the under-lock check below remains load-bearing.
-        if (closed.get()) {
-            throw failure(
-                category = IndexFailureCategory.CLOSED,
-                code = "client_closed",
-                message = "Indexino client is closed",
-                retryable = false,
-            )
-        }
         val publishedStore = publishGenerationStore(commit, generation, revision)
         afterPublishGenerationStoreForTests?.invoke()
         synchronized(generationLock) {
-            // Mirror snapshot(): close may have raced during the long index+copy while
-            // generationLock was free. Never publish onto a closed client (CAS close will not
-            // run again to reclaim this copy).
             if (closed.get()) {
-                // Undo exactly what this publish did: delete only a directory we created.
-                if (publishedStore.created) {
-                    publishedStore.path.parent.toFile().deleteRecursively()
-                }
-                throw failure(
-                    category = IndexFailureCategory.CLOSED,
-                    code = "client_closed",
-                    message = "Indexino client is closed",
-                    retryable = false,
-                )
+                // Publication is workspace-owned, but this closed client no longer owns a ref.
+                publishedStore.path.parent.toFile().deleteRecursively()
+                return
             }
             generationStores[generation] = publishedStore.path
             published =
@@ -241,8 +273,25 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         }
     }
 
-    public suspend fun snapshot(): IndexSnapshot {
+    public suspend fun snapshot(): IndexSnapshot = snapshot(FreshnessPolicy.PUBLISHED)
+
+    public suspend fun snapshot(freshness: FreshnessPolicy): IndexSnapshot {
         ensureOpen()
+        if (freshness == FreshnessPolicy.AWAIT_CURRENT) {
+            IndexingCoordinator.active(workspace)
+                .asSequence()
+                .map { (_, operation) -> operation }
+                .distinct()
+                .forEach { operation ->
+                    RefreshHandle.inFlight(
+                            operation.id,
+                            operation.result,
+                            operation.terminalEvent,
+                            operation::stop,
+                        )
+                        .await()
+                }
+        }
         val generation =
             try {
                 synchronized(generationLock) {
@@ -290,6 +339,12 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
             store = openedStore,
             revision = generation.revision,
             generation = generation.generation,
+            freshnessAtAcquisition =
+                if (freshness == FreshnessPolicy.AWAIT_CURRENT) {
+                    SnapshotFreshness.CURRENT
+                } else {
+                    SnapshotFreshness.UNKNOWN
+                },
             onClose = { releaseGeneration(generation.generation) },
         )
     }
