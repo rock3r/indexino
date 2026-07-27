@@ -23,65 +23,63 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                     context.store.delete(key)
                 }
             }
-        registry.fileAnalyzers
-            .filter { it.pluginId.value in selectedPluginIds }
-            .groupBy { it.pluginId.value }
-            .forEach { (pluginId, analyzers) ->
-                (context.sourceFiles + context.deletedSourceFiles + POST_PROCESSOR_FILE).forEach {
-                    relativeFile ->
-                    context.store
-                        .prefixScan(CodeIndexKey.pluginFactFilePrefix(pluginId, relativeFile))
-                        .forEach { (key, _) -> context.store.delete(key) }
-                }
-                try {
-                    context.sourceFiles.forEach { relativeFile ->
-                        analyzers.forEach { registered ->
-                            runBlocking {
-                                registered.analyzer.analyze(
-                                    FileAnalysisContextV1(
-                                        file =
-                                            SourceFile.of(
-                                                SourceOriginId.of("workspace"),
-                                                relativeFile,
-                                                relativeFile,
-                                            ),
-                                        sourceText = context.readSource(relativeFile),
-                                        facts =
-                                            StorePluginFactSink(
-                                                context.store,
-                                                pluginId,
-                                                relativeFile,
-                                            ),
-                                        active = { true },
-                                    )
-                                )
-                            }
-                        }
-                    }
-                } finally {
-                    analyzers.forEach { (it.analyzer as? AutoCloseable)?.close() }
-                }
-                registry.postProcessors
-                    .filter { it.pluginId.value == pluginId }
-                    .forEach { registered ->
-                        check(registered.processor.level == PostProcessLevelV1.COMPOSITE) {
-                            "Shard post-processors are not supported by the current build runner"
-                        }
+        val analyzersByPlugin =
+            registry.fileAnalyzers
+                .filter { it.pluginId.value in selectedPluginIds }
+                .groupBy { it.pluginId.value }
+        selectedPluginIds.forEach { pluginId ->
+            val analyzers = analyzersByPlugin[pluginId].orEmpty()
+            (context.sourceFiles + context.deletedSourceFiles + POST_PROCESSOR_FILE).forEach {
+                relativeFile ->
+                context.store
+                    .prefixScan(CodeIndexKey.pluginFactFilePrefix(pluginId, relativeFile))
+                    .forEach { (key, _) -> context.store.delete(key) }
+            }
+            try {
+                context.sourceFiles.forEach { relativeFile ->
+                    analyzers.forEach { registered ->
                         runBlocking {
-                            registered.processor.process(
-                                PostProcessContextV1(
-                                    facts =
-                                        StorePluginFactSink(
-                                            context.store,
-                                            pluginId,
-                                            POST_PROCESSOR_FILE,
+                            registered.analyzer.analyze(
+                                FileAnalysisContextV1(
+                                    file =
+                                        SourceFile.of(
+                                            SourceOriginId.of("workspace"),
+                                            relativeFile,
+                                            relativeFile,
                                         ),
+                                    sourceText = context.readSource(relativeFile),
+                                    facts =
+                                        StorePluginFactSink(context.store, pluginId, relativeFile),
                                     active = { true },
                                 )
                             )
                         }
                     }
+                }
+            } finally {
+                analyzers.forEach { (it.analyzer as? AutoCloseable)?.close() }
             }
+            registry.postProcessors
+                .filter { it.pluginId.value == pluginId }
+                .forEach { registered ->
+                    check(registered.processor.level == PostProcessLevelV1.COMPOSITE) {
+                        "Shard post-processors are not supported by the current build runner"
+                    }
+                    runBlocking {
+                        registered.processor.process(
+                            PostProcessContextV1(
+                                facts =
+                                    StorePluginFactSink(
+                                        context.store,
+                                        pluginId,
+                                        POST_PROCESSOR_FILE,
+                                    ),
+                                active = { true },
+                            )
+                        )
+                    }
+                }
+        }
     }
 
     private companion object {

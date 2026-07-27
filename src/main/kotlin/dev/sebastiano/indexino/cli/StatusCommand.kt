@@ -12,6 +12,7 @@ import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.ManifestFreshness
 import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
+import dev.sebastiano.indexino.engine.PluginRegistry
 import dev.sebastiano.indexino.producer.FileHashProducer
 import dev.sebastiano.indexino.topology.BuildSystem
 import dev.sebastiano.indexino.topology.TopologyRequest
@@ -97,6 +98,8 @@ internal class StatusCommand : CliktCommand(name = "status") {
                 bazelProcessRunner = bazelProcessRunner,
             )
         val currentHash = FileHashProducer.combinedSourcesHash(project, topologyResult.sourceFiles)
+        val pluginCoordinates =
+            PluginRegistry.load(javaClass.classLoader).selectedCoordinates(manifest.applications)
         val criteria =
             ManifestFreshness.criteriaFrom(
                 commit = commit,
@@ -106,7 +109,7 @@ internal class StatusCommand : CliktCommand(name = "status") {
                 includeDeps = request.includeDeps,
                 sourcesContentHash = currentHash,
                 applications = manifest.applications,
-                pluginCoordinates = manifest.pluginCoordinates,
+                pluginCoordinates = pluginCoordinates,
             )
         val fresh = ManifestFreshness.isFresh(manifest, criteria)
 
