@@ -8,9 +8,11 @@ import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import com.github.ajalt.clikt.parameters.options.split
 import com.github.ajalt.clikt.parameters.types.file
+import dev.sebastiano.indexino.api.AutoRefreshMode
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.api.IndexScope
 import dev.sebastiano.indexino.api.Indexino
+import dev.sebastiano.indexino.api.IndexinoConfiguration
 import dev.sebastiano.indexino.api.RefreshRequest
 import dev.sebastiano.indexino.core.Version
 import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
@@ -40,6 +42,7 @@ internal class IndexCommand : CliktCommand(name = "index") {
     private val bazelTarget by option("--bazel-target")
     private val gradleModule by option("--gradle-module")
     private val includeDeps by option("--include-deps").flag(default = false)
+    private val noAutoRefresh by option("--no-auto-refresh").flag(default = false)
     private val applications by option("--applications").split(",").default(emptyList())
     private val progressFormat by option("--progress-format").default("text")
 
@@ -59,18 +62,35 @@ internal class IndexCommand : CliktCommand(name = "index") {
         val scope = daemonScope(project.toPath())
         if (jsonlProgress) JsonlIndexBuildProgressReporter { echo(it) }.discoveryStarted()
         runBlocking {
-            Indexino.connect(project.toPath()).use { indexino ->
-                val request =
-                    applications.filter(String::isNotBlank).fold(RefreshRequest.forScope(scope)) {
-                        current,
-                        application ->
-                        current.withPlugin(PluginId.of(application))
+            Indexino.connect(
+                    IndexinoConfiguration.forWorkspace(project.toPath())
+                        .withAutoRefresh(
+                            if (noAutoRefresh) AutoRefreshMode.DISABLED else AutoRefreshMode.ENABLED
+                        )
+                )
+                .use { indexino ->
+                    val request =
+                        applications.filter(String::isNotBlank).fold(
+                            RefreshRequest.forScope(scope)
+                        ) { current, application ->
+                            current.withPlugin(PluginId.of(application))
+                        }
+                    val handle = indexino.refresh(request)
+                    val awaiting = async { runCatching { handle.await() } }
+                    val emittedText = mutableSetOf<String>()
+                    val emittedMachine = mutableSetOf<String>()
+                    while (!awaiting.isCompleted) {
+                        replayProgress(
+                            indexino,
+                            handle.id.value,
+                            jsonlProgress,
+                            emittedText,
+                            emittedMachine,
+                        )
+                        delay(PROGRESS_POLL_INTERVAL_MILLIS)
                     }
-                val handle = indexino.refresh(request)
-                val awaiting = async { runCatching { handle.await() } }
-                val emittedText = mutableSetOf<String>()
-                val emittedMachine = mutableSetOf<String>()
-                while (!awaiting.isCompleted) {
+                    val result = awaiting.await().getOrNull()
+                    val failure = awaiting.await().exceptionOrNull()
                     replayProgress(
                         indexino,
                         handle.id.value,
@@ -78,31 +98,22 @@ internal class IndexCommand : CliktCommand(name = "index") {
                         emittedText,
                         emittedMachine,
                     )
-                    delay(PROGRESS_POLL_INTERVAL_MILLIS)
-                }
-                val result = awaiting.await().getOrNull()
-                val failure = awaiting.await().exceptionOrNull()
-                replayProgress(
-                    indexino,
-                    handle.id.value,
-                    jsonlProgress,
-                    emittedText,
-                    emittedMachine,
-                )
-                result?.let { materializeCliCompatibilityProjection(project.toPath().toRealPath()) }
-                if (!jsonlProgress && result?.outcome?.value == "UNCHANGED")
-                    echo("index fresh", err = true)
-                failure?.let { thrown ->
-                    if (jsonlProgress) {
-                        JsonlIndexBuildProgressReporter { echo(it) }
-                            .failed(
-                                CliExitCodes.ANALYSIS_ERROR,
-                                thrown.message ?: thrown.javaClass.name,
-                            )
+                    result?.let {
+                        materializeCliCompatibilityProjection(project.toPath().toRealPath())
                     }
-                    throw thrown
+                    if (!jsonlProgress && result?.outcome?.value == "UNCHANGED")
+                        echo("index fresh", err = true)
+                    failure?.let { thrown ->
+                        if (jsonlProgress) {
+                            JsonlIndexBuildProgressReporter { echo(it) }
+                                .failed(
+                                    CliExitCodes.ANALYSIS_ERROR,
+                                    thrown.message ?: thrown.javaClass.name,
+                                )
+                        }
+                        throw thrown
+                    }
                 }
-            }
         }
     }
 

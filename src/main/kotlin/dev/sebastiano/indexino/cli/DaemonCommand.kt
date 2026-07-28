@@ -3,8 +3,10 @@ package dev.sebastiano.indexino.cli
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.ProgramResult
 import com.github.ajalt.clikt.core.subcommands
+import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
+import dev.sebastiano.indexino.api.AutoRefreshMode
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.engine.WorkspaceRuntime
 import java.nio.file.Files
@@ -25,22 +27,35 @@ internal class DaemonCommand : CliktCommand(name = "daemon") {
 
 internal class DaemonStartCliCommand : CliktCommand(name = "start") {
     private val project by option("--project").required()
+    private val noAutoRefresh by option("--no-auto-refresh").flag(default = false)
 
     override fun run() {
-        val exitCode = DaemonStartCommand().start(Path.of(project))
+        val exitCode =
+            DaemonStartCommand()
+                .start(
+                    Path.of(project),
+                    autoRefreshMode =
+                        if (noAutoRefresh) AutoRefreshMode.DISABLED else AutoRefreshMode.ENABLED,
+                )
         if (exitCode != CliExitCodes.SUCCESS) throw ProgramResult(exitCode)
     }
 }
 
 internal class DaemonRunCliCommand : CliktCommand(name = "run") {
     private val project by option("--project").required()
+    private val noAutoRefresh by option("--no-auto-refresh").flag(default = false)
 
     override fun run() {
-        WorkspaceRuntime.start(Path.of(project), InProcessCacheLayout.cacheRoot()).use { runtime ->
-            while (Files.exists(runtime.endpoint)) {
-                Thread.sleep(DAEMON_POLL_INTERVAL_MILLIS)
+        WorkspaceRuntime.start(
+                Path.of(project),
+                InProcessCacheLayout.cacheRoot(),
+                if (noAutoRefresh) AutoRefreshMode.DISABLED else AutoRefreshMode.ENABLED,
+            )
+            .use { runtime ->
+                while (Files.exists(runtime.endpoint)) {
+                    Thread.sleep(DAEMON_POLL_INTERVAL_MILLIS)
+                }
             }
-        }
     }
 
     private companion object {

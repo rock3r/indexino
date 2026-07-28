@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.cli
 
+import dev.sebastiano.indexino.api.AutoRefreshMode
 import dev.sebastiano.indexino.api.FreshnessPolicy
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.api.IndexScope
@@ -26,6 +27,31 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
 class DaemonStartCommandTest {
+    @Test
+    fun `daemon start persists disabled auto refresh mode`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-daemon-mode-")
+        val workspace =
+            Files.createTempDirectory(Path.of("/tmp"), "indexino-daemon-mode-workspace-")
+        try {
+            assertEquals(
+                CliExitCodes.SUCCESS,
+                DaemonStartCommand().start(workspace, cacheRoot, AutoRefreshMode.DISABLED),
+            )
+            val workspaceId = InProcessCacheLayout.workspaceId(workspace.toRealPath())
+            assertEquals(
+                AutoRefreshMode.DISABLED,
+                dev.sebastiano.indexino.engine.RuntimeLeaseStore.read(
+                        RuntimePaths.leasePath(cacheRoot, workspaceId)
+                    )
+                    ?.autoRefreshMode,
+            )
+        } finally {
+            DaemonStopCommand().stop(workspace, cacheRoot)
+            workspace.toFile().deleteRecursively()
+            cacheRoot.toFile().deleteRecursively()
+        }
+    }
+
     @Test
     fun `public daemon snapshot preserves index not found failure`() {
         val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-daemon-failure-")

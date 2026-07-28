@@ -8,7 +8,11 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 internal class DaemonStartCommand {
-    fun start(project: Path, cacheRoot: Path = InProcessCacheLayout.cacheRoot()): Int {
+    fun start(
+        project: Path,
+        cacheRoot: Path = InProcessCacheLayout.cacheRoot(),
+        autoRefreshMode: AutoRefreshMode = AutoRefreshMode.ENABLED,
+    ): Int {
         val canonicalProject = project.toRealPath()
         val workspaceId = InProcessCacheLayout.workspaceId(canonicalProject)
         val lease = RuntimeLeaseStore.read(RuntimePaths.leasePath(cacheRoot, workspaceId))
@@ -18,15 +22,12 @@ internal class DaemonStartCommand {
 
         val command = buildList {
             add(javaExecutable())
-            System.getProperty("indexino.cache.dir")?.takeIf(String::isNotBlank)?.let {
-                cacheDirectory ->
-                add("-Dindexino.cache.dir=$cacheDirectory")
-            }
+            add("-Dindexino.cache.dir=$cacheRoot")
             add("-cp")
             add(System.getProperty("java.class.path"))
             add("dev.sebastiano.indexino.engine.RuntimeOwnerMainKt")
             add(canonicalProject.toString())
-            add(AutoRefreshMode.ENABLED.name)
+            add(autoRefreshMode.name)
         }
         ProcessBuilder(command)
             .redirectOutput(ProcessBuilder.Redirect.DISCARD)

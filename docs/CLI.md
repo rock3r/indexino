@@ -20,10 +20,10 @@ These map to the embedded API; land with slices S6–S7 (daemon) and cache opera
 ### `daemon`
 
 ```bash
-indexino daemon start  --project /path/to/repo
+indexino daemon start  --project /path/to/repo [--no-auto-refresh]
 indexino daemon status --project /path/to/repo
 indexino daemon stop   --project /path/to/repo [--purge]
-indexino daemon run    --project /path/to/repo   # foreground owner; used by auto-spawn
+indexino daemon run    --project /path/to/repo [--no-auto-refresh] # foreground owner; used by auto-spawn
 ```
 
 | Command | Maps to | Notes |
@@ -49,7 +49,7 @@ Not an agent-query API. Reclamation policy: [INDEX-STORAGE.md](INDEX-STORAGE.md)
 
 | Flag | Meaning |
 |------|---------|
-| `--no-auto-refresh` | `AutoRefreshMode.DISABLED` (meaningful from S7; earlier slices are manual-only) |
+| `--no-auto-refresh` | Launches the workspace runtime with `AutoRefreshMode.DISABLED`; explicit `index` still refreshes. A live runtime keeps its existing mode. |
 | `--plugin /path/to.jar` | Explicit trusted plugin JAR (repeatable); maps to `withPlugin` |
 | `--project` | Workspace root (identity binding) |
 
