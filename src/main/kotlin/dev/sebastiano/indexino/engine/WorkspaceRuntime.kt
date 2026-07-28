@@ -52,7 +52,8 @@ private constructor(
             RuntimeRefreshProtocol.REFRESH,
             RuntimeRefreshProtocol.AWAIT,
             RuntimeRefreshProtocol.STOP,
-            RuntimeRefreshProtocol.ACTIVE -> refreshDispatcher.dispatch(command)
+            RuntimeRefreshProtocol.ACTIVE,
+            RuntimeRefreshProtocol.PROGRESS -> refreshDispatcher.dispatch(command)
             RuntimeSnapshotProtocol.ACQUIRE,
             RuntimeSnapshotProtocol.RELEASE,
             RuntimeSnapshotProtocol.FIND_SYMBOLS,
@@ -98,6 +99,7 @@ private constructor(
 
     private fun handleWorkspaceLoss() {
         if (workspaceLost.compareAndSet(false, true)) {
+            refreshDispatcher.stopAll()
             RuntimeTombstoneStore.write(
                 RuntimePaths.tombstonePath(cacheRoot, workspaceId),
                 workspace,
@@ -138,6 +140,9 @@ private constructor(
                     sessionDisconnected = runtime.snapshotDispatcher::releaseSession,
                 )
             if (start is RuntimeDaemonStart.Owned) {
+                RuntimeTombstoneStore.acknowledge(
+                    RuntimePaths.tombstonePath(cacheRoot, workspaceId)
+                )
                 runtime.daemon = start.daemon
                 runtime.startLivenessMonitoring()
                 return runtime

@@ -29,6 +29,7 @@ import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.SourceOriginRevision
 import dev.sebastiano.indexino.model.WorkspaceGenerationId
 import dev.sebastiano.indexino.model.WorkspaceRevision
+import dev.sebastiano.indexino.producer.IndexBuildProgressReporter
 import dev.sebastiano.indexino.topology.BuildSystem as InternalBuildSystem
 import dev.sebastiano.indexino.topology.TopologyRequest
 import java.io.IOException
@@ -148,7 +149,15 @@ private constructor(
     }
 
     @OptIn(IndexinoInternalApi::class)
-    public suspend fun refresh(request: RefreshRequest): RefreshHandle {
+    public suspend fun refresh(request: RefreshRequest): RefreshHandle =
+        refresh(request, progress = {}, machineProgress = null)
+
+    @OptIn(IndexinoInternalApi::class)
+    internal suspend fun refresh(
+        request: RefreshRequest,
+        progress: (String) -> Unit,
+        machineProgress: IndexBuildProgressReporter?,
+    ): RefreshHandle {
         ensureOpen()
         runtimeConnection?.let { connection ->
             return mapRemoteFailures { remoteRefresh(connection, request) }
@@ -158,7 +167,15 @@ private constructor(
         val operation =
             IndexingCoordinator.start(workspace, request) { created ->
                 try {
-                    val result = runRefresh(request, created.id, applications, created)
+                    val result =
+                        runRefresh(
+                            request,
+                            created.id,
+                            applications,
+                            created,
+                            progress,
+                            machineProgress,
+                        )
                     if (!created.isStopped()) {
                         created.result.complete(result)
                         created.terminalEvent.complete(RefreshCompleted(created.id, result))
@@ -190,6 +207,13 @@ private constructor(
         )
     }
 
+    internal fun refreshProgress(
+        id: String
+    ): dev.sebastiano.indexino.engine.RuntimeRefreshProgress {
+        val connection = checkNotNull(runtimeConnection) { "Refresh progress is daemon-owned" }
+        return RuntimeRefreshClient(connection).progress(id)
+    }
+
     @OptIn(IndexinoInternalApi::class)
     public suspend fun activeRefreshes(): List<RefreshSummary> {
         ensureOpen()
@@ -209,6 +233,8 @@ private constructor(
         refreshId: RefreshId,
         applications: List<String>,
         operation: InFlightRefresh,
+        progress: (String) -> Unit,
+        machineProgress: IndexBuildProgressReporter?,
     ): RefreshResult {
         // Serialize in-process peers across run+copy so a shared commit writer cannot mutate while
         // another client copies it. Cross-process single-writer election remains S6.
@@ -222,8 +248,11 @@ private constructor(
                             applications = applications,
                             bazelQueryExecutor = null,
                             bazelProcessRunner = null,
-                            progress = { operation.checkActive() },
-                            machineProgress = null,
+                            progress = { message ->
+                                operation.checkActive()
+                                progress(message)
+                            },
+                            machineProgress = machineProgress,
                             storeRootOverride = storeRoot,
                         )
                         .runDetailed()
@@ -243,7 +272,13 @@ private constructor(
                 val revision = manifest.toWorkspaceRevision()
                 val generation = manifest.toGenerationId(revision)
                 operation.checkActive()
-                publishGenerationOrAbortIfClosed(manifest.commit, generation, revision)
+                publishGenerationOrAbortIfClosed(
+                    manifest.commit,
+                    generation,
+                    revision,
+                    request.scope,
+                    applications,
+                )
                 val changedFileCount = execution.changes?.changedFiles?.size ?: 0
                 val removedFileCount = execution.changes?.deletedFiles?.size ?: 0
                 val result =
@@ -312,8 +347,11 @@ private constructor(
         commit: String,
         generation: WorkspaceGenerationId,
         revision: WorkspaceRevision,
+        scope: IndexScope,
+        applications: List<String>,
     ) {
-        val publishedStore = publishGenerationStore(commit, generation, revision)
+        val publishedStore =
+            publishGenerationStore(commit, generation, revision, scope, applications)
         afterPublishGenerationStoreForTests?.invoke()
         synchronized(generationLock) {
             if (closed.get()) {
@@ -567,6 +605,8 @@ private constructor(
         commit: String,
         generation: WorkspaceGenerationId,
         revision: WorkspaceRevision,
+        scope: IndexScope,
+        applications: List<String>,
     ): PublishedStore {
         val destination =
             InProcessCacheLayout.generationStore(workspace, clientId, generation.value)
@@ -586,9 +626,14 @@ private constructor(
                     revision = revision.origins.single().revision,
                     stateFingerprint = revision.origins.single().stateFingerprint,
                     packKeys = listOf(packKey),
+                    scopeBuildSystem = scope.buildSystem.value,
+                    scopeValue = scope.value,
+                    includesDependencies = scope.includesDependencies,
+                    applications = applications,
                 )
             )
-        ContentAddressedPackCache(cacheRoot).materializeDirectory(packKey, destination)
+        val packs = ContentAddressedPackCache(cacheRoot)
+        packs.materializeDirectory(packKey, destination)
         return PublishedStore(path = destination, created = !alreadyMaterialized)
     }
 

@@ -6,6 +6,8 @@ import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import com.github.ajalt.clikt.parameters.types.file
 import dev.sebastiano.indexino.api.IndexSnapshot
+import dev.sebastiano.indexino.api.Indexino
+import dev.sebastiano.indexino.api.IndexinoException
 import dev.sebastiano.indexino.api.SnapshotFreshness
 import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.ManifestIO
@@ -56,6 +58,28 @@ internal class QueryCommand : CliktCommand(name = "query") {
         output: (String) -> Unit = {},
     ): Int {
         require(format == "jsonl") { "Only jsonl format is supported" }
+        try {
+            runBlocking {
+                Indexino.connect(project).use { indexino ->
+                    indexino.snapshot().use { snapshot ->
+                        val request = CheckRequest.of(PluginId.of(application), checkId)
+                        var offset = 0
+                        do {
+                            val findings =
+                                snapshot.runCheck(request, QueryOptions.page(QUERY_LIMIT, offset))
+                            findings.items.map(::toJsonl).forEach(output)
+                            check(!findings.hasMore || findings.items.isNotEmpty()) {
+                                "Check '${checkId}' returned an empty page with more results"
+                            }
+                            offset += findings.items.size
+                        } while (findings.hasMore)
+                    }
+                }
+            }
+            return 0
+        } catch (_: IndexinoException) {
+            // Compatibility fallback for pre-daemon immutable project indexes.
+        }
         val commit = GitHeadResolver.resolve(project)
         val resolver = IndexPathResolver(project)
         val manifestPath = resolver.resolveManifest(commit)

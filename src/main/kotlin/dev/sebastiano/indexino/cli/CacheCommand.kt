@@ -6,13 +6,12 @@ import com.github.ajalt.clikt.core.subcommands
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import dev.sebastiano.indexino.api.InProcessCacheLayout
-import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifest
+import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.engine.RuntimeLeaseStore
 import dev.sebastiano.indexino.engine.RuntimePaths
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Comparator
-import kotlinx.serialization.json.Json
 
 internal class CacheCommand : CliktCommand(name = "cache") {
     init {
@@ -46,8 +45,6 @@ internal class CacheForgetCliCommand : CliktCommand(name = "forget") {
 }
 
 internal object CacheMaintenance {
-    private val json = Json { ignoreUnknownKeys = true }
-
     fun status(cacheRoot: Path, project: Path? = null): String {
         val workspaceId = project?.let { InProcessCacheLayout.workspaceId(it.toRealPath()) }
         val workspaceRoot = workspaceId?.let { cacheRoot.resolve("workspaces").resolve(it) }
@@ -96,19 +93,21 @@ internal object CacheMaintenance {
             .mapNotNull { RuntimeLeaseStore.read(it) }
             .any(RuntimeLeaseStore::isLive)
 
-    private fun referencedPackKeys(cacheRoot: Path): Set<String> =
-        regularFiles(cacheRoot.resolve("workspaces"))
-            .filter { it.fileName.toString() == "manifest.json" }
-            .flatMap { manifest ->
-                json
-                    .decodeFromString(
-                        WorkspaceGenerationManifest.serializer(),
-                        Files.readString(manifest),
-                    )
-                    .packKeys
-                    .asSequence()
-            }
-            .toSet()
+    private fun referencedPackKeys(cacheRoot: Path): Set<String> {
+        val workspaces = cacheRoot.resolve("workspaces")
+        if (!Files.isDirectory(workspaces)) return emptySet()
+        Files.list(workspaces).use { roots ->
+            return roots
+                .filter(Files::isDirectory)
+                .flatMap { root ->
+                    WorkspaceGenerationManifestStore(cacheRoot, root.fileName.toString())
+                        .current()
+                        ?.packKeys
+                        ?.stream() ?: java.util.stream.Stream.empty()
+                }
+                .collect(java.util.stream.Collectors.toSet())
+        }
+    }
 
     private const val CONTENT_KEY_LENGTH = 64
 

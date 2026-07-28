@@ -16,6 +16,7 @@ import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.SourceOriginRevision
 import dev.sebastiano.indexino.model.WorkspaceGenerationId
 import dev.sebastiano.indexino.model.WorkspaceRevision
+import dev.sebastiano.indexino.producer.JsonlIndexBuildProgressReporter
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
@@ -33,6 +34,8 @@ internal class RuntimeRefreshHandle(val id: String, private val connection: Runt
         connection.request(RuntimeRefreshProtocol.stopCommand(id))
     }
 }
+
+internal class RuntimeRefreshProgress(val text: List<String>, val machine: List<String>)
 
 internal class RuntimeRefreshResult(val result: RefreshResult) {
     val generation: String
@@ -52,10 +55,20 @@ internal class RuntimeRefreshClient(private val connection: RuntimeConnection) {
         RuntimeRefreshProtocol.decodeActiveResponse(
             connection.request(RuntimeRefreshProtocol.activeCommand())
         )
+
+    fun progress(id: String): RuntimeRefreshProgress =
+        RuntimeRefreshProtocol.decodeProgressResponse(
+            connection.request(RuntimeRefreshProtocol.progressCommand(id))
+        )
 }
 
 internal class RuntimeRefreshDispatcher(private val owner: Indexino) {
     private val handles = ConcurrentHashMap<String, RefreshHandle>()
+    private val journals = ConcurrentHashMap<String, RuntimeRefreshProgress>()
+
+    fun stopAll() {
+        handles.values.forEach { handle -> runBlocking { handle.stop() } }
+    }
 
     @OptIn(IndexinoInternalApi::class)
     fun dispatch(command: ByteArray): ByteArray {
@@ -63,8 +76,17 @@ internal class RuntimeRefreshDispatcher(private val owner: Indexino) {
         return when (input.readUnsignedByte()) {
             RuntimeRefreshProtocol.REFRESH -> {
                 val request = RuntimeRefreshProtocol.decodeRefreshRequest(input)
-                val handle = runBlocking { owner.refresh(request) }
+                val text = mutableListOf<String>()
+                val machine = mutableListOf<String>()
+                val handle = runBlocking {
+                    owner.refresh(
+                        request,
+                        progress = text::add,
+                        machineProgress = JsonlIndexBuildProgressReporter(machine::add),
+                    )
+                }
                 handles[handle.id.value] = handle
+                journals[handle.id.value] = RuntimeRefreshProgress(text, machine)
                 RuntimeRefreshProtocol.refreshResponse(handle.id.value)
             }
             RuntimeRefreshProtocol.AWAIT -> {
@@ -74,6 +96,10 @@ internal class RuntimeRefreshDispatcher(private val owner: Indexino) {
             }
             RuntimeRefreshProtocol.ACTIVE ->
                 RuntimeRefreshProtocol.activeResponse(runBlocking { owner.activeRefreshes() })
+            RuntimeRefreshProtocol.PROGRESS ->
+                RuntimeRefreshProtocol.progressResponse(
+                    journals[input.readUTF()] ?: RuntimeRefreshProgress(emptyList(), emptyList())
+                )
             RuntimeRefreshProtocol.STOP -> {
                 val id = input.readUTF()
                 val handle = handles[id] ?: throw RuntimeProtocolException("Unknown refresh $id")
@@ -91,6 +117,7 @@ internal object RuntimeRefreshProtocol {
     const val AWAIT = 2
     const val STOP = 3
     const val ACTIVE = 5
+    const val PROGRESS = 6
 
     fun refreshCommand(request: RefreshRequest): ByteArray = bytes {
         writeByte(REFRESH)
@@ -101,6 +128,11 @@ internal object RuntimeRefreshProtocol {
 
     fun awaitCommand(id: String): ByteArray = bytes {
         writeByte(AWAIT)
+        writeUTF(id)
+    }
+
+    fun progressCommand(id: String): ByteArray = bytes {
+        writeByte(PROGRESS)
         writeUTF(id)
     }
 
@@ -205,6 +237,21 @@ internal object RuntimeRefreshProtocol {
                     scope = scope,
                     changes = changes,
                 )
+            )
+        }
+
+    fun progressResponse(progress: RuntimeRefreshProgress): ByteArray = bytes {
+        writeInt(progress.text.size)
+        progress.text.forEach(::writeUTF)
+        writeInt(progress.machine.size)
+        progress.machine.forEach(::writeUTF)
+    }
+
+    fun decodeProgressResponse(response: ByteArray): RuntimeRefreshProgress =
+        DataInputStream(ByteArrayInputStream(response)).use { input ->
+            RuntimeRefreshProgress(
+                List(input.readInt()) { input.readUTF() },
+                List(input.readInt()) { input.readUTF() },
             )
         }
 

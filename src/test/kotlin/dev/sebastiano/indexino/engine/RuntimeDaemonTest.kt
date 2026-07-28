@@ -8,6 +8,21 @@ import kotlin.test.assertTrue
 
 class RuntimeDaemonTest {
     @Test
+    fun `daemon starts with a long cache path`() {
+        val cacheRoot = Files.createTempDirectory("indexino-daemon-").resolve("x".repeat(120))
+        val workspace = Files.createTempDirectory(Path.of("/tmp"), "indexino-daemon-workspace-")
+        val start =
+            RuntimeDaemon.start(cacheRoot, "e".repeat(RuntimePaths.WORKSPACE_ID_LENGTH), workspace)
+        try {
+            assertTrue(Files.exists(assertIs<RuntimeDaemonStart.Owned>(start).daemon.endpoint))
+        } finally {
+            (start as? RuntimeDaemonStart.Owned)?.daemon?.close()
+            cacheRoot.parent.toFile().deleteRecursively()
+            workspace.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `one daemon owns the lease and endpoint until explicit shutdown`() {
         val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-daemon-")
         val workspace = Files.createTempDirectory(Path.of("/tmp"), "indexino-daemon-workspace-")

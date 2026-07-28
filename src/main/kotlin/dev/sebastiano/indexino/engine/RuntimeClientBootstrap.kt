@@ -11,6 +11,20 @@ internal object RuntimeClientBootstrap {
         val cacheRoot = InProcessCacheLayout.cacheRoot()
         val workspaceId = InProcessCacheLayout.workspaceId(workspace)
         val endpoint = RuntimePaths.socketPath(cacheRoot, workspaceId)
+        if (
+            RuntimeTombstoneStore.read(RuntimePaths.tombstonePath(cacheRoot, workspaceId)) != null
+        ) {
+            throw RuntimeProtocolException(
+                "WORKSPACE_LOST: daemon stop must acknowledge this workspace"
+            )
+        }
+        val leasePath = RuntimePaths.leasePath(cacheRoot, workspaceId)
+        RuntimeLeaseStore.read(leasePath)
+            ?.takeIf { it.protocolMajor != RuntimeLeaseStore.PROTOCOL_MAJOR }
+            ?.let {
+                Files.deleteIfExists(endpoint)
+                Files.deleteIfExists(leasePath)
+            }
         if (!Files.exists(endpoint)) startOwner(workspace, cacheRoot, endpoint)
         var lastFailure: IOException? = null
         repeat(CONNECT_WAIT_ATTEMPTS) {
@@ -44,15 +58,10 @@ internal object RuntimeClientBootstrap {
         if (lease == null || !RuntimeLeaseStore.isLive(lease)) {
             val command = buildList {
                 add(Path.of(System.getProperty("java.home"), "bin", "java").toString())
-                System.getProperty("indexino.cache.dir")?.takeIf(String::isNotBlank)?.let { root ->
-                    add("-Dindexino.cache.dir=$root")
-                }
+                add("-Dindexino.cache.dir=$cacheRoot")
                 add("-cp")
                 add(System.getProperty("java.class.path"))
-                add("dev.sebastiano.indexino.cli.MainCommandKt")
-                add("daemon")
-                add("run")
-                add("--project")
+                add("dev.sebastiano.indexino.engine.RuntimeOwnerMainKt")
                 add(workspace.toString())
             }
             ProcessBuilder(command)
@@ -68,6 +77,6 @@ internal object RuntimeClientBootstrap {
     }
 
     private const val CONNECT_WAIT_ATTEMPTS = 100
-    private const val START_WAIT_ATTEMPTS = 100
+    private const val START_WAIT_ATTEMPTS = 600
     private const val START_WAIT_MILLIS = 50L
 }

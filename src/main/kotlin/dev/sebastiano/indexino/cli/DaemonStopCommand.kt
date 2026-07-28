@@ -5,6 +5,7 @@ import dev.sebastiano.indexino.engine.RuntimeConnection
 import dev.sebastiano.indexino.engine.RuntimeControlProtocol
 import dev.sebastiano.indexino.engine.RuntimeLeaseStore
 import dev.sebastiano.indexino.engine.RuntimePaths
+import dev.sebastiano.indexino.engine.RuntimeTombstoneStore
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -17,7 +18,11 @@ internal class DaemonStopCommand {
         val workspaceId = InProcessCacheLayout.workspaceId(identityPath)
         val endpoint = RuntimePaths.socketPath(cacheRoot, workspaceId)
         val leasePath = RuntimePaths.leasePath(cacheRoot, workspaceId)
-        val lease = RuntimeLeaseStore.read(leasePath) ?: return CliExitCodes.SUCCESS
+        val lease = RuntimeLeaseStore.read(leasePath)
+        if (lease == null) {
+            RuntimeTombstoneStore.acknowledge(RuntimePaths.tombstonePath(cacheRoot, workspaceId))
+            return CliExitCodes.SUCCESS
+        }
         try {
             RuntimeConnection.connect(endpoint).use { connection ->
                 connection.request(RuntimeControlProtocol.shutdownCommand())

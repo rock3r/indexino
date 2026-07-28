@@ -7,6 +7,8 @@ import com.github.ajalt.clikt.parameters.options.default
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import com.github.ajalt.clikt.parameters.types.file
+import dev.sebastiano.indexino.api.Indexino
+import dev.sebastiano.indexino.api.IndexinoException
 import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.core.record.CodeIndexRecord
@@ -15,9 +17,13 @@ import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.store.IndexStoreOpener
+import dev.sebastiano.indexino.model.QueryOptions
+import dev.sebastiano.indexino.model.ReferenceQuery
+import dev.sebastiano.indexino.model.SymbolQuery
 import java.nio.file.Path
 import kotlin.io.path.exists
 import kotlin.time.TimeSource
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -41,8 +47,26 @@ internal class FindSymbolCommand : CliktCommand(name = "find-symbol") {
             progressOutput = { echo(it, err = true) },
         ) {
             requireJsonl(format)
-            withStore(project.toPath(), sessionId) { store ->
-                findSymbols(store, name, kind, language)
+            try {
+                require(sessionId == null) {
+                    "--session-id is not supported by daemon-backed lookup"
+                }
+                runBlocking {
+                    Indexino.connect(project.toPath()).use { indexino ->
+                        val query =
+                            SymbolQuery.named(name)
+                                .let { current -> kind?.let(current::withKind) ?: current }
+                                .let { current -> language?.let(current::withLanguage) ?: current }
+                        indexino.snapshot().use { snapshot ->
+                            snapshot
+                                .findSymbols(query, QueryOptions.page(LOOKUP_PAGE_SIZE))
+                                .items
+                                .map(::symbolRecord)
+                        }
+                    }
+                }
+            } catch (_: IndexinoException) {
+                withStore(project.toPath(), sessionId) { findSymbols(it, name, kind, language) }
             }
         }
     }
@@ -85,7 +109,43 @@ internal class FindReferencesCommand : CliktCommand(name = "find-references") {
             progressOutput = { echo(it, err = true) },
         ) {
             requireJsonl(format)
-            withStore(project.toPath(), sessionId) { store -> findReferences(store, symbol) }
+            if (symbol.startsWith("@")) {
+                return@runLookup withStore(project.toPath(), sessionId) {
+                    findReferences(it, symbol)
+                }
+            }
+            try {
+                require(sessionId == null) {
+                    "--session-id is not supported by daemon-backed lookup"
+                }
+                runBlocking {
+                    Indexino.connect(project.toPath()).use { indexino ->
+                        indexino.snapshot().use { snapshot ->
+                            snapshot
+                                .findSymbols(
+                                    SymbolQuery.named(
+                                        symbol.substringAfterLast('#').substringAfterLast('.')
+                                    ),
+                                    QueryOptions.page(LOOKUP_PAGE_SIZE),
+                                )
+                                .items
+                                .filter { symbol in it.aliases }
+                                .flatMap { definition ->
+                                    snapshot
+                                        .findReferences(
+                                            ReferenceQuery.to(definition.id),
+                                            QueryOptions.page(LOOKUP_PAGE_SIZE),
+                                        )
+                                        .items
+                                }
+                                .distinctBy { it.location }
+                                .map { referenceRecord(it, legacySymbolFqn(symbol)) }
+                        }
+                    }
+                }
+            } catch (_: IndexinoException) {
+                withStore(project.toPath(), sessionId) { findReferences(it, symbol) }
+            }
         }
     }
 
@@ -137,7 +197,29 @@ internal class ResolveResourceCommand : CliktCommand(name = "resolve-resource") 
             progressOutput = { echo(it, err = true) },
         ) {
             requireJsonl(format)
-            withStore(project.toPath(), sessionId) { store -> resolveResources(store, type, name) }
+            try {
+                require(sessionId == null) {
+                    "--session-id is not supported by daemon-backed lookup"
+                }
+                val matches = runBlocking {
+                    Indexino.connect(project.toPath()).use { indexino ->
+                        indexino.snapshot().use { snapshot ->
+                            snapshot
+                                .findSymbols(
+                                    SymbolQuery.named(name),
+                                    QueryOptions.page(LOOKUP_PAGE_SIZE),
+                                )
+                                .items
+                                .map(::symbolRecord)
+                        }
+                    }
+                }
+                matches.ifEmpty {
+                    withStore(project.toPath(), sessionId) { resolveResources(it, type, name) }
+                }
+            } catch (_: IndexinoException) {
+                withStore(project.toPath(), sessionId) { resolveResources(it, type, name) }
+            }
         }
     }
 
@@ -156,6 +238,39 @@ internal class ResolveResourceCommand : CliktCommand(name = "resolve-resource") 
             )
             .toList()
 }
+
+private fun symbolRecord(symbol: dev.sebastiano.indexino.model.Symbol): SymbolRecord =
+    SymbolRecord(
+        fqn = symbol.aliases.lastOrNull() ?: symbol.id.value,
+        relativeFile = symbol.location.file.path,
+        line = symbol.location.line,
+        kind = symbol.kind,
+        name = symbol.name,
+        language = symbol.language,
+        ownerFqn = symbol.ownerId?.value,
+        signature = symbol.signature,
+        arity = symbol.arity,
+        aliases = symbol.aliases,
+    )
+
+private fun legacySymbolFqn(symbol: String): String =
+    if (symbol.startsWith("@")) "res:${symbol.removePrefix("@").replace('/', ':')}" else symbol
+
+private fun referenceRecord(
+    reference: dev.sebastiano.indexino.model.Reference,
+    requestedSymbol: String = reference.symbolId.value,
+): ReferenceRecord =
+    ReferenceRecord(
+        symbolFqn = requestedSymbol,
+        relativeFile = reference.location.file.path,
+        line = reference.location.line,
+        column = reference.location.column ?: 1,
+        language = reference.language,
+        referencedName = reference.referencedName,
+        qualifier = reference.qualifier,
+        candidateSymbolFqns = reference.candidateSymbolIds.map { it.value },
+        arity = reference.arity,
+    )
 
 private fun <T> withStore(project: Path, sessionId: String?, block: (CodeIndexStore) -> T): T {
     val commit = GitHeadResolver.resolve(project)
@@ -265,4 +380,5 @@ private class InvalidLookupFormatException :
     IllegalArgumentException("Only jsonl format is supported")
 
 private const val JSONL = "jsonl"
+private const val LOOKUP_PAGE_SIZE = 10_000
 private const val TEXT_PROGRESS_FORMAT = "text"

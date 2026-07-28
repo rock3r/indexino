@@ -54,4 +54,8 @@ internal object RuntimeTombstoneStore {
         } else {
             null
         }
+
+    fun acknowledge(path: Path) {
+        Files.deleteIfExists(path)
+    }
 }

@@ -64,7 +64,7 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
             ownerId = ownerId,
             signature = signature,
             arity = arity,
-            aliases = aliases,
+            aliases = (aliases + fqn).distinct(),
         )
     }
 

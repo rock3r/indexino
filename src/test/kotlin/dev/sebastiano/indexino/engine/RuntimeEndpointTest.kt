@@ -14,6 +14,18 @@ private const val BIND_ACCEPTANCE_PATH_LENGTH = 100
 
 class RuntimeEndpointTest {
     @Test
+    fun `long cache paths use a stable short local socket endpoint`() {
+        val cacheRoot = Files.createTempDirectory("indexino-runtime-path-").resolve("x".repeat(120))
+        val workspaceId = "a".repeat(RuntimePaths.WORKSPACE_ID_LENGTH)
+
+        val endpoint = RuntimePaths.socketPath(cacheRoot, workspaceId)
+
+        assertTrue(endpoint.toString().length <= BIND_ACCEPTANCE_PATH_LENGTH)
+        assertEquals(endpoint, RuntimePaths.socketPath(cacheRoot, workspaceId))
+        assertTrue(endpoint.fileName.toString().startsWith(workspaceId))
+    }
+
+    @Test
     fun `runtime endpoint binds at a 100 character path`() {
         val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-path-")
         try {

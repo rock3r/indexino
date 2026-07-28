@@ -23,10 +23,7 @@ internal class DaemonStartCommand {
             }
             add("-cp")
             add(System.getProperty("java.class.path"))
-            add("dev.sebastiano.indexino.cli.MainCommandKt")
-            add("daemon")
-            add("run")
-            add("--project")
+            add("dev.sebastiano.indexino.engine.RuntimeOwnerMainKt")
             add(canonicalProject.toString())
         }
         ProcessBuilder(command)

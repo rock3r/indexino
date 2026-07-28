@@ -2,6 +2,7 @@ package dev.sebastiano.indexino.cli
 
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifest
+import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.engine.RuntimeLease
 import dev.sebastiano.indexino.engine.RuntimePaths
 import java.nio.file.Files
@@ -44,44 +45,49 @@ class CacheMaintenanceTest {
     }
 
     @Test
-    fun `gc reclaims only packs not referenced by generation manifests`() {
+    fun `gc reclaims packs referenced only by superseded generations`() {
         val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-cache-gc-")
         val referenced = "a".repeat(64)
-        val orphaned = "b".repeat(64)
+        val superseded = "b".repeat(64)
+        val orphaned = "d".repeat(64)
         val workspaceId = "c".repeat(16)
-        val manifest =
-            cacheRoot
-                .resolve("workspaces")
-                .resolve(workspaceId)
-                .resolve("generations")
-                .resolve("g")
-                .resolve("manifest.json")
-        Files.createDirectories(manifest.parent)
-        Files.writeString(
-            manifest,
-            Json.encodeToString(
-                WorkspaceGenerationManifest(
-                    generation = "g",
-                    workspaceRevisionFingerprint = "r",
-                    originId = "workspace",
-                    revision = null,
-                    stateFingerprint = "s",
-                    packKeys = listOf(referenced),
-                )
-            ),
+        val manifests = WorkspaceGenerationManifestStore(cacheRoot, workspaceId)
+        manifests.publish(
+            WorkspaceGenerationManifest(
+                generation = "old",
+                workspaceRevisionFingerprint = "r1",
+                originId = "workspace",
+                revision = null,
+                stateFingerprint = "s1",
+                packKeys = listOf(superseded),
+            )
+        )
+        manifests.publish(
+            WorkspaceGenerationManifest(
+                generation = "current",
+                workspaceRevisionFingerprint = "r2",
+                originId = "workspace",
+                revision = null,
+                stateFingerprint = "s2",
+                packKeys = listOf(referenced),
+            )
         )
         val referencedPack = packPath(cacheRoot, referenced)
+        val supersededPack = packPath(cacheRoot, superseded)
         val orphanedPack = packPath(cacheRoot, orphaned)
         Files.createDirectories(referencedPack.parent)
         Files.writeString(referencedPack, "keep")
+        Files.createDirectories(supersededPack.parent)
+        Files.writeString(supersededPack, "reclaim")
         Files.createDirectories(orphanedPack.parent)
         Files.writeString(orphanedPack, "remove")
         try {
             val report = CacheMaintenance.gc(cacheRoot)
 
             assertTrue(Files.exists(referencedPack))
+            assertFalse(Files.exists(supersededPack), report)
             assertFalse(Files.exists(orphanedPack), report)
-            assertTrue(report.contains("reclaimedPacks=1"), report)
+            assertTrue(report.contains("reclaimedPacks=2"), report)
         } finally {
             cacheRoot.toFile().deleteRecursively()
         }

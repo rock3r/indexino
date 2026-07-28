@@ -16,6 +16,10 @@ internal data class WorkspaceGenerationManifest(
     val revision: String?,
     val stateFingerprint: String,
     val packKeys: List<String>,
+    val scopeBuildSystem: String = "",
+    val scopeValue: String = "",
+    val includesDependencies: Boolean = false,
+    val applications: List<String> = emptyList(),
 )
 
 /** Publishes immutable workspace generation manifests through a short current pointer. */
