@@ -186,6 +186,7 @@ class IndexMachineProgressCliTest {
             "gradle",
             "--gradle-module",
             ":app",
+            "--no-auto-refresh",
             "--progress-format",
             "jsonl",
         )

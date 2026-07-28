@@ -119,6 +119,7 @@ private constructor(
 
     companion object {
         private const val LIVENESS_PROBE_INTERVAL_MILLIS = 100L
+        private const val DEFAULT_RECONCILIATION_INTERVAL_MILLIS = 30_000L
 
         @Volatile internal var maxWatchedDirectoriesForTests: Int? = null
         @Volatile internal var reconciliationIntervalMillisForTests: Long? = null
@@ -154,7 +155,7 @@ private constructor(
                     autoRefreshMode,
                     runtime.refreshDispatcher::refresh,
                     maxWatchedDirectoriesForTests ?: Int.MAX_VALUE,
-                    reconciliationIntervalMillisForTests ?: 30_000L,
+                    reconciliationIntervalMillisForTests ?: DEFAULT_RECONCILIATION_INTERVAL_MILLIS,
                 )
             owner.onRefreshSucceededForRuntime = runtime.autoRefreshController::register
             val start =
