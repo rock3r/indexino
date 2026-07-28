@@ -255,6 +255,7 @@ internal class MacFseventsWatcher(
         private val RUN_LOOP_RUN = FunctionDescriptor.ofVoid()
         private val RUN_LOOP_STOP = FunctionDescriptor.ofVoid(ValueLayout.ADDRESS)
 
+        @Suppress("UnusedPrivateFunction")
         @JvmStatic
         private fun events(
             stream: MemorySegment,
