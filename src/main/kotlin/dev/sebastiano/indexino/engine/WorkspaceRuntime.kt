@@ -6,6 +6,7 @@ import dev.sebastiano.indexino.api.IndexinoConfiguration
 import dev.sebastiano.indexino.api.RuntimeAttachMode
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.BasicFileAttributes
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** The sole owner of a workspace's refresh registry and mutable writer state. */
@@ -15,6 +16,7 @@ private constructor(
     private val cacheRoot: Path,
     private val workspaceId: String,
     private val owner: Indexino,
+    private val workspaceFileKey: String?,
 ) : AutoCloseable {
     private val refreshDispatcher = RuntimeRefreshDispatcher(owner)
     private val snapshotDispatcher = RuntimeSnapshotDispatcher(owner)
@@ -38,7 +40,7 @@ private constructor(
     internal fun snapshotLeaseCountForTests(): Int = snapshotDispatcher.leaseCountForTests()
 
     private fun dispatch(session: RuntimeSession, command: ByteArray): ByteArray {
-        if (!Files.isDirectory(workspace)) {
+        if (!isBoundWorkspace()) {
             handleWorkspaceLoss()
             throw RuntimeProtocolException("WORKSPACE_LOST: bound workspace disappeared")
         }
@@ -67,7 +69,7 @@ private constructor(
                     {
                         try {
                             while (!Thread.currentThread().isInterrupted) {
-                                if (!Files.isDirectory(workspace)) {
+                                if (!isBoundWorkspace()) {
                                     handleWorkspaceLoss()
                                     return@Thread
                                 }
@@ -84,6 +86,15 @@ private constructor(
                     start()
                 }
     }
+
+    private fun isBoundWorkspace(): Boolean =
+        try {
+            val attributes = Files.readAttributes(workspace, BasicFileAttributes::class.java)
+            attributes.isDirectory &&
+                (workspaceFileKey == null || attributes.fileKey()?.toString() == workspaceFileKey)
+        } catch (_: java.io.IOException) {
+            false
+        }
 
     private fun handleWorkspaceLoss() {
         if (workspaceLost.compareAndSet(false, true)) {
@@ -106,7 +117,18 @@ private constructor(
                         .withRuntimeAttach(RuntimeAttachMode.IN_PROCESS)
                 )
             val workspaceId = InProcessCacheLayout.workspaceId(canonicalWorkspace)
-            val runtime = WorkspaceRuntime(canonicalWorkspace, cacheRoot, workspaceId, owner)
+            val workspaceFileKey =
+                Files.readAttributes(canonicalWorkspace, BasicFileAttributes::class.java)
+                    .fileKey()
+                    ?.toString()
+            val runtime =
+                WorkspaceRuntime(
+                    canonicalWorkspace,
+                    cacheRoot,
+                    workspaceId,
+                    owner,
+                    workspaceFileKey,
+                )
             val start =
                 RuntimeDaemon.start(
                     cacheRoot = cacheRoot,

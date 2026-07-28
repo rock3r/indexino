@@ -2,11 +2,62 @@ package dev.sebastiano.indexino.engine
 
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
 class RuntimeConnectionTest {
+    @Test
+    fun `refresh stop uses a control connection while await is blocked`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-refresh-stop-")
+        val endpoint =
+            RuntimePaths.socketPath(cacheRoot, "e".repeat(RuntimePaths.WORKSPACE_ID_LENGTH))
+        val awaitStarted = CountDownLatch(1)
+        val stopReceived = CountDownLatch(1)
+        RuntimeHandshakeServer(endpoint) { payload ->
+                when (payload.first().toInt()) {
+                    RuntimeRefreshProtocol.REFRESH ->
+                        RuntimeRefreshProtocol.refreshResponse("refresh")
+                    RuntimeRefreshProtocol.AWAIT -> {
+                        awaitStarted.countDown()
+                        check(stopReceived.await(5, TimeUnit.SECONDS))
+                        ByteArray(0)
+                    }
+                    RuntimeRefreshProtocol.STOP -> {
+                        stopReceived.countDown()
+                        ByteArray(0)
+                    }
+                    else -> error("unexpected command")
+                }
+            }
+            .use { server ->
+                server.start()
+                RuntimeConnection.connect(endpoint).use { control ->
+                    val refresh =
+                        RuntimeRefreshClient(control)
+                            .refresh(
+                                dev.sebastiano.indexino.api.RefreshRequest.forScope(
+                                    dev.sebastiano.indexino.api.IndexScope.gradle(":app")
+                                )
+                            )
+                    val awaiting = CompletableFuture.runAsync {
+                        RuntimeConnection.connect(control.endpoint).use { observation ->
+                            runCatching { RuntimeRefreshHandle(refresh.id, observation).await() }
+                        }
+                    }
+
+                    check(awaitStarted.await(5, TimeUnit.SECONDS))
+                    refresh.stop()
+
+                    awaiting.get(5, TimeUnit.SECONDS)
+                }
+            }
+        cacheRoot.toFile().deleteRecursively()
+    }
+
     @Test
     fun `command errors are framed and do not close the session`() {
         val cacheRoot =

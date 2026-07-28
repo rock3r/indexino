@@ -18,7 +18,9 @@ import dev.sebastiano.indexino.engine.IndexingCoordinator
 import dev.sebastiano.indexino.engine.PluginRegistry
 import dev.sebastiano.indexino.engine.RuntimeClientBootstrap
 import dev.sebastiano.indexino.engine.RuntimeConnection
+import dev.sebastiano.indexino.engine.RuntimeProtocolException
 import dev.sebastiano.indexino.engine.RuntimeRefreshClient
+import dev.sebastiano.indexino.engine.RuntimeRefreshHandle
 import dev.sebastiano.indexino.engine.RuntimeSnapshotClient
 import dev.sebastiano.indexino.model.IndexFailureCategory
 import dev.sebastiano.indexino.model.IndexinoInternalApi
@@ -54,7 +56,7 @@ private constructor(
     private val generationStores = mutableMapOf<WorkspaceGenerationId, Path>()
     private val snapshotPins = mutableMapOf<WorkspaceGenerationId, Int>()
     private var published: PublishedGeneration? = null
-    private val remoteSnapshotIds = mutableSetOf<String>()
+    private val remoteSnapshots = mutableMapOf<String, IndexSnapshot>()
 
     /**
      * Test-only seam: runs after a generation copy is staged and before it is published under
@@ -100,7 +102,19 @@ private constructor(
             val canonical = canonicalWorkspace(configuration.workspace)
             return when (configuration.runtimeAttachMode) {
                 RuntimeAttachMode.PREFER_DAEMON ->
-                    Indexino(canonical, RuntimeClientBootstrap.connect(canonical))
+                    try {
+                        Indexino(canonical, RuntimeClientBootstrap.connect(canonical))
+                    } catch (thrown: IndexinoException) {
+                        throw thrown
+                    } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
+                        throw indexinoFailure(
+                            category = IndexFailureCategory.IO,
+                            code = "runtime_connect_failed",
+                            message = "Unable to connect to the local Indexino runtime",
+                            retryable = true,
+                            cause = thrown,
+                        )
+                    }
                 RuntimeAttachMode.IN_PROCESS -> Indexino(canonical)
             }
         }
@@ -137,7 +151,7 @@ private constructor(
     public suspend fun refresh(request: RefreshRequest): RefreshHandle {
         ensureOpen()
         runtimeConnection?.let { connection ->
-            return remoteRefresh(connection, request)
+            return mapRemoteFailures { remoteRefresh(connection, request) }
         }
         requireSupportedScope(request.scope)
         val applications = applicationsFor(request)
@@ -180,7 +194,7 @@ private constructor(
     public suspend fun activeRefreshes(): List<RefreshSummary> {
         ensureOpen()
         runtimeConnection?.let { connection ->
-            return RuntimeRefreshClient(connection).active()
+            return mapRemoteFailures { RuntimeRefreshClient(connection).active() }
         }
         return IndexingCoordinator.active(workspace)
             .asSequence()
@@ -325,7 +339,7 @@ private constructor(
     public suspend fun snapshot(freshness: FreshnessPolicy): IndexSnapshot {
         ensureOpen()
         runtimeConnection?.let { connection ->
-            return remoteSnapshot(connection, freshness)
+            return mapRemoteFailures { remoteSnapshot(connection, freshness) }
         }
         if (freshness == FreshnessPolicy.AWAIT_CURRENT) {
             IndexingCoordinator.active(workspace)
@@ -421,6 +435,18 @@ private constructor(
         close()
     }
 
+    private fun <T> mapRemoteFailures(block: () -> T): T =
+        try {
+            block()
+        } catch (thrown: IndexinoException) {
+            throw thrown
+        } catch (thrown: RuntimeProtocolException) {
+            thrown.failure?.let { failure -> throw IndexinoException(failure, thrown) }
+            throw mapUnexpectedFailure(thrown)
+        } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
+            throw mapUnexpectedFailure(thrown)
+        }
+
     @OptIn(IndexinoInternalApi::class)
     private fun remoteRefresh(
         connection: RuntimeConnection,
@@ -428,7 +454,11 @@ private constructor(
     ): RefreshHandle {
         val remote = RuntimeRefreshClient(connection).refresh(request)
         val id = RefreshId.of(remote.id)
-        val result = CompletableFuture.supplyAsync { remote.await().result }
+        val result = CompletableFuture.supplyAsync {
+            RuntimeConnection.connect(connection.endpoint).use { observation ->
+                mapRemoteFailures { RuntimeRefreshHandle(remote.id, observation).await().result }
+            }
+        }
         val terminal = result.thenApply<RefreshEvent> { refresh -> RefreshCompleted(id, refresh) }
         return RefreshHandle.inFlight(id, result, terminal, remote::stop)
     }
@@ -439,27 +469,28 @@ private constructor(
     ): IndexSnapshot {
         val client = RuntimeSnapshotClient(connection)
         val lease = client.acquire(freshness)
-        synchronized(remoteSnapshotIds) { remoteSnapshotIds.add(lease.id) }
-        return IndexSnapshot.createRemote(
-            client = client,
-            leaseId = lease.id,
-            revision = lease.revision,
-            generation = lease.generation,
-            freshnessAtAcquisition = lease.freshness,
-            onClose = {
-                synchronized(remoteSnapshotIds) { remoteSnapshotIds.remove(lease.id) }
-                client.release(lease.id)
-            },
-        )
+        val snapshot =
+            IndexSnapshot.createRemote(
+                client = client,
+                leaseId = lease.id,
+                revision = lease.revision,
+                generation = lease.generation,
+                freshnessAtAcquisition = lease.freshness,
+                onClose = {
+                    synchronized(remoteSnapshots) { remoteSnapshots.remove(lease.id) }
+                    client.release(lease.id)
+                },
+            )
+        synchronized(remoteSnapshots) { remoteSnapshots[lease.id] = snapshot }
+        return snapshot
     }
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         runtimeConnection?.let { connection ->
-            val snapshots = synchronized(remoteSnapshotIds) { remoteSnapshotIds.toList() }
-            snapshots.forEach { id ->
-                runCatching { RuntimeSnapshotClient(connection).release(id) }
-            }
+            val snapshots = synchronized(remoteSnapshots) { remoteSnapshots.values.toList() }
+            snapshots.forEach { snapshot -> runCatching(snapshot::close) }
+            synchronized(remoteSnapshots) { remoteSnapshots.clear() }
             connection.close()
             return
         }

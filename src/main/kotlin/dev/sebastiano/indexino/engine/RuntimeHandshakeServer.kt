@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.engine
 
+import dev.sebastiano.indexino.api.IndexinoException
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.IOException
@@ -101,6 +102,8 @@ internal class RuntimeHandshakeServer(
                                     sessionCommandHandler?.invoke(session, command)
                                         ?: checkNotNull(commandHandler).invoke(command)
                                 )
+                            } catch (failure: IndexinoException) {
+                                RuntimeCommandResponseCodec.structuredError(failure.failure)
                             } catch (failure: RuntimeProtocolException) {
                                 RuntimeCommandResponseCodec.error(
                                     code = "INVALID_REQUEST",

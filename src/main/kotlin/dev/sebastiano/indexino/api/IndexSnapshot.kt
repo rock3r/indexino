@@ -8,6 +8,7 @@ import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.engine.PluginRegistry
+import dev.sebastiano.indexino.engine.RuntimeProtocolException
 import dev.sebastiano.indexino.engine.RuntimeSnapshotClient
 import dev.sebastiano.indexino.model.BasicFactQueries
 import dev.sebastiano.indexino.model.BasicFactSchemaVersion
@@ -54,8 +55,10 @@ private constructor(
 
     override suspend fun findSymbols(query: SymbolQuery, options: QueryOptions): QueryPage<Symbol> {
         ensureOpen()
-        remoteClient?.let {
-            return it.findSymbols(checkNotNull(remoteLeaseId), query, options)
+        remoteClient?.let { client ->
+            return mapUnexpectedFailures {
+                client.findSymbols(checkNotNull(remoteLeaseId), query, options)
+            }
         }
         validateQueryOptions(options)
         return mapUnexpectedFailures {
@@ -92,8 +95,10 @@ private constructor(
         options: QueryOptions,
     ): QueryPage<Reference> {
         ensureOpen()
-        remoteClient?.let {
-            return it.findReferences(checkNotNull(remoteLeaseId), query, options)
+        remoteClient?.let { client ->
+            return mapUnexpectedFailures {
+                client.findReferences(checkNotNull(remoteLeaseId), query, options)
+            }
         }
         validateQueryOptions(options)
         return mapUnexpectedFailures {
@@ -146,8 +151,10 @@ private constructor(
 
     override suspend fun findCalls(query: CallQuery, options: QueryOptions): QueryPage<CallSite> {
         ensureOpen()
-        remoteClient?.let {
-            return it.findCalls(checkNotNull(remoteLeaseId), query, options)
+        remoteClient?.let { client ->
+            return mapUnexpectedFailures {
+                client.findCalls(checkNotNull(remoteLeaseId), query, options)
+            }
         }
         validateQueryOptions(options)
         return mapUnexpectedFailures {
@@ -185,8 +192,10 @@ private constructor(
     @OptIn(IndexinoInternalApi::class)
     public suspend fun runCheck(request: CheckRequest, options: QueryOptions): QueryPage<Finding> {
         ensureOpen()
-        remoteClient?.let {
-            return it.runCheck(checkNotNull(remoteLeaseId), request, options)
+        remoteClient?.let { client ->
+            return mapUnexpectedFailuresSuspend {
+                client.runCheck(checkNotNull(remoteLeaseId), request, options)
+            }
         }
         validateCheckQueryOptions(options)
         return mapUnexpectedFailuresSuspend {
@@ -242,7 +251,7 @@ private constructor(
             } finally {
                 // Unpin even when store.close fails — a leaked generation pin is worse than a
                 // mapped close failure.
-                onClose()
+                mapUnexpectedFailures(onClose)
             }
         }
     }
@@ -468,6 +477,9 @@ private constructor(
             block()
         } catch (thrown: IndexinoException) {
             throw thrown
+        } catch (thrown: RuntimeProtocolException) {
+            thrown.failure?.let { failure -> throw IndexinoException(failure, thrown) }
+            throw unexpectedFailure(thrown)
         } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
             throw unexpectedFailure(thrown)
         }
@@ -477,6 +489,9 @@ private constructor(
             block()
         } catch (thrown: IndexinoException) {
             throw thrown
+        } catch (thrown: RuntimeProtocolException) {
+            thrown.failure?.let { failure -> throw IndexinoException(failure, thrown) }
+            throw unexpectedFailure(thrown)
         } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
             throw unexpectedFailure(thrown)
         }

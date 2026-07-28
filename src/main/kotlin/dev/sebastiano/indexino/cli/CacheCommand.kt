@@ -92,7 +92,7 @@ internal object CacheMaintenance {
 
     private fun hasLiveRuntime(cacheRoot: Path): Boolean =
         regularFiles(cacheRoot.resolve("runtime"))
-            .filter { it.fileName.toString().endsWith(".lease") }
+            .filter { it.fileName.toString().endsWith(".lease.json") }
             .mapNotNull { RuntimeLeaseStore.read(it) }
             .any(RuntimeLeaseStore::isLive)
 

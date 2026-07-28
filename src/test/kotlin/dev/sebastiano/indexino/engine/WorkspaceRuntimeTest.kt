@@ -121,6 +121,37 @@ class WorkspaceRuntimeTest {
     }
 
     @Test
+    fun `replaced workspace at the same path shuts down the bound runtime`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-replaced-")
+        val workspace = createGradleWorkspace()
+        val replacement = createGradleWorkspace()
+        val previousCacheRoot = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheRoot.toString())
+        val runtime = WorkspaceRuntime.start(workspace, cacheRoot)
+        val workspaceId = InProcessCacheLayout.workspaceId(workspace.toRealPath())
+        try {
+            assertTrue(workspace.toFile().deleteRecursively())
+            Files.move(replacement, workspace)
+
+            val tombstonePath = RuntimePaths.tombstonePath(cacheRoot, workspaceId)
+            waitUntil {
+                RuntimeTombstoneStore.read(tombstonePath) != null && !Files.exists(runtime.endpoint)
+            }
+
+            assertEquals("WORKSPACE_LOST", RuntimeTombstoneStore.read(tombstonePath)?.code)
+            assertFalse(Files.exists(runtime.endpoint))
+            assertTrue(Files.isDirectory(workspace))
+        } finally {
+            runtime.close()
+            cacheRoot.toFile().deleteRecursively()
+            workspace.toFile().deleteRecursively()
+            replacement.toFile().deleteRecursively()
+            if (previousCacheRoot == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheRoot)
+        }
+    }
+
+    @Test
     fun `deleted workspace shuts down the runtime and leaves an external tombstone`() {
         val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-lost-")
         val workspace = createGradleWorkspace()

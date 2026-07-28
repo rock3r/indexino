@@ -1,16 +1,20 @@
 package dev.sebastiano.indexino.engine
 
+import dev.sebastiano.indexino.model.IndexFailure
+import dev.sebastiano.indexino.model.IndexinoInternalApi
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 
-internal class RuntimeProtocolException(message: String) : IOException(message)
+internal class RuntimeProtocolException(message: String, val failure: IndexFailure? = null) :
+    IOException(message)
 
 internal sealed interface RuntimeCommandResponse {
     class Success(val payload: ByteArray) : RuntimeCommandResponse
 
-    class Error(val code: String, val message: String) : RuntimeCommandResponse
+    class Error(val code: String, val message: String, val failure: IndexFailure? = null) :
+        RuntimeCommandResponse
 }
 
 /** Internal command response envelope; handshake frames deliberately remain separate. */
@@ -23,18 +27,41 @@ internal object RuntimeCommandResponseCodec {
     fun error(code: String, message: String): ByteArray =
         encode(RuntimeCommandResponse.Error(code, message))
 
+    @OptIn(IndexinoInternalApi::class)
+    fun structuredError(failure: IndexFailure): ByteArray =
+        encode(RuntimeCommandResponse.Error(failure.code, failure.message, failure))
+
     fun unwrap(payload: ByteArray): ByteArray =
         when (val response = decode(payload)) {
             is RuntimeCommandResponse.Success -> response.payload
             is RuntimeCommandResponse.Error ->
-                throw RuntimeProtocolException("${response.code}: ${response.message}")
+                throw RuntimeProtocolException(
+                    "${response.code}: ${response.message}",
+                    response.failure,
+                )
         }
 
+    @OptIn(IndexinoInternalApi::class)
     fun decode(payload: ByteArray): RuntimeCommandResponse =
         DataInputStream(payload.inputStream()).use { input ->
             when (input.readUnsignedByte()) {
                 SUCCESS -> RuntimeCommandResponse.Success(input.readBytes())
-                ERROR -> RuntimeCommandResponse.Error(input.readUTF(), input.readUTF())
+                ERROR -> {
+                    val code = input.readUTF()
+                    val message = input.readUTF()
+                    val failure =
+                        if (input.readBoolean()) {
+                            IndexFailure.of(
+                                category = decodeCategory(input.readUTF()),
+                                code = input.readUTF(),
+                                message = input.readUTF(),
+                                retryable = input.readBoolean(),
+                            )
+                        } else {
+                            null
+                        }
+                    RuntimeCommandResponse.Error(code, message, failure)
+                }
                 else -> throw RuntimeProtocolException("Unknown runtime command response")
             }
         }
@@ -51,25 +78,70 @@ internal object RuntimeCommandResponseCodec {
                     output.writeByte(ERROR)
                     output.writeUTF(response.code)
                     output.writeUTF(response.message)
+                    output.writeBoolean(response.failure != null)
+                    response.failure?.let { failure ->
+                        output.writeUTF(failure.category.value)
+                        output.writeUTF(failure.code)
+                        output.writeUTF(failure.message)
+                        output.writeBoolean(failure.retryable)
+                    }
                 }
             }
         }
         return bytes.toByteArray()
     }
+
+    @OptIn(IndexinoInternalApi::class)
+    private fun decodeCategory(value: String): dev.sebastiano.indexino.model.IndexFailureCategory =
+        when (value) {
+            "INVALID_REQUEST" -> dev.sebastiano.indexino.model.IndexFailureCategory.INVALID_REQUEST
+            "INDEX_NOT_FOUND" -> dev.sebastiano.indexino.model.IndexFailureCategory.INDEX_NOT_FOUND
+            "TOPOLOGY" -> dev.sebastiano.indexino.model.IndexFailureCategory.TOPOLOGY
+            "STORAGE_BUSY" -> dev.sebastiano.indexino.model.IndexFailureCategory.STORAGE_BUSY
+            "IO" -> dev.sebastiano.indexino.model.IndexFailureCategory.IO
+            "PARSE" -> dev.sebastiano.indexino.model.IndexFailureCategory.PARSE
+            "PLUGIN" -> dev.sebastiano.indexino.model.IndexFailureCategory.PLUGIN
+            "SCRIPT" -> dev.sebastiano.indexino.model.IndexFailureCategory.SCRIPT
+            "WORKSPACE_LOST" -> dev.sebastiano.indexino.model.IndexFailureCategory.WORKSPACE_LOST
+            "CLOSED" -> dev.sebastiano.indexino.model.IndexFailureCategory.CLOSED
+            else -> dev.sebastiano.indexino.model.IndexFailureCategory.INTERNAL
+        }
 }
 
 internal object RuntimeFrameCodec {
     const val MAX_FRAME_BYTES = 1_048_576
+    private const val MAX_MESSAGE_BYTES = 64 * 1_048_576
+    private const val CHUNKED_MESSAGE = Int.MIN_VALUE
 
     fun write(output: DataOutputStream, payload: ByteArray) {
-        require(payload.size <= MAX_FRAME_BYTES) { "Runtime frame exceeds $MAX_FRAME_BYTES bytes" }
-        output.writeInt(payload.size)
-        output.write(payload)
+        if (payload.size <= MAX_FRAME_BYTES) {
+            output.writeInt(payload.size)
+            output.write(payload)
+        } else {
+            require(payload.size <= MAX_MESSAGE_BYTES) {
+                "Runtime message exceeds $MAX_MESSAGE_BYTES bytes"
+            }
+            output.writeInt(CHUNKED_MESSAGE)
+            output.writeInt(payload.size)
+            var offset = 0
+            while (offset < payload.size) {
+                val count = minOf(MAX_FRAME_BYTES, payload.size - offset)
+                output.write(payload, offset, count)
+                offset += count
+            }
+        }
         output.flush()
     }
 
     fun read(input: DataInputStream): ByteArray {
         val length = input.readInt()
+        if (length == CHUNKED_MESSAGE) {
+            val messageLength = input.readInt()
+            if (messageLength < 0 || messageLength > MAX_MESSAGE_BYTES) {
+                throw RuntimeProtocolException("Runtime message length $messageLength is invalid")
+            }
+            return ByteArray(messageLength).also(input::readFully)
+        }
         if (length < 0 || length > MAX_FRAME_BYTES) {
             throw RuntimeProtocolException("Runtime frame length $length is invalid")
         }

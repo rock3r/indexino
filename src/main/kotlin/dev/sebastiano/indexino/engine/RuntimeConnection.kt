@@ -11,6 +11,7 @@ import java.nio.file.Path
 /** One internal local-runtime session. Public callers never see its frame format. */
 internal class RuntimeConnection
 private constructor(
+    internal val endpoint: Path,
     private val channel: SocketChannel,
     private val input: DataInputStream,
     private val output: DataOutputStream,
@@ -45,7 +46,7 @@ private constructor(
                         RuntimeHandshakeResponseCodec.decode(RuntimeFrameCodec.read(input))
                 ) {
                     RuntimeHandshakeResponse.Accepted ->
-                        return RuntimeConnection(channel, input, output)
+                        return RuntimeConnection(endpoint, channel, input, output)
                     is RuntimeHandshakeResponse.Rejected -> {
                         throw RuntimeProtocolException("${response.code}: ${response.message}")
                     }

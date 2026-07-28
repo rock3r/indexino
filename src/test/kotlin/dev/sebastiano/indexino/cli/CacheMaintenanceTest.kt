@@ -3,6 +3,7 @@ package dev.sebastiano.indexino.cli
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifest
 import dev.sebastiano.indexino.engine.RuntimeLease
+import dev.sebastiano.indexino.engine.RuntimePaths
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
@@ -19,7 +20,7 @@ class CacheMaintenanceTest {
         val pack = packPath(cacheRoot, "e".repeat(64))
         Files.createDirectories(pack.parent)
         Files.writeString(pack, "keep while refreshing")
-        val lease = cacheRoot.resolve("runtime").resolve("f".repeat(16) + ".lease")
+        val lease = RuntimePaths.leasePath(cacheRoot, "f".repeat(RuntimePaths.WORKSPACE_ID_LENGTH))
         Files.createDirectories(lease.parent)
         Files.writeString(
             lease,

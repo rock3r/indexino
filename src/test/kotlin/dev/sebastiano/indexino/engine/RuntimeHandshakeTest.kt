@@ -11,6 +11,19 @@ import kotlin.test.assertTrue
 
 class RuntimeHandshakeTest {
     @Test
+    fun `messages larger than one frame are transparently reassembled`() {
+        val payload = ByteArray(RuntimeFrameCodec.MAX_FRAME_BYTES + 1) { index -> index.toByte() }
+        val bytes = ByteArrayOutputStream()
+        DataOutputStream(bytes).use { output -> RuntimeFrameCodec.write(output, payload) }
+
+        assertEquals(
+            payload.toList(),
+            RuntimeFrameCodec.read(DataInputStream(ByteArrayInputStream(bytes.toByteArray())))
+                .toList(),
+        )
+    }
+
+    @Test
     fun `matching major handshake accepts additive minor versions`() {
         val response = roundTrip(RuntimeHandshake(RuntimeLeaseStore.PROTOCOL_MAJOR, minor = 99))
 

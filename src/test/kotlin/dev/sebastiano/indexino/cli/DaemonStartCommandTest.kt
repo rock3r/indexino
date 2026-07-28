@@ -4,6 +4,7 @@ import dev.sebastiano.indexino.api.FreshnessPolicy
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.api.IndexScope
 import dev.sebastiano.indexino.api.Indexino
+import dev.sebastiano.indexino.api.IndexinoException
 import dev.sebastiano.indexino.api.RefreshRequest
 import dev.sebastiano.indexino.engine.RuntimeConnection
 import dev.sebastiano.indexino.engine.RuntimePaths
@@ -19,11 +20,40 @@ import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
 class DaemonStartCommandTest {
+    @Test
+    fun `public daemon snapshot preserves index not found failure`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-daemon-failure-")
+        val workspace =
+            Files.createTempDirectory(Path.of("/tmp"), "indexino-daemon-failure-workspace-")
+        val previousCacheRoot = System.getProperty("indexino.cache.dir")
+        val previousAttachMode = Indexino.defaultRuntimeAttachModeForTests
+        System.setProperty("indexino.cache.dir", cacheRoot.toString())
+        Indexino.defaultRuntimeAttachModeForTests = null
+        try {
+            val indexino = Indexino.connectBlocking(workspace)
+            try {
+                val failure =
+                    assertFailsWith<IndexinoException> { runBlocking { indexino.snapshot() } }
+                assertEquals("index_not_found", failure.failure.code)
+            } finally {
+                indexino.close()
+            }
+        } finally {
+            DaemonStopCommand().stop(workspace, cacheRoot)
+            workspace.toFile().deleteRecursively()
+            cacheRoot.toFile().deleteRecursively()
+            Indexino.defaultRuntimeAttachModeForTests = previousAttachMode
+            if (previousCacheRoot == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheRoot)
+        }
+    }
+
     @Test
     fun `default public connect auto-spawns and proxies through the daemon`() {
         val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-public-daemon-")
