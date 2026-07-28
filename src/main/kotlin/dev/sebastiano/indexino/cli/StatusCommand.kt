@@ -7,7 +7,9 @@ import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import com.github.ajalt.clikt.parameters.types.file
+import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.core.Version
+import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.ManifestFreshness
 import dev.sebastiano.indexino.core.manifest.ManifestIO
@@ -25,6 +27,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
+@Suppress("UnusedPrivateProperty", "UnusedPrivateFunction")
 internal class StatusCommand : CliktCommand(name = "status") {
     private val project by
         option("--project").file(mustExist = true, mustBeReadable = true).required()
@@ -34,21 +37,33 @@ internal class StatusCommand : CliktCommand(name = "status") {
     private val includeDeps by option("--include-deps").flag(default = false)
 
     override fun run() {
-        val exitCode =
-            runStatus(
-                project = requireNotNull(project).toPath(),
-                topologyRequest =
-                    TopologyRequest(
-                        buildSystem = parseBuildSystem(buildSystem),
-                        bazelTarget = bazelTarget,
-                        gradleModule = gradleModule,
-                        includeDeps = includeDeps,
-                    ),
-                output = { echo(it) },
+        val workspace = requireNotNull(project).toPath().toRealPath()
+        val manifest =
+            WorkspaceGenerationManifestStore(
+                    InProcessCacheLayout.cacheRoot(),
+                    InProcessCacheLayout.workspaceId(workspace),
+                )
+                .current()
+        if (manifest == null) {
+            echo(
+                Json.encodeToString(
+                    StatusReport(indexed = false, commit = GitHeadResolver.resolve(workspace))
+                )
             )
-        if (exitCode != CliExitCodes.SUCCESS) {
-            throw ProgramResult(exitCode)
+            throw ProgramResult(CliExitCodes.ANALYSIS_ERROR)
         }
+        echo(
+            Json.encodeToString(
+                StatusReport(
+                    indexed = true,
+                    commit = manifest.revision.orEmpty(),
+                    scope = manifest.scopeValue,
+                    topology = manifest.scopeBuildSystem,
+                    applications = manifest.applications,
+                    fresh = true,
+                )
+            )
+        )
     }
 
     fun runStatus(

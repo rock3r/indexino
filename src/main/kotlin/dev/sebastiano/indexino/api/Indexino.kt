@@ -16,6 +16,12 @@ import dev.sebastiano.indexino.core.store.IndexStoreOpener
 import dev.sebastiano.indexino.engine.InFlightRefresh
 import dev.sebastiano.indexino.engine.IndexingCoordinator
 import dev.sebastiano.indexino.engine.PluginRegistry
+import dev.sebastiano.indexino.engine.RuntimeClientBootstrap
+import dev.sebastiano.indexino.engine.RuntimeConnection
+import dev.sebastiano.indexino.engine.RuntimeProtocolException
+import dev.sebastiano.indexino.engine.RuntimeRefreshClient
+import dev.sebastiano.indexino.engine.RuntimeRefreshHandle
+import dev.sebastiano.indexino.engine.RuntimeSnapshotClient
 import dev.sebastiano.indexino.model.IndexFailureCategory
 import dev.sebastiano.indexino.model.IndexinoInternalApi
 import dev.sebastiano.indexino.model.RefreshId
@@ -23,6 +29,7 @@ import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.SourceOriginRevision
 import dev.sebastiano.indexino.model.WorkspaceGenerationId
 import dev.sebastiano.indexino.model.WorkspaceRevision
+import dev.sebastiano.indexino.producer.IndexBuildProgressReporter
 import dev.sebastiano.indexino.topology.BuildSystem as InternalBuildSystem
 import dev.sebastiano.indexino.topology.TopologyRequest
 import java.io.IOException
@@ -32,12 +39,17 @@ import java.security.MessageDigest
 import java.util.HexFormat
 import java.util.UUID
 import java.util.concurrent.CancellationException
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.atomic.AtomicBoolean
 
 private const val BASIC_FACT_SCHEMA_VERSION = 1
 
 @Suppress("TooManyFunctions")
-public class Indexino private constructor(private val workspace: Path) : AutoCloseable {
+public class Indexino
+private constructor(
+    private val workspace: Path,
+    private val runtimeConnection: RuntimeConnection? = null,
+) : AutoCloseable {
     private val closed = AtomicBoolean()
     private val clientId = UUID.randomUUID().toString()
     private val storeRoot = InProcessCacheLayout.writerRoot(workspace)
@@ -45,6 +57,7 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
     private val generationStores = mutableMapOf<WorkspaceGenerationId, Path>()
     private val snapshotPins = mutableMapOf<WorkspaceGenerationId, Int>()
     private var published: PublishedGeneration? = null
+    private val remoteSnapshots = mutableMapOf<String, IndexSnapshot>()
 
     /**
      * Test-only seam: runs after a generation copy is staged and before it is published under
@@ -66,11 +79,51 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
          */
         @Volatile internal var canonicalWorkspacePathForTests: ((Path) -> Path)? = null
 
+        /** Test-only seam that keeps legacy unit fixtures in one process. */
+        @Volatile internal var defaultRuntimeAttachModeForTests: RuntimeAttachMode? = null
+
         @JvmStatic
         public suspend fun connect(workspace: Path): Indexino = connectBlocking(workspace)
 
         @JvmStatic
-        public fun connectBlocking(workspace: Path): Indexino {
+        public suspend fun connect(configuration: IndexinoConfiguration): Indexino =
+            connectBlocking(configuration)
+
+        @JvmStatic
+        public fun connectBlocking(workspace: Path): Indexino =
+            connectBlocking(
+                IndexinoConfiguration.forWorkspace(workspace)
+                    .withRuntimeAttach(
+                        defaultRuntimeAttachModeForTests ?: RuntimeAttachMode.PREFER_DAEMON
+                    )
+            )
+
+        @JvmStatic
+        public fun connectBlocking(configuration: IndexinoConfiguration): Indexino {
+            val canonical = canonicalWorkspace(configuration.workspace)
+            return when (configuration.runtimeAttachMode) {
+                RuntimeAttachMode.PREFER_DAEMON ->
+                    try {
+                        Indexino(canonical, RuntimeClientBootstrap.connect(canonical))
+                    } catch (thrown: IndexinoException) {
+                        throw thrown
+                    } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
+                        throw indexinoFailure(
+                            category = IndexFailureCategory.IO,
+                            code = "runtime_connect_failed",
+                            message = "Unable to connect to the local Indexino runtime",
+                            retryable = true,
+                            cause = thrown,
+                        )
+                    }
+                RuntimeAttachMode.IN_PROCESS -> Indexino(canonical)
+            }
+        }
+
+        internal fun connectRemote(workspace: Path, connection: RuntimeConnection): Indexino =
+            Indexino(workspace, connection)
+
+        private fun canonicalWorkspace(workspace: Path): Path {
             if (!Files.isDirectory(workspace)) {
                 throw indexinoFailure(
                     category = IndexFailureCategory.INVALID_REQUEST,
@@ -79,35 +132,50 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                     retryable = false,
                 )
             }
-            val canonical =
-                try {
-                    canonicalWorkspacePathForTests?.invoke(workspace) ?: workspace.toRealPath()
-                } catch (thrown: IOException) {
-                    // Connect-time path resolution failures are IO (retryable). WORKSPACE_LOST is
-                    // reserved for an already-bound workspace disappearing after connect.
-                    throw indexinoFailure(
-                        category = IndexFailureCategory.IO,
-                        code = "workspace_path_unresolvable",
-                        message =
-                            thrown.message?.takeIf { it.isNotBlank() }
-                                ?: "Workspace path could not be resolved",
-                        retryable = true,
-                        cause = thrown,
-                    )
-                }
-            return Indexino(canonical)
+            return try {
+                canonicalWorkspacePathForTests?.invoke(workspace) ?: workspace.toRealPath()
+            } catch (thrown: IOException) {
+                throw indexinoFailure(
+                    category = IndexFailureCategory.IO,
+                    code = "workspace_path_unresolvable",
+                    message =
+                        thrown.message?.takeIf { it.isNotBlank() }
+                            ?: "Workspace path could not be resolved",
+                    retryable = true,
+                    cause = thrown,
+                )
+            }
         }
     }
 
     @OptIn(IndexinoInternalApi::class)
-    public suspend fun refresh(request: RefreshRequest): RefreshHandle {
+    public suspend fun refresh(request: RefreshRequest): RefreshHandle =
+        refresh(request, progress = {}, machineProgress = null)
+
+    @OptIn(IndexinoInternalApi::class)
+    internal suspend fun refresh(
+        request: RefreshRequest,
+        progress: (String) -> Unit,
+        machineProgress: IndexBuildProgressReporter?,
+    ): RefreshHandle {
         ensureOpen()
+        runtimeConnection?.let { connection ->
+            return mapRemoteFailures { remoteRefresh(connection, request) }
+        }
         requireSupportedScope(request.scope)
         val applications = applicationsFor(request)
         val operation =
             IndexingCoordinator.start(workspace, request) { created ->
                 try {
-                    val result = runRefresh(request, created.id, applications, created)
+                    val result =
+                        runRefresh(
+                            request,
+                            created.id,
+                            applications,
+                            created,
+                            progress,
+                            machineProgress,
+                        )
                     if (!created.isStopped()) {
                         created.result.complete(result)
                         created.terminalEvent.complete(RefreshCompleted(created.id, result))
@@ -139,9 +207,21 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         )
     }
 
+    internal fun refreshProgress(
+        id: String
+    ): dev.sebastiano.indexino.engine.RuntimeRefreshProgress {
+        val connection = checkNotNull(runtimeConnection) { "Refresh progress is daemon-owned" }
+        return RuntimeConnection.connect(connection.endpoint).use { progressConnection ->
+            RuntimeRefreshClient(progressConnection).progress(id)
+        }
+    }
+
     @OptIn(IndexinoInternalApi::class)
     public suspend fun activeRefreshes(): List<RefreshSummary> {
         ensureOpen()
+        runtimeConnection?.let { connection ->
+            return mapRemoteFailures { RuntimeRefreshClient(connection).active() }
+        }
         return IndexingCoordinator.active(workspace)
             .asSequence()
             .map { (request, operation) -> RefreshSummary(operation.id, request) }
@@ -155,6 +235,8 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         refreshId: RefreshId,
         applications: List<String>,
         operation: InFlightRefresh,
+        progress: (String) -> Unit,
+        machineProgress: IndexBuildProgressReporter?,
     ): RefreshResult {
         // Serialize in-process peers across run+copy so a shared commit writer cannot mutate while
         // another client copies it. Cross-process single-writer election remains S6.
@@ -168,8 +250,11 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                             applications = applications,
                             bazelQueryExecutor = null,
                             bazelProcessRunner = null,
-                            progress = { operation.checkActive() },
-                            machineProgress = null,
+                            progress = { message ->
+                                operation.checkActive()
+                                progress(message)
+                            },
+                            machineProgress = machineProgress,
                             storeRootOverride = storeRoot,
                         )
                         .runDetailed()
@@ -189,7 +274,13 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                 val revision = manifest.toWorkspaceRevision()
                 val generation = manifest.toGenerationId(revision)
                 operation.checkActive()
-                publishGenerationOrAbortIfClosed(manifest.commit, generation, revision)
+                publishGenerationOrAbortIfClosed(
+                    manifest.commit,
+                    generation,
+                    revision,
+                    request.scope,
+                    applications,
+                )
                 val changedFileCount = execution.changes?.changedFiles?.size ?: 0
                 val removedFileCount = execution.changes?.deletedFiles?.size ?: 0
                 val result =
@@ -258,8 +349,11 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         commit: String,
         generation: WorkspaceGenerationId,
         revision: WorkspaceRevision,
+        scope: IndexScope,
+        applications: List<String>,
     ) {
-        val publishedStore = publishGenerationStore(commit, generation, revision)
+        val publishedStore =
+            publishGenerationStore(commit, generation, revision, scope, applications)
         afterPublishGenerationStoreForTests?.invoke()
         synchronized(generationLock) {
             if (closed.get()) {
@@ -284,6 +378,9 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
 
     public suspend fun snapshot(freshness: FreshnessPolicy): IndexSnapshot {
         ensureOpen()
+        runtimeConnection?.let { connection ->
+            return mapRemoteFailures { remoteSnapshot(connection, freshness) }
+        }
         if (freshness == FreshnessPolicy.AWAIT_CURRENT) {
             IndexingCoordinator.active(workspace)
                 .asSequence()
@@ -364,8 +461,79 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         }
     }
 
+    public suspend fun shutdownRuntime() {
+        ensureOpen()
+        runtimeConnection?.let { connection ->
+            try {
+                connection.request(
+                    dev.sebastiano.indexino.engine.RuntimeControlProtocol.shutdownCommand()
+                )
+            } catch (_: IOException) {
+                // A successful owner shutdown may close the socket before its empty response.
+            }
+        }
+        close()
+    }
+
+    private fun <T> mapRemoteFailures(block: () -> T): T =
+        try {
+            block()
+        } catch (thrown: IndexinoException) {
+            throw thrown
+        } catch (thrown: RuntimeProtocolException) {
+            thrown.failure?.let { failure -> throw IndexinoException(failure, thrown) }
+            throw mapUnexpectedFailure(thrown)
+        } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
+            throw mapUnexpectedFailure(thrown)
+        }
+
+    @OptIn(IndexinoInternalApi::class)
+    private fun remoteRefresh(
+        connection: RuntimeConnection,
+        request: RefreshRequest,
+    ): RefreshHandle {
+        val remote = RuntimeRefreshClient(connection).refresh(request)
+        val id = RefreshId.of(remote.id)
+        val result = CompletableFuture.supplyAsync {
+            RuntimeConnection.connect(connection.endpoint).use { observation ->
+                mapRemoteFailures { RuntimeRefreshHandle(remote.id, observation).await().result }
+            }
+        }
+        val terminal = result.thenApply<RefreshEvent> { refresh -> RefreshCompleted(id, refresh) }
+        return RefreshHandle.inFlight(id, result, terminal, remote::stop)
+    }
+
+    private fun remoteSnapshot(
+        connection: RuntimeConnection,
+        freshness: FreshnessPolicy,
+    ): IndexSnapshot {
+        val client = RuntimeSnapshotClient(connection)
+        val lease = client.acquire(freshness)
+        val snapshot =
+            IndexSnapshot.createRemote(
+                client = client,
+                leaseId = lease.id,
+                revision = lease.revision,
+                generation = lease.generation,
+                freshnessAtAcquisition = lease.freshness,
+                onClose = {
+                    synchronized(remoteSnapshots) { remoteSnapshots.remove(lease.id) }
+                    client.release(lease.id)
+                },
+            )
+        synchronized(remoteSnapshots) { remoteSnapshots[lease.id] = snapshot }
+        return snapshot
+    }
+
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
+        runtimeConnection?.let { connection ->
+            val snapshots = synchronized(remoteSnapshots) { remoteSnapshots.values.toList() }
+            snapshots.forEach { snapshot -> runCatching(snapshot::close) }
+            synchronized(remoteSnapshots) { remoteSnapshots.clear() }
+            connection.close()
+            return
+        }
         // Drop the published exemption so unpinned per-client copies can be reclaimed. Open
         // snapshots keep their pins and are only deleted when those snapshots close (see C3/S3/S6).
         synchronized(generationLock) {
@@ -439,6 +607,8 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
         commit: String,
         generation: WorkspaceGenerationId,
         revision: WorkspaceRevision,
+        scope: IndexScope,
+        applications: List<String>,
     ): PublishedStore {
         val destination =
             InProcessCacheLayout.generationStore(workspace, clientId, generation.value)
@@ -458,9 +628,14 @@ public class Indexino private constructor(private val workspace: Path) : AutoClo
                     revision = revision.origins.single().revision,
                     stateFingerprint = revision.origins.single().stateFingerprint,
                     packKeys = listOf(packKey),
+                    scopeBuildSystem = scope.buildSystem.value,
+                    scopeValue = scope.value,
+                    includesDependencies = scope.includesDependencies,
+                    applications = applications,
                 )
             )
-        ContentAddressedPackCache(cacheRoot).materializeDirectory(packKey, destination)
+        val packs = ContentAddressedPackCache(cacheRoot)
+        packs.materializeDirectory(packKey, destination)
         return PublishedStore(path = destination, created = !alreadyMaterialized)
     }
 

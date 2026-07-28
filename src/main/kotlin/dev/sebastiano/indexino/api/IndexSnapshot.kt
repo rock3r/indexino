@@ -8,6 +8,8 @@ import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.engine.PluginRegistry
+import dev.sebastiano.indexino.engine.RuntimeProtocolException
+import dev.sebastiano.indexino.engine.RuntimeSnapshotClient
 import dev.sebastiano.indexino.model.BasicFactQueries
 import dev.sebastiano.indexino.model.BasicFactSchemaVersion
 import dev.sebastiano.indexino.model.CallQuery
@@ -35,20 +37,29 @@ import kotlinx.coroutines.CompletableDeferred
 
 public class IndexSnapshot
 private constructor(
-    private val store: CodeIndexStore,
+    private val store: CodeIndexStore?,
     public val revision: WorkspaceRevision,
     override val generation: WorkspaceGenerationId,
     override val basicFactSchemaVersion: BasicFactSchemaVersion = BasicFactSchemaVersion.of(1),
     public val freshnessAtAcquisition: SnapshotFreshness,
     private val onClose: () -> Unit,
-    private val pluginRegistry: PluginRegistry,
+    private val pluginRegistry: PluginRegistry?,
+    private val remoteClient: RuntimeSnapshotClient? = null,
+    private val remoteLeaseId: String? = null,
 ) : BasicFactQueries, AutoCloseable {
     private val closed = AtomicBoolean()
     private val queries = IndexSnapshotQueries(generation)
     private val checkResults = ConcurrentHashMap<CheckRequest, CompletableDeferred<List<Finding>>>()
+    private val localStore: CodeIndexStore
+        get() = checkNotNull(store)
 
     override suspend fun findSymbols(query: SymbolQuery, options: QueryOptions): QueryPage<Symbol> {
         ensureOpen()
+        remoteClient?.let { client ->
+            return mapUnexpectedFailures {
+                client.findSymbols(checkNotNull(remoteLeaseId), query, options)
+            }
+        }
         validateQueryOptions(options)
         return mapUnexpectedFailures {
             orderedPage(
@@ -62,7 +73,7 @@ private constructor(
                         SymbolRecord::name,
                     ),
                 scan = { accept ->
-                    store.forEachPrefix("sym:") { _, record ->
+                    localStore.forEachPrefix("sym:") { _, record ->
                         if (record is SymbolRecord && record.matches(query)) {
                             accept(record)
                         }
@@ -84,6 +95,11 @@ private constructor(
         options: QueryOptions,
     ): QueryPage<Reference> {
         ensureOpen()
+        remoteClient?.let { client ->
+            return mapUnexpectedFailures {
+                client.findReferences(checkNotNull(remoteLeaseId), query, options)
+            }
+        }
         validateQueryOptions(options)
         return mapUnexpectedFailures {
             val targetSymbol = findSymbolById(query.symbolId)
@@ -102,7 +118,7 @@ private constructor(
                         ReferenceRecord::symbolFqn,
                     ),
                 scan = { accept ->
-                    store.forEachPrefix("ref:") { _, record ->
+                    localStore.forEachPrefix("ref:") { _, record ->
                         if (record is ReferenceRecord) {
                             val matches =
                                 with(queries) {
@@ -135,6 +151,11 @@ private constructor(
 
     override suspend fun findCalls(query: CallQuery, options: QueryOptions): QueryPage<CallSite> {
         ensureOpen()
+        remoteClient?.let { client ->
+            return mapUnexpectedFailures {
+                client.findCalls(checkNotNull(remoteLeaseId), query, options)
+            }
+        }
         validateQueryOptions(options)
         return mapUnexpectedFailures {
             val enclosing = query.enclosingSymbolId?.let(::findSymbolById)
@@ -151,7 +172,7 @@ private constructor(
                     ),
                 scan = { accept ->
                     if (!unresolvedEnclosingId) {
-                        store.forEachPrefix("call:") { _, record ->
+                        localStore.forEachPrefix("call:") { _, record ->
                             if (record is CallSiteRecord && record.matches(query, enclosing))
                                 accept(record)
                             true
@@ -171,6 +192,11 @@ private constructor(
     @OptIn(IndexinoInternalApi::class)
     public suspend fun runCheck(request: CheckRequest, options: QueryOptions): QueryPage<Finding> {
         ensureOpen()
+        remoteClient?.let { client ->
+            return mapUnexpectedFailuresSuspend {
+                client.runCheck(checkNotNull(remoteLeaseId), request, options)
+            }
+        }
         validateCheckQueryOptions(options)
         return mapUnexpectedFailuresSuspend {
             val candidate = CompletableDeferred<List<Finding>>()
@@ -178,7 +204,7 @@ private constructor(
             if (deferred === candidate) {
                 try {
                     val registered =
-                        pluginRegistry.checks.firstOrNull {
+                        checkNotNull(pluginRegistry).checks.firstOrNull {
                             it.pluginId == request.pluginId && it.check.id == request.checkId
                         }
                             ?: throw indexinoFailure(
@@ -193,7 +219,7 @@ private constructor(
                             .run(
                                 CheckContextV1(
                                     queries = this,
-                                    facts = StorePluginFactView(store, request.pluginId.value),
+                                    facts = StorePluginFactView(localStore, request.pluginId.value),
                                     active = { !closed.get() },
                                 )
                             )
@@ -221,11 +247,11 @@ private constructor(
     override fun close() {
         if (closed.compareAndSet(false, true)) {
             try {
-                mapUnexpectedFailures { store.close() }
+                store?.let { localStore -> mapUnexpectedFailures { localStore.close() } }
             } finally {
                 // Unpin even when store.close fails — a leaked generation pin is worse than a
                 // mapped close failure.
-                onClose()
+                mapUnexpectedFailures(onClose)
             }
         }
     }
@@ -279,7 +305,7 @@ private constructor(
 
     private fun findSymbolById(symbolId: SymbolId): SymbolRecord? {
         var result: SymbolRecord? = null
-        store.forEachPrefix("sym:") { _, record ->
+        localStore.forEachPrefix("sym:") { _, record ->
             if (record is SymbolRecord && with(queries) { record.definitionId() == symbolId }) {
                 result = record
                 false
@@ -293,7 +319,7 @@ private constructor(
     private fun unknownReferenceNamesForId(symbolId: SymbolId): UnknownReferenceNames {
         val external = LinkedHashSet<String>()
         val ambiguous = LinkedHashSet<String>()
-        store.forEachPrefix("ref:") { _, record ->
+        localStore.forEachPrefix("ref:") { _, record ->
             if (record is ReferenceRecord) {
                 val recordNames = record.candidateSymbolFqns + record.symbolFqn
                 with(queries) {
@@ -311,7 +337,7 @@ private constructor(
     private fun candidatesByName(names: Set<String>): Map<String, List<SymbolRecord>> {
         if (names.isEmpty()) return emptyMap()
         val candidates = names.associateWith { mutableListOf<SymbolRecord>() }
-        store.forEachPrefix("sym:") { _, record ->
+        localStore.forEachPrefix("sym:") { _, record ->
             if (record is SymbolRecord) {
                 for (name in names) {
                     if (record.fqn == name || name in record.aliases) {
@@ -369,7 +395,7 @@ private constructor(
         val namesByReference = references.associateWith { it.candidateSymbolFqns + it.symbolFqn }
         val matchesByReference =
             LinkedHashMap<ReferenceRecord, LinkedHashMap<String, MutableList<SymbolRecord>>>()
-        store.forEachPrefix("sym:") { _, record ->
+        localStore.forEachPrefix("sym:") { _, record ->
             if (record is SymbolRecord) {
                 for ((reference, names) in namesByReference) {
                     if (with(queries) { reference.isArityCompatibleWith(record) }) {
@@ -404,7 +430,7 @@ private constructor(
 
         val candidates: MutableMap<SymbolRecord, OwnerCandidates> =
             symbolsByOwner.values.flatten().associateWith { OwnerCandidates() }.toMutableMap()
-        store.forEachPrefix("sym:") { _, record ->
+        localStore.forEachPrefix("sym:") { _, record ->
             if (record is SymbolRecord) {
                 val owners = buildSet {
                     if (record.fqn in symbolsByOwner) add(record.fqn)
@@ -451,6 +477,9 @@ private constructor(
             block()
         } catch (thrown: IndexinoException) {
             throw thrown
+        } catch (thrown: RuntimeProtocolException) {
+            thrown.failure?.let { failure -> throw IndexinoException(failure, thrown) }
+            throw unexpectedFailure(thrown)
         } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
             throw unexpectedFailure(thrown)
         }
@@ -460,6 +489,9 @@ private constructor(
             block()
         } catch (thrown: IndexinoException) {
             throw thrown
+        } catch (thrown: RuntimeProtocolException) {
+            thrown.failure?.let { failure -> throw IndexinoException(failure, thrown) }
+            throw unexpectedFailure(thrown)
         } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
             throw unexpectedFailure(thrown)
         }
@@ -584,6 +616,25 @@ private constructor(
         private const val HOST_QUERY_LIMIT_MAXIMUM: Int = 10_000
         private const val HOST_QUERY_WINDOW_MAXIMUM: Int = 10_000
         private val WORKSPACE_ORIGIN: SourceOriginId = SourceOriginId.of("workspace")
+
+        internal fun createRemote(
+            client: RuntimeSnapshotClient,
+            leaseId: String,
+            revision: WorkspaceRevision,
+            generation: WorkspaceGenerationId,
+            freshnessAtAcquisition: SnapshotFreshness,
+            onClose: () -> Unit,
+        ): IndexSnapshot =
+            IndexSnapshot(
+                store = null,
+                revision = revision,
+                generation = generation,
+                freshnessAtAcquisition = freshnessAtAcquisition,
+                onClose = onClose,
+                pluginRegistry = null,
+                remoteClient = client,
+                remoteLeaseId = leaseId,
+            )
 
         internal fun create(
             store: CodeIndexStore,

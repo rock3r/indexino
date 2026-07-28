@@ -20,6 +20,10 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 
 class InProcessIndexinoTest {
+    init {
+        Indexino.defaultRuntimeAttachModeForTests = RuntimeAttachMode.IN_PROCESS
+    }
+
     private val tempDirs = mutableListOf<java.nio.file.Path>()
 
     @AfterTest
