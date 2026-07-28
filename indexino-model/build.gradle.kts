@@ -1,3 +1,6 @@
+import com.vanniktech.maven.publish.JavadocJar
+import com.vanniktech.maven.publish.KotlinJvm
+import com.vanniktech.maven.publish.SourcesJar
 import org.gradle.api.tasks.JavaExec
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 
@@ -6,7 +9,7 @@ plugins {
     alias(libs.plugins.detekt)
     alias(libs.plugins.ktfmt)
     `java-library`
-    `maven-publish`
+    alias(libs.plugins.maven.publish)
 }
 
 group = providers.gradleProperty("GROUP").get()
@@ -128,13 +131,17 @@ val metalavaCheckSignature by tasks.registering {
 
 tasks.named("check") { dependsOn(metalavaCheckSignature) }
 
-publishing {
-    publications {
-        create<MavenPublication>("maven") {
-            artifactId = "indexino-model"
-            from(components["java"])
-        }
+mavenPublishing {
+    coordinates(group.toString(), "indexino-model", version.toString())
+    publishToMavenCentral(automaticRelease = false)
+    configure(KotlinJvm(javadocJar = JavadocJar.Empty(), sourcesJar = SourcesJar.Sources()))
+
+    if (providers.gradleProperty("signingInMemoryKey").orNull?.isNotBlank() == true) {
+        signAllPublications()
     }
+}
+
+publishing {
     repositories {
         maven {
             name = "Test"

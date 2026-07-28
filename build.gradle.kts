@@ -571,14 +571,15 @@ tasks
     .matching { it.name.startsWith("publish") && it.name.endsWith("PublicationToTestRepository") }
     .configureEach { dependsOn(cleanTestMavenRepository) }
 
-listOf(":indexino-model", ":indexino-plugin-api", ":indexino-selection-context").forEach {
-    project(it)
-        .tasks
-        .matching { task ->
-            task.name.startsWith("publish") && task.name.endsWith("PublicationToTestRepository")
-        }
-        .configureEach { dependsOn(cleanTestMavenRepository) }
-}
+listOf(":indexino-bom", ":indexino-model", ":indexino-plugin-api", ":indexino-selection-context")
+    .forEach {
+        project(it)
+            .tasks
+            .matching { task ->
+                task.name.startsWith("publish") && task.name.endsWith("PublicationToTestRepository")
+            }
+            .configureEach { dependsOn(cleanTestMavenRepository) }
+    }
 
 tasks.build { dependsOn(tasks.shadowJar) }
 
@@ -847,6 +848,7 @@ val verifyMavenPublication by
         description = "Verify the thin Maven publication and Central-required metadata"
         dependsOn(
             "publishAllPublicationsToTestRepository",
+            ":indexino-bom:publishAllPublicationsToTestRepository",
             ":indexino-model:publishAllPublicationsToTestRepository",
             ":indexino-plugin-api:publishAllPublicationsToTestRepository",
             ":indexino-selection-context:publishAllPublicationsToTestRepository",

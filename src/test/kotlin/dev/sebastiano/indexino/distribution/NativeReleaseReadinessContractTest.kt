@@ -134,11 +134,10 @@ class NativeReleaseReadinessContractTest {
         assertContains(workflow, "generate-release-provenance.sh")
         assertContains(workflow, "gh release create")
         assertContains(workflow, "--draft")
-        assertContains(workflow, "blocked until S5")
-        assertTrue(
-            !workflow.contains("publishToMavenCentral"),
-            "Central publish must stay blocked until indexino-model is S5-configured",
-        )
+        assertContains(workflow, "Upload complete Maven Central release train")
+        assertContains(workflow, "publishToMavenCentral")
+        assertContains(workflow, "MAVEN_CENTRAL_USERNAME")
+        assertContains(workflow, "SIGNING_IN_MEMORY_KEY")
         assertContains(workflow, "generateBundledDependencyInventory")
         assertContains(workflow, "approvalStatus")
         assertContains(workflow, "verify-native-release-readiness.sh")

@@ -1,14 +1,11 @@
 # Publishing
 
-`indexino` is wired with
-[`com.vanniktech.maven.publish`](https://github.com/vanniktech/gradle-maven-publish-plugin)
-for a thin JVM artifact, but **tag releases to Maven Central are blocked until S5** configures
-`indexino-model` for the same signed Central path (the facade POM already depends on it). Until
-then, publish only to Maven Local for dogfood. Because the tag workflow's native-distribution and
-draft-release jobs need the publish job, that block intentionally stops the whole tag pipeline —
-not only Central upload — until S5 unblocks all three. The Shadow `*-all.jar` remains the
-standalone CLI distribution and the `*-shrunk.jar` remains an internal native-packaging input.
-Both are deliberately excluded from the Maven publication.
+The release train is published with
+[`com.vanniktech.maven.publish`](https://github.com/vanniktech/gradle-maven-publish-plugin):
+`indexino-bom`, `indexino-model`, `indexino`, `indexino-plugin-api`, and
+`indexino-selection-context` share Central metadata, signing, and one release version. The Shadow
+`*-all.jar` remains the standalone CLI distribution and the `*-shrunk.jar` remains an internal
+native-packaging input. Both are deliberately excluded from Maven publication.
 
 ## API publication state
 
@@ -23,22 +20,22 @@ in the thin JAR does not make packages outside the future public packages a supp
 
 Minimum JDK for published library artifacts is **25** (aligned with the JBR 25 native pin).
 
-## Future consumer coordinates
+## Consumer coordinates
 
-Consumers will need no publishing or Indexino-specific Gradle plugin. After the first embedded API:
+Consumers need no Indexino-specific Gradle plugin. Import the BOM to align the release train:
 
 ```kotlin
 dependencies {
-    implementation("dev.sebastiano.indexino:indexino:<version>")
+    implementation(platform("dev.sebastiano.indexino:indexino-bom:<version>"))
+    implementation("dev.sebastiano.indexino:indexino")
     // optional:
-    // implementation("dev.sebastiano.indexino:indexino-plugin-api:<version>")
-    // implementation("dev.sebastiano.indexino:indexino-script-host:<version>")
+    // implementation("dev.sebastiano.indexino:indexino-selection-context")
 }
 ```
 
-Maven consumers use the equivalent coordinates for `indexino`, `indexino-model`,
-`indexino-plugin-api`, and optional `indexino-script-host`. A BOM may align versions on the same
-release train.
+Maven consumers use the equivalent `dependencyManagement` import for `indexino-bom`. The aligned
+artifacts are `indexino-model`, `indexino`, `indexino-plugin-api`, and
+`indexino-selection-context`.
 
 The library POM must **not** expose Clikt. Coroutines are an `api` dependency of the client because
 `suspend`/`Flow` appear in signatures. Xodus, the Kotlin compiler embeddable, and serialization
@@ -55,7 +52,9 @@ verify the publication locally:
 
 The task publishes to an isolated repository under `build/test-maven-repository/` and checks:
 
-- the main, sources, javadoc, POM, and Gradle module metadata artifacts exist
+- the aligned BOM plus each thin artifact's main, sources, javadoc, and POM artifacts exist;
+  library modules also publish Gradle module metadata, while `indexino` deliberately remains
+  POM-only so consumers resolve its filtered dependency graph
 - the main artifact contains indexino classes but no bundled dependency classes
 - the Shadow `*-all.jar`, R8 `*-shrunk.jar`, and optional Shadow runtime variant are absent from
   both artifacts and publication metadata

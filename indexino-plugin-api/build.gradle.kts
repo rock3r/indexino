@@ -1,3 +1,6 @@
+import com.vanniktech.maven.publish.JavadocJar
+import com.vanniktech.maven.publish.KotlinJvm
+import com.vanniktech.maven.publish.SourcesJar
 import java.io.File
 
 plugins {
@@ -5,7 +8,7 @@ plugins {
     alias(libs.plugins.detekt)
     alias(libs.plugins.ktfmt)
     `java-library`
-    `maven-publish`
+    alias(libs.plugins.maven.publish)
 }
 
 group = providers.gradleProperty("GROUP").get()
@@ -36,13 +39,17 @@ dependencies {
     testImplementation(kotlin("test"))
 }
 
-publishing {
-    publications {
-        create<MavenPublication>("maven") {
-            artifactId = "indexino-plugin-api"
-            from(components["java"])
-        }
+mavenPublishing {
+    coordinates(group.toString(), "indexino-plugin-api", version.toString())
+    publishToMavenCentral(automaticRelease = false)
+    configure(KotlinJvm(javadocJar = JavadocJar.Empty(), sourcesJar = SourcesJar.Sources()))
+
+    if (providers.gradleProperty("signingInMemoryKey").orNull?.isNotBlank() == true) {
+        signAllPublications()
     }
+}
+
+publishing {
     repositories {
         maven {
             name = "Test"

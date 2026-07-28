@@ -83,19 +83,14 @@ atomic workspace `current` pointer. Mutable incremental writer state is confined
 on-disk `refs/<client>/<generation>/store` snapshot directory. Snapshot pins reclaim only those
 client-owned refs after close, while shared packs are retained by manifest reachability and cache GC.
 
-The Maven Local `indexino` publication is dogfood-only until the S5 artifact split. Its generated
-library POM deliberately omits CLI-only Clikt, JNA, and `slf4j-nop`; Gradle Module Metadata is
-disabled for this publication so Gradle consumers resolve that stripped POM instead of the unfiltered
-`.module` graph. The fat CLI distribution still contains its runtime dependencies. S5 publishes
-separate thin library and CLI coordinates and replaces the no-op logging binding with the
-library-appropriate API dependency.
+The thin `indexino` POM deliberately omits CLI-only Clikt, JNA, and `slf4j-nop`; Gradle Module
+Metadata is disabled for that artifact so Gradle consumers resolve the filtered POM rather than an
+unfiltered `.module` graph. The fat CLI distribution still contains its runtime dependencies.
 
-Maven Central tag releases are **blocked until S5**: the facade POM already declares a compile
-dependency on `indexino-model`, but that module is not yet wired for the same signed
-`publishToMavenCentral` path as `indexino`. Cutting a Central release of the facade alone would
-publish an unresolvable coordinate set. Dogfood via Maven Local
-(`:indexino-model:publishToMavenLocal` then `:publishToMavenLocal`) until S5 lands the multi-artifact
-Central configuration.
+S5 publishes a complete signed Central release train: `indexino-bom`, `indexino-model`, `indexino`,
+`indexino-plugin-api`, and `indexino-selection-context`. The BOM aligns those coordinates for
+Gradle and Maven consumers, and the tag workflow uploads every artifact together. Maven Local
+remains available for dogfooding, but is no longer the only publication path.
 
 ## Embedded API boundary
 

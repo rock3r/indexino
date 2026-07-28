@@ -114,27 +114,52 @@ class MavenPublicationTest {
     }
 
     @Test
+    fun `publication includes a bom that aligns every public artifact`() {
+        val repository = requiredProperty("indexino.publicationRepository").let(::File)
+        val groupId = requiredProperty("indexino.publicationGroup")
+        val version = requiredProperty("indexino.publicationVersion")
+        val bomDirectory =
+            repository.resolve(groupId.replace('.', '/')).resolve("indexino-bom/$version")
+        val bomPom =
+            assertNotNull(
+                bomDirectory.listFiles()?.singleOrNull { file ->
+                    file.name.startsWith("indexino-bom-") && file.extension == "pom"
+                },
+                "Expected one published BOM POM in $bomDirectory",
+            )
+
+        assertTrue(bomPom.isFile, "Expected published BOM at $bomPom")
+        val pomText = bomPom.readText()
+        assertTrue(pomText.contains("<packaging>pom</packaging>"), pomText)
+        listOf("indexino-model", "indexino", "indexino-plugin-api", "indexino-selection-context")
+            .forEach { artifactId ->
+                assertTrue(
+                    pomText.contains("<artifactId>$artifactId</artifactId>"),
+                    "BOM does not align $artifactId:\n$pomText",
+                )
+            }
+        assertTrue(
+            pomText.contains("<version>$version</version>"),
+            "BOM does not pin the release-train version:\n$pomText",
+        )
+    }
+
+    @Test
     fun `tag release cannot publish Central without every sibling POM dependency`() {
         val releaseWorkflow = File(".github/workflows/release.yml").readText()
         val modelBuild = File("indexino-model/build.gradle.kts").readText()
         val modelHasCentralPublisher =
             modelBuild.contains("com.vanniktech.maven.publish") ||
                 modelBuild.contains("publishToMavenCentral")
-        if (modelHasCentralPublisher) {
-            assertTrue(
-                releaseWorkflow.contains("publishToMavenCentral"),
-                "indexino-model is Central-configured; release.yml should publish it",
-            )
-        } else {
-            assertFalse(
-                releaseWorkflow.contains("publishToMavenCentral"),
-                "release.yml must not call publishToMavenCentral while indexino-model lacks Central config",
-            )
-            assertTrue(
-                releaseWorkflow.contains("blocked until S5"),
-                "release.yml must refuse incomplete Central coordinate sets until S5",
-            )
-        }
+        assertTrue(modelHasCentralPublisher, "S5 requires indexino-model Central publication")
+        assertTrue(
+            releaseWorkflow.contains("publishToMavenCentral"),
+            "S5 release workflow must publish the complete Central release train",
+        )
+        assertFalse(
+            releaseWorkflow.contains("blocked until S5"),
+            "S5 release workflow must not retain the incomplete-coordinate block",
+        )
     }
 
     @Test
@@ -152,12 +177,18 @@ class MavenPublicationTest {
                 package consumer;
 
                 import dev.sebastiano.indexino.api.IndexScope;
+                import dev.sebastiano.indexino.model.PluginId;
+                import dev.sebastiano.indexino.plugin.api.IndexinoPluginProvider;
+                import dev.sebastiano.indexino.plugin.selection.SelectionContextPlugin;
 
                 public final class Consumer {
                     private Consumer() {}
 
                     public static void main(String[] args) {
+                        IndexinoPluginProvider plugin = new SelectionContextPlugin();
                         System.out.println(IndexScope.gradle(":"));
+                        System.out.println(PluginId.of("consumer"));
+                        System.out.println(plugin.getClass().getSimpleName());
                     }
                 }
                 """
@@ -176,7 +207,11 @@ class MavenPublicationTest {
             }
 
             dependencies {
-                implementation("$groupId:$artifactId:$version")
+                implementation(platform("$groupId:indexino-bom:$version"))
+                implementation("$groupId:$artifactId")
+                implementation("$groupId:indexino-model")
+                implementation("$groupId:indexino-plugin-api")
+                implementation("$groupId:indexino-selection-context")
             }
 
             java {
@@ -198,6 +233,8 @@ class MavenPublicationTest {
                 .build()
 
         assertTrue(result.output.contains("GRADLE"), result.output)
+        assertTrue(result.output.contains("PluginId(value=consumer)"), result.output)
+        assertTrue(result.output.contains("SelectionContextPlugin"), result.output)
     }
 
     private fun assertSiblingCentralDependenciesAreReleasable(pomText: String, groupId: String) {
@@ -216,14 +253,14 @@ class MavenPublicationTest {
         val modelHasCentralPublisher =
             modelBuild.contains("com.vanniktech.maven.publish") ||
                 modelBuild.contains("publishToMavenCentral")
-        if ("indexino-model" in siblingArtifacts && !modelHasCentralPublisher) {
-            assertFalse(
-                releaseWorkflow.contains("publishToMavenCentral"),
-                "Facade POM depends on indexino-model but release.yml still publishes to Central",
+        if ("indexino-model" in siblingArtifacts) {
+            assertTrue(
+                modelHasCentralPublisher,
+                "Facade sibling dependencies must be published to Maven Central",
             )
             assertTrue(
-                releaseWorkflow.contains("blocked until S5"),
-                "Release workflow must block incomplete Central publishes until S5",
+                releaseWorkflow.contains("publishToMavenCentral"),
+                "Release workflow must publish the complete sibling coordinate set",
             )
         }
     }
