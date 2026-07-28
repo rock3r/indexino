@@ -211,7 +211,9 @@ private constructor(
         id: String
     ): dev.sebastiano.indexino.engine.RuntimeRefreshProgress {
         val connection = checkNotNull(runtimeConnection) { "Refresh progress is daemon-owned" }
-        return RuntimeRefreshClient(connection).progress(id)
+        return RuntimeConnection.connect(connection.endpoint).use { progressConnection ->
+            RuntimeRefreshClient(progressConnection).progress(id)
+        }
     }
 
     @OptIn(IndexinoInternalApi::class)

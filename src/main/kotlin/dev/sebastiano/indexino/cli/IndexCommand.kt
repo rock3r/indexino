@@ -26,6 +26,8 @@ import dev.sebastiano.indexino.topology.bazel.BazelProcessRunner
 import dev.sebastiano.indexino.topology.bazel.BazelQueryExecutor
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 
 internal class IndexCommand : CliktCommand(name = "index") {
@@ -62,17 +64,28 @@ internal class IndexCommand : CliktCommand(name = "index") {
                         current.withPlugin(PluginId.of(application))
                     }
                 val handle = indexino.refresh(request)
-                var failure: Throwable? = null
-                val result =
-                    try {
-                        handle.await()
-                    } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
-                        failure = thrown
-                        null
-                    }
-                val journal = indexino.refreshProgress(handle.id.value)
-                journal.text.forEach { echo(it, err = true) }
-                if (jsonlProgress) journal.machine.forEach { echo(it) }
+                val awaiting = async { runCatching { handle.await() } }
+                val emittedText = mutableSetOf<String>()
+                val emittedMachine = mutableSetOf<String>()
+                while (!awaiting.isCompleted) {
+                    replayProgress(
+                        indexino,
+                        handle.id.value,
+                        jsonlProgress,
+                        emittedText,
+                        emittedMachine,
+                    )
+                    delay(PROGRESS_POLL_INTERVAL_MILLIS)
+                }
+                val result = awaiting.await().getOrNull()
+                val failure = awaiting.await().exceptionOrNull()
+                replayProgress(
+                    indexino,
+                    handle.id.value,
+                    jsonlProgress,
+                    emittedText,
+                    emittedMachine,
+                )
                 result?.let { materializeCliCompatibilityProjection(project.toPath().toRealPath()) }
                 if (!jsonlProgress && result?.outcome?.value == "UNCHANGED")
                     echo("index fresh", err = true)
@@ -88,6 +101,18 @@ internal class IndexCommand : CliktCommand(name = "index") {
                 }
             }
         }
+    }
+
+    private fun replayProgress(
+        indexino: Indexino,
+        refreshId: String,
+        jsonlProgress: Boolean,
+        emittedText: MutableSet<String>,
+        emittedMachine: MutableSet<String>,
+    ) {
+        val journal = indexino.refreshProgress(refreshId)
+        journal.text.filter(emittedText::add).forEach { echo(it, err = true) }
+        if (jsonlProgress) journal.machine.filter(emittedMachine::add).forEach(::echo)
     }
 
     private fun materializeCliCompatibilityProjection(project: Path) {
@@ -137,6 +162,10 @@ internal class IndexCommand : CliktCommand(name = "index") {
             }
             BuildSystem.AUTO -> error("unreachable")
         }
+    }
+
+    private companion object {
+        const val PROGRESS_POLL_INTERVAL_MILLIS = 50L
     }
 
     fun runIndexedBuild(

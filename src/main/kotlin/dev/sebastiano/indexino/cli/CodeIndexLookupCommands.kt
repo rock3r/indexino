@@ -197,29 +197,7 @@ internal class ResolveResourceCommand : CliktCommand(name = "resolve-resource") 
             progressOutput = { echo(it, err = true) },
         ) {
             requireJsonl(format)
-            try {
-                require(sessionId == null) {
-                    "--session-id is not supported by daemon-backed lookup"
-                }
-                val matches = runBlocking {
-                    Indexino.connect(project.toPath()).use { indexino ->
-                        indexino.snapshot().use { snapshot ->
-                            snapshot
-                                .findSymbols(
-                                    SymbolQuery.named(name),
-                                    QueryOptions.page(LOOKUP_PAGE_SIZE),
-                                )
-                                .items
-                                .map(::symbolRecord)
-                        }
-                    }
-                }
-                matches.ifEmpty {
-                    withStore(project.toPath(), sessionId) { resolveResources(it, type, name) }
-                }
-            } catch (_: IndexinoException) {
-                withStore(project.toPath(), sessionId) { resolveResources(it, type, name) }
-            }
+            withStore(project.toPath(), sessionId) { resolveResources(it, type, name) }
         }
     }
 
