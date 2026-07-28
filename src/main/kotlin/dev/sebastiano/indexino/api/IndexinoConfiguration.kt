@@ -6,14 +6,22 @@ import java.nio.file.Path
 public class IndexinoConfiguration
 private constructor(
     internal val workspace: Path,
+    internal val autoRefreshMode: AutoRefreshMode,
     internal val runtimeAttachMode: RuntimeAttachMode,
 ) {
     public companion object {
         @JvmStatic
         public fun forWorkspace(workspace: Path): IndexinoConfiguration =
-            IndexinoConfiguration(workspace, RuntimeAttachMode.PREFER_DAEMON)
+            IndexinoConfiguration(
+                workspace,
+                AutoRefreshMode.ENABLED,
+                RuntimeAttachMode.PREFER_DAEMON,
+            )
     }
 
+    public fun withAutoRefresh(mode: AutoRefreshMode): IndexinoConfiguration =
+        IndexinoConfiguration(workspace, mode, runtimeAttachMode)
+
     public fun withRuntimeAttach(mode: RuntimeAttachMode): IndexinoConfiguration =
-        IndexinoConfiguration(workspace, mode)
+        IndexinoConfiguration(workspace, autoRefreshMode, mode)
 }

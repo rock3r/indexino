@@ -104,7 +104,13 @@ private constructor(
             return when (configuration.runtimeAttachMode) {
                 RuntimeAttachMode.PREFER_DAEMON ->
                     try {
-                        Indexino(canonical, RuntimeClientBootstrap.connect(canonical))
+                        Indexino(
+                            canonical,
+                            RuntimeClientBootstrap.connect(
+                                canonical,
+                                configuration.autoRefreshMode,
+                            ),
+                        )
                     } catch (thrown: IndexinoException) {
                         throw thrown
                     } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {

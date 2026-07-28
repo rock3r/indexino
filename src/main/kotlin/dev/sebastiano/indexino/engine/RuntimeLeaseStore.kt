@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.engine
 
+import dev.sebastiano.indexino.api.AutoRefreshMode
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -16,6 +17,7 @@ internal class RuntimeLease(
     val protocolMinor: Int,
     val endpoint: String,
     val workspace: String,
+    val autoRefreshMode: AutoRefreshMode = AutoRefreshMode.ENABLED,
 )
 
 internal sealed interface RuntimeLeaseAcquisition {
@@ -33,7 +35,12 @@ internal class RuntimeLeaseStore(
     private val clockMillis: () -> Long = System::currentTimeMillis,
     private val processStartedAtMillis: (Long) -> Long? = RuntimeLeaseStore::processStartedAtMillis,
 ) {
-    fun acquire(workspaceId: String, endpoint: Path, workspace: Path): RuntimeLeaseAcquisition {
+    fun acquire(
+        workspaceId: String,
+        endpoint: Path,
+        workspace: Path,
+        autoRefreshMode: AutoRefreshMode = AutoRefreshMode.ENABLED,
+    ): RuntimeLeaseAcquisition {
         val leasePath = RuntimePaths.leasePath(cacheRoot, workspaceId)
         Files.createDirectories(leasePath.parent)
         val candidate =
@@ -45,6 +52,7 @@ internal class RuntimeLeaseStore(
                 protocolMinor = PROTOCOL_MINOR,
                 endpoint = endpoint.toString(),
                 workspace = workspace.toString(),
+                autoRefreshMode = autoRefreshMode,
             )
         while (true) {
             try {
@@ -87,7 +95,7 @@ internal class RuntimeLeaseStore(
                 processStartedAtMillis(lease.ownerPid) == lease.ownerStartedAtMillis)
 
     companion object {
-        const val PROTOCOL_MAJOR = 3
+        const val PROTOCOL_MAJOR = 4
         const val PROTOCOL_MINOR = 0
 
         private val JSON = Json {

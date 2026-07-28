@@ -1,6 +1,11 @@
 // Signature format: 5.0
 package dev.sebastiano.indexino.api {
 
+  public enum AutoRefreshMode {
+    enum_constant public static final dev.sebastiano.indexino.api.AutoRefreshMode DISABLED;
+    enum_constant public static final dev.sebastiano.indexino.api.AutoRefreshMode ENABLED;
+  }
+
   public final class BuildSystem {
     method @InaccessibleFromKotlin public String getValue();
     property public String value;
@@ -86,6 +91,7 @@ package dev.sebastiano.indexino.api {
 
   public final class IndexinoConfiguration {
     method public static dev.sebastiano.indexino.api.IndexinoConfiguration forWorkspace(java.nio.file.Path workspace);
+    method public dev.sebastiano.indexino.api.IndexinoConfiguration withAutoRefresh(dev.sebastiano.indexino.api.AutoRefreshMode mode);
     method public dev.sebastiano.indexino.api.IndexinoConfiguration withRuntimeAttach(dev.sebastiano.indexino.api.RuntimeAttachMode mode);
     field public static final dev.sebastiano.indexino.api.IndexinoConfiguration.Companion Companion;
   }

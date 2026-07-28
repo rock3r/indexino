@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.engine
 
+import dev.sebastiano.indexino.api.AutoRefreshMode
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.api.Indexino
 import dev.sebastiano.indexino.api.IndexinoConfiguration
@@ -17,6 +18,7 @@ private constructor(
     private val workspaceId: String,
     private val owner: Indexino,
     private val workspaceFileKey: String?,
+    internal val autoRefreshMode: AutoRefreshMode,
 ) : AutoCloseable {
     private val refreshDispatcher = RuntimeRefreshDispatcher(owner)
     private val snapshotDispatcher = RuntimeSnapshotDispatcher(owner)
@@ -112,7 +114,11 @@ private constructor(
     companion object {
         private const val LIVENESS_PROBE_INTERVAL_MILLIS = 100L
 
-        fun start(workspace: Path, cacheRoot: Path): WorkspaceRuntime {
+        fun start(
+            workspace: Path,
+            cacheRoot: Path,
+            autoRefreshMode: AutoRefreshMode = AutoRefreshMode.ENABLED,
+        ): WorkspaceRuntime {
             val canonicalWorkspace = workspace.toRealPath()
             val owner =
                 Indexino.connectBlocking(
@@ -131,12 +137,14 @@ private constructor(
                     workspaceId,
                     owner,
                     workspaceFileKey,
+                    autoRefreshMode,
                 )
             val start =
                 RuntimeDaemon.start(
                     cacheRoot = cacheRoot,
                     workspaceId = workspaceId,
                     workspace = canonicalWorkspace,
+                    autoRefreshMode = autoRefreshMode,
                     sessionCommandHandler = runtime::dispatch,
                     sessionDisconnected = runtime.snapshotDispatcher::releaseSession,
                 )

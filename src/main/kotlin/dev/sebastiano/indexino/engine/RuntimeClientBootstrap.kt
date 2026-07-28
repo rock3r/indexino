@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.engine
 
+import dev.sebastiano.indexino.api.AutoRefreshMode
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import java.io.IOException
 import java.io.PrintStream
@@ -10,7 +11,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /** Attaches to, or starts, the local runtime owner for a canonical workspace. */
 internal object RuntimeClientBootstrap {
-    fun connect(workspace: Path): RuntimeConnection {
+    fun connect(workspace: Path, autoRefreshMode: AutoRefreshMode): RuntimeConnection {
         val cacheRoot = InProcessCacheLayout.cacheRoot()
         val workspaceId = InProcessCacheLayout.workspaceId(workspace)
         val endpoint = RuntimePaths.socketPath(cacheRoot, workspaceId)
@@ -43,7 +44,8 @@ internal object RuntimeClientBootstrap {
                 Files.deleteIfExists(endpoint)
                 Files.deleteIfExists(leasePath)
             }
-        if (!Files.exists(endpoint)) startOwner(workspace, cacheRoot, endpoint)
+        assertCompatibleMode(leasePath, autoRefreshMode)
+        if (!Files.exists(endpoint)) startOwner(workspace, cacheRoot, endpoint, autoRefreshMode)
         var lastFailure: IOException? = null
         repeat(CONNECT_WAIT_ATTEMPTS) {
             try {
@@ -51,7 +53,8 @@ internal object RuntimeClientBootstrap {
             } catch (failure: IOException) {
                 lastFailure = failure
                 recoverDeadEndpoint(cacheRoot, workspace, endpoint)
-                if (!Files.exists(endpoint)) startOwner(workspace, cacheRoot, endpoint)
+                assertCompatibleMode(leasePath, autoRefreshMode)
+                if (!Files.exists(endpoint)) startOwner(workspace, cacheRoot, endpoint, autoRefreshMode)
                 Thread.sleep(START_WAIT_MILLIS)
             }
         }
@@ -68,7 +71,12 @@ internal object RuntimeClientBootstrap {
         }
     }
 
-    private fun startOwner(workspace: Path, cacheRoot: Path, endpoint: Path) {
+    private fun startOwner(
+        workspace: Path,
+        cacheRoot: Path,
+        endpoint: Path,
+        autoRefreshMode: AutoRefreshMode,
+    ) {
         val lease =
             RuntimeLeaseStore.read(
                 RuntimePaths.leasePath(cacheRoot, InProcessCacheLayout.workspaceId(workspace))
@@ -83,6 +91,7 @@ internal object RuntimeClientBootstrap {
                     add(System.getProperty("java.class.path"))
                     add("dev.sebastiano.indexino.engine.RuntimeOwnerMainKt")
                     add(workspace.toString())
+                    add(autoRefreshMode.name)
                 }
                 ProcessBuilder(command)
                     .redirectOutput(ProcessBuilder.Redirect.DISCARD)
@@ -91,7 +100,7 @@ internal object RuntimeClientBootstrap {
             } else {
                 suppressEmbeddedRegistryWarnings()
                 embeddedRuntimes.computeIfAbsent(InProcessCacheLayout.workspaceId(workspace)) {
-                    WorkspaceRuntime.start(workspace, cacheRoot)
+                    WorkspaceRuntime.start(workspace, cacheRoot, autoRefreshMode)
                 }
             }
         }
@@ -100,6 +109,15 @@ internal object RuntimeClientBootstrap {
             Thread.sleep(START_WAIT_MILLIS)
         }
         throw RuntimeProtocolException("Local runtime failed to start")
+    }
+
+    private fun assertCompatibleMode(leasePath: Path, requested: AutoRefreshMode) {
+        val lease = RuntimeLeaseStore.read(leasePath) ?: return
+        if (RuntimeLeaseStore.isLive(lease) && lease.autoRefreshMode != requested) {
+            throw RuntimeProtocolException(
+                "AUTO_REFRESH_MODE_MISMATCH: runtime uses ${lease.autoRefreshMode}"
+            )
+        }
     }
 
     private val embeddedRuntimes = ConcurrentHashMap<String, WorkspaceRuntime>()

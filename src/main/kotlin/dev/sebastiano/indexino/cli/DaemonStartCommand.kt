@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.cli
 
+import dev.sebastiano.indexino.api.AutoRefreshMode
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.engine.RuntimeLeaseStore
 import dev.sebastiano.indexino.engine.RuntimePaths
@@ -25,6 +26,7 @@ internal class DaemonStartCommand {
             add(System.getProperty("java.class.path"))
             add("dev.sebastiano.indexino.engine.RuntimeOwnerMainKt")
             add(canonicalProject.toString())
+            add(AutoRefreshMode.ENABLED.name)
         }
         ProcessBuilder(command)
             .redirectOutput(ProcessBuilder.Redirect.DISCARD)
