@@ -52,8 +52,9 @@ verify the publication locally:
 
 The task publishes to an isolated repository under `build/test-maven-repository/` and checks:
 
-- the aligned BOM plus each thin artifact's main, sources, javadoc, POM, and Gradle module metadata
-  artifacts exist
+- the aligned BOM plus each thin artifact's main, sources, javadoc, and POM artifacts exist;
+  library modules also publish Gradle module metadata, while `indexino` deliberately remains
+  POM-only so consumers resolve its filtered dependency graph
 - the main artifact contains indexino classes but no bundled dependency classes
 - the Shadow `*-all.jar`, R8 `*-shrunk.jar`, and optional Shadow runtime variant are absent from
   both artifacts and publication metadata
