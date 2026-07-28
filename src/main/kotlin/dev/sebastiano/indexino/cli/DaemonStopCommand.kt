@@ -44,7 +44,7 @@ internal class DaemonStopCommand {
     }
 
     private companion object {
-        const val ENDPOINT_CLOSE_WAIT_ATTEMPTS = 50
+        const val ENDPOINT_CLOSE_WAIT_ATTEMPTS = 250
         const val ENDPOINT_CLOSE_WAIT_MILLIS = 20L
     }
 }
