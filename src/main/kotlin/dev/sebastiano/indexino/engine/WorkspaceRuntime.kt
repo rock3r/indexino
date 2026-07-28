@@ -25,7 +25,8 @@ private constructor(
         RuntimeRefreshDispatcher(owner) { request, handle ->
             autoRefreshController.onRefreshStarted(request, handle)
         }
-    private val snapshotDispatcher = RuntimeSnapshotDispatcher(owner)
+    private val snapshotDispatcher =
+        RuntimeSnapshotDispatcher(owner) { freshness -> autoRefreshController.freshness(freshness) }
     private val workspaceLost = AtomicBoolean()
     private lateinit var livenessThread: Thread
     private lateinit var daemon: RuntimeDaemon
@@ -119,6 +120,9 @@ private constructor(
     companion object {
         private const val LIVENESS_PROBE_INTERVAL_MILLIS = 100L
 
+        @Volatile internal var maxWatchedDirectoriesForTests: Int? = null
+        @Volatile internal var reconciliationIntervalMillisForTests: Long? = null
+
         fun start(
             workspace: Path,
             cacheRoot: Path,
@@ -149,6 +153,8 @@ private constructor(
                     canonicalWorkspace,
                     autoRefreshMode,
                     runtime.refreshDispatcher::refresh,
+                    maxWatchedDirectoriesForTests ?: Int.MAX_VALUE,
+                    reconciliationIntervalMillisForTests ?: 30_000L,
                 )
             owner.onRefreshSucceededForRuntime = runtime.autoRefreshController::register
             val start =

@@ -40,6 +40,10 @@ class WorkspaceRuntimeTest {
             Thread.sleep(500L)
             RuntimeConnection.connect(runtime.endpoint).use { connection ->
                 assertTrue(RuntimeRefreshClient(connection).active().isEmpty())
+                val snapshots = RuntimeSnapshotClient(connection)
+                val stale = snapshots.acquire(FreshnessPolicy.AWAIT_CURRENT)
+                assertEquals("DIRTY", stale.freshness.value)
+                snapshots.release(stale.id)
                 assertEquals(
                     RefreshOutcome.UPDATED,
                     RuntimeRefreshClient(connection).refresh(request).await().result.outcome,
@@ -47,6 +51,47 @@ class WorkspaceRuntimeTest {
             }
         } finally {
             runtime.close()
+            cacheRoot.toFile().deleteRecursively()
+            workspace.toFile().deleteRecursively()
+            if (previousCacheRoot == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheRoot)
+        }
+    }
+
+    @Test
+    fun `uncovered source edits are caught by reconciliation`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-watch-cap-")
+        val workspace = createGradleWorkspace()
+        val previousCacheRoot = System.getProperty("indexino.cache.dir")
+        val previousWatchCap = WorkspaceRuntime.maxWatchedDirectoriesForTests
+        val previousReconciliation = WorkspaceRuntime.reconciliationIntervalMillisForTests
+        System.setProperty("indexino.cache.dir", cacheRoot.toString())
+        WorkspaceRuntime.maxWatchedDirectoriesForTests = 0
+        WorkspaceRuntime.reconciliationIntervalMillisForTests = 100L
+        val runtime = WorkspaceRuntime.start(workspace, cacheRoot)
+        try {
+            val request = RefreshRequest.forScope(IndexScope.gradle(":app"))
+            val initial =
+                RuntimeConnection.connect(runtime.endpoint).use { connection ->
+                    RuntimeRefreshClient(connection).refresh(request).await().result.generation
+                }
+            Files.writeString(
+                workspace.resolve("app/src/main/kotlin/Panel.kt"),
+                "package sample\nclass ReconciledPanel\n",
+            )
+
+            waitUntil {
+                RuntimeConnection.connect(runtime.endpoint).use { connection ->
+                    val snapshots = RuntimeSnapshotClient(connection)
+                    val lease = snapshots.acquire(FreshnessPolicy.PUBLISHED)
+                    snapshots.release(lease.id)
+                    lease.generation != initial
+                }
+            }
+        } finally {
+            runtime.close()
+            WorkspaceRuntime.maxWatchedDirectoriesForTests = previousWatchCap
+            WorkspaceRuntime.reconciliationIntervalMillisForTests = previousReconciliation
             cacheRoot.toFile().deleteRecursively()
             workspace.toFile().deleteRecursively()
             if (previousCacheRoot == null) System.clearProperty("indexino.cache.dir")

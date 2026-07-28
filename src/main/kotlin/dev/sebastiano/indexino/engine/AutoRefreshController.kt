@@ -1,8 +1,10 @@
 package dev.sebastiano.indexino.engine
 
 import dev.sebastiano.indexino.api.AutoRefreshMode
+import dev.sebastiano.indexino.api.FreshnessPolicy
 import dev.sebastiano.indexino.api.RefreshHandle
 import dev.sebastiano.indexino.api.RefreshRequest
+import dev.sebastiano.indexino.api.SnapshotFreshness
 import java.io.IOException
 import java.nio.file.FileSystems
 import java.nio.file.Files
@@ -16,12 +18,15 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /** Runtime-owned, scope-derived watcher that coalesces filesystem hints into refresh requests. */
 internal class AutoRefreshController(
     private val workspace: Path,
     private val mode: AutoRefreshMode,
     private val refresh: (RefreshRequest) -> Unit,
+    private val maxWatchedDirectories: Int = Int.MAX_VALUE,
+    private val reconciliationIntervalMillis: Long = RECONCILIATION_INTERVAL_MILLIS,
 ) : AutoCloseable {
     private val closed = AtomicBoolean()
     private val watchService: WatchService = FileSystems.getDefault().newWatchService()
@@ -33,12 +38,23 @@ internal class AutoRefreshController(
     private val keys = ConcurrentHashMap<WatchKey, Path>()
     private val queued = ConcurrentHashMap.newKeySet<RefreshRequest>()
     private val dirty = ConcurrentHashMap.newKeySet<RefreshRequest>()
+    private val dirtyEpoch = ConcurrentHashMap<RefreshRequest, AtomicLong>()
     private val active = ConcurrentHashMap<RefreshRequest, String>()
+    private val uncovered = ConcurrentHashMap.newKeySet<RefreshRequest>()
     private val watcher =
         Thread(::watch, "indexino-source-watcher").apply {
             isDaemon = true
             start()
         }
+
+    init {
+        scheduler.scheduleWithFixedDelay(
+            { uncovered.forEach(::enqueue) },
+            reconciliationIntervalMillis,
+            reconciliationIntervalMillis,
+            TimeUnit.MILLISECONDS,
+        )
+    }
 
     fun register(request: RefreshRequest, sourceFiles: List<String>) {
         if (closed.get()) return
@@ -56,28 +72,51 @@ internal class AutoRefreshController(
                 }
                 .toSet()
         directoriesByRequest[request] = directories
+        var coverageComplete = true
         directories.forEach { directory ->
-            requestsByDirectory
-                .computeIfAbsent(directory) { ConcurrentHashMap.newKeySet() }
-                .add(request)
-            registerDirectory(directory)
+            if (keys.size >= maxWatchedDirectories && keys.values.none { it == directory }) {
+                coverageComplete = false
+            } else {
+                requestsByDirectory
+                    .computeIfAbsent(directory) { ConcurrentHashMap.newKeySet() }
+                    .add(request)
+                if (!registerDirectory(directory)) coverageComplete = false
+            }
         }
+        if (coverageComplete) uncovered.remove(request) else uncovered.add(request)
     }
 
     fun onRefreshStarted(request: RefreshRequest, handle: RefreshHandle) {
         active[request] = handle.id.value
+        val epochAtStart = dirtyEpoch[request]?.get() ?: 0L
         scheduler.execute {
+            var succeeded = false
             try {
                 kotlinx.coroutines.runBlocking { handle.await() }
+                succeeded = true
             } catch (_: Exception) {
                 // The last complete generation stays queryable; a later event/manual refresh
                 // retries.
             } finally {
                 active.remove(request, handle.id.value)
-                if (dirty.remove(request)) enqueue(request)
+                val newerChange = (dirtyEpoch[request]?.get() ?: 0L) > epochAtStart
+                if (succeeded && !newerChange) {
+                    dirty.remove(request)
+                } else if (dirty.contains(request)) {
+                    enqueue(request)
+                }
             }
         }
     }
+
+    fun freshness(freshness: FreshnessPolicy): SnapshotFreshness =
+        when {
+            directoriesByRequest.isEmpty() -> SnapshotFreshness.UNKNOWN
+            uncovered.isNotEmpty() -> SnapshotFreshness.UNKNOWN
+            dirty.isNotEmpty() -> SnapshotFreshness.DIRTY
+            freshness == FreshnessPolicy.AWAIT_CURRENT -> SnapshotFreshness.CURRENT
+            else -> SnapshotFreshness.UNKNOWN
+        }
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
@@ -87,6 +126,8 @@ internal class AutoRefreshController(
         keys.clear()
         requestsByDirectory.clear()
         directoriesByRequest.clear()
+        uncovered.clear()
+        dirtyEpoch.clear()
     }
 
     private fun watch() {
@@ -116,9 +157,11 @@ internal class AutoRefreshController(
     }
 
     private fun enqueue(request: RefreshRequest) {
-        if (mode == AutoRefreshMode.DISABLED || closed.get()) return
+        if (closed.get()) return
         dirty.add(request)
-        if (active.containsKey(request) || !queued.add(request)) return
+        dirtyEpoch.computeIfAbsent(request) { AtomicLong() }.incrementAndGet()
+        if (mode == AutoRefreshMode.DISABLED || active.containsKey(request) || !queued.add(request))
+            return
         scheduler.schedule(
             {
                 queued.remove(request)
@@ -129,14 +172,14 @@ internal class AutoRefreshController(
         )
     }
 
-    private fun registerDirectory(directory: Path) {
-        if (keys.values.any { registered -> registered == directory }) return
-        try {
+    private fun registerDirectory(directory: Path): Boolean {
+        if (keys.values.any { registered -> registered == directory }) return true
+        return try {
             val key = directory.register(watchService, ENTRY_CREATE, ENTRY_DELETE, ENTRY_MODIFY)
             keys[key] = directory
+            true
         } catch (_: IOException) {
-            // An uncovered directory remains reconciled by explicit/manual refresh; S7 records
-            // degraded coverage in the registry in the next tranche.
+            false
         }
     }
 
@@ -158,5 +201,6 @@ internal class AutoRefreshController(
 
     private companion object {
         const val DEBOUNCE_MILLIS = 150L
+        const val RECONCILIATION_INTERVAL_MILLIS = 30_000L
     }
 }
