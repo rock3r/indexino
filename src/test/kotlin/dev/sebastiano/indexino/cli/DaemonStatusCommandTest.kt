@@ -1,6 +1,7 @@
 package dev.sebastiano.indexino.cli
 
 import com.github.ajalt.clikt.testing.test
+import dev.sebastiano.indexino.api.AutoRefreshMode
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.engine.RuntimePaths
 import dev.sebastiano.indexino.engine.RuntimeTombstoneStore
@@ -11,6 +12,30 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class DaemonStatusCommandTest {
+    @Test
+    fun `daemon status reports the runtime auto refresh mode`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-daemon-status-mode-")
+        val workspace =
+            Files.createTempDirectory(Path.of("/tmp"), "indexino-daemon-status-mode-workspace-")
+        try {
+            assertEquals(
+                CliExitCodes.SUCCESS,
+                DaemonStartCommand().start(workspace, cacheRoot, AutoRefreshMode.DISABLED),
+            )
+            val output = StringBuilder()
+
+            val exitCode =
+                DaemonStatusCommand().runStatus(workspace, cacheRoot) { output.appendLine(it) }
+
+            assertEquals(CliExitCodes.SUCCESS, exitCode)
+            assertTrue(output.toString().contains("DISABLED"), output.toString())
+        } finally {
+            DaemonStopCommand().stop(workspace, cacheRoot)
+            workspace.toFile().deleteRecursively()
+            cacheRoot.toFile().deleteRecursively()
+        }
+    }
+
     @Test
     fun `daemon status is reachable from the root CLI`() {
         val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-daemon-cli-")
