@@ -28,6 +28,28 @@ import kotlinx.coroutines.runBlocking
 
 class DaemonStartCommandTest {
     @Test
+    fun `daemon start rejects an incompatible live auto refresh mode`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-daemon-mode-mismatch-")
+        val workspace =
+            Files.createTempDirectory(Path.of("/tmp"), "indexino-daemon-mode-workspace-")
+        try {
+            assertEquals(
+                CliExitCodes.SUCCESS,
+                DaemonStartCommand().start(workspace, cacheRoot, AutoRefreshMode.DISABLED),
+            )
+
+            assertEquals(
+                CliExitCodes.INVALID_ARGUMENTS,
+                DaemonStartCommand().start(workspace, cacheRoot, AutoRefreshMode.ENABLED),
+            )
+        } finally {
+            DaemonStopCommand().stop(workspace, cacheRoot)
+            workspace.toFile().deleteRecursively()
+            cacheRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `daemon start persists disabled auto refresh mode`() {
         val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-daemon-mode-")
         val workspace =

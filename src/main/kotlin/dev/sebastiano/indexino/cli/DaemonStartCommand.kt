@@ -17,7 +17,11 @@ internal class DaemonStartCommand {
         val workspaceId = InProcessCacheLayout.workspaceId(canonicalProject)
         val lease = RuntimeLeaseStore.read(RuntimePaths.leasePath(cacheRoot, workspaceId))
         if (lease != null && RuntimeLeaseStore.isLive(lease)) {
-            return CliExitCodes.SUCCESS
+            return if (lease.autoRefreshMode == autoRefreshMode) {
+                CliExitCodes.SUCCESS
+            } else {
+                CliExitCodes.INVALID_ARGUMENTS
+            }
         }
 
         val command = buildList {

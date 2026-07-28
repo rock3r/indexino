@@ -43,6 +43,8 @@ internal class AutoRefreshController(
     private val dirty = ConcurrentHashMap.newKeySet<RefreshRequest>()
     private val dirtyEpoch = ConcurrentHashMap<RefreshRequest, AtomicLong>()
     private val active = ConcurrentHashMap<RefreshRequest, String>()
+    private val automatic = ConcurrentHashMap.newKeySet<RefreshRequest>()
+    private val retryAttempts = ConcurrentHashMap<RefreshRequest, Int>()
     private val uncovered = ConcurrentHashMap.newKeySet<RefreshRequest>()
     private val watcher: Thread? = watchService?.let {
         Thread(::watch, "indexino-source-watcher").apply {
@@ -99,20 +101,24 @@ internal class AutoRefreshController(
     fun onRefreshStarted(request: RefreshRequest, handle: RefreshHandle) {
         active[request] = handle.id.value
         val epochAtStart = dirtyEpoch[request]?.get() ?: 0L
+        val automaticRefresh = automatic.remove(request)
         scheduler.execute {
             var succeeded = false
             try {
                 kotlinx.coroutines.runBlocking { handle.await() }
                 succeeded = true
             } catch (_: Exception) {
-                // The last complete generation stays queryable; a later event/manual refresh
-                // retries.
+                if (automaticRefresh) {
+                    dirty.add(request)
+                    scheduleRetry(request)
+                }
             } finally {
                 active.remove(request, handle.id.value)
                 val newerChange = (dirtyEpoch[request]?.get() ?: 0L) > epochAtStart
                 if (succeeded && !newerChange) {
                     dirty.remove(request)
-                } else if (dirty.contains(request)) {
+                    retryAttempts.remove(request)
+                } else if (dirty.contains(request) && (succeeded || !automaticRefresh)) {
                     enqueue(request)
                 }
             }
@@ -171,14 +177,39 @@ internal class AutoRefreshController(
         if (closed.get()) return
         dirty.add(request)
         dirtyEpoch.computeIfAbsent(request) { AtomicLong() }.incrementAndGet()
+        retryAttempts.remove(request)
         if (mode == AutoRefreshMode.DISABLED || active.containsKey(request) || !queued.add(request))
             return
         scheduler.schedule(
             {
                 queued.remove(request)
-                if (!closed.get() && dirty.remove(request)) refresh(request)
+                if (!closed.get() && dirty.remove(request)) {
+                    automatic.add(request)
+                    refresh(request)
+                }
             },
             DEBOUNCE_MILLIS,
+            TimeUnit.MILLISECONDS,
+        )
+    }
+
+    private fun scheduleRetry(request: RefreshRequest) {
+        val attempt =
+            retryAttempts.compute(request) { _, previous -> (previous ?: 0) + 1 } ?: return
+        if (
+            attempt > MAX_RETRY_ATTEMPTS || mode == AutoRefreshMode.DISABLED || !queued.add(request)
+        ) {
+            return
+        }
+        scheduler.schedule(
+            {
+                queued.remove(request)
+                if (!closed.get() && dirty.contains(request) && !active.containsKey(request)) {
+                    automatic.add(request)
+                    refresh(request)
+                }
+            },
+            RETRY_DELAYS_MILLIS[attempt - 1],
             TimeUnit.MILLISECONDS,
         )
     }
@@ -226,5 +257,7 @@ internal class AutoRefreshController(
     private companion object {
         const val DEBOUNCE_MILLIS = 150L
         const val RECONCILIATION_INTERVAL_MILLIS = 30_000L
+        const val MAX_RETRY_ATTEMPTS = 3
+        val RETRY_DELAYS_MILLIS = longArrayOf(1_000L, 5_000L, 30_000L)
     }
 }
