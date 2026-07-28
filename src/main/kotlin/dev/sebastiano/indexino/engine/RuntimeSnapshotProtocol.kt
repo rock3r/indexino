@@ -85,7 +85,11 @@ internal class RuntimeSnapshotClient(private val connection: RuntimeConnection) 
         )
 }
 
-internal class RuntimeSnapshotDispatcher(private val owner: Indexino) : AutoCloseable {
+internal class RuntimeSnapshotDispatcher(
+    private val owner: Indexino,
+    private val freshnessOverride: (FreshnessPolicy) -> SnapshotFreshness? = { null },
+    private val beforeAcquire: (FreshnessPolicy) -> Unit = {},
+) : AutoCloseable {
     private val snapshots = ConcurrentHashMap<String, SessionSnapshot>()
 
     internal fun leaseCountForTests(): Int = snapshots.size
@@ -103,6 +107,7 @@ internal class RuntimeSnapshotDispatcher(private val owner: Indexino) : AutoClos
         return when (input.readUnsignedByte()) {
             RuntimeSnapshotProtocol.ACQUIRE -> {
                 val freshness = RuntimeSnapshotProtocol.decodeFreshness(input)
+                beforeAcquire(freshness)
                 val snapshot = runBlocking { owner.snapshot(freshness) }
                 val id = UUID.randomUUID().toString()
                 snapshots[id] = SessionSnapshot(session.id, snapshot)
@@ -110,7 +115,7 @@ internal class RuntimeSnapshotDispatcher(private val owner: Indexino) : AutoClos
                     id = id,
                     generation = snapshot.generation,
                     revision = snapshot.revision,
-                    freshness = snapshot.freshnessAtAcquisition,
+                    freshness = freshnessOverride(freshness) ?: snapshot.freshnessAtAcquisition,
                 )
             }
             RuntimeSnapshotProtocol.RELEASE -> {

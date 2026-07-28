@@ -37,18 +37,20 @@ internal class IndexBuildRunner(
 ) {
     private var latestChanges: SourceChangeSet? = null
     private var latestManifest: IndexManifest? = null
+    private var latestSourceFiles: List<String> = emptyList()
     private var reusedFreshIndex: Boolean = false
 
     fun runDetailed(): IndexBuildExecution {
         val exitCode = run()
         if (exitCode != CliExitCodes.SUCCESS) {
-            return IndexBuildExecution(exitCode, null, null, reusedFreshIndex)
+            return IndexBuildExecution(exitCode, null, null, latestSourceFiles, reusedFreshIndex)
         }
         return IndexBuildExecution(
             exitCode = exitCode,
             manifest =
                 checkNotNull(latestManifest) { "Successful index run did not produce a manifest" },
             changes = latestChanges,
+            sourceFiles = latestSourceFiles,
             reusedFreshIndex = reusedFreshIndex,
         )
     }
@@ -56,6 +58,7 @@ internal class IndexBuildRunner(
     fun run(): Int {
         latestChanges = null
         latestManifest = null
+        latestSourceFiles = emptyList()
         reusedFreshIndex = false
         val topologyResult =
             TopologyResolver.resolve(
@@ -72,6 +75,7 @@ internal class IndexBuildRunner(
         }
 
         val sourceFiles = topologyResult.sourceFiles
+        latestSourceFiles = sourceFiles
         val pluginRegistry = PluginRegistry.load(javaClass.classLoader)
         val unknownApplications = applications.filter {
             PluginId.of(it) !in pluginRegistry.pluginIds()
@@ -232,5 +236,6 @@ internal data class IndexBuildExecution(
     val exitCode: Int,
     val manifest: IndexManifest?,
     val changes: SourceChangeSet?,
+    val sourceFiles: List<String>,
     val reusedFreshIndex: Boolean,
 )

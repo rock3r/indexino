@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.engine
 
+import dev.sebastiano.indexino.api.AutoRefreshMode
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
@@ -7,6 +8,26 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 
 class RuntimeLeaseStoreTest {
+    @Test
+    fun `lease persists the owner auto refresh mode`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-mode-")
+        try {
+            val workspaceId = "d".repeat(RuntimePaths.WORKSPACE_ID_LENGTH)
+            val endpoint = RuntimePaths.socketPath(cacheRoot, workspaceId)
+
+            RuntimeLeaseStore(cacheRoot, pidProvider = { 101L })
+                .acquire(workspaceId, endpoint, Path.of("/workspace"), AutoRefreshMode.DISABLED)
+
+            assertEquals(
+                AutoRefreshMode.DISABLED,
+                RuntimeLeaseStore.read(RuntimePaths.leasePath(cacheRoot, workspaceId))
+                    ?.autoRefreshMode,
+            )
+        } finally {
+            cacheRoot.toFile().deleteRecursively()
+        }
+    }
+
     @Test
     fun `a reused PID with a different start time is reclaimed`() {
         val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-reused-pid-")

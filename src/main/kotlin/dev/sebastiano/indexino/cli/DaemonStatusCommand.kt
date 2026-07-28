@@ -45,6 +45,7 @@ internal class DaemonStatusCommand {
                     state = if (running) "running" else "stopped",
                     ownerPid = lease?.ownerPid,
                     endpoint = lease?.endpoint,
+                    autoRefreshMode = lease?.autoRefreshMode?.name,
                 )
             )
         )
@@ -59,4 +60,5 @@ internal data class DaemonStatusReport(
     val message: String? = null,
     val ownerPid: Long? = null,
     val endpoint: String? = null,
+    val autoRefreshMode: String? = null,
 )

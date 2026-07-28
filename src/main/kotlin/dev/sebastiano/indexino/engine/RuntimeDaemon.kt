@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.engine
 
+import dev.sebastiano.indexino.api.AutoRefreshMode
 import java.nio.file.Path
 
 internal sealed interface RuntimeDaemonStart {
@@ -31,13 +32,17 @@ private constructor(
             cacheRoot: Path,
             workspaceId: String,
             workspace: Path,
+            autoRefreshMode: AutoRefreshMode = AutoRefreshMode.ENABLED,
             sessionCommandHandler: ((RuntimeSession, ByteArray) -> ByteArray)? = null,
             sessionDisconnected: (RuntimeSession) -> Unit = {},
             commandHandler: ((ByteArray) -> ByteArray)? = null,
         ): RuntimeDaemonStart {
             val endpoint = RuntimePaths.socketPath(cacheRoot, workspaceId)
             val leaseStore = RuntimeLeaseStore(cacheRoot)
-            return when (val acquisition = leaseStore.acquire(workspaceId, endpoint, workspace)) {
+            return when (
+                val acquisition =
+                    leaseStore.acquire(workspaceId, endpoint, workspace, autoRefreshMode)
+            ) {
                 is RuntimeLeaseAcquisition.Existing ->
                     RuntimeDaemonStart.Existing(acquisition.lease)
                 is RuntimeLeaseAcquisition.Owned -> {

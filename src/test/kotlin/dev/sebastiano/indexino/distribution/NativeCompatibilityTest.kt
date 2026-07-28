@@ -267,6 +267,10 @@ class NativeCompatibilityTest {
                             .resolve(if (target == WINDOWS_X64) "indexino.exe" else "indexino")
                             .toString()
                     ),
+                    mapOf(
+                        "HOME" to tempDir.resolve("home-roast").toString(),
+                        "JAVA_TOOL_OPTIONS" to "-Duser.home=${tempDir.resolve("home-roast")}",
+                    ),
                 ),
             )
 
@@ -332,6 +336,7 @@ class NativeCompatibilityTest {
         results
             .filterKeys { it != "invalid" }
             .forEach { (_, result) -> assertEquals(0, result.exitCode, result.diagnostic()) }
+        run(entryPoint, caller, "daemon", "stop", "--project", workspace.toString())
 
         val manifest = workspace.resolve(".indexino/index/$commit/manifest.json")
         assertManifestSchema(manifest)
@@ -475,14 +480,45 @@ class NativeCompatibilityTest {
         workingDirectory: Path,
         vararg arguments: String,
     ): ProcessResult =
-        runCommand(workingDirectory, *(entryPoint.commandPrefix + arguments).toTypedArray())
+        runCommand(
+            workingDirectory,
+            entryPoint.environment,
+            *(entryPoint.commandPrefix + arguments).toTypedArray(),
+        )
 
     private fun runCommand(workingDirectory: Path, vararg command: String): ProcessResult {
-        return runCommand(workingDirectory, PROCESS_TIMEOUT_MINUTES, TimeUnit.MINUTES, *command)
+        return runCommand(
+            workingDirectory,
+            emptyMap(),
+            PROCESS_TIMEOUT_MINUTES,
+            TimeUnit.MINUTES,
+            *command,
+        )
     }
 
     private fun runCommand(
         workingDirectory: Path,
+        environment: Map<String, String>,
+        vararg command: String,
+    ): ProcessResult =
+        runCommand(
+            workingDirectory,
+            environment,
+            PROCESS_TIMEOUT_MINUTES,
+            TimeUnit.MINUTES,
+            *command,
+        )
+
+    private fun runCommand(
+        workingDirectory: Path,
+        timeout: Long,
+        timeoutUnit: TimeUnit,
+        vararg command: String,
+    ): ProcessResult = runCommand(workingDirectory, emptyMap(), timeout, timeoutUnit, *command)
+
+    private fun runCommand(
+        workingDirectory: Path,
+        environment: Map<String, String>,
         timeout: Long,
         timeoutUnit: TimeUnit,
         vararg command: String,
@@ -491,6 +527,7 @@ class NativeCompatibilityTest {
             runCapturedProcess(
                 workingDirectory,
                 command.toList(),
+                environment = environment,
                 timeout = timeout,
                 timeoutUnit = timeoutUnit,
                 terminationTimeout = PROCESS_TERMINATION_GRACE_SECONDS,
@@ -510,7 +547,11 @@ class NativeCompatibilityTest {
 
     private fun powershellQuote(value: Any): String = value.toString().replace("'", "''")
 
-    private data class EntryPoint(val name: String, val commandPrefix: List<String>)
+    private data class EntryPoint(
+        val name: String,
+        val commandPrefix: List<String>,
+        val environment: Map<String, String> = emptyMap(),
+    )
 
     private data class Snapshot(
         val results: Map<String, ProcessResult>,
@@ -532,7 +573,10 @@ class NativeCompatibilityTest {
                     .fold(value) { normalized, path -> normalized.replace(path, "<workspace>") }
                     .replace(BUILT_AT_JSON) { match -> "${match.groupValues[1]}<volatile>" }
             }
-            return copy(stdout = normalize(stdout), stderr = normalize(stderr))
+            return copy(
+                stdout = normalize(stdout),
+                stderr = normalize(stderr).replace(JAVA_TOOL_OPTIONS_BANNER, ""),
+            )
         }
 
         fun diagnostic(): String = "exit=$exitCode\nstdout:\n$stdout\nstderr:\n$stderr"
@@ -546,5 +590,6 @@ class NativeCompatibilityTest {
         const val LINUX_X64 = "linux-x64"
         const val WINDOWS_X64 = "windows-x64"
         val BUILT_AT_JSON = Regex("""("builtAt":")[^"]+""")
+        val JAVA_TOOL_OPTIONS_BANNER = Regex("Picked up JAVA_TOOL_OPTIONS: .*\\n")
     }
 }

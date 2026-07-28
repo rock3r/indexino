@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.cli
 
+import dev.sebastiano.indexino.api.AutoRefreshMode
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.engine.RuntimeLeaseStore
 import dev.sebastiano.indexino.engine.RuntimePaths
@@ -7,24 +8,31 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 internal class DaemonStartCommand {
-    fun start(project: Path, cacheRoot: Path = InProcessCacheLayout.cacheRoot()): Int {
+    fun start(
+        project: Path,
+        cacheRoot: Path = InProcessCacheLayout.cacheRoot(),
+        autoRefreshMode: AutoRefreshMode = AutoRefreshMode.ENABLED,
+    ): Int {
         val canonicalProject = project.toRealPath()
         val workspaceId = InProcessCacheLayout.workspaceId(canonicalProject)
         val lease = RuntimeLeaseStore.read(RuntimePaths.leasePath(cacheRoot, workspaceId))
         if (lease != null && RuntimeLeaseStore.isLive(lease)) {
-            return CliExitCodes.SUCCESS
+            return if (lease.autoRefreshMode == autoRefreshMode) {
+                CliExitCodes.SUCCESS
+            } else {
+                CliExitCodes.INVALID_ARGUMENTS
+            }
         }
 
         val command = buildList {
             add(javaExecutable())
-            System.getProperty("indexino.cache.dir")?.takeIf(String::isNotBlank)?.let {
-                cacheDirectory ->
-                add("-Dindexino.cache.dir=$cacheDirectory")
-            }
+            add("--enable-native-access=ALL-UNNAMED")
+            add("-Dindexino.cache.dir=$cacheRoot")
             add("-cp")
             add(System.getProperty("java.class.path"))
             add("dev.sebastiano.indexino.engine.RuntimeOwnerMainKt")
             add(canonicalProject.toString())
+            add(autoRefreshMode.name)
         }
         ProcessBuilder(command)
             .redirectOutput(ProcessBuilder.Redirect.DISCARD)
