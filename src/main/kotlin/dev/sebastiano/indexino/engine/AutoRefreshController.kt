@@ -29,7 +29,10 @@ internal class AutoRefreshController(
     private val reconciliationIntervalMillis: Long = RECONCILIATION_INTERVAL_MILLIS,
 ) : AutoCloseable {
     private val closed = AtomicBoolean()
-    private val watchService: WatchService = FileSystems.getDefault().newWatchService()
+    private val watcherKind = AutoRefreshWatcherFactory.kindForPlatform()
+    private val watchService: WatchService? =
+        if (watcherKind == AutoRefreshWatcherKind.MAC_FSEVENTS) null
+        else FileSystems.getDefault().newWatchService()
     private val scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "indexino-auto-refresh").apply { isDaemon = true }
     }
@@ -41,10 +44,17 @@ internal class AutoRefreshController(
     private val dirtyEpoch = ConcurrentHashMap<RefreshRequest, AtomicLong>()
     private val active = ConcurrentHashMap<RefreshRequest, String>()
     private val uncovered = ConcurrentHashMap.newKeySet<RefreshRequest>()
-    private val watcher =
+    private val watcher: Thread? = watchService?.let {
         Thread(::watch, "indexino-source-watcher").apply {
             isDaemon = true
             start()
+        }
+    }
+    private val macWatcher: MacFseventsWatcher? =
+        if (watcherKind == AutoRefreshWatcherKind.MAC_FSEVENTS) {
+            MacFseventsWatcher(workspace, ::onMacPathChanged, ::onWatcherOverflow)
+        } else {
+            null
         }
 
     init {
@@ -120,8 +130,9 @@ internal class AutoRefreshController(
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
-        watcher.interrupt()
-        runCatching { watchService.close() }
+        watcher?.interrupt()
+        runCatching { watchService?.close() }
+        macWatcher?.close()
         scheduler.shutdownNow()
         keys.clear()
         requestsByDirectory.clear()
@@ -134,7 +145,7 @@ internal class AutoRefreshController(
         while (!closed.get()) {
             val key =
                 try {
-                    watchService.take()
+                    checkNotNull(watchService).take()
                 } catch (_: InterruptedException) {
                     return
                 } catch (_: java.nio.file.ClosedWatchServiceException) {
@@ -173,6 +184,7 @@ internal class AutoRefreshController(
     }
 
     private fun registerDirectory(directory: Path): Boolean {
+        if (watchService == null) return true
         if (keys.values.any { registered -> registered == directory }) return true
         return try {
             val key = directory.register(watchService, ENTRY_CREATE, ENTRY_DELETE, ENTRY_MODIFY)
@@ -181,6 +193,18 @@ internal class AutoRefreshController(
         } catch (_: IOException) {
             false
         }
+    }
+
+    private fun onMacPathChanged(path: Path) {
+        requestsByDirectory
+            .filterKeys { directory -> path.startsWith(directory) }
+            .values
+            .flatten()
+            .forEach(::enqueue)
+    }
+
+    private fun onWatcherOverflow() {
+        uncovered.addAll(directoriesByRequest.keys)
     }
 
     private fun topologyInputs(): List<Path> =

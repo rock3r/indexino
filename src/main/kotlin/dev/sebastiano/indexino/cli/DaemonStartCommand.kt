@@ -22,6 +22,7 @@ internal class DaemonStartCommand {
 
         val command = buildList {
             add(javaExecutable())
+            add("--enable-native-access=ALL-UNNAMED")
             add("-Dindexino.cache.dir=$cacheRoot")
             add("-cp")
             add(System.getProperty("java.class.path"))

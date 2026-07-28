@@ -87,6 +87,7 @@ internal object RuntimeClientBootstrap {
             if (Files.isExecutable(java)) {
                 val command = buildList {
                     add(java.toString())
+                    add("--enable-native-access=ALL-UNNAMED")
                     add("-Dindexino.cache.dir=$cacheRoot")
                     add("-cp")
                     add(System.getProperty("java.class.path"))
