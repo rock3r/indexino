@@ -207,7 +207,7 @@ private constructor(
                     runtime.rehydratePublishedScope()
                     runtime.startLivenessMonitoring()
                     return runtime
-                } catch (thrown: Throwable) {
+                } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
                     runtime.close()
                     throw thrown
                 }
