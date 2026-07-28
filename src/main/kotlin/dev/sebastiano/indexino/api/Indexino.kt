@@ -103,14 +103,27 @@ private constructor(
             )
 
         @JvmStatic
-        public fun connectBlocking(configuration: IndexinoConfiguration): Indexino {
+        public fun connectBlocking(configuration: IndexinoConfiguration): Indexino =
+            connectBlocking(configuration, allowExistingModeMismatch = false)
+
+        internal fun connectBlockingForCli(configuration: IndexinoConfiguration): Indexino =
+            connectBlocking(configuration, allowExistingModeMismatch = true)
+
+        private fun connectBlocking(
+            configuration: IndexinoConfiguration,
+            allowExistingModeMismatch: Boolean,
+        ): Indexino {
             val canonical = canonicalWorkspace(configuration.workspace)
             return when (configuration.runtimeAttachMode) {
                 RuntimeAttachMode.PREFER_DAEMON ->
                     try {
                         Indexino(
                             canonical,
-                            RuntimeClientBootstrap.connect(canonical, configuration.autoRefreshMode),
+                            RuntimeClientBootstrap.connect(
+                                canonical,
+                                configuration.autoRefreshMode,
+                                allowExistingModeMismatch,
+                            ),
                         )
                     } catch (thrown: IndexinoException) {
                         throw thrown

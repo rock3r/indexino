@@ -12,6 +12,7 @@ import java.nio.file.Path
 import java.nio.file.StandardWatchEventKinds.ENTRY_CREATE
 import java.nio.file.StandardWatchEventKinds.ENTRY_DELETE
 import java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY
+import java.nio.file.StandardWatchEventKinds.OVERFLOW
 import java.nio.file.WatchKey
 import java.nio.file.WatchService
 import java.util.concurrent.ConcurrentHashMap
@@ -73,9 +74,11 @@ internal class AutoRefreshController(
         val directories =
             buildSet {
                     sourceFiles.forEach { source ->
-                        workspace.resolve(source).normalize().parent?.let(::add)
+                        val sourcePath = workspace.resolve(source).normalize()
+                        sourcePath.parent?.let(::add)
+                        sourceRoot(sourcePath)?.let(::add)
                     }
-                    topologyInputs().mapTo(this) { it.parent ?: workspace }
+                    topologyInputs(sourceFiles).mapTo(this) { it.parent ?: workspace }
                 }
                 .filter { directory ->
                     Files.isDirectory(directory) &&
@@ -160,16 +163,19 @@ internal class AutoRefreshController(
             val directory = keys[key]
             if (directory != null) {
                 key.pollEvents().forEach { event ->
-                    if (
-                        event.kind() == ENTRY_CREATE ||
-                            event.kind() == ENTRY_DELETE ||
-                            event.kind() == ENTRY_MODIFY
-                    ) {
-                        requestsByDirectory[directory]?.forEach(::enqueue)
+                    when (event.kind()) {
+                        OVERFLOW -> onWatcherOverflow()
+                        ENTRY_CREATE,
+                        ENTRY_DELETE,
+                        ENTRY_MODIFY -> requestsByDirectory[directory]?.forEach(::enqueue)
                     }
                 }
             }
-            if (!key.reset()) keys.remove(key)
+            if (!key.reset()) {
+                keys.remove(key)?.let { invalidDirectory ->
+                    requestsByDirectory[invalidDirectory]?.let(uncovered::addAll)
+                }
+            }
         }
     }
 
@@ -238,16 +244,33 @@ internal class AutoRefreshController(
         uncovered.addAll(directoriesByRequest.keys)
     }
 
-    private fun topologyInputs(): List<Path> =
-        listOf(
-                workspace.resolve("settings.gradle.kts"),
-                workspace.resolve("settings.gradle"),
-                workspace.resolve("build.gradle.kts"),
-                workspace.resolve("build.gradle"),
-                workspace.resolve("MODULE.bazel"),
-                workspace.resolve("WORKSPACE"),
-                workspace.resolve("WORKSPACE.bazel"),
-            )
+    private fun sourceRoot(sourcePath: Path): Path? =
+        generateSequence(sourcePath.parent) { current -> current.parent }
+            .takeWhile { current -> current.startsWith(workspace) }
+            .firstOrNull { current -> current.fileName.toString() in SOURCE_ROOT_NAMES }
+
+    private fun topologyInputs(sourceFiles: List<String>): List<Path> =
+        buildSet {
+                add(workspace.resolve("settings.gradle.kts"))
+                add(workspace.resolve("settings.gradle"))
+                add(workspace.resolve("build.gradle.kts"))
+                add(workspace.resolve("build.gradle"))
+                add(workspace.resolve("MODULE.bazel"))
+                add(workspace.resolve("WORKSPACE"))
+                add(workspace.resolve("WORKSPACE.bazel"))
+                sourceFiles.forEach { source ->
+                    generateSequence(workspace.resolve(source).normalize().parent) { current ->
+                            current.parent
+                        }
+                        .takeWhile { current -> current.startsWith(workspace) }
+                        .forEach { directory ->
+                            add(directory.resolve("build.gradle.kts"))
+                            add(directory.resolve("build.gradle"))
+                            add(directory.resolve("BUILD"))
+                            add(directory.resolve("BUILD.bazel"))
+                        }
+                }
+            }
             .filter(Files::exists)
 
     private fun excluded(path: Path): Boolean =
@@ -259,5 +282,6 @@ internal class AutoRefreshController(
         const val RECONCILIATION_INTERVAL_MILLIS = 30_000L
         const val MAX_RETRY_ATTEMPTS = 3
         val RETRY_DELAYS_MILLIS = longArrayOf(1_000L, 5_000L, 30_000L)
+        val SOURCE_ROOT_NAMES = setOf("kotlin", "java", "resources")
     }
 }

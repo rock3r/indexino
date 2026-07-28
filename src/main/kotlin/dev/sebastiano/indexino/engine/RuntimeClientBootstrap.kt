@@ -11,7 +11,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /** Attaches to, or starts, the local runtime owner for a canonical workspace. */
 internal object RuntimeClientBootstrap {
-    fun connect(workspace: Path, autoRefreshMode: AutoRefreshMode): RuntimeConnection {
+    fun connect(
+        workspace: Path,
+        autoRefreshMode: AutoRefreshMode,
+        allowExistingModeMismatch: Boolean = false,
+    ): RuntimeConnection {
         val cacheRoot = InProcessCacheLayout.cacheRoot()
         val workspaceId = InProcessCacheLayout.workspaceId(workspace)
         val endpoint = RuntimePaths.socketPath(cacheRoot, workspaceId)
@@ -44,7 +48,7 @@ internal object RuntimeClientBootstrap {
                 Files.deleteIfExists(endpoint)
                 Files.deleteIfExists(leasePath)
             }
-        assertCompatibleMode(leasePath, autoRefreshMode)
+        assertCompatibleMode(leasePath, autoRefreshMode, allowExistingModeMismatch)
         if (!Files.exists(endpoint)) startOwner(workspace, cacheRoot, endpoint, autoRefreshMode)
         var lastFailure: IOException? = null
         repeat(CONNECT_WAIT_ATTEMPTS) {
@@ -53,7 +57,7 @@ internal object RuntimeClientBootstrap {
             } catch (failure: IOException) {
                 lastFailure = failure
                 recoverDeadEndpoint(cacheRoot, workspace, endpoint)
-                assertCompatibleMode(leasePath, autoRefreshMode)
+                assertCompatibleMode(leasePath, autoRefreshMode, allowExistingModeMismatch)
                 if (!Files.exists(endpoint))
                     startOwner(workspace, cacheRoot, endpoint, autoRefreshMode)
                 Thread.sleep(START_WAIT_MILLIS)
@@ -113,9 +117,17 @@ internal object RuntimeClientBootstrap {
         throw RuntimeProtocolException("Local runtime failed to start")
     }
 
-    private fun assertCompatibleMode(leasePath: Path, requested: AutoRefreshMode) {
+    private fun assertCompatibleMode(
+        leasePath: Path,
+        requested: AutoRefreshMode,
+        allowExistingModeMismatch: Boolean,
+    ) {
         val lease = RuntimeLeaseStore.read(leasePath) ?: return
-        if (RuntimeLeaseStore.isLive(lease) && lease.autoRefreshMode != requested) {
+        if (
+            !allowExistingModeMismatch &&
+                RuntimeLeaseStore.isLive(lease) &&
+                lease.autoRefreshMode != requested
+        ) {
             throw RuntimeProtocolException(
                 "AUTO_REFRESH_MODE_MISMATCH: runtime uses ${lease.autoRefreshMode}"
             )

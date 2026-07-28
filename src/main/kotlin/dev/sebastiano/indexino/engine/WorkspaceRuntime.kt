@@ -1,10 +1,15 @@
 package dev.sebastiano.indexino.engine
 
 import dev.sebastiano.indexino.api.AutoRefreshMode
+import dev.sebastiano.indexino.api.BuildSystem
 import dev.sebastiano.indexino.api.InProcessCacheLayout
+import dev.sebastiano.indexino.api.IndexScope
 import dev.sebastiano.indexino.api.Indexino
 import dev.sebastiano.indexino.api.IndexinoConfiguration
+import dev.sebastiano.indexino.api.RefreshRequest
 import dev.sebastiano.indexino.api.RuntimeAttachMode
+import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
+import dev.sebastiano.indexino.model.PluginId
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.BasicFileAttributes
@@ -46,6 +51,24 @@ private constructor(
     }
 
     internal fun snapshotLeaseCountForTests(): Int = snapshotDispatcher.leaseCountForTests()
+
+    private fun rehydratePublishedScope() {
+        val manifest = WorkspaceGenerationManifestStore(cacheRoot, workspaceId).current() ?: return
+        val scope =
+            when (manifest.scopeBuildSystem) {
+                BuildSystem.GRADLE.value -> IndexScope.gradle(manifest.scopeValue)
+                BuildSystem.BAZEL.value -> IndexScope.bazel(manifest.scopeValue)
+                else -> return
+            }
+        var request =
+            RefreshRequest.forScope(
+                if (manifest.includesDependencies) scope.includingDependencies() else scope
+            )
+        manifest.applications.forEach { application ->
+            request = request.withPlugin(PluginId.of(application))
+        }
+        refreshDispatcher.refresh(request)
+    }
 
     private fun dispatch(session: RuntimeSession, command: ByteArray): ByteArray {
         if (!isBoundWorkspace()) {
@@ -172,10 +195,11 @@ private constructor(
                     RuntimePaths.tombstonePath(cacheRoot, workspaceId)
                 )
                 runtime.daemon = start.daemon
+                runtime.rehydratePublishedScope()
                 runtime.startLivenessMonitoring()
                 return runtime
             }
-            owner.close()
+            runtime.close()
             error("A workspace runtime already owns ${workspace.toAbsolutePath()}")
         }
     }

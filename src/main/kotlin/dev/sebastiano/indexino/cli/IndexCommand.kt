@@ -62,7 +62,7 @@ internal class IndexCommand : CliktCommand(name = "index") {
         val scope = daemonScope(project.toPath())
         if (jsonlProgress) JsonlIndexBuildProgressReporter { echo(it) }.discoveryStarted()
         runBlocking {
-            Indexino.connect(
+            Indexino.connectBlockingForCli(
                     IndexinoConfiguration.forWorkspace(project.toPath())
                         .withAutoRefresh(
                             if (noAutoRefresh) AutoRefreshMode.DISABLED else AutoRefreshMode.ENABLED
