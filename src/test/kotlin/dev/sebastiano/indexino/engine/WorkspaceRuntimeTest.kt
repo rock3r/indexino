@@ -135,6 +135,49 @@ class WorkspaceRuntimeTest {
     }
 
     @Test
+    fun `await current promotes a debounced automatic refresh`() {
+        val cacheRoot =
+            Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-await-current-")
+        val workspace = createGradleWorkspace()
+        val previousCacheRoot = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheRoot.toString())
+        val runtime = WorkspaceRuntime.start(workspace, cacheRoot)
+        try {
+            val request = RefreshRequest.forScope(IndexScope.gradle(":app"))
+            val initial =
+                RuntimeConnection.connect(runtime.endpoint).use { connection ->
+                    RuntimeRefreshClient(connection).refresh(request).await().result.generation
+                }
+            Files.writeString(
+                workspace.resolve("app/src/main/kotlin/Panel.kt"),
+                "package sample\nclass AwaitCurrentPanel\n",
+            )
+
+            waitUntil {
+                RuntimeConnection.connect(runtime.endpoint).use { connection ->
+                    val snapshots = RuntimeSnapshotClient(connection)
+                    val lease = snapshots.acquire(FreshnessPolicy.PUBLISHED)
+                    snapshots.release(lease.id)
+                    lease.freshness.value == "DIRTY"
+                }
+            }
+            RuntimeConnection.connect(runtime.endpoint).use { connection ->
+                val snapshots = RuntimeSnapshotClient(connection)
+                val lease = snapshots.acquire(FreshnessPolicy.AWAIT_CURRENT)
+                snapshots.release(lease.id)
+                assertTrue(initial != lease.generation)
+                assertEquals("CURRENT", lease.freshness.value)
+            }
+        } finally {
+            runtime.close()
+            cacheRoot.toFile().deleteRecursively()
+            workspace.toFile().deleteRecursively()
+            if (previousCacheRoot == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheRoot)
+        }
+    }
+
+    @Test
     fun `new sibling source directory triggers a daemon owned refresh`() {
         val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-sibling-")
         val workspace = createGradleWorkspace()
