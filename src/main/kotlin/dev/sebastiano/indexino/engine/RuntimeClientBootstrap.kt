@@ -2,8 +2,11 @@ package dev.sebastiano.indexino.engine
 
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import java.io.IOException
+import java.io.PrintStream
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Attaches to, or starts, the local runtime owner for a canonical workspace. */
 internal object RuntimeClientBootstrap {
@@ -11,12 +14,27 @@ internal object RuntimeClientBootstrap {
         val cacheRoot = InProcessCacheLayout.cacheRoot()
         val workspaceId = InProcessCacheLayout.workspaceId(workspace)
         val endpoint = RuntimePaths.socketPath(cacheRoot, workspaceId)
-        if (
-            RuntimeTombstoneStore.read(RuntimePaths.tombstonePath(cacheRoot, workspaceId)) != null
-        ) {
-            throw RuntimeProtocolException(
-                "WORKSPACE_LOST: daemon stop must acknowledge this workspace"
-            )
+        val tombstonePath = RuntimePaths.tombstonePath(cacheRoot, workspaceId)
+        RuntimeTombstoneStore.read(tombstonePath)?.let { tombstone ->
+            val currentFileKey =
+                runCatching {
+                        Files.readAttributes(
+                                workspace,
+                                java.nio.file.attribute.BasicFileAttributes::class.java,
+                            )
+                            .fileKey()
+                            ?.toString()
+                    }
+                    .getOrNull()
+            if (
+                tombstone.workspaceFileKey != null && tombstone.workspaceFileKey != currentFileKey
+            ) {
+                RuntimeTombstoneStore.acknowledge(tombstonePath)
+            } else {
+                throw RuntimeProtocolException(
+                    "WORKSPACE_LOST: daemon stop must acknowledge this workspace"
+                )
+            }
         }
         val leasePath = RuntimePaths.leasePath(cacheRoot, workspaceId)
         RuntimeLeaseStore.read(leasePath)
@@ -56,18 +74,26 @@ internal object RuntimeClientBootstrap {
                 RuntimePaths.leasePath(cacheRoot, InProcessCacheLayout.workspaceId(workspace))
             )
         if (lease == null || !RuntimeLeaseStore.isLive(lease)) {
-            val command = buildList {
-                add(Path.of(System.getProperty("java.home"), "bin", "java").toString())
-                add("-Dindexino.cache.dir=$cacheRoot")
-                add("-cp")
-                add(System.getProperty("java.class.path"))
-                add("dev.sebastiano.indexino.engine.RuntimeOwnerMainKt")
-                add(workspace.toString())
+            val java = Path.of(System.getProperty("java.home"), "bin", "java")
+            if (Files.isExecutable(java)) {
+                val command = buildList {
+                    add(java.toString())
+                    add("-Dindexino.cache.dir=$cacheRoot")
+                    add("-cp")
+                    add(System.getProperty("java.class.path"))
+                    add("dev.sebastiano.indexino.engine.RuntimeOwnerMainKt")
+                    add(workspace.toString())
+                }
+                ProcessBuilder(command)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .redirectError(ProcessBuilder.Redirect.DISCARD)
+                    .start()
+            } else {
+                suppressEmbeddedRegistryWarnings()
+                embeddedRuntimes.computeIfAbsent(InProcessCacheLayout.workspaceId(workspace)) {
+                    WorkspaceRuntime.start(workspace, cacheRoot)
+                }
             }
-            ProcessBuilder(command)
-                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                .redirectError(ProcessBuilder.Redirect.DISCARD)
-                .start()
         }
         repeat(START_WAIT_ATTEMPTS) {
             if (Files.exists(endpoint)) return
@@ -76,7 +102,29 @@ internal object RuntimeClientBootstrap {
         throw RuntimeProtocolException("Local runtime failed to start")
     }
 
+    private val embeddedRuntimes = ConcurrentHashMap<String, WorkspaceRuntime>()
+    private val embeddedStderrFiltered = AtomicBoolean()
+
+    private fun suppressEmbeddedRegistryWarnings() {
+        if (embeddedStderrFiltered.compareAndSet(false, true)) {
+            System.setErr(RegistryWarningFilteringPrintStream(System.err))
+        }
+    }
+
     private const val CONNECT_WAIT_ATTEMPTS = 100
     private const val START_WAIT_ATTEMPTS = 600
     private const val START_WAIT_MILLIS = 50L
+}
+
+private class RegistryWarningFilteringPrintStream(private val delegate: PrintStream) :
+    PrintStream(delegate, true) {
+    override fun println(value: String?) {
+        if (value?.startsWith(REGISTRY_WARNING_PREFIX) != true) delegate.println(value)
+    }
+
+    override fun println(value: Any?) = println(value?.toString())
+
+    private companion object {
+        const val REGISTRY_WARNING_PREFIX = "WARN: Attempt to load key '"
+    }
 }

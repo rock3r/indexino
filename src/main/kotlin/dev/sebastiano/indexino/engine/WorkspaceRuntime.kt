@@ -103,6 +103,7 @@ private constructor(
             RuntimeTombstoneStore.write(
                 RuntimePaths.tombstonePath(cacheRoot, workspaceId),
                 workspace,
+                workspaceFileKey,
             )
             close()
         }

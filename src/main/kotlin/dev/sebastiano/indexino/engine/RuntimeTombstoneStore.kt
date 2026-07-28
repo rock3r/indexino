@@ -11,6 +11,7 @@ internal class RuntimeTombstone(
     val code: String,
     val message: String,
     val workspace: String,
+    val workspaceFileKey: String? = null,
     val occurredAtMillis: Long,
 )
 
@@ -20,7 +21,7 @@ internal object RuntimeTombstoneStore {
         ignoreUnknownKeys = false
     }
 
-    fun write(path: Path, workspace: Path) {
+    fun write(path: Path, workspace: Path, workspaceFileKey: String? = null) {
         val tombstone =
             RuntimeTombstone(
                 code = "WORKSPACE_LOST",
@@ -28,6 +29,7 @@ internal object RuntimeTombstoneStore {
                     "Indexino shut down because the bound workspace disappeared or was replaced. " +
                         "Before deleting a workspace, run indexino daemon stop --project <path>.",
                 workspace = workspace.toString(),
+                workspaceFileKey = workspaceFileKey,
                 occurredAtMillis = System.currentTimeMillis(),
             )
         Files.createDirectories(path.parent)
