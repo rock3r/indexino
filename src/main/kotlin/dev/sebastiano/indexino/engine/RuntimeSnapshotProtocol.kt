@@ -88,6 +88,7 @@ internal class RuntimeSnapshotClient(private val connection: RuntimeConnection) 
 internal class RuntimeSnapshotDispatcher(
     private val owner: Indexino,
     private val freshnessOverride: (FreshnessPolicy) -> SnapshotFreshness? = { null },
+    private val beforeAcquire: (FreshnessPolicy) -> Unit = {},
 ) : AutoCloseable {
     private val snapshots = ConcurrentHashMap<String, SessionSnapshot>()
 
@@ -106,6 +107,7 @@ internal class RuntimeSnapshotDispatcher(
         return when (input.readUnsignedByte()) {
             RuntimeSnapshotProtocol.ACQUIRE -> {
                 val freshness = RuntimeSnapshotProtocol.decodeFreshness(input)
+                beforeAcquire(freshness)
                 val snapshot = runBlocking { owner.snapshot(freshness) }
                 val id = UUID.randomUUID().toString()
                 snapshots[id] = SessionSnapshot(session.id, snapshot)

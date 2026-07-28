@@ -87,7 +87,7 @@ internal class AutoRefreshController(
                 }
                 .toSet()
         directoriesByRequest[request] = directories
-        var coverageComplete = true
+        var coverageComplete = directories.isNotEmpty()
         directories.forEach { directory ->
             if (keys.size >= maxWatchedDirectories && keys.values.none { it == directory }) {
                 coverageComplete = false
@@ -125,6 +125,16 @@ internal class AutoRefreshController(
                     enqueue(request)
                 }
             }
+        }
+    }
+
+    fun startQueuedForAwaitCurrent() {
+        if (mode == AutoRefreshMode.DISABLED) return
+        dirty.toList().forEach { request ->
+            if (active.containsKey(request)) return@forEach
+            queued.remove(request)
+            automatic.add(request)
+            refresh(request)
         }
     }
 
@@ -247,7 +257,10 @@ internal class AutoRefreshController(
     private fun sourceRoot(sourcePath: Path): Path? =
         generateSequence(sourcePath.parent) { current -> current.parent }
             .takeWhile { current -> current.startsWith(workspace) }
-            .firstOrNull { current -> current.fileName.toString() in SOURCE_ROOT_NAMES }
+            .firstOrNull { current ->
+                current.fileName.toString() in SOURCE_ROOT_NAMES &&
+                    current.parent?.parent?.fileName?.toString() == "src"
+            }
 
     private fun topologyInputs(sourceFiles: List<String>): List<Path> =
         buildSet {

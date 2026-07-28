@@ -31,7 +31,15 @@ private constructor(
             autoRefreshController.onRefreshStarted(request, handle)
         }
     private val snapshotDispatcher =
-        RuntimeSnapshotDispatcher(owner) { freshness -> autoRefreshController.freshness(freshness) }
+        RuntimeSnapshotDispatcher(
+            owner,
+            freshnessOverride = { freshness -> autoRefreshController.freshness(freshness) },
+            beforeAcquire = { freshness ->
+                if (freshness == dev.sebastiano.indexino.api.FreshnessPolicy.AWAIT_CURRENT) {
+                    autoRefreshController.startQueuedForAwaitCurrent()
+                }
+            },
+        )
     private val workspaceLost = AtomicBoolean()
     private lateinit var livenessThread: Thread
     private lateinit var daemon: RuntimeDaemon
@@ -195,9 +203,14 @@ private constructor(
                     RuntimePaths.tombstonePath(cacheRoot, workspaceId)
                 )
                 runtime.daemon = start.daemon
-                runtime.rehydratePublishedScope()
-                runtime.startLivenessMonitoring()
-                return runtime
+                try {
+                    runtime.rehydratePublishedScope()
+                    runtime.startLivenessMonitoring()
+                    return runtime
+                } catch (thrown: Throwable) {
+                    runtime.close()
+                    throw thrown
+                }
             }
             runtime.close()
             error("A workspace runtime already owns ${workspace.toAbsolutePath()}")

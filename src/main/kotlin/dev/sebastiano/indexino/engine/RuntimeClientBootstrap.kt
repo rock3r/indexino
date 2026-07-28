@@ -44,7 +44,12 @@ internal object RuntimeClientBootstrap {
         val leasePath = RuntimePaths.leasePath(cacheRoot, workspaceId)
         RuntimeLeaseStore.read(leasePath)
             ?.takeIf { it.protocolMajor != RuntimeLeaseStore.PROTOCOL_MAJOR }
-            ?.let {
+            ?.let { lease ->
+                if (RuntimeLeaseStore.isLive(lease)) {
+                    throw RuntimeProtocolException(
+                        "RUNTIME_PROTOCOL_MISMATCH: runtime protocol ${lease.protocolMajor} is live"
+                    )
+                }
                 Files.deleteIfExists(endpoint)
                 Files.deleteIfExists(leasePath)
             }
