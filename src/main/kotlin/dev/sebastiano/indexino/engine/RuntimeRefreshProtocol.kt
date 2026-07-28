@@ -22,6 +22,7 @@ import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.runBlocking
 
 internal class RuntimeRefreshHandle(val id: String, private val connection: RuntimeConnection) {
@@ -75,8 +76,8 @@ internal class RuntimeRefreshDispatcher(
 
     @OptIn(IndexinoInternalApi::class)
     fun refresh(request: RefreshRequest): RefreshHandle {
-        val text = mutableListOf<String>()
-        val machine = mutableListOf<String>()
+        val text = CopyOnWriteArrayList<String>()
+        val machine = CopyOnWriteArrayList<String>()
         val handle = runBlocking {
             owner.refresh(
                 request,
