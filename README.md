@@ -2,19 +2,19 @@
 
 [![check](https://github.com/rock3r/indexino/actions/workflows/check.yml/badge.svg)](https://github.com/rock3r/indexino/actions/workflows/check.yml)
 
-> **Pre-release** — there is no supported embedded API yet. Index layout and CLI contracts may
-> change until the first release.
+> **Pre-release** — the embedded API is published as an experimental 0.x release train. Its
+> public artifacts are compatibility-gated, while APIs explicitly marked experimental may change in
+> a minor release. CLI and storage contracts remain pre-release.
 
 > **Personal experiment only** — Indexino is a personal experimentation project, not a product or
 > supported tool. It is not production-ready and carries no commitment to stability, maintenance,
 > security fixes, compatibility, releases, or fitness for any use. Do not depend on it for
 > important work; it may change radically or be abandoned without notice.
 
-Standalone Kotlin CLI that builds a **persistent** local code index (Xodus under
-`<workspace>/.indexino/index/<commit>/`) for agent audit tools. Detekt-independent,
-Bazel-first (Gradle secondary), and ships as a fat compatibility JAR with no target-repo build
-coupling. A separate R8-shrunk JAR is the internal native-distribution input. The same code is
-prepared as a thin Maven artifact for the forthcoming embedded API.
+Standalone Kotlin CLI and embeddable library that builds a **persistent** local code index in a
+user-local content-addressed cache (never under the target worktree) for agent audit tools.
+Detekt-independent, Bazel-first (Gradle secondary), and ships as a fat compatibility JAR with no
+target-repo build coupling. A separate R8-shrunk JAR is the internal native-distribution input.
 
 **selection-context** is the first application plugin: precomputed SelectionContainer /
 DisableSelection facts at composable call sites for Compose/Jewel UI audits.
@@ -95,18 +95,20 @@ supported baselines, AOT fallback, and current pre-release restrictions.
 
 ## Maven publication
 
-The future embedded API will use normal Maven Central coordinates with no custom Gradle plugin.
-The current snapshot deliberately exports no supported Kotlin declarations: every implementation
-symbol is `internal`, strict explicit API mode is enabled, and the committed Kotlin ABI baseline is
-empty. See [docs/API-STABILITY.md](docs/API-STABILITY.md) before adding a public declaration.
-
-Once an API is defined, consumers will use:
+The embedded API is published as a compatibility-gated 0.x release train. Use the BOM to keep the
+facade, model, plugin SPI, and selection-context plugin aligned:
 
 ```kotlin
 dependencies {
-    implementation("dev.sebastiano.indexino:indexino:<version>")
+    implementation(platform("dev.sebastiano.indexino:indexino-bom:<version>"))
+    implementation("dev.sebastiano.indexino:indexino")
+    implementation("dev.sebastiano.indexino:indexino-selection-context")
 }
 ```
+
+`indexino-model`, `indexino`, `indexino-plugin-api`, and `indexino-selection-context` are thin
+artifacts. See [docs/API-STABILITY.md](docs/API-STABILITY.md) for the supported packages,
+experimental-status policy, and compatibility gates.
 
 The Shadow `*-all.jar` remains the standalone distribution for direct `java -jar` use. The
 `*-shrunk.jar` is not a Maven artifact. See [docs/PUBLISHING.md](docs/PUBLISHING.md) for local
@@ -118,7 +120,7 @@ publication verification and the release flow.
 |-----|--------|
 | [docs/CLI.md](docs/CLI.md) | Commands, flags, JSONL schema |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layers |
-| [docs/INDEX-STORAGE.md](docs/INDEX-STORAGE.md) | `.indexino/` + keys |
+| [docs/INDEX-STORAGE.md](docs/INDEX-STORAGE.md) | User-local cache + keys |
 | [docs/API-STABILITY.md](docs/API-STABILITY.md) | Public API boundary and compatibility gates |
 | [docs/PUBLISHING.md](docs/PUBLISHING.md) | Maven coordinates and release flow |
 | [docs/DISTRIBUTIONS.md](docs/DISTRIBUTIONS.md) | Native installation, support, and release gates |

@@ -67,12 +67,16 @@ jobs:
           path: build/reports/release/bundled-dependencies.txt
           if-no-files-found: error
           retention-days: 7
-      # S5 must configure indexino-model for the same signed Central deployment before restoring
-      # the Central upload step. The facade POM already depends on indexino-model.
-      - name: Refuse incomplete Maven Central coordinate set
+      - name: Upload complete Maven Central release train
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.SIGNING_IN_MEMORY_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_IN_MEMORY_KEY_PASSWORD }}
         run: |
-          echo "::error::Maven Central publish is blocked until S5 configures indexino-model for the same signed Central deployment as indexino (facade POM depends on it). See docs/ARCHITECTURE.md."
-          exit 1
+          ./gradlew \
+            publishToMavenCentral \
+            -PVERSION_NAME="${{ needs.readiness.outputs.version }}"
 
   native-distributions:
     name: Build final native release candidates
