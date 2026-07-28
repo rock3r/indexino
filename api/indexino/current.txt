@@ -66,17 +66,32 @@ package dev.sebastiano.indexino.api {
   public final class Indexino implements java.lang.AutoCloseable {
     method public suspend Object? activeRefreshes(kotlin.coroutines.Continuation<? super java.util.List<dev.sebastiano.indexino.api.RefreshSummary>>);
     method public void close();
+    method public static suspend Object? connect(dev.sebastiano.indexino.api.IndexinoConfiguration configuration, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.api.Indexino>);
     method public static suspend Object? connect(java.nio.file.Path workspace, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.api.Indexino>);
+    method public static dev.sebastiano.indexino.api.Indexino connectBlocking(dev.sebastiano.indexino.api.IndexinoConfiguration configuration);
     method public static dev.sebastiano.indexino.api.Indexino connectBlocking(java.nio.file.Path workspace);
     method public suspend Object? refresh(dev.sebastiano.indexino.api.RefreshRequest request, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.api.RefreshHandle>);
+    method public suspend Object? shutdownRuntime(kotlin.coroutines.Continuation<? super kotlin.Unit>);
     method public suspend Object? snapshot(dev.sebastiano.indexino.api.FreshnessPolicy freshness, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.api.IndexSnapshot>);
     method public suspend Object? snapshot(kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.api.IndexSnapshot>);
     field public static final dev.sebastiano.indexino.api.Indexino.Companion Companion;
   }
 
   public static final class Indexino.Companion {
+    method public suspend Object? connect(dev.sebastiano.indexino.api.IndexinoConfiguration configuration, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.api.Indexino>);
     method public suspend Object? connect(java.nio.file.Path workspace, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.api.Indexino>);
+    method public dev.sebastiano.indexino.api.Indexino connectBlocking(dev.sebastiano.indexino.api.IndexinoConfiguration configuration);
     method public dev.sebastiano.indexino.api.Indexino connectBlocking(java.nio.file.Path workspace);
+  }
+
+  public final class IndexinoConfiguration {
+    method public static dev.sebastiano.indexino.api.IndexinoConfiguration forWorkspace(java.nio.file.Path workspace);
+    method public dev.sebastiano.indexino.api.IndexinoConfiguration withRuntimeAttach(dev.sebastiano.indexino.api.RuntimeAttachMode mode);
+    field public static final dev.sebastiano.indexino.api.IndexinoConfiguration.Companion Companion;
+  }
+
+  public static final class IndexinoConfiguration.Companion {
+    method public dev.sebastiano.indexino.api.IndexinoConfiguration forWorkspace(java.nio.file.Path workspace);
   }
 
   public final class IndexinoException extends java.lang.RuntimeException {
@@ -177,6 +192,11 @@ package dev.sebastiano.indexino.api {
     method @InaccessibleFromKotlin public dev.sebastiano.indexino.api.RefreshRequest getRequest();
     property public dev.sebastiano.indexino.model.RefreshId id;
     property public dev.sebastiano.indexino.api.RefreshRequest request;
+  }
+
+  public enum RuntimeAttachMode {
+    enum_constant public static final dev.sebastiano.indexino.api.RuntimeAttachMode IN_PROCESS;
+    enum_constant public static final dev.sebastiano.indexino.api.RuntimeAttachMode PREFER_DAEMON;
   }
 
   public final class SnapshotFreshness {

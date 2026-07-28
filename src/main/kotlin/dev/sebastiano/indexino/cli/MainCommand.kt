@@ -9,6 +9,8 @@ internal class MainCommand : CliktCommand(name = "indexino") {
     init {
         subcommands(
             IndexCommand(),
+            DaemonCommand(),
+            CacheCommand(),
             QueryCommand(),
             StatusCommand(),
             FindSymbolCommand(),
