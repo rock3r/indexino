@@ -4,6 +4,7 @@ import dev.sebastiano.indexino.api.FreshnessPolicy
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.api.IndexScope
 import dev.sebastiano.indexino.api.IndexSnapshot
+import dev.sebastiano.indexino.api.RefreshOutcome
 import dev.sebastiano.indexino.api.RefreshRequest
 import java.nio.file.Files
 import java.nio.file.Path
@@ -14,6 +15,93 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
 class WorkspaceRuntimeTest {
+    @Test
+    fun `disabled mode keeps explicit refresh available without watcher scheduling`() {
+        val cacheRoot =
+            Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-auto-disabled-")
+        val workspace = createGradleWorkspace()
+        val previousCacheRoot = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheRoot.toString())
+        val runtime =
+            WorkspaceRuntime.start(
+                workspace,
+                cacheRoot,
+                dev.sebastiano.indexino.api.AutoRefreshMode.DISABLED,
+            )
+        try {
+            val request = RefreshRequest.forScope(IndexScope.gradle(":app"))
+            RuntimeConnection.connect(runtime.endpoint).use { connection ->
+                RuntimeRefreshClient(connection).refresh(request).await()
+            }
+            Files.writeString(
+                workspace.resolve("app/src/main/kotlin/Panel.kt"),
+                "package sample\nclass ManualPanel\n",
+            )
+            Thread.sleep(500L)
+            RuntimeConnection.connect(runtime.endpoint).use { connection ->
+                assertTrue(RuntimeRefreshClient(connection).active().isEmpty())
+                assertEquals(
+                    RefreshOutcome.UPDATED,
+                    RuntimeRefreshClient(connection).refresh(request).await().result.outcome,
+                )
+            }
+        } finally {
+            runtime.close()
+            cacheRoot.toFile().deleteRecursively()
+            workspace.toFile().deleteRecursively()
+            if (previousCacheRoot == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheRoot)
+        }
+    }
+
+    @Test
+    fun `source edit enqueues a daemon owned successor without manual refresh`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-auto-refresh-")
+        val workspace = createGradleWorkspace()
+        val previousCacheRoot = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheRoot.toString())
+        val runtime = WorkspaceRuntime.start(workspace, cacheRoot)
+        try {
+            val request = RefreshRequest.forScope(IndexScope.gradle(":app"))
+            val initial =
+                RuntimeConnection.connect(runtime.endpoint).use { connection ->
+                    RuntimeRefreshClient(connection).refresh(request).await().result
+                }
+            Files.writeString(
+                workspace.resolve("app/src/main/kotlin/Panel.kt"),
+                "package sample\nclass RenamedPanel\n",
+            )
+
+            waitUntil {
+                RuntimeConnection.connect(runtime.endpoint).use { connection ->
+                    RuntimeRefreshClient(connection).active().any { summary ->
+                        summary.request == request
+                    }
+                }
+            }
+            val successor =
+                RuntimeConnection.connect(runtime.endpoint).use { connection ->
+                    RuntimeRefreshClient(connection)
+                        .active()
+                        .single { it.request == request }
+                        .id
+                        .value
+                }
+            val result =
+                RuntimeConnection.connect(runtime.endpoint).use { connection ->
+                    RuntimeRefreshHandle(successor, connection).await().result
+                }
+
+            assertTrue(result.generation != initial.generation)
+        } finally {
+            runtime.close()
+            cacheRoot.toFile().deleteRecursively()
+            workspace.toFile().deleteRecursively()
+            if (previousCacheRoot == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheRoot)
+        }
+    }
+
     @Test
     fun `disconnecting a client releases its daemon snapshot leases`() {
         val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-disconnect-pin-")

@@ -54,7 +54,8 @@ internal object RuntimeClientBootstrap {
                 lastFailure = failure
                 recoverDeadEndpoint(cacheRoot, workspace, endpoint)
                 assertCompatibleMode(leasePath, autoRefreshMode)
-                if (!Files.exists(endpoint)) startOwner(workspace, cacheRoot, endpoint, autoRefreshMode)
+                if (!Files.exists(endpoint))
+                    startOwner(workspace, cacheRoot, endpoint, autoRefreshMode)
                 Thread.sleep(START_WAIT_MILLIS)
             }
         }

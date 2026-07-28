@@ -20,7 +20,11 @@ private constructor(
     private val workspaceFileKey: String?,
     internal val autoRefreshMode: AutoRefreshMode,
 ) : AutoCloseable {
-    private val refreshDispatcher = RuntimeRefreshDispatcher(owner)
+    private lateinit var autoRefreshController: AutoRefreshController
+    private val refreshDispatcher =
+        RuntimeRefreshDispatcher(owner) { request, handle ->
+            autoRefreshController.onRefreshStarted(request, handle)
+        }
     private val snapshotDispatcher = RuntimeSnapshotDispatcher(owner)
     private val workspaceLost = AtomicBoolean()
     private lateinit var livenessThread: Thread
@@ -34,6 +38,7 @@ private constructor(
         try {
             if (::daemon.isInitialized) daemon.close()
         } finally {
+            if (::autoRefreshController.isInitialized) autoRefreshController.close()
             snapshotDispatcher.close()
             owner.close()
         }
@@ -139,6 +144,13 @@ private constructor(
                     workspaceFileKey,
                     autoRefreshMode,
                 )
+            runtime.autoRefreshController =
+                AutoRefreshController(
+                    canonicalWorkspace,
+                    autoRefreshMode,
+                    runtime.refreshDispatcher::refresh,
+                )
+            owner.onRefreshSucceededForRuntime = runtime.autoRefreshController::register
             val start =
                 RuntimeDaemon.start(
                     cacheRoot = cacheRoot,

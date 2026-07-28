@@ -62,7 +62,10 @@ internal class RuntimeRefreshClient(private val connection: RuntimeConnection) {
         )
 }
 
-internal class RuntimeRefreshDispatcher(private val owner: Indexino) {
+internal class RuntimeRefreshDispatcher(
+    private val owner: Indexino,
+    private val refreshStarted: (RefreshRequest, RefreshHandle) -> Unit = { _, _ -> },
+) {
     private val handles = ConcurrentHashMap<String, RefreshHandle>()
     private val journals = ConcurrentHashMap<String, RuntimeRefreshProgress>()
 
@@ -71,23 +74,29 @@ internal class RuntimeRefreshDispatcher(private val owner: Indexino) {
     }
 
     @OptIn(IndexinoInternalApi::class)
+    fun refresh(request: RefreshRequest): RefreshHandle {
+        val text = mutableListOf<String>()
+        val machine = mutableListOf<String>()
+        val handle = runBlocking {
+            owner.refresh(
+                request,
+                progress = text::add,
+                machineProgress = JsonlIndexBuildProgressReporter(machine::add),
+            )
+        }
+        handles[handle.id.value] = handle
+        journals[handle.id.value] = RuntimeRefreshProgress(text, machine)
+        refreshStarted(request, handle)
+        return handle
+    }
+
+    @OptIn(IndexinoInternalApi::class)
     fun dispatch(command: ByteArray): ByteArray {
         val input = DataInputStream(ByteArrayInputStream(command))
         return when (input.readUnsignedByte()) {
             RuntimeRefreshProtocol.REFRESH -> {
                 val request = RuntimeRefreshProtocol.decodeRefreshRequest(input)
-                val text = mutableListOf<String>()
-                val machine = mutableListOf<String>()
-                val handle = runBlocking {
-                    owner.refresh(
-                        request,
-                        progress = text::add,
-                        machineProgress = JsonlIndexBuildProgressReporter(machine::add),
-                    )
-                }
-                handles[handle.id.value] = handle
-                journals[handle.id.value] = RuntimeRefreshProgress(text, machine)
-                RuntimeRefreshProtocol.refreshResponse(handle.id.value)
+                RuntimeRefreshProtocol.refreshResponse(refresh(request).id.value)
             }
             RuntimeRefreshProtocol.AWAIT -> {
                 val id = input.readUTF()

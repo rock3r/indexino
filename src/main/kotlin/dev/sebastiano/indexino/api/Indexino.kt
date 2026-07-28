@@ -72,6 +72,10 @@ private constructor(
      */
     @Volatile internal var observedIncludeDepsOverrideForTests: Boolean? = null
 
+    /** Runtime-owned hook that receives the resolved source closure of completed refreshes. */
+    @Volatile
+    internal var onRefreshSucceededForRuntime: ((RefreshRequest, List<String>) -> Unit)? = null
+
     public companion object {
         /**
          * Test-only seam: replaces [Path.toRealPath] during [connectBlocking]. Production leaves
@@ -106,10 +110,7 @@ private constructor(
                     try {
                         Indexino(
                             canonical,
-                            RuntimeClientBootstrap.connect(
-                                canonical,
-                                configuration.autoRefreshMode,
-                            ),
+                            RuntimeClientBootstrap.connect(canonical, configuration.autoRefreshMode),
                         )
                     } catch (thrown: IndexinoException) {
                         throw thrown
@@ -287,6 +288,7 @@ private constructor(
                     request.scope,
                     applications,
                 )
+                onRefreshSucceededForRuntime?.invoke(request, execution.sourceFiles)
                 val changedFileCount = execution.changes?.changedFiles?.size ?: 0
                 val removedFileCount = execution.changes?.deletedFiles?.size ?: 0
                 val result =
