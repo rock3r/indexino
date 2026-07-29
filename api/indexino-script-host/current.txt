@@ -1,0 +1,85 @@
+// Signature format: 5.0
+package dev.sebastiano.indexino.script {
+
+  @dev.sebastiano.indexino.model.ExperimentalIndexinoApi public final class IndexinoScriptContext {
+    ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public IndexinoScriptContext(dev.sebastiano.indexino.api.IndexSnapshot snapshot);
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.script.ScriptCallQueries getCalls();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.script.IndexinoScriptContext getContext();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.api.IndexSnapshot getSnapshot();
+    method public <T> void managedParallel(Iterable<? extends T> inputs, kotlin.jvm.functions.Function1<? super T,kotlin.Unit> transform);
+    method public void report(dev.sebastiano.indexino.script.ScriptFinding finding);
+    method public void report(dev.sebastiano.indexino.script.ScriptFinding.Builder builder);
+    property public dev.sebastiano.indexino.script.ScriptCallQueries calls;
+    property public dev.sebastiano.indexino.script.IndexinoScriptContext context;
+    property public dev.sebastiano.indexino.api.IndexSnapshot snapshot;
+  }
+
+  @dev.sebastiano.indexino.model.ExperimentalIndexinoApi public final class IndexinoScriptHost {
+    method public static dev.sebastiano.indexino.script.IndexinoScriptHost create();
+    method public dev.sebastiano.indexino.script.ScriptReport run(dev.sebastiano.indexino.script.ScriptRequest request);
+    field public static final dev.sebastiano.indexino.script.IndexinoScriptHost.Companion Companion;
+  }
+
+  public static final class IndexinoScriptHost.Companion {
+    method public dev.sebastiano.indexino.script.IndexinoScriptHost create();
+  }
+
+  @dev.sebastiano.indexino.model.ExperimentalIndexinoApi public final class ScriptCallQueries {
+    ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public ScriptCallQueries(dev.sebastiano.indexino.api.IndexSnapshot snapshot);
+    method public dev.sebastiano.indexino.model.CallSite? byId(dev.sebastiano.indexino.model.CallSiteId id);
+    method public dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.CallSite> find(dev.sebastiano.indexino.model.CallQuery query, dev.sebastiano.indexino.model.QueryOptions options);
+  }
+
+  @dev.sebastiano.indexino.model.ExperimentalIndexinoApi public final class ScriptFinding {
+    method public static dev.sebastiano.indexino.script.ScriptFinding.Builder at(dev.sebastiano.indexino.model.SourceRange range);
+    method @InaccessibleFromKotlin public String getMessage();
+    method @InaccessibleFromKotlin public java.util.Map<java.lang.String,java.lang.String> getProperties();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceRange? getRange();
+    method public static dev.sebastiano.indexino.script.ScriptFinding messageOnly(String message);
+    property public String message;
+    property public java.util.Map<java.lang.String,java.lang.String> properties;
+    property public dev.sebastiano.indexino.model.SourceRange? range;
+    field public static final dev.sebastiano.indexino.script.ScriptFinding.Companion Companion;
+  }
+
+  public static final class ScriptFinding.Builder {
+    method public dev.sebastiano.indexino.script.ScriptFinding build();
+    method public dev.sebastiano.indexino.script.ScriptFinding.Builder message(String message);
+    method public dev.sebastiano.indexino.script.ScriptFinding.Builder property(String key, String value);
+  }
+
+  public static final class ScriptFinding.Companion {
+    method public dev.sebastiano.indexino.script.ScriptFinding.Builder at(dev.sebastiano.indexino.model.SourceRange range);
+    method public dev.sebastiano.indexino.script.ScriptFinding messageOnly(String message);
+  }
+
+  @dev.sebastiano.indexino.model.ExperimentalIndexinoApi public final class ScriptReport {
+    method @InaccessibleFromKotlin public java.util.List<dev.sebastiano.indexino.script.ScriptFinding> getFindings();
+    method @InaccessibleFromKotlin public String getScriptDigest();
+    method public static dev.sebastiano.indexino.script.ScriptReport of(java.util.List<dev.sebastiano.indexino.script.ScriptFinding> findings, String scriptDigest);
+    property public java.util.List<dev.sebastiano.indexino.script.ScriptFinding> findings;
+    property public String scriptDigest;
+    field public static final dev.sebastiano.indexino.script.ScriptReport.Companion Companion;
+  }
+
+  public static final class ScriptReport.Companion {
+    method public dev.sebastiano.indexino.script.ScriptReport of(java.util.List<dev.sebastiano.indexino.script.ScriptFinding> findings, String scriptDigest);
+  }
+
+  @dev.sebastiano.indexino.model.ExperimentalIndexinoApi public final class ScriptRequest {
+    method public static dev.sebastiano.indexino.script.ScriptRequest forFile(java.nio.file.Path workspace, java.nio.file.Path script);
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.api.FreshnessPolicy getFreshness();
+    method @InaccessibleFromKotlin public java.nio.file.Path getScript();
+    method @InaccessibleFromKotlin public java.nio.file.Path getWorkspace();
+    method public dev.sebastiano.indexino.script.ScriptRequest withFreshness(dev.sebastiano.indexino.api.FreshnessPolicy freshness);
+    property public dev.sebastiano.indexino.api.FreshnessPolicy freshness;
+    property public java.nio.file.Path script;
+    property public java.nio.file.Path workspace;
+    field public static final dev.sebastiano.indexino.script.ScriptRequest.Companion Companion;
+  }
+
+  public static final class ScriptRequest.Companion {
+    method public dev.sebastiano.indexino.script.ScriptRequest forFile(java.nio.file.Path workspace, java.nio.file.Path script);
+  }
+
+}

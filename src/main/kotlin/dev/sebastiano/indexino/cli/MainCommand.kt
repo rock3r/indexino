@@ -12,6 +12,7 @@ internal class MainCommand : CliktCommand(name = "indexino") {
             DaemonCommand(),
             CacheCommand(),
             QueryCommand(),
+            ScriptCommand(),
             StatusCommand(),
             FindSymbolCommand(),
             FindReferencesCommand(),

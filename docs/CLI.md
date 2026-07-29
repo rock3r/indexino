@@ -193,7 +193,10 @@ and rehash — that is a bug relative to the product contract, not a feature to 
 indexino script --project /path/to/repo path/to/query.indexino.kts
 ```
 
-Maps to `IndexinoScriptHost.run`. Non-suspend DSL. See design doc script contract.
+Maps to `IndexinoScriptHost.run` and prints each `ScriptFinding`. The non-suspend DSL pins one
+published snapshot for the run and does not refresh it. The fat JVM JAR bundles the optional host;
+the shrunk/native distributions deliberately reject dynamic compiler hosting. See the design doc
+script contract.
 
 ### Session overlay
 

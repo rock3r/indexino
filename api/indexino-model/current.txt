@@ -123,6 +123,9 @@ package dev.sebastiano.indexino.model {
   @kotlin.annotation.Retention(kotlin.annotation.AnnotationRetention.BINARY) @kotlin.annotation.Target(allowedTargets=kotlin.annotation.AnnotationTarget.PROPERTY) public @interface ExcludeFromEquality {
   }
 
+  @kotlin.RequiresOptIn(level=kotlin.RequiresOptIn.Level.ERROR, message="Experimental Indexino API; semantics may change in a minor release.") @kotlin.annotation.Retention(kotlin.annotation.AnnotationRetention.BINARY) @kotlin.annotation.Target(allowedTargets={kotlin.annotation.AnnotationTarget.CLASS, kotlin.annotation.AnnotationTarget.CONSTRUCTOR, kotlin.annotation.AnnotationTarget.FUNCTION, kotlin.annotation.AnnotationTarget.PROPERTY}) public @interface ExperimentalIndexinoApi {
+  }
+
   public final class Finding {
     ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public Finding(dev.sebastiano.indexino.model.PluginId plugin, String checkId, String message, dev.sebastiano.indexino.model.SourceRange? range, java.util.Map<java.lang.String,java.lang.String> properties);
     method @InaccessibleFromKotlin public String getCheckId();

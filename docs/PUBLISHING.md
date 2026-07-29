@@ -2,8 +2,9 @@
 
 The release train is published with
 [`com.vanniktech.maven.publish`](https://github.com/vanniktech/gradle-maven-publish-plugin):
-`indexino-bom`, `indexino-model`, `indexino`, `indexino-plugin-api`, and
-`indexino-selection-context` share Central metadata, signing, and one release version. The Shadow
+`indexino-bom`, `indexino-model`, `indexino`, `indexino-plugin-api`,
+`indexino-selection-context`, and the optional Alpha `indexino-script-host` share Central metadata,
+signing, and one release version. The Shadow
 `*-all.jar` remains the standalone CLI distribution and the `*-shrunk.jar` remains an internal
 native-packaging input. Both are deliberately excluded from Maven publication.
 
@@ -30,12 +31,13 @@ dependencies {
     implementation("dev.sebastiano.indexino:indexino")
     // optional:
     // implementation("dev.sebastiano.indexino:indexino-selection-context")
+    // implementation("dev.sebastiano.indexino:indexino-script-host")
 }
 ```
 
 Maven consumers use the equivalent `dependencyManagement` import for `indexino-bom`. The aligned
-artifacts are `indexino-model`, `indexino`, `indexino-plugin-api`, and
-`indexino-selection-context`.
+artifacts are `indexino-model`, `indexino`, `indexino-plugin-api`,
+`indexino-selection-context`, and `indexino-script-host`.
 
 The library POM must **not** expose Clikt. Coroutines are an `api` dependency of the client because
 `suspend`/`Flow` appear in signatures. Xodus, the Kotlin compiler embeddable, and serialization

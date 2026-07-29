@@ -88,7 +88,8 @@ Metadata is disabled for that artifact so Gradle consumers resolve the filtered 
 unfiltered `.module` graph. The fat CLI distribution still contains its runtime dependencies.
 
 S5 publishes a complete signed Central release train: `indexino-bom`, `indexino-model`, `indexino`,
-`indexino-plugin-api`, and `indexino-selection-context`. The BOM aligns those coordinates for
+`indexino-plugin-api`, and `indexino-selection-context`. S8 adds the optional Alpha
+`indexino-script-host` artifact to that aligned train. The BOM aligns those coordinates for
 Gradle and Maven consumers, and the tag workflow uploads every artifact together. Maven Local
 remains available for dogfooding, but is no longer the only publication path.
 

@@ -10,4 +10,6 @@ include(":indexino-plugin-api")
 
 include(":indexino-selection-context")
 
+include(":indexino-script-host")
+
 include(":detekt-plugin")
