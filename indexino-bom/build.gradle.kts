@@ -17,6 +17,7 @@ dependencies {
         api("$group:indexino:$version")
         api("$group:indexino-plugin-api:$version")
         api("$group:indexino-selection-context:$version")
+        api("$group:indexino-script-host:$version")
     }
 }
 

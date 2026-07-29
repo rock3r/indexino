@@ -87,6 +87,9 @@ repositories {
 }
 
 val metalava by configurations.creating
+val scriptHostRuntime by configurations.creating {
+    exclude(group = group.toString(), module = "indexino")
+}
 
 dependencies {
     detektPlugins(project(":detekt-plugin"))
@@ -101,9 +104,11 @@ dependencies {
     implementation(libs.slf4j.nop)
     implementation(libs.jna)
     metalava(libs.metalava)
+    scriptHostRuntime(project(":indexino-script-host"))
 
     testImplementation(kotlin("test"))
     testImplementation(project(":indexino-selection-context"))
+    testRuntimeOnly(project(":indexino-script-host"))
     testImplementation(gradleTestKit())
 }
 
@@ -232,7 +237,10 @@ fun ShadowJar.configureCliArchive(classifier: String) {
     isPreserveFileTimestamps = false
 }
 
-tasks.shadowJar { configureCliArchive("all") }
+tasks.shadowJar {
+    configureCliArchive("all")
+    configurations = listOf(runtimeClasspathConfiguration.get(), scriptHostRuntime)
+}
 
 val shrunkCliJar by
     tasks.registering(ShadowJar::class) {
@@ -571,7 +579,13 @@ tasks
     .matching { it.name.startsWith("publish") && it.name.endsWith("PublicationToTestRepository") }
     .configureEach { dependsOn(cleanTestMavenRepository) }
 
-listOf(":indexino-bom", ":indexino-model", ":indexino-plugin-api", ":indexino-selection-context")
+listOf(
+        ":indexino-bom",
+        ":indexino-model",
+        ":indexino-plugin-api",
+        ":indexino-selection-context",
+        ":indexino-script-host",
+    )
     .forEach {
         project(it)
             .tasks
@@ -852,6 +866,7 @@ val verifyMavenPublication by
             ":indexino-model:publishAllPublicationsToTestRepository",
             ":indexino-plugin-api:publishAllPublicationsToTestRepository",
             ":indexino-selection-context:publishAllPublicationsToTestRepository",
+            ":indexino-script-host:publishAllPublicationsToTestRepository",
         )
         testClassesDirs = sourceSets.test.get().output.classesDirs
         classpath = sourceSets.test.get().runtimeClasspath
