@@ -30,6 +30,7 @@ import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.store.hasSymbol
 import dev.sebastiano.indexino.producer.IndexBuildContext
 import dev.sebastiano.indexino.producer.IndexProducer
+import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.SourceRecordCleanup
 import java.net.URI
 import javax.tools.Diagnostic
@@ -44,30 +45,28 @@ internal class JavaSourceProducer : IndexProducer {
     override val displayName: String = "JavaSourceProducer"
 
     override val progressTotal: (IndexBuildContext) -> Int = { context ->
-        context.sourceFiles.count { it.endsWith(".java") && it in context.changedSourceFiles }
+        context.changedSources.count { it.path.endsWith(".java") }
     }
 
     override fun produce(context: IndexBuildContext, store: CodeIndexStore) {
-        val affectedFiles =
-            (context.changedSourceFiles + context.deletedSourceFiles).filterTo(linkedSetOf()) {
-                it.endsWith(".java")
+        val affectedSources =
+            (context.changedSources + context.deletedSources).filterTo(linkedSetOf()) {
+                it.path.endsWith(".java")
             }
-        SourceRecordCleanup.deleteLanguageRecords(store, LANGUAGE, ".java", affectedFiles)
-        val javaFiles =
-            context.sourceFiles.filter { it.endsWith(".java") && it in context.changedSourceFiles }
+        SourceRecordCleanup.deleteLanguageOriginRecords(store, LANGUAGE, ".java", affectedSources)
+        val javaFiles = context.changedSources.filter { it.path.endsWith(".java") }
         // Seed declarations from every changed file before final call materialization. The parser
         // writes deterministic keys, so the final pass overwrites equivalent symbol/reference facts
         // while letting caller files resolve parameter names from callees later in source order.
-        javaFiles.forEach { relativePath ->
-            parse(relativePath, context.readSource(relativePath), store)
-        }
-        javaFiles.forEachIndexed { index, relativePath ->
-            context.reportFileProgress(index + 1, javaFiles.size, relativePath)
-            parse(relativePath, context.readSource(relativePath), store)
+        javaFiles.forEach { source -> parse(source, context.readSource(source), store) }
+        javaFiles.forEachIndexed { index, source ->
+            context.reportFileProgress(index + 1, javaFiles.size, source.path)
+            parse(source, context.readSource(source), store)
         }
     }
 
-    private fun parse(relativePath: String, source: String, store: CodeIndexStore) {
+    private fun parse(indexedSource: IndexedSource, source: String, store: CodeIndexStore) {
+        val relativePath = indexedSource.path
         val compiler =
             checkNotNull(ToolProvider.getSystemJavaCompiler()) { "JDK compiler is unavailable" }
         val diagnostics = DiagnosticCollector<JavaFileObject>()
@@ -84,7 +83,8 @@ internal class JavaSourceProducer : IndexProducer {
         val unit = task.parse().single()
         val error = diagnostics.diagnostics.firstOrNull { it.kind == Diagnostic.Kind.ERROR }
         check(error == null) { "$relativePath:${error?.lineNumber}: ${error?.getMessage(null)}" }
-        JavaRecordScanner(relativePath, unit, Trees.instance(task), store).scan(unit, Unit)
+        JavaRecordScanner(indexedSource.originId, relativePath, unit, Trees.instance(task), store)
+            .scan(unit, Unit)
     }
 
     private class StringJavaFileObject(path: String, private val source: String) :
@@ -97,6 +97,7 @@ internal class JavaSourceProducer : IndexProducer {
 
     @Suppress("TooManyFunctions")
     private class JavaRecordScanner(
+        private val originId: String,
         private val relativePath: String,
         private val unit: CompilationUnitTree,
         private val trees: Trees,
@@ -355,6 +356,7 @@ internal class JavaSourceProducer : IndexProducer {
                     enclosingSymbolFqn = methodOwners.lastOrNull(),
                     parentCallIdentity = parent,
                     relativeFile = relativePath,
+                    originId = originId,
                     startLine = start.line,
                     startColumn = start.column,
                     startOffset = start.offset,
@@ -403,7 +405,12 @@ internal class JavaSourceProducer : IndexProducer {
         private fun storedParameterNames(fqn: String, argumentCount: Int): List<String> {
             val candidates = mutableListOf<SymbolRecord>()
             store.forEachPrefix("sym:$fqn:") { _, record ->
-                if (record is SymbolRecord && record.fqn == fqn && record.arity == argumentCount) {
+                if (
+                    record is SymbolRecord &&
+                        record.fqn == fqn &&
+                        record.originId == originId &&
+                        record.arity == argumentCount
+                ) {
                     candidates += record
                 }
                 true
@@ -554,10 +561,17 @@ internal class JavaSourceProducer : IndexProducer {
         ) {
             val position = position(tree)
             store.put(
-                CodeIndexKey.symbolDefinition(fqn, relativePath, position.line, position.column),
+                CodeIndexKey.symbolDefinition(
+                    fqn,
+                    originId,
+                    relativePath,
+                    position.line,
+                    position.column,
+                ),
                 SymbolRecord(
                     fqn = fqn,
                     relativeFile = relativePath,
+                    originId = originId,
                     line = position.line,
                     kind = kind,
                     name = name,
@@ -582,10 +596,11 @@ internal class JavaSourceProducer : IndexProducer {
         ) {
             val position = position(tree)
             store.put(
-                CodeIndexKey.ref(target, relativePath, position.line, position.column),
+                CodeIndexKey.ref(target, originId, relativePath, position.line, position.column),
                 ReferenceRecord(
                     symbolFqn = target,
                     relativeFile = relativePath,
+                    originId = originId,
                     line = position.line,
                     column = position.column,
                     context = context,
@@ -618,7 +633,7 @@ internal class JavaSourceProducer : IndexProducer {
         }
 
         private fun callIdentity(position: SourcePosition): String =
-            "$relativePath:${position.offset}"
+            "$originId:$relativePath:${position.offset}"
 
         private data class SourcePosition(val line: Int, val column: Int, val offset: Int)
 

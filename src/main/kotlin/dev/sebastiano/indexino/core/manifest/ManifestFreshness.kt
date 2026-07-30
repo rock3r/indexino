@@ -10,6 +10,7 @@ internal data class ManifestFreshnessCriteria(
     val sourcesContentHash: String,
     val applications: List<String>,
     val pluginCoordinates: Map<String, String> = emptyMap(),
+    val origins: List<IndexManifestOrigin> = emptyList(),
 )
 
 internal object ManifestFreshness {
@@ -20,7 +21,8 @@ internal object ManifestFreshness {
             manifest.includeDeps == criteria.includeDeps &&
             manifest.sourcesContentHash == criteria.sourcesContentHash &&
             manifest.applications.sorted() == criteria.applications.sorted() &&
-            manifest.pluginCoordinates == criteria.pluginCoordinates
+            manifest.pluginCoordinates == criteria.pluginCoordinates &&
+            (criteria.origins.isEmpty() || manifest.origins == criteria.origins)
 
     fun criteriaFrom(
         commit: String,
@@ -29,6 +31,7 @@ internal object ManifestFreshness {
         sourcesContentHash: String,
         applications: List<String>,
         pluginCoordinates: Map<String, String> = emptyMap(),
+        origins: List<IndexManifestOrigin> = emptyList(),
     ): ManifestFreshnessCriteria =
         ManifestFreshnessCriteria(
             commit = commit,
@@ -38,5 +41,6 @@ internal object ManifestFreshness {
             sourcesContentHash = sourcesContentHash,
             applications = applications,
             pluginCoordinates = pluginCoordinates,
+            origins = origins,
         )
 }

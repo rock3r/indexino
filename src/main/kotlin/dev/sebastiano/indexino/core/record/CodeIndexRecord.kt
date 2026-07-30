@@ -11,8 +11,11 @@ internal data class MetaIndexerVersionRecord(val version: String) : CodeIndexRec
 
 @Serializable
 @SerialName("file_hash")
-internal data class FileHashRecord(val relativePath: String, val contentHash: String) :
-    CodeIndexRecord
+internal data class FileHashRecord(
+    val relativePath: String,
+    val contentHash: String,
+    val originId: String = "workspace",
+) : CodeIndexRecord
 
 @Serializable
 @SerialName("symbol")
@@ -29,6 +32,7 @@ internal data class SymbolRecord(
     val parameterNames: List<String> = emptyList(),
     val isVararg: Boolean = false,
     val aliases: List<String> = emptyList(),
+    val originId: String = "workspace",
 ) : CodeIndexRecord
 
 @Serializable
@@ -44,6 +48,7 @@ internal data class ReferenceRecord(
     val qualifier: String? = null,
     val candidateSymbolFqns: List<String> = listOf(symbolFqn),
     val arity: Int? = null,
+    val originId: String = "workspace",
 ) : CodeIndexRecord
 
 @Serializable
@@ -78,6 +83,7 @@ internal data class CallSiteRecord(
     val endOffset: Int,
     val arguments: List<CallArgumentRecord> = emptyList(),
     val confidence: String,
+    val originId: String = "workspace",
 ) : CodeIndexRecord
 
 @Serializable
@@ -93,4 +99,5 @@ internal data class PluginFactRecord(
     val rangeEndColumn: Int? = null,
     val rangeEndOffset: Int? = null,
     val encodedValue: String,
+    val originId: String = "workspace",
 ) : CodeIndexRecord

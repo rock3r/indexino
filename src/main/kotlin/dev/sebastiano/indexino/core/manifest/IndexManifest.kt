@@ -6,6 +6,16 @@ import kotlin.io.path.writeText
 import kotlinx.serialization.Serializable
 
 @Serializable
+internal data class IndexManifestOrigin(
+    val originId: String,
+    val revision: String?,
+    val stateFingerprint: String,
+    val expectedRevision: String? = null,
+    val dirty: Boolean = false,
+    val available: Boolean = true,
+)
+
+@Serializable
 internal data class IndexManifest(
     val commit: String,
     val indexerVersion: String,
@@ -17,6 +27,7 @@ internal data class IndexManifest(
     val builtAt: String,
     val applications: List<String> = emptyList(),
     val pluginCoordinates: Map<String, String> = emptyMap(),
+    val origins: List<IndexManifestOrigin> = emptyList(),
 )
 
 internal object ManifestIO {

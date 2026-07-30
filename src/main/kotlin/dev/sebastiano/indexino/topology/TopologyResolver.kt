@@ -4,6 +4,7 @@ import dev.sebastiano.indexino.topology.bazel.BazelProcessRunner
 import dev.sebastiano.indexino.topology.bazel.BazelQueryExecutor
 import dev.sebastiano.indexino.topology.bazel.BazelTopology
 import dev.sebastiano.indexino.topology.gradle.GradleTopology
+import dev.sebastiano.indexino.topology.repo.RepoTopology
 import java.nio.file.Path
 
 internal data class TopologyRequest(
@@ -11,6 +12,7 @@ internal data class TopologyRequest(
     val bazelTarget: String? = null,
     val gradleModule: String? = null,
     val includeDeps: Boolean = false,
+    val repoManifest: Path? = null,
 )
 
 internal object TopologyResolver {
@@ -30,6 +32,7 @@ internal object TopologyResolver {
                         )
                 BuildSystem.BAZEL -> BuildSystem.BAZEL
                 BuildSystem.GRADLE -> BuildSystem.GRADLE
+                BuildSystem.REPO -> BuildSystem.REPO
             }
         return when (effective) {
             BuildSystem.BAZEL -> {
@@ -52,6 +55,13 @@ internal object TopologyResolver {
                     }
                 GradleTopology.resolveSources(module, project, request.includeDeps, onStderr)
             }
+            BuildSystem.REPO ->
+                RepoTopology.resolveSources(
+                    project,
+                    requireNotNull(request.repoManifest) {
+                        "repo manifest is required for repo topology"
+                    },
+                )
             BuildSystem.AUTO -> error("unreachable")
         }
     }

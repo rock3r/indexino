@@ -8,6 +8,16 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 @Serializable
+internal data class WorkspaceGenerationOrigin(
+    val originId: String,
+    val revision: String?,
+    val stateFingerprint: String,
+    val expectedRevision: String? = null,
+    val dirty: Boolean = false,
+    val available: Boolean = true,
+)
+
+@Serializable
 internal data class WorkspaceGenerationManifest(
     val basicFactSchemaVersion: Int = 1,
     val generation: String,
@@ -20,6 +30,8 @@ internal data class WorkspaceGenerationManifest(
     val scopeValue: String = "",
     val includesDependencies: Boolean = false,
     val applications: List<String> = emptyList(),
+    val origins: List<WorkspaceGenerationOrigin> =
+        listOf(WorkspaceGenerationOrigin(originId, revision, stateFingerprint)),
 )
 
 /** Publishes immutable workspace generation manifests through a short current pointer. */

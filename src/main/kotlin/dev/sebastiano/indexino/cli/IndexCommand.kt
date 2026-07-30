@@ -186,6 +186,11 @@ internal class IndexCommand : CliktCommand(name = "index") {
                     )
                 if (includeDeps) scope.includingDependencies() else scope
             }
+            BuildSystem.REPO ->
+                throw UsageError(
+                    "Daemon-backed repo indexing is not available yet",
+                    "--build-system",
+                )
             BuildSystem.AUTO -> error("unreachable")
         }
     }
@@ -250,6 +255,7 @@ internal class IndexCommand : CliktCommand(name = "index") {
             "auto" -> BuildSystem.AUTO
             "bazel" -> BuildSystem.BAZEL
             "gradle" -> BuildSystem.GRADLE
-            else -> error("Unknown --build-system: $raw (expected auto, bazel, gradle)")
+            "repo" -> BuildSystem.REPO
+            else -> error("Unknown --build-system: $raw (expected auto, bazel, gradle, repo)")
         }
 }

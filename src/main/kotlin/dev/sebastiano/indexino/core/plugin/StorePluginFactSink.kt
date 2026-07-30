@@ -11,6 +11,7 @@ internal class StorePluginFactSink(
     private val store: CodeIndexStore,
     private val pluginId: String,
     private val relativeFile: String,
+    private val originId: String = "workspace",
 ) : PluginFactSinkV1 {
     override suspend fun put(key: String, value: PluginFactValue) {
         putAt(key, null, value)
@@ -21,7 +22,11 @@ internal class StorePluginFactSink(
             "Plugin fact nesting exceeds maximum depth of ${PluginFactValue.MAX_DEPTH}"
         }
         store.put(
-            CodeIndexKey.pluginFact(pluginId, relativeFile, key),
+            if (originId == "workspace") {
+                CodeIndexKey.pluginFact(pluginId, relativeFile, key)
+            } else {
+                CodeIndexKey.pluginFact(pluginId, originId, relativeFile, key)
+            },
             PluginFactRecord(
                 pluginId = pluginId,
                 relativeFile = relativeFile,
@@ -33,6 +38,7 @@ internal class StorePluginFactSink(
                 rangeEndColumn = range?.end?.column,
                 rangeEndOffset = range?.end?.offset,
                 encodedValue = PluginFactValueCodec.encode(value),
+                originId = originId,
             ),
         )
     }

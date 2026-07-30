@@ -2,6 +2,7 @@ package dev.sebastiano.indexino.api
 
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
+import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.WorkspaceGenerationId
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -9,6 +10,34 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class IndexSnapshotQueriesTest {
+    @Test
+    fun `materializes record locations with their source origin`() {
+        val queries = IndexSnapshotQueries(WorkspaceGenerationId.of("generation-a"))
+        val symbol =
+            SymbolRecord(
+                fqn = "android.Panel",
+                relativeFile = "src/main/kotlin/Panel.kt",
+                line = 1,
+                kind = "class",
+                name = "Panel",
+                originId = "git:android",
+            )
+        val reference =
+            ReferenceRecord(
+                symbolFqn = "android.Panel",
+                relativeFile = "src/main/kotlin/UsePanel.kt",
+                line = 4,
+                column = 5,
+                originId = "git:android",
+            )
+
+        val publicSymbol = with(queries) { symbol.toPublicSymbol(null) }
+        val publicReference = with(queries) { reference.toPublicReference(listOf(symbol)) }
+
+        assertEquals(SourceOriginId.of("git:android"), publicSymbol.location.file.originId)
+        assertEquals(SourceOriginId.of("git:android"), publicReference.location.file.originId)
+    }
+
     @Test
     fun `external symbol ids are generation-local`() {
         val reference =

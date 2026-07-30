@@ -62,14 +62,10 @@ internal class StorePluginFactView(
     private fun PluginFactRecord.toSourceRange(): SourceRange? {
         val startLine = rangeStartLine ?: return null
         val endLine = rangeEndLine ?: return null
-        val file = SourceFile.of(WORKSPACE_ORIGIN, relativeFile, relativeFile)
+        val file = SourceFile.of(SourceOriginId.of(originId), relativeFile, relativeFile)
         return SourceRange.of(
             SourceLocation.of(file, startLine, rangeStartColumn, rangeStartOffset),
             SourceLocation.of(file, endLine, rangeEndColumn, rangeEndOffset),
         )
-    }
-
-    private companion object {
-        val WORKSPACE_ORIGIN: SourceOriginId = SourceOriginId.of("workspace")
     }
 }

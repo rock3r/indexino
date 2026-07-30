@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.topology.gradle
 
+import dev.sebastiano.indexino.topology.ExternalSourceMount
 import dev.sebastiano.indexino.topology.TopologyResult
 import java.nio.file.Path
 import kotlin.io.path.exists
@@ -17,7 +18,9 @@ internal object GradleTopology {
                 .map { workspace.resolve(it) }
                 .firstOrNull { it.exists() } ?: error("No settings.gradle(.kts) in $workspace")
 
-        val includes = SettingsParser.parseIncludes(settingsFile.readText())
+        val settingsContent = settingsFile.readText()
+        val includes = SettingsParser.parseIncludes(settingsContent)
+        val externalMounts = resolveExternalMounts(workspace, settingsFile, settingsContent)
         if (includes.isEmpty()) {
             onStderr("gradle-parse: no included modules in ${settingsFile.fileName}")
         }
@@ -59,7 +62,57 @@ internal object GradleTopology {
             // provenance record.
             includeDeps = if (rootScope) true else includeDeps,
             scope = normalizedModule,
+            externalMounts = externalMounts,
+            externalSources =
+                externalMounts.map { mount ->
+                    ExternalSourceMount(root = mount, sourceFiles = collectBuildSources(mount))
+                },
         )
+    }
+
+    private fun collectBuildSources(buildRoot: Path): List<String> {
+        val settings =
+            listOf("settings.gradle.kts", "settings.gradle").map(buildRoot::resolve).firstOrNull {
+                it.exists()
+            } ?: return emptyList()
+        val modules = listOf(":") + SettingsParser.parseIncludes(settings.readText())
+        return modules
+            .flatMap { module ->
+                ModuleSourceRoots.collectKotlinSources(
+                    ModuleSourceRoots.moduleDirectory(buildRoot, module),
+                    buildRoot,
+                )
+            }
+            .distinct()
+            .sorted()
+    }
+
+    private fun resolveExternalMounts(
+        workspace: Path,
+        settingsFile: Path,
+        settingsContent: String,
+    ): List<Path> {
+        val canonicalWorkspace = workspace.toRealPath()
+        val visitedBuilds = linkedSetOf(canonicalWorkspace)
+        val externalMounts = linkedSetOf<Path>()
+
+        fun visit(settings: Path, content: String) {
+            SettingsParser.parseIncludedBuilds(content).forEach { declaredPath ->
+                val buildRoot =
+                    runCatching { settings.parent.resolve(declaredPath).normalize().toRealPath() }
+                        .getOrNull() ?: return@forEach
+                if (!visitedBuilds.add(buildRoot)) return@forEach
+                if (!buildRoot.startsWith(canonicalWorkspace)) externalMounts.add(buildRoot)
+                val nestedSettings =
+                    listOf("settings.gradle.kts", "settings.gradle")
+                        .map(buildRoot::resolve)
+                        .firstOrNull { it.exists() } ?: return@forEach
+                visit(nestedSettings, nestedSettings.readText())
+            }
+        }
+
+        visit(settingsFile, settingsContent)
+        return externalMounts.toList()
     }
 
     fun normalizeModule(raw: String): String = if (raw.startsWith(":")) raw else ":$raw"

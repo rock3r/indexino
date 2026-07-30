@@ -10,6 +10,7 @@ import dev.sebastiano.indexino.api.Indexino
 import dev.sebastiano.indexino.api.IndexinoException
 import dev.sebastiano.indexino.api.SnapshotFreshness
 import dev.sebastiano.indexino.core.git.GitHeadResolver
+import dev.sebastiano.indexino.core.manifest.IndexManifest
 import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.core.store.IndexStoreOpener
@@ -22,6 +23,8 @@ import dev.sebastiano.indexino.model.SourceOriginRevision
 import dev.sebastiano.indexino.model.WorkspaceGenerationId
 import dev.sebastiano.indexino.model.WorkspaceRevision
 import java.nio.file.Path
+import java.security.MessageDigest
+import java.util.Locale
 import kotlin.io.path.exists
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -31,6 +34,36 @@ import kotlinx.serialization.json.putJsonObject
 
 @OptIn(IndexinoInternalApi::class)
 internal class QueryCommand : CliktCommand(name = "query") {
+    private fun IndexManifest.workspaceRevisionFingerprint(): String {
+        val graph =
+            origins
+                .ifEmpty {
+                    listOf(
+                        dev.sebastiano.indexino.core.manifest.IndexManifestOrigin(
+                            originId = "workspace",
+                            revision = commit.takeUnless(GitHeadResolver::isFilesystemRevision),
+                            stateFingerprint = sourcesContentHash,
+                        )
+                    )
+                }
+                .sortedBy { it.originId }
+                .joinToString("\u0001") { origin ->
+                    listOf(
+                            origin.originId,
+                            origin.revision.orEmpty(),
+                            origin.stateFingerprint,
+                            origin.expectedRevision.orEmpty(),
+                        )
+                        .joinToString("\u0002")
+                }
+        val input =
+            listOf(commit, scope, topology, includeDeps.toString(), sourcesContentHash, graph)
+                .joinToString("\u0000")
+        return MessageDigest.getInstance("SHA-256").digest(input.toByteArray()).joinToString("") {
+            "%02x".format(Locale.ROOT, it)
+        }
+    }
+
     private val project by
         option("--project").file(mustExist = true, mustBeReadable = true).required()
     private val application by option("--application").required()
@@ -88,16 +121,27 @@ internal class QueryCommand : CliktCommand(name = "query") {
         val store = IndexStoreOpener.openForQuery(project, commit, sessionId)
         val revision =
             WorkspaceRevision(
-                fingerprint = manifest.sourcesContentHash,
+                fingerprint = manifest.workspaceRevisionFingerprint(),
                 origins =
-                    listOf(
-                        SourceOriginRevision(
-                            originId = SourceOriginId.of("workspace"),
-                            revision = commit.takeUnless(GitHeadResolver::isFilesystemRevision),
-                            stateFingerprint = manifest.sourcesContentHash,
-                            expectedRevision = null,
-                        )
-                    ),
+                    manifest.origins
+                        .ifEmpty {
+                            listOf(
+                                dev.sebastiano.indexino.core.manifest.IndexManifestOrigin(
+                                    originId = "workspace",
+                                    revision =
+                                        commit.takeUnless(GitHeadResolver::isFilesystemRevision),
+                                    stateFingerprint = manifest.sourcesContentHash,
+                                )
+                            )
+                        }
+                        .map { origin ->
+                            SourceOriginRevision(
+                                originId = SourceOriginId.of(origin.originId),
+                                revision = origin.revision,
+                                stateFingerprint = origin.stateFingerprint,
+                                expectedRevision = origin.expectedRevision,
+                            )
+                        },
             )
         val snapshot =
             IndexSnapshot.create(

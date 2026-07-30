@@ -5,14 +5,55 @@ import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.producer.IndexBuildContext
+import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.ProducerRegistry
+import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
+import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class JavaSourceProducerTest {
+    @Test
+    fun `keeps equal Java paths from separate origins distinct`() {
+        val firstRoot = createTempDirectory("indexino-java-origin-first-")
+        val secondRoot = createTempDirectory("indexino-java-origin-second-")
+        val relativePath = "src/main/java/sample/Panel.java"
+        firstRoot
+            .resolve(relativePath)
+            .also { it.parent.createDirectories() }
+            .writeText("package sample; class Panel { void first() {} }")
+        secondRoot
+            .resolve(relativePath)
+            .also { it.parent.createDirectories() }
+            .writeText("package sample; class Panel { void second() {} }")
+
+        withStore { store ->
+            checkNotNull(ProducerRegistry.get("java-source"))
+                .produce(
+                    IndexBuildContext(
+                        store = store,
+                        commitHash = "abc",
+                        sourceFiles = listOf(relativePath),
+                        sources =
+                            listOf(
+                                IndexedSource("git:first", firstRoot, relativePath),
+                                IndexedSource("git:second", secondRoot, relativePath),
+                            ),
+                    )
+                )
+
+            val symbols =
+                store.prefixScan("sym:").map { it.second }.filterIsInstance<SymbolRecord>()
+            assertEquals(
+                setOf("git:first", "git:second"),
+                symbols.filter { it.fqn == "sample.Panel" }.map { it.originId }.toSet(),
+            )
+        }
+    }
+
     @Test
     fun `indexes Java declarations and reconstructable references`() {
         val source =

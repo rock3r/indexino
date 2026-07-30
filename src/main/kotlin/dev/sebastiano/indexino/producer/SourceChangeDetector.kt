@@ -3,15 +3,24 @@ package dev.sebastiano.indexino.producer
 import dev.sebastiano.indexino.core.record.FileHashRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import java.nio.file.Path
+import java.nio.file.Paths
 import kotlin.io.path.readText
 
-internal data class SourceChangeSet(val changedFiles: Set<String>, val deletedFiles: Set<String>)
+internal data class SourceChangeSet(
+    val changedSources: Set<IndexedSource>,
+    val deletedSources: Set<IndexedSource>,
+) {
+    val changedFiles: Set<String>
+        get() = changedSources.mapTo(linkedSetOf()) { it.path }
+
+    val deletedFiles: Set<String>
+        get() = deletedSources.mapTo(linkedSetOf()) { it.path }
+}
 
 internal object SourceChangeDetector {
     fun detect(
         store: CodeIndexStore,
-        workspaceRoot: Path,
-        sourceFiles: List<String>,
+        sources: List<IndexedSource>,
         onFileProcessed: ((index: Int, total: Int, relativePath: String) -> Unit)? = null,
     ): SourceChangeSet {
         val previousHashes =
@@ -19,18 +28,34 @@ internal object SourceChangeDetector {
                 .prefixScan("file:")
                 .map { it.second }
                 .filterIsInstance<FileHashRecord>()
-                .associate { it.relativePath to it.contentHash }
-        val currentFiles = sourceFiles.toSet()
-        val changedFiles =
-            sourceFiles.filterIndexedTo(linkedSetOf()) { index, relativePath ->
-                onFileProcessed?.invoke(index + 1, sourceFiles.size, relativePath)
+                .associate { (it.originId to it.relativePath) to it.contentHash }
+        val currentSources = sources.associateBy { it.originId to it.path }
+        val changedSources =
+            sources.filterIndexedTo(linkedSetOf()) { index, source ->
+                onFileProcessed?.invoke(index + 1, sources.size, source.path)
                 val currentHash =
-                    FileHashProducer.contentHash(workspaceRoot.resolve(relativePath).readText())
-                previousHashes[relativePath] != currentHash
+                    FileHashProducer.contentHash(source.originRoot.resolve(source.path).readText())
+                previousHashes[source.originId to source.path] != currentHash
             }
         return SourceChangeSet(
-            changedFiles = changedFiles,
-            deletedFiles = previousHashes.keys - currentFiles,
+            changedSources = changedSources,
+            deletedSources =
+                (previousHashes.keys - currentSources.keys).mapTo(linkedSetOf()) { (originId, path)
+                    ->
+                    IndexedSource(originId, Paths.get("."), path)
+                },
         )
     }
+
+    fun detect(
+        store: CodeIndexStore,
+        workspaceRoot: Path,
+        sourceFiles: List<String>,
+        onFileProcessed: ((index: Int, total: Int, relativePath: String) -> Unit)? = null,
+    ): SourceChangeSet =
+        detect(
+            store,
+            sourceFiles.map { IndexedSource.workspace(workspaceRoot, it) },
+            onFileProcessed,
+        )
 }

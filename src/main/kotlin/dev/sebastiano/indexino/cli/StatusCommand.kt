@@ -17,6 +17,7 @@ import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.engine.PluginRegistry
 import dev.sebastiano.indexino.producer.FileHashProducer
 import dev.sebastiano.indexino.topology.BuildSystem
+import dev.sebastiano.indexino.topology.SourceOriginResolver
 import dev.sebastiano.indexino.topology.TopologyRequest
 import dev.sebastiano.indexino.topology.TopologyResolver
 import dev.sebastiano.indexino.topology.bazel.BazelProcessRunner
@@ -112,7 +113,22 @@ internal class StatusCommand : CliktCommand(name = "status") {
                 bazelQueryExecutor = bazelQueryExecutor,
                 bazelProcessRunner = bazelProcessRunner,
             )
-        val currentHash = FileHashProducer.combinedSourcesHash(project, topologyResult.sourceFiles)
+        val currentSources =
+            SourceOriginResolver.resolve(project, topologyResult.sourceFiles).flatMap { origin ->
+                origin.sourceFiles.map { path ->
+                    dev.sebastiano.indexino.producer.IndexedSource(origin.id, origin.root, path)
+                }
+            } +
+                topologyResult.externalSources.flatMap { mount ->
+                    mount.sourceFiles.map { path ->
+                        dev.sebastiano.indexino.producer.IndexedSource(
+                            mount.originId ?: SourceOriginResolver.externalOriginId(mount.root),
+                            mount.root,
+                            path,
+                        )
+                    }
+                }
+        val currentHash = FileHashProducer.combinedIndexedSourcesHash(currentSources)
         val pluginCoordinates =
             PluginRegistry.load(javaClass.classLoader).selectedCoordinates(manifest.applications)
         val criteria =
@@ -157,18 +173,25 @@ internal class StatusCommand : CliktCommand(name = "status") {
         if (cli.bazelTarget != null || cli.gradleModule != null) {
             return cli
         }
-        return if (manifestTopology.startsWith("gradle")) {
-            cli.copy(
-                buildSystem = BuildSystem.GRADLE,
-                gradleModule = manifestScope,
-                includeDeps = manifestIncludeDeps,
-            )
-        } else {
-            cli.copy(
-                buildSystem = BuildSystem.BAZEL,
-                bazelTarget = manifestScope,
-                includeDeps = manifestIncludeDeps,
-            )
+        return when {
+            manifestTopology == "repo-manifest" ->
+                cli.copy(
+                    buildSystem = BuildSystem.REPO,
+                    repoManifest = Path.of(manifestScope),
+                    includeDeps = manifestIncludeDeps,
+                )
+            manifestTopology.startsWith("gradle") ->
+                cli.copy(
+                    buildSystem = BuildSystem.GRADLE,
+                    gradleModule = manifestScope,
+                    includeDeps = manifestIncludeDeps,
+                )
+            else ->
+                cli.copy(
+                    buildSystem = BuildSystem.BAZEL,
+                    bazelTarget = manifestScope,
+                    includeDeps = manifestIncludeDeps,
+                )
         }
     }
 
@@ -177,6 +200,7 @@ internal class StatusCommand : CliktCommand(name = "status") {
             "auto" -> BuildSystem.AUTO
             "bazel" -> BuildSystem.BAZEL
             "gradle" -> BuildSystem.GRADLE
+            "repo" -> BuildSystem.REPO
             else -> error("Unknown --build-system: $raw")
         }
 }

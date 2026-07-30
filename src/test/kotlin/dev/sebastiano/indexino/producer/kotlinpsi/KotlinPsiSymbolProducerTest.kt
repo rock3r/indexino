@@ -5,8 +5,11 @@ import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.producer.IndexBuildContext
+import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.ProducerRegistry
+import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
+import kotlin.io.path.writeText
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -14,6 +17,44 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class KotlinPsiSymbolProducerTest {
+    @Test
+    fun `keeps equal Kotlin paths from separate origins distinct`() {
+        val firstRoot = createTempDirectory("indexino-kotlin-origin-first-")
+        val secondRoot = createTempDirectory("indexino-kotlin-origin-second-")
+        val relativePath = "src/main/kotlin/sample/Panel.kt"
+        firstRoot
+            .resolve(relativePath)
+            .also { it.parent.createDirectories() }
+            .writeText("package sample\nfun first() = Unit")
+        secondRoot
+            .resolve(relativePath)
+            .also { it.parent.createDirectories() }
+            .writeText("package sample\nfun second() = Unit")
+        val producer = checkNotNull(ProducerRegistry.get("kotlin-psi-symbols"))
+        producer.produce(
+            IndexBuildContext(
+                store = store,
+                commitHash = "abc",
+                sourceFiles = listOf(relativePath),
+                sources =
+                    listOf(
+                        IndexedSource("git:first", firstRoot, relativePath),
+                        IndexedSource("git:second", secondRoot, relativePath),
+                    ),
+            ),
+            store,
+        )
+
+        val symbols = store.prefixScan("sym:").map { it.second }.filterIsInstance<SymbolRecord>()
+        assertEquals(
+            setOf("git:first", "git:second"),
+            symbols
+                .filter { it.fqn in setOf("sample.first", "sample.second") }
+                .map { it.originId }
+                .toSet(),
+        )
+    }
+
     @Test
     fun `incremental callers resolve unchanged same-package declarations`() {
         val sources =

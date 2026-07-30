@@ -23,7 +23,6 @@ import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.QueryPage
 import dev.sebastiano.indexino.model.Reference
 import dev.sebastiano.indexino.model.ReferenceQuery
-import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.Symbol
 import dev.sebastiano.indexino.model.SymbolId
 import dev.sebastiano.indexino.model.SymbolQuery
@@ -271,7 +270,7 @@ private constructor(
         val requestedFile = query.file
         val fileMatches =
             requestedFile == null ||
-                (requestedFile.originId == WORKSPACE_ORIGIN && relativeFile == requestedFile.path)
+                (originId == requestedFile.originId.value && relativeFile == requestedFile.path)
         val kindMatches = query.kind == null || kind == query.kind
         val languageMatches = query.language == null || language == query.language
         val requestedName = query.name
@@ -292,7 +291,7 @@ private constructor(
         val requestedFile = query.file
         val fileMatches =
             requestedFile == null ||
-                (requestedFile.originId == WORKSPACE_ORIGIN && relativeFile == requestedFile.path)
+                (originId == requestedFile.originId.value && relativeFile == requestedFile.path)
         val enclosingMatches =
             enclosing == null ||
                 enclosingSymbolFqn == enclosing.fqn ||
@@ -438,7 +437,9 @@ private constructor(
                 }
                 for (owner in owners) {
                     for (symbol in symbolsByOwner.getValue(owner)) {
-                        candidates.getValue(symbol).consider(owner, symbol.relativeFile, record)
+                        candidates
+                            .getValue(symbol)
+                            .consider(owner, symbol.originId, symbol.relativeFile, record)
                     }
                 }
             }
@@ -459,7 +460,13 @@ private constructor(
         private var exact: SymbolRecord? = null
         private var alias: SymbolRecord? = null
 
-        fun consider(owner: String, symbolFile: String, candidate: SymbolRecord) {
+        fun consider(
+            owner: String,
+            symbolOriginId: String,
+            symbolFile: String,
+            candidate: SymbolRecord,
+        ) {
+            if (candidate.originId != symbolOriginId) return
             when {
                 candidate.fqn == owner && candidate.relativeFile == symbolFile ->
                     sameFileExact = sameFileExact ?: candidate
@@ -615,7 +622,6 @@ private constructor(
         // settles exact default page limits in docs/PUBLIC-API-DESIGN.html.
         private const val HOST_QUERY_LIMIT_MAXIMUM: Int = 10_000
         private const val HOST_QUERY_WINDOW_MAXIMUM: Int = 10_000
-        private val WORKSPACE_ORIGIN: SourceOriginId = SourceOriginId.of("workspace")
 
         internal fun createRemote(
             client: RuntimeSnapshotClient,
