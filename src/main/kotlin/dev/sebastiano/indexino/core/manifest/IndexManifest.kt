@@ -28,6 +28,7 @@ internal data class IndexManifest(
     val applications: List<String> = emptyList(),
     val pluginCoordinates: Map<String, String> = emptyMap(),
     val origins: List<IndexManifestOrigin> = emptyList(),
+    val resolvedTopologyDigest: String? = null,
 )
 
 internal object ManifestIO {

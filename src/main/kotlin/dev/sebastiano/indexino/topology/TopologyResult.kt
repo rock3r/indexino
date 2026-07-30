@@ -16,6 +16,7 @@ internal data class TopologyResult(
     val scope: String,
     val externalMounts: List<Path> = emptyList(),
     val externalSources: List<ExternalSourceMount> = emptyList(),
+    val resolvedTopologyDigest: String? = null,
 )
 
 internal enum class BuildSystem {

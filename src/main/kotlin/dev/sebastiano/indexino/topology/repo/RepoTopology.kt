@@ -8,8 +8,9 @@ import java.nio.file.Path
 internal object RepoTopology {
     fun resolveSources(workspace: Path, manifestPath: Path): TopologyResult {
         val canonicalWorkspace = workspace.toRealPath()
+        val resolvedManifest = RepoManifestParser.parse(manifestPath)
         val mounts =
-            RepoManifestParser.parse(manifestPath).projects.mapNotNull { project ->
+            resolvedManifest.projects.mapNotNull { project ->
                 val root = canonicalWorkspace.resolve(project.path).normalize()
                 require(root.startsWith(canonicalWorkspace)) {
                     "repo project path escapes workspace: ${project.path}"
@@ -30,6 +31,7 @@ internal object RepoTopology {
             includeDeps = true,
             scope = manifestPath.toRealPath().toString(),
             externalSources = mounts,
+            resolvedTopologyDigest = resolvedManifest.digest,
         )
     }
 }

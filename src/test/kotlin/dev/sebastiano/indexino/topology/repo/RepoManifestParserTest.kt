@@ -8,6 +8,42 @@ import kotlin.test.assertEquals
 
 class RepoManifestParserTest {
     @Test
+    fun `resolves includes and local manifest operations`() {
+        val workspace = createTempDirectory("indexino-repo-resolved-")
+        try {
+            val manifest = workspace.resolve(".repo/manifest.xml")
+            manifest.parent.createDirectories()
+            manifest.writeText(
+                "<manifest><include name=\"included.xml\"/><project name=\"base\" revision=\"one\"/></manifest>"
+            )
+            manifest.parent
+                .resolve("included.xml")
+                .writeText(
+                    "<manifest><project name=\"included\" path=\"source/included\"/></manifest>"
+                )
+            workspace
+                .resolve(".repo/local_manifests/override.xml")
+                .also { it.parent.createDirectories() }
+                .writeText(
+                    """
+                    <manifest>
+                      <remove-project name="base"/>
+                      <extend-project name="included" revision="two"/>
+                    </manifest>
+                    """
+                        .trimIndent()
+                )
+
+            assertEquals(
+                listOf(RepoProject("included", "source/included", "two")),
+                RepoManifestParser.parse(manifest).projects,
+            )
+        } finally {
+            workspace.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `includes local manifest projects`() {
         val workspace = createTempDirectory("indexino-repo-local-")
         try {

@@ -126,6 +126,7 @@ internal class IndexBuildRunner(
                 applications = applications,
                 pluginCoordinates = pluginCoordinates,
                 origins = origins,
+                resolvedTopologyDigest = topologyResult.resolvedTopologyDigest,
             )
         val existingManifest = manifestPath.takeIf { it.exists() }?.let(ManifestIO::read)
         if (existingManifest != null && ManifestFreshness.isFresh(existingManifest, criteria)) {
@@ -141,6 +142,7 @@ internal class IndexBuildRunner(
             commit = commit,
             scope = topologyResult.scope,
             topology = topologyResult.topology,
+            resolvedTopologyDigest = topologyResult.resolvedTopologyDigest,
             includeDeps = topologyResult.includeDeps,
             sourceFiles = sourceFiles,
             sources = sources,
@@ -167,6 +169,7 @@ internal class IndexBuildRunner(
         commit: String,
         scope: String,
         topology: String,
+        resolvedTopologyDigest: String?,
         includeDeps: Boolean,
         sourceFiles: List<String>,
         sources: List<IndexedSource>,
@@ -217,6 +220,7 @@ internal class IndexBuildRunner(
                     applications = applications,
                     pluginCoordinates = pluginCoordinates,
                     origins = origins,
+                    resolvedTopologyDigest = resolvedTopologyDigest,
                 )
             ManifestIO.write(resolver.resolveManifest(commit), manifest)
             latestManifest = manifest
