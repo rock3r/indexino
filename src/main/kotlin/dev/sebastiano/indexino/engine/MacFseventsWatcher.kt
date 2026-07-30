@@ -52,8 +52,10 @@ internal class MacFseventsWatcher(
             fsevents("FSEventStreamStop", STOP, stream)
             fsevents("FSEventStreamInvalidate", INVALIDATE, stream)
         }
-        if (::runLoop.isInitialized) coreFoundation("CFRunLoopStop", RUN_LOOP_STOP, runLoop)
-        thread.join(JOIN_TIMEOUT_MILLIS)
+        while (thread.isAlive) {
+            if (::runLoop.isInitialized) coreFoundation("CFRunLoopStop", RUN_LOOP_STOP, runLoop)
+            thread.join(RUN_LOOP_STOP_RETRY_MILLIS)
+        }
         INSTANCES.remove(id)
         if (::stream.isInitialized) STREAMS.remove(stream.address())
         if (::stream.isInitialized) fsevents("FSEventStreamRelease", RELEASE, stream)
@@ -175,7 +177,7 @@ internal class MacFseventsWatcher(
         private const val FSEVENT_STREAM_CONTEXT_RELEASE_OFFSET = 24L
         private const val FSEVENT_STREAM_CONTEXT_COPY_DESCRIPTION_OFFSET = 32L
         private const val POINTER_ALIGNMENT = 8L
-        private const val JOIN_TIMEOUT_MILLIS = 1_000L
+        private const val RUN_LOOP_STOP_RETRY_MILLIS = 10L
 
         private val NULL = MemorySegment.NULL
         private val LINKER = Linker.nativeLinker()
