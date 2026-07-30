@@ -4,19 +4,19 @@ import dev.sebastiano.indexino.topology.ExternalSourceMount
 import dev.sebastiano.indexino.topology.TopologyResult
 import dev.sebastiano.indexino.topology.gradle.ModuleSourceRoots
 import java.nio.file.Path
-import kotlin.io.path.exists
-import kotlin.io.path.readText
 
 internal object RepoTopology {
     fun resolveSources(workspace: Path, manifestPath: Path): TopologyResult {
         val canonicalWorkspace = workspace.toRealPath()
         val mounts =
-            RepoManifestParser.parse(manifestPath.readText()).projects.mapNotNull { project ->
+            RepoManifestParser.parse(manifestPath).projects.mapNotNull { project ->
                 val root = canonicalWorkspace.resolve(project.path).normalize()
                 require(root.startsWith(canonicalWorkspace)) {
                     "repo project path escapes workspace: ${project.path}"
                 }
-                if (!root.exists()) return@mapNotNull null
+                require(root.toFile().isDirectory) {
+                    "repo project mount is unavailable: ${project.name} at $root"
+                }
                 ExternalSourceMount(
                     root = root,
                     sourceFiles = ModuleSourceRoots.collectKotlinSources(root, root),

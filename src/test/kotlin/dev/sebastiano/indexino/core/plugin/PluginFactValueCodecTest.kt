@@ -25,6 +25,34 @@ class PluginFactValueCodecTest {
     }
 
     @Test
+    fun `reads origin qualified plugin facts`() = runBlocking {
+        val store =
+            XodusCodeIndexStore.open(createTempDirectory("plugin-fact-origin-").resolve("store"))
+        try {
+            val value = PluginFactValue.Text.of("nested origin")
+            StorePluginFactSink(
+                    store = store,
+                    pluginId = "dev.example.plugin",
+                    relativeFile = "src/main/kotlin/Sample.kt",
+                    originId = "git:nested",
+                )
+                .put("fact", value)
+
+            assertEquals(
+                value,
+                StorePluginFactView(
+                        store = store,
+                        pluginId = "dev.example.plugin",
+                        relativeFile = "src/main/kotlin/Sample.kt",
+                    )
+                    .get("fact"),
+            )
+        } finally {
+            store.close()
+        }
+    }
+
+    @Test
     fun `rejects a fact tree deeper than the public maximum`() = runBlocking {
         val store =
             XodusCodeIndexStore.open(createTempDirectory("plugin-fact-depth-").resolve("store"))

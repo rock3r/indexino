@@ -1,8 +1,13 @@
 package dev.sebastiano.indexino.topology.repo
 
 import java.io.StringReader
+import java.nio.file.Path
 import javax.xml.stream.XMLInputFactory
 import javax.xml.stream.XMLStreamConstants
+import kotlin.io.path.exists
+import kotlin.io.path.isDirectory
+import kotlin.io.path.listDirectoryEntries
+import kotlin.io.path.readText
 
 internal data class RepoProject(val name: String, val path: String, val revision: String?)
 
@@ -10,6 +15,19 @@ internal data class RepoManifest(val projects: List<RepoProject>)
 
 /** Parses the resolved Android repo manifest into repository identities and local mounts. */
 internal object RepoManifestParser {
+    fun parse(manifestPath: Path): RepoManifest {
+        val manifests = buildList {
+            add(manifestPath)
+            val localManifests = manifestPath.parent.resolve("local_manifests")
+            if (localManifests.exists() && localManifests.isDirectory()) {
+                addAll(localManifests.listDirectoryEntries("*.xml").sorted())
+            }
+        }
+        return RepoManifest(
+            manifests.flatMap { parse(it.readText()).projects }.sortedBy { it.name }
+        )
+    }
+
     fun parse(content: String): RepoManifest {
         val reader =
             XMLInputFactory.newFactory()

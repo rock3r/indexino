@@ -98,11 +98,13 @@ internal object GradleTopology {
 
         fun visit(settings: Path, content: String) {
             SettingsParser.parseIncludedBuilds(content).forEach { declaredPath ->
-                val buildRoot =
-                    runCatching { settings.parent.resolve(declaredPath).normalize().toRealPath() }
-                        .getOrNull() ?: return@forEach
+                val declaredRoot = settings.parent.resolve(declaredPath).normalize()
+                require(declaredRoot.toFile().isDirectory) {
+                    "Gradle included build mount is unavailable: $declaredRoot"
+                }
+                val buildRoot = declaredRoot.toRealPath()
                 if (!visitedBuilds.add(buildRoot)) return@forEach
-                if (!buildRoot.startsWith(canonicalWorkspace)) externalMounts.add(buildRoot)
+                if (buildRoot != canonicalWorkspace) externalMounts.add(buildRoot)
                 val nestedSettings =
                     listOf("settings.gradle.kts", "settings.gradle")
                         .map(buildRoot::resolve)

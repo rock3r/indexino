@@ -86,9 +86,13 @@ indexino index \
 ```
 
 When `--build-system auto` (default), Bazel is chosen if `MODULE.bazel` / `WORKSPACE` exists;
-otherwise Gradle when `settings.gradle(.kts)` is present. Pass `--bazel-target` or
-`--gradle-module` for the scope. Embedded API scopes stay explicit (`IndexScope.bazel` /
-`gradle`); CLI may keep auto-detect.
+otherwise Gradle when `settings.gradle(.kts)` is present; a resolved `.repo/manifest.xml` is
+also detected as repo topology. Pass `--bazel-target` or `--gradle-module` for the scope.
+Embedded API scopes stay explicit (`IndexScope.bazel` / `gradle`); CLI may keep auto-detect.
+
+**Repo topology is not yet available through the daemon-backed `index` command.** The internal
+build runner supports repo-origin discovery and provenance while daemon scope support is being
+completed; use explicit Bazel or Gradle scope selection for daemon-backed indexing.
 
 **Current shipping behaviour (transitional):** resolves `git rev-parse HEAD`, discovers sources via
 Bazel/Gradle, may open a commit-addressed store under the project, runs core producers plus
@@ -298,7 +302,7 @@ queries and direct plugin-fact reads are intentionally not a core CLI contract.
 | Flag | Description |
 |------|-------------|
 | `--project` | Monorepo root (required) |
-| `--build-system` | `auto`, `bazel`, `gradle` |
+| `--build-system` | `auto`, `bazel`, `gradle`, `repo` |
 | `--bazel-target` | Bazel label, e.g. `//pkg:ui` |
 | `--gradle-module` | Gradle path, e.g. `:foo:ui` (bonus backend) |
 | `--include-deps` | Include dependency target/module sources |

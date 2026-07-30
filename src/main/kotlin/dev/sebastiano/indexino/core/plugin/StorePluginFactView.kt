@@ -1,6 +1,5 @@
 package dev.sebastiano.indexino.core.plugin
 
-import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.PluginFactRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.model.PluginFactEntry
@@ -23,6 +22,7 @@ internal class StorePluginFactView(
         store
             .prefixScan(pluginPrefix())
             .mapNotNull { (_, record) -> record as? PluginFactRecord }
+            .filter(::matchesRelativeFile)
             .firstOrNull { it.factKey == key }
             ?.let { PluginFactValueCodec.decode(it.encodedValue) }
 
@@ -34,6 +34,7 @@ internal class StorePluginFactView(
             store
                 .prefixScan(pluginPrefix())
                 .mapNotNull { (_, record) -> record as? PluginFactRecord }
+                .filter(::matchesRelativeFile)
                 .filter { it.factKey.startsWith(prefix) }
                 .sortedBy { it.factKey }
                 .map { record ->
@@ -56,8 +57,10 @@ internal class StorePluginFactView(
         )
     }
 
-    private fun pluginPrefix(): String =
-        relativeFile?.let { CodeIndexKey.pluginFactFilePrefix(pluginId, it) } ?: "plugin:$pluginId:"
+    private fun pluginPrefix(): String = "plugin:$pluginId:"
+
+    private fun matchesRelativeFile(record: PluginFactRecord): Boolean =
+        relativeFile == null || record.relativeFile == relativeFile
 
     private fun PluginFactRecord.toSourceRange(): SourceRange? {
         val startLine = rangeStartLine ?: return null

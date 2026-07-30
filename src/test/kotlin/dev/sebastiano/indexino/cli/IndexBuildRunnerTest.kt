@@ -8,7 +8,9 @@ import kotlin.io.path.Path
 import kotlin.io.path.readText
 import kotlin.io.path.writeText
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import org.junit.jupiter.api.io.TempDir
 
 class IndexBuildRunnerTest {
@@ -104,7 +106,7 @@ class IndexBuildRunnerTest {
     }
 
     @Test
-    fun `skips unavailable repo manifest projects`() {
+    fun `rejects unavailable repo manifest projects`() {
         val workspace = tempDir.resolve("partial-repo-workspace")
         Files.createDirectories(workspace.resolve(".repo"))
         Files.createDirectories(workspace.resolve("checked-out/src/main/kotlin"))
@@ -128,25 +130,26 @@ class IndexBuildRunnerTest {
         git(workspace, "add", ".")
         git(workspace, "commit", "-m", "partial repo workspace")
 
-        val execution =
-            IndexBuildRunner(
-                    project = workspace,
-                    topologyRequest =
-                        TopologyRequest(
-                            buildSystem = BuildSystem.REPO,
-                            repoManifest = workspace.resolve(".repo/manifest.xml"),
-                        ),
-                    applications = emptyList(),
-                    bazelQueryExecutor = null,
-                    bazelProcessRunner = null,
-                    progress = {},
-                    machineProgress = null,
-                    storeRootOverride = tempDir.resolve("store"),
-                )
-                .runDetailed()
+        val failure =
+            assertFailsWith<IllegalArgumentException> {
+                IndexBuildRunner(
+                        project = workspace,
+                        topologyRequest =
+                            TopologyRequest(
+                                buildSystem = BuildSystem.REPO,
+                                repoManifest = workspace.resolve(".repo/manifest.xml"),
+                            ),
+                        applications = emptyList(),
+                        bazelQueryExecutor = null,
+                        bazelProcessRunner = null,
+                        progress = {},
+                        machineProgress = null,
+                        storeRootOverride = tempDir.resolve("store"),
+                    )
+                    .runDetailed()
+            }
 
-        assertEquals(CliExitCodes.SUCCESS, execution.exitCode)
-        assertEquals(listOf("repo:checked"), execution.manifest?.origins?.map { it.originId })
+        assertContains(failure.message.orEmpty(), "repo project mount is unavailable: missing")
     }
 
     @Test
