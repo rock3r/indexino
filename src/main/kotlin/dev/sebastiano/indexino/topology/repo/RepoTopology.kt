@@ -79,5 +79,5 @@ internal object RepoTopology {
     }
 
     private val IGNORED_DIRECTORY_NAMES =
-        setOf(".git", ".gradle", "build", "node_modules", "out", "target", "test", "tests")
+        setOf(".git", ".gradle", "build", "node_modules", "out", "target")
 }

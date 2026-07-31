@@ -35,6 +35,19 @@ class SettingsParserTest {
     }
 
     @Test
+    fun `ignores included builds inside comments`() {
+        val content =
+            """
+            // includeBuild("../line-comment")
+            includeBuild("../active") // includeBuild("../trailing-comment")
+            /* includeBuild("../block-comment") */
+            """
+                .trimIndent()
+
+        assertEquals(listOf("../active"), SettingsParser.parseIncludedBuilds(content))
+    }
+
+    @Test
     fun `parses include list from settings kts`() {
         val content =
             """

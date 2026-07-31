@@ -32,7 +32,7 @@ class RepoTopologyTest {
             .also { it.parent.createDirectories() }
             .writeText("class Base")
         workspace
-            .resolve("tools/base-local/tests/src/main/kotlin/Fixture.kt")
+            .resolve("tools/base-local/src/test/kotlin/Fixture.kt")
             .also { it.parent.createDirectories() }
             .writeText("class Fixture")
         workspace
@@ -47,6 +47,29 @@ class RepoTopologyTest {
             )
 
         assertEquals(listOf("src/main/kotlin/Base.kt"), result.externalSources.single().sourceFiles)
+    }
+
+    @Test
+    fun `includes production modules named test`() {
+        val workspace = createTempDirectory("indexino-repo-").also(temporaryDirectories::add)
+        val manifest = workspace.resolve(".repo/manifest.xml")
+        manifest.parent.createDirectories()
+        manifest.writeText("<manifest><project name=\"tools\" path=\"tools\"/></manifest>")
+        workspace
+            .resolve("tools/test/src/main/kotlin/Production.kt")
+            .also { it.parent.createDirectories() }
+            .writeText("class Production")
+
+        val result =
+            TopologyResolver.resolve(
+                workspace,
+                TopologyRequest(buildSystem = BuildSystem.REPO, repoManifest = manifest),
+            )
+
+        assertEquals(
+            listOf("test/src/main/kotlin/Production.kt"),
+            result.externalSources.single().sourceFiles,
+        )
     }
 
     @Test

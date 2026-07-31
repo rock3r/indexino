@@ -11,6 +11,7 @@ import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationOrigin
 import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.IndexManifest
+import dev.sebastiano.indexino.core.manifest.workspaceRevisionFingerprint
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.store.IndexStoreOpener
@@ -620,28 +621,7 @@ private constructor(
                         expectedRevision = origin.expectedRevision,
                     )
                 }
-        val fingerprint =
-            sha256(
-                listOf(
-                        commit,
-                        scope,
-                        topology,
-                        includeDeps.toString(),
-                        sourcesContentHash,
-                        resolvedTopologyDigest.orEmpty(),
-                        origins.joinToString("\u0001") { origin ->
-                            listOf(
-                                    origin.originId.value,
-                                    origin.revision.orEmpty(),
-                                    origin.stateFingerprint,
-                                    origin.expectedRevision.orEmpty(),
-                                )
-                                .joinToString("\u0002")
-                        },
-                    )
-                    .joinToString(separator = "\u0000")
-            )
-        return WorkspaceRevision(fingerprint, origins)
+        return WorkspaceRevision(workspaceRevisionFingerprint(), origins)
     }
 
     private fun IndexManifest.toGenerationId(revision: WorkspaceRevision): WorkspaceGenerationId =
