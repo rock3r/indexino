@@ -416,7 +416,8 @@ private constructor(
             for (name in namesByReference.getValue(reference)) {
                 matchesByReference[reference]?.get(name)?.let(candidates::addAll)
             }
-            candidates.toList()
+            val sameOrigin = candidates.filter { it.originId == reference.originId }
+            (sameOrigin.ifEmpty { candidates }).toList()
         }
     }
 

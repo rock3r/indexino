@@ -45,7 +45,7 @@ remain implementation dependencies of the engine/client JAR.
 
 ## Local verification
 
-The default version on `main` is `0.2.0-SNAPSHOT`. No credentials or signing key are required to
+The default version on `main` is `0.3.0-SNAPSHOT`. No credentials or signing key are required to
 verify the publication locally:
 
 ```bash
@@ -108,8 +108,8 @@ Before the first release, confirm that the Central Portal account can publish un
 `dev.sebastiano` namespace. Then push an already-reviewed release commit and its version tag:
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 After the workflow succeeds, inspect the deployment in the Central Portal and promote it manually.
