@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.topology
 
+import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
 import java.util.Locale
@@ -18,10 +19,12 @@ internal object SourceOriginResolver {
             require(sourcePath.startsWith(canonicalWorkspace)) {
                 "Topology source path escapes workspace: $sourceFile"
             }
+            val sourceDirectory = sourcePath.parent
+            val gitRoot =
+                cachedGitRoot(sourceDirectory, gitRoots)
+                    ?: gitRoots.getOrPut(sourceDirectory) { findGitRoot(sourceDirectory) }
             val originRoot =
-                gitRoots
-                    .getOrPut(sourcePath.parent) { findGitRoot(sourcePath.parent) }
-                    ?.takeIf { it.startsWith(canonicalWorkspace) } ?: canonicalWorkspace
+                gitRoot?.takeIf { it.startsWith(canonicalWorkspace) } ?: canonicalWorkspace
             origins.getOrPut(originRoot) { mutableListOf() } +=
                 originRoot.relativize(sourcePath).invariantSeparatorsPathString
         }
@@ -36,6 +39,20 @@ internal object SourceOriginResolver {
             .sortedWith(
                 compareBy<ResolvedSourceOrigin> { it.id != WORKSPACE_ORIGIN_ID }.thenBy { it.id }
             )
+    }
+
+    private fun cachedGitRoot(directory: Path, gitRoots: Map<Path, Path?>): Path? {
+        val cachedRoot =
+            gitRoots.values
+                .filterNotNull()
+                .filter(directory::startsWith)
+                .maxByOrNull(Path::getNameCount) ?: return null
+        var ancestor = directory
+        while (ancestor != cachedRoot) {
+            if (Files.exists(ancestor.resolve(".git"))) return null
+            ancestor = ancestor.parent ?: return null
+        }
+        return cachedRoot
     }
 
     fun externalOriginId(root: Path): String {
