@@ -143,6 +143,11 @@ public constructor(
     public val originId: SourceOriginId? = null,
     private val active: () -> Boolean,
 ) {
+    public constructor(
+        facts: PluginFactSinkV1,
+        active: () -> Boolean,
+    ) : this(facts = facts, originId = null, active = active)
+
     public fun ensureActive(): Unit = check(active()) { "Plugin post-processing was cancelled" }
 }
 
