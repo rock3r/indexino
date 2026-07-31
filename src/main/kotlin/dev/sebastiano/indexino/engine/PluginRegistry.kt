@@ -12,7 +12,7 @@ import dev.sebastiano.indexino.plugin.api.PostProcessorV1
 import java.util.ServiceLoader
 
 internal class PluginRegistry
-private constructor(
+internal constructor(
     private val descriptors: Map<PluginId, PluginDescriptor>,
     internal val fileAnalyzers: List<RegisteredFileAnalyzer>,
     internal val postProcessors: List<RegisteredPostProcessor>,
