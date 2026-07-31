@@ -20,6 +20,36 @@ class RepoTopologyTest {
     }
 
     @Test
+    fun `excludes nested test fixtures and generated trees`() {
+        val workspace = createTempDirectory("indexino-repo-").also(temporaryDirectories::add)
+        val manifest = workspace.resolve(".repo/manifest.xml")
+        manifest.parent.createDirectories()
+        manifest.writeText(
+            "<manifest><project name=\"platform/tools/base\" path=\"tools/base-local\"/></manifest>"
+        )
+        workspace
+            .resolve("tools/base-local/src/main/kotlin/Base.kt")
+            .also { it.parent.createDirectories() }
+            .writeText("class Base")
+        workspace
+            .resolve("tools/base-local/tests/src/main/kotlin/Fixture.kt")
+            .also { it.parent.createDirectories() }
+            .writeText("class Fixture")
+        workspace
+            .resolve("tools/base-local/build/generated/src/main/kotlin/Generated.kt")
+            .also { it.parent.createDirectories() }
+            .writeText("class Generated")
+
+        val result =
+            TopologyResolver.resolve(
+                workspace,
+                TopologyRequest(buildSystem = BuildSystem.REPO, repoManifest = manifest),
+            )
+
+        assertEquals(listOf("src/main/kotlin/Base.kt"), result.externalSources.single().sourceFiles)
+    }
+
+    @Test
     fun `resolves each manifest project source closure`() {
         val workspace = createTempDirectory("indexino-repo-").also(temporaryDirectories::add)
         val manifest = workspace.resolve(".repo/manifest.xml")
