@@ -55,8 +55,13 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                 .toList()
                 .forEach(context.store::delete)
             context.store
-                .prefixScan(CodeIndexKey.pluginFactFilePrefix(pluginId, POST_PROCESSOR_FILE))
-                .forEach { (key, _) -> context.store.delete(key) }
+                .prefixScan(CodeIndexKey.pluginFactPluginPrefix(pluginId))
+                .filter { (_, record) ->
+                    record is PluginFactRecord && record.relativeFile == POST_PROCESSOR_FILE
+                }
+                .map { it.first }
+                .toList()
+                .forEach(context.store::delete)
             try {
                 context.sources.forEach { source ->
                     analyzers.forEach { registered ->
@@ -93,19 +98,26 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                     it.pluginId.value == pluginId && it.processor.level == PostProcessLevelV1.SHARD
                 }
                 .forEach { registered ->
-                    runBlocking {
-                        registered.processor.process(
-                            PostProcessContextV1(
-                                facts =
-                                    StorePluginFactSink(
-                                        context.store,
-                                        pluginId,
-                                        POST_PROCESSOR_FILE,
-                                    ),
-                                active = { true },
-                            )
-                        )
-                    }
+                    context.sources
+                        .map { it.originId }
+                        .distinct()
+                        .ifEmpty { listOf("workspace") }
+                        .forEach { originId ->
+                            runBlocking {
+                                registered.processor.process(
+                                    PostProcessContextV1(
+                                        facts =
+                                            StorePluginFactSink(
+                                                context.store,
+                                                pluginId,
+                                                POST_PROCESSOR_FILE,
+                                                originId,
+                                            ),
+                                        active = { true },
+                                    )
+                                )
+                            }
+                        }
                 }
             registry.postProcessors
                 .filter {
