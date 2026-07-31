@@ -106,6 +106,10 @@ private constructor(
                 if (targetSymbol == null) unknownReferenceNamesForId(query.symbolId)
                 else UnknownReferenceNames()
             val unknownTargetCandidates = candidatesByName(unknownTargetNames.all)
+            val targetCandidates =
+                targetSymbol
+                    ?.let { candidatesByName((it.aliases + it.fqn).toSet()).values.flatten() }
+                    .orEmpty()
             orderedPage(
                 options = options,
                 comparator =
@@ -122,7 +126,11 @@ private constructor(
                             val matches =
                                 with(queries) {
                                     if (targetSymbol != null) {
-                                        record.canTarget(targetSymbol)
+                                        record.canTarget(targetSymbol) &&
+                                            record.matchesTargetOrigin(
+                                                targetCandidates,
+                                                targetSymbol.originId,
+                                            )
                                     } else {
                                         record.matchesUnknownSymbolId(
                                             externalNames = unknownTargetNames.external,
@@ -363,6 +371,16 @@ private constructor(
                 .flatMap { candidatesByName[it].orEmpty() }
                 .distinct()
         }
+    }
+
+    private fun ReferenceRecord.matchesTargetOrigin(
+        candidates: List<SymbolRecord>,
+        targetOriginId: String,
+    ): Boolean {
+        val sameOrigin = candidates.any {
+            it.originId == originId && with(queries) { isArityCompatibleWith(it) }
+        }
+        return !sameOrigin || originId == targetOriginId
     }
 
     private fun ReferenceRecord.matchesUnknownSymbolId(
