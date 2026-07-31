@@ -114,7 +114,7 @@ internal class IndexBuildRunner(
                 }
         latestSourceFiles = sourceFiles
         latestSources = sources
-        latestTopologyRoots = topologyResult.externalMounts
+        latestTopologyRoots = (listOf(project) + topologyResult.externalMounts).distinct()
         val pluginRegistry = PluginRegistry.load(javaClass.classLoader)
         val unknownApplications = applications.filter {
             PluginId.of(it) !in pluginRegistry.pluginIds()

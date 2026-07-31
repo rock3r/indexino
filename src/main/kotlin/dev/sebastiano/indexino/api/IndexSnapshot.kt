@@ -66,6 +66,7 @@ private constructor(
                 comparator =
                     compareBy(
                         SymbolRecord::fqn,
+                        SymbolRecord::originId,
                         SymbolRecord::relativeFile,
                         SymbolRecord::line,
                         { it.signature.orEmpty() },
@@ -114,6 +115,7 @@ private constructor(
                 options = options,
                 comparator =
                     compareBy(
+                        ReferenceRecord::originId,
                         ReferenceRecord::relativeFile,
                         ReferenceRecord::line,
                         ReferenceRecord::column,
@@ -171,6 +173,7 @@ private constructor(
                 options = options,
                 comparator =
                     compareBy(
+                        CallSiteRecord::originId,
                         CallSiteRecord::relativeFile,
                         CallSiteRecord::startOffset,
                         CallSiteRecord::endOffset,
