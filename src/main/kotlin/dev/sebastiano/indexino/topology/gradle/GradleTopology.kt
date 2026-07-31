@@ -76,8 +76,9 @@ internal object GradleTopology {
         val settings =
             listOf("settings.gradle.kts", "settings.gradle").map(buildRoot::resolve).firstOrNull {
                 it.exists()
-            } ?: return emptyList()
-        val modules = listOf(":") + SettingsParser.parseIncludes(settings.readText())
+            }
+        val modules =
+            listOf(":") + settings?.let { SettingsParser.parseIncludes(it.readText()) }.orEmpty()
         return modules
             .flatMap { module ->
                 ModuleSourceRoots.collectKotlinSources(

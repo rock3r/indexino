@@ -1,7 +1,9 @@
 package dev.sebastiano.indexino.cli
 
+import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.JsonlIndexBuildProgressReporter
 import dev.sebastiano.indexino.topology.BuildSystem
+import dev.sebastiano.indexino.topology.SourceOriginResolver
 import dev.sebastiano.indexino.topology.TopologyRequest
 import java.nio.file.Files
 import java.nio.file.Path
@@ -208,6 +210,76 @@ class IndexBuildRunnerTest {
         assertEquals(CliExitCodes.SUCCESS, execution.exitCode)
         assertEquals(childRevision, execution.manifest?.origins?.single()?.expectedRevision)
         assertEquals(true, execution.manifest?.origins?.single()?.dirty)
+    }
+
+    @Test
+    fun `manifest resolves nested submodule revision from its parent`() {
+        val child = tempDir.resolve("child")
+        Files.createDirectories(child.resolve("src/main/kotlin"))
+        Files.writeString(child.resolve("src/main/kotlin/Child.kt"), "class Child")
+        git(child, "init")
+        git(child, "config", "user.email", "test@example.invalid")
+        git(child, "config", "user.name", "Indexino Test")
+        git(child, "add", ".")
+        git(child, "commit", "-m", "child")
+        val childRevision = git(child, "rev-parse", "HEAD").trim()
+
+        val parent = tempDir.resolve("parent")
+        Files.createDirectories(parent)
+        git(parent, "init")
+        git(parent, "config", "user.email", "test@example.invalid")
+        git(parent, "config", "user.name", "Indexino Test")
+        git(
+            parent,
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            child.toString(),
+            "nested",
+        )
+        git(parent, "commit", "-m", "add child")
+
+        val workspace = tempDir.resolve("workspace")
+        Files.createDirectories(workspace)
+        git(workspace, "init")
+        git(workspace, "config", "user.email", "test@example.invalid")
+        git(workspace, "config", "user.name", "Indexino Test")
+        git(
+            workspace,
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            parent.toString(),
+            "parent",
+        )
+        git(workspace, "commit", "-m", "add parent")
+        git(
+            workspace,
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "update",
+            "--init",
+            "--recursive",
+        )
+        val nestedRoot = workspace.resolve("parent/nested")
+
+        val origins =
+            ManifestOriginResolver.resolve(
+                workspace,
+                listOf(
+                    IndexedSource(
+                        SourceOriginResolver.externalOriginId(nestedRoot),
+                        nestedRoot,
+                        "src/main/kotlin/Child.kt",
+                    )
+                ),
+                emptyMap(),
+            )
+
+        assertEquals(childRevision, origins.single().expectedRevision)
     }
 
     @Test

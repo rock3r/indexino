@@ -95,21 +95,13 @@ internal object ManifestOriginResolver {
     }
 
     private fun expectedSubmoduleRevision(workspace: Path, originRoot: Path): String? {
-        val canonicalWorkspace = workspace.toRealPath()
-        if (originRoot == canonicalWorkspace || !originRoot.startsWith(canonicalWorkspace))
-            return null
-        val mount = canonicalWorkspace.relativize(originRoot).toString().replace('\\', '/')
+        val canonicalOriginRoot = originRoot.toRealPath()
+        val owner = superprojectRoot(canonicalOriginRoot) ?: workspace.toRealPath()
+        if (canonicalOriginRoot == owner || !canonicalOriginRoot.startsWith(owner)) return null
+        val mount = owner.relativize(canonicalOriginRoot).toString().replace('\\', '/')
         val process =
             runCatching {
-                    ProcessBuilder(
-                            "git",
-                            "-C",
-                            canonicalWorkspace.toString(),
-                            "ls-tree",
-                            "HEAD",
-                            "--",
-                            mount,
-                        )
+                    ProcessBuilder("git", "-C", owner.toString(), "ls-tree", "HEAD", "--", mount)
                         .redirectErrorStream(true)
                         .start()
                 }
@@ -118,6 +110,24 @@ internal object ManifestOriginResolver {
         if (process.waitFor() != 0) return null
         val fields = output.substringBefore('\t').split(' ')
         return fields.getOrNull(0)?.takeIf { it == "160000" }?.let { fields.getOrNull(2) }
+    }
+
+    private fun superprojectRoot(originRoot: Path): Path? {
+        val process =
+            runCatching {
+                    ProcessBuilder(
+                            "git",
+                            "-C",
+                            originRoot.toString(),
+                            "rev-parse",
+                            "--show-superproject-working-tree",
+                        )
+                        .redirectErrorStream(true)
+                        .start()
+                }
+                .getOrNull() ?: return null
+        val output = process.inputStream.bufferedReader().readText().trim()
+        return output.takeIf { process.waitFor() == 0 && it.isNotEmpty() }?.let(Path::of)
     }
 
     private const val PORCELAIN_STATUS_PREFIX_LENGTH = 3

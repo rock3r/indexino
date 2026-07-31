@@ -95,6 +95,26 @@ class GradleIncludedBuildTopologyTest {
     }
 
     @Test
+    fun `scans a settings-less included build root`() {
+        val workspace =
+            createTempDirectory("indexino-settings-less-included-").also(temporaryDirectories::add)
+        val includedBuild = workspace.resolve("build-logic").also { it.createDirectories() }
+        workspace.resolve("settings.gradle.kts").writeText("includeBuild(\"build-logic\")")
+        includedBuild.resolve("build.gradle.kts").writeText("plugins {}")
+        includedBuild
+            .resolve("src/main/kotlin/Convention.kt")
+            .also { it.parent.createDirectories() }
+            .writeText("class Convention")
+
+        val result = GradleTopology.resolveSources(":", workspace)
+
+        assertEquals(
+            listOf("src/main/kotlin/Convention.kt"),
+            result.externalSources.single().sourceFiles,
+        )
+    }
+
+    @Test
     fun `reports declared external included build mounts`() {
         val root = createTempDirectory("indexino-external-report-").also(temporaryDirectories::add)
         val workspace = root.resolve("app").also { it.createDirectories() }
