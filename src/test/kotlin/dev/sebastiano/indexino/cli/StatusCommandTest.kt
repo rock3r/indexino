@@ -428,6 +428,23 @@ class StatusCommandTest {
         return workspace
     }
 
+    @Test
+    fun `retains source-less external origins in manifest provenance`() {
+        val workspace = createGradleWorkspace()
+        val externalRoot = createTempDirectory("status-external-").also(tempDirs::add)
+
+        val origins =
+            ManifestOriginResolver.resolve(
+                workspace,
+                sources = emptyList(),
+                externalOriginMetadata =
+                    mapOf(externalRoot.toRealPath() to ("gradle:build-logic" to "expected")),
+            )
+
+        assertEquals(listOf("gradle:build-logic"), origins.map { it.originId })
+        assertEquals("expected", origins.single().expectedRevision)
+    }
+
     private fun createGradleWorkspace(): java.nio.file.Path {
         val workspace = createTempDirectory("status-gradle-")
         tempDirs.add(workspace)

@@ -50,6 +50,45 @@ class RepoTopologyTest {
     }
 
     @Test
+    fun `does not scan nested repo project sources through their parent mount`() {
+        val workspace = createTempDirectory("indexino-repo-").also(temporaryDirectories::add)
+        val manifest = workspace.resolve(".repo/manifest.xml")
+        manifest.parent.createDirectories()
+        manifest.writeText(
+            """
+            <manifest>
+              <project name="parent" path="tools"/>
+              <project name="child" path="tools/child"/>
+            </manifest>
+            """
+                .trimIndent()
+        )
+        workspace
+            .resolve("tools/src/main/kotlin/Parent.kt")
+            .also { it.parent.createDirectories() }
+            .writeText("class Parent")
+        workspace
+            .resolve("tools/child/src/main/kotlin/Child.kt")
+            .also { it.parent.createDirectories() }
+            .writeText("class Child")
+
+        val result =
+            TopologyResolver.resolve(
+                workspace,
+                TopologyRequest(buildSystem = BuildSystem.REPO, repoManifest = manifest),
+            )
+
+        assertEquals(
+            listOf("src/main/kotlin/Parent.kt"),
+            result.externalSources.single { it.originId == "repo:parent" }.sourceFiles,
+        )
+        assertEquals(
+            listOf("src/main/kotlin/Child.kt"),
+            result.externalSources.single { it.originId == "repo:child" }.sourceFiles,
+        )
+    }
+
+    @Test
     fun `resolves each manifest project source closure`() {
         val workspace = createTempDirectory("indexino-repo-").also(temporaryDirectories::add)
         val manifest = workspace.resolve(".repo/manifest.xml")

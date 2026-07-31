@@ -11,7 +11,12 @@ import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 
 /** Installs immutable analysis packs under the cache-root two-level content-key fanout. */
-internal class ContentAddressedPackCache(private val cacheRoot: Path) {
+internal class ContentAddressedPackCache(
+    private val cacheRoot: Path,
+    private val moveDirectoryAction: (Path, Path) -> Unit = { source, destination ->
+        moveDirectory(source, destination)
+    },
+) {
     fun installDirectory(directory: Path, basicFactSchemaVersion: Int = 1): String {
         val entries =
             Files.walk(directory).use { paths ->
@@ -98,24 +103,26 @@ internal class ContentAddressedPackCache(private val cacheRoot: Path) {
     fun replaceMaterializedDirectory(contentKey: String, destination: Path) {
         val replacement =
             destination.resolveSibling("${destination.fileName}.replace-${UUID.randomUUID()}")
+        val backup =
+            destination.resolveSibling("${destination.fileName}.backup-${UUID.randomUUID()}")
+        var destinationMoved = false
         try {
             materializeDirectory(contentKey, replacement)
+            if (Files.exists(destination)) {
+                moveDirectoryAction(destination, backup)
+                destinationMoved = true
+            }
             try {
-                Files.move(
-                    replacement,
-                    destination,
-                    StandardCopyOption.ATOMIC_MOVE,
-                    StandardCopyOption.REPLACE_EXISTING,
-                )
-            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
-                destination.toFile().deleteRecursively()
-                Files.move(replacement, destination, StandardCopyOption.REPLACE_EXISTING)
-            } catch (_: java.nio.file.FileSystemException) {
-                destination.toFile().deleteRecursively()
-                Files.move(replacement, destination, StandardCopyOption.REPLACE_EXISTING)
+                moveDirectoryAction(replacement, destination)
+            } catch (failure: java.io.IOException) {
+                if (destinationMoved && !Files.exists(destination) && Files.exists(backup)) {
+                    moveDirectoryAction(backup, destination)
+                }
+                throw failure
             }
         } finally {
             if (Files.exists(replacement)) replacement.toFile().deleteRecursively()
+            if (Files.exists(backup)) backup.toFile().deleteRecursively()
         }
     }
 
@@ -151,5 +158,13 @@ internal class ContentAddressedPackCache(private val cacheRoot: Path) {
     private companion object {
         const val FANOUT_PREFIX_LENGTH: Int = 2
         const val BUFFER_SIZE: Int = 8_192
+
+        fun moveDirectory(source: Path, destination: Path) {
+            try {
+                Files.move(source, destination, StandardCopyOption.ATOMIC_MOVE)
+            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                Files.move(source, destination)
+            }
+        }
     }
 }

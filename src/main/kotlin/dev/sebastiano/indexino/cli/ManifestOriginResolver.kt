@@ -13,33 +13,60 @@ internal object ManifestOriginResolver {
         workspace: Path,
         sources: List<IndexedSource>,
         externalOriginMetadata: Map<Path, Pair<String?, String?>>,
-    ): List<IndexManifestOrigin> =
-        sources
-            .groupBy { it.originId to it.originRoot }
-            .map { (identity, originSources) ->
-                val (originId, originRoot) = identity
-                val stateFingerprint =
-                    FileHashProducer.contentHash(
-                        originSources
-                            .sortedBy { it.path }
-                            .joinToString("\n") { source ->
-                                val file = source.originRoot.resolve(source.path)
-                                "${source.path}:${FileHashProducer.contentHash(file.readText())}"
-                            }
+    ): List<IndexManifestOrigin> {
+        val sourceOrigins =
+            sources
+                .groupBy { it.originId to it.originRoot }
+                .map { (identity, originSources) ->
+                    val (originId, originRoot) = identity
+                    origin(
+                        workspace = workspace,
+                        originId = originId,
+                        originRoot = originRoot,
+                        sourceFingerprint =
+                            FileHashProducer.contentHash(
+                                originSources
+                                    .sortedBy { it.path }
+                                    .joinToString("\n") { source ->
+                                        val file = source.originRoot.resolve(source.path)
+                                        "${source.path}:${FileHashProducer.contentHash(file.readText())}"
+                                    }
+                            ),
+                        expectedRevision = externalOriginMetadata[originRoot.toRealPath()]?.second,
                     )
-                IndexManifestOrigin(
-                    originId = originId,
-                    revision =
-                        GitHeadResolver.resolve(originRoot)
-                            .takeUnless(GitHeadResolver::isFilesystemRevision),
-                    stateFingerprint = stateFingerprint,
-                    expectedRevision =
-                        externalOriginMetadata[originRoot.toRealPath()]?.second
-                            ?: expectedSubmoduleRevision(workspace, originRoot),
-                    dirty = isGitDirty(originRoot),
-                )
-            }
-            .sortedBy { it.originId }
+                }
+        val sourceRoots = sources.map { it.originRoot.toRealPath() }.toSet()
+        val emptyExternalOrigins =
+            externalOriginMetadata
+                .filterKeys { it !in sourceRoots }
+                .map { (originRoot, metadata) ->
+                    origin(
+                        workspace = workspace,
+                        originId = metadata.first ?: "external:${originRoot}",
+                        originRoot = originRoot,
+                        sourceFingerprint = FileHashProducer.contentHash(""),
+                        expectedRevision = metadata.second,
+                    )
+                }
+        return (sourceOrigins + emptyExternalOrigins).sortedBy { it.originId }
+    }
+
+    private fun origin(
+        workspace: Path,
+        originId: String,
+        originRoot: Path,
+        sourceFingerprint: String,
+        expectedRevision: String?,
+    ): IndexManifestOrigin =
+        IndexManifestOrigin(
+            originId = originId,
+            revision =
+                GitHeadResolver.resolve(originRoot)
+                    .takeUnless(GitHeadResolver::isFilesystemRevision),
+            stateFingerprint = sourceFingerprint,
+            expectedRevision = expectedRevision ?: expectedSubmoduleRevision(workspace, originRoot),
+            dirty = isGitDirty(originRoot),
+        )
 
     private fun isGitDirty(originRoot: Path): Boolean {
         val process =

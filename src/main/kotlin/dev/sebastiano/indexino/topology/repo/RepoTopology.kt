@@ -13,8 +13,8 @@ internal object RepoTopology {
     fun resolveSources(workspace: Path, manifestPath: Path): TopologyResult {
         val canonicalWorkspace = workspace.toRealPath()
         val resolvedManifest = RepoManifestParser.parse(manifestPath)
-        val mounts =
-            resolvedManifest.projects.mapNotNull { project ->
+        val projectRoots =
+            resolvedManifest.projects.map { project ->
                 val root = canonicalWorkspace.resolve(project.path).normalize()
                 require(root.startsWith(canonicalWorkspace)) {
                     "repo project path escapes workspace: ${project.path}"
@@ -22,20 +22,25 @@ internal object RepoTopology {
                 require(root.toFile().isDirectory) {
                     "repo project mount is unavailable: ${project.name} at $root"
                 }
-                val moduleRoots = findModuleRoots(root)
-                ExternalSourceMount(
-                    root = root,
-                    sourceFiles =
-                        moduleRoots
-                            .flatMap { moduleRoot ->
-                                ModuleSourceRoots.collectKotlinSources(moduleRoot, root)
-                            }
-                            .distinct()
-                            .sorted(),
-                    originId = "repo:${project.name}",
-                    expectedRevision = project.revision,
-                )
+                project to root
             }
+        val mounts = projectRoots.map { (project, root) ->
+            val nestedMounts =
+                projectRoots.map { it.second }.filter { it != root && it.startsWith(root) }.toSet()
+            val moduleRoots = findModuleRoots(root, nestedMounts)
+            ExternalSourceMount(
+                root = root,
+                sourceFiles =
+                    moduleRoots
+                        .flatMap { moduleRoot ->
+                            ModuleSourceRoots.collectKotlinSources(moduleRoot, root)
+                        }
+                        .distinct()
+                        .sorted(),
+                originId = "repo:${project.name}",
+                expectedRevision = project.revision,
+            )
+        }
         return TopologyResult(
             sourceFiles = emptyList(),
             topology = "repo-manifest",
@@ -46,7 +51,7 @@ internal object RepoTopology {
         )
     }
 
-    private fun findModuleRoots(root: Path): List<Path> {
+    private fun findModuleRoots(root: Path, nestedMounts: Set<Path>): List<Path> {
         val moduleRoots = mutableListOf<Path>()
         Files.walkFileTree(
             root,
@@ -56,7 +61,10 @@ internal object RepoTopology {
                     attributes: BasicFileAttributes,
                 ): FileVisitResult {
                     val name = directory.fileName.toString()
-                    if (directory != root && name in IGNORED_DIRECTORY_NAMES) {
+                    if (
+                        directory in nestedMounts ||
+                            (directory != root && name in IGNORED_DIRECTORY_NAMES)
+                    ) {
                         return FileVisitResult.SKIP_SUBTREE
                     }
                     if (name == "src") {
