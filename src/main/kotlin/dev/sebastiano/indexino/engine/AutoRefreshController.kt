@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 /** Runtime-owned, scope-derived watcher that coalesces filesystem hints into refresh requests. */
+@Suppress("TooManyFunctions")
 internal class AutoRefreshController(
     private val workspace: Path,
     private val mode: AutoRefreshMode,

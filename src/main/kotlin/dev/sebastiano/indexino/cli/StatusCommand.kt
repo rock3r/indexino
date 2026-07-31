@@ -69,6 +69,7 @@ internal class StatusCommand : CliktCommand(name = "status") {
             output = output,
         )
 
+    @Suppress("LongMethod")
     fun runStatus(
         project: Path,
         topologyRequest: TopologyRequest,

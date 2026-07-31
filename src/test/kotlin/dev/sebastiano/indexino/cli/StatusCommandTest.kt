@@ -111,6 +111,7 @@ class StatusCommandTest {
         assertTrue(text.contains("\"scope\":\":ui\""), text)
     }
 
+    @Suppress("LongMethod")
     @Test
     fun `status marks resolved repo manifest changes stale`() {
         val workspace = createRepoWorkspace()
