@@ -131,13 +131,7 @@ internal class IndexBuildRunner(
         val resolver = IndexPathResolver(project, storeRootOverride = storeRootOverride)
         val manifestPath = resolver.resolveManifest(commit)
         val previewHash = previewHash(sources)
-        val origins =
-            ManifestOriginResolver.resolve(
-                project,
-                sources,
-                externalOriginMetadata,
-                includeWorkspaceWithoutSources = topologyResult.topology == "gradle-parse",
-            )
+        val origins = resolveOrigins(sources, externalOriginMetadata, topologyResult.topology)
         val criteria =
             ManifestFreshness.criteriaFrom(
                 commit = commit,
@@ -177,6 +171,18 @@ internal class IndexBuildRunner(
         machineProgress?.completed("indexed")
         return CliExitCodes.SUCCESS
     }
+
+    private fun resolveOrigins(
+        sources: List<IndexedSource>,
+        externalOriginMetadata: Map<Path, Pair<String?, String?>>,
+        topology: String,
+    ): List<IndexManifestOrigin> =
+        ManifestOriginResolver.resolve(
+            project,
+            sources,
+            externalOriginMetadata,
+            includeWorkspaceWithoutSources = topology == "gradle-parse",
+        )
 
     private fun previewHash(sources: List<IndexedSource>): String {
         machineProgress?.phaseStarted(SOURCE_HASH_PREVIEW_PHASE, sources.size)
