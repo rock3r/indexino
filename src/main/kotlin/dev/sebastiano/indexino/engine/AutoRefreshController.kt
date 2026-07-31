@@ -90,10 +90,14 @@ internal class AutoRefreshController(
                     }
                     topologyRoots.forEach { root ->
                         add(root)
-                        Files.walk(root).use { paths ->
+                        Files.walk(root, MAX_MODULE_DISCOVERY_DEPTH).use { paths ->
                             paths
                                 .filter { directory ->
                                     Files.isDirectory(directory) &&
+                                        directory.none { segment ->
+                                            segment.toString() == ".git" ||
+                                                segment.toString() == "build"
+                                        } &&
                                         directory.fileName.toString() in SOURCE_ROOT_NAMES &&
                                         directory.parent?.fileName?.toString() == "main" &&
                                         directory.parent?.parent?.fileName?.toString() == "src"
@@ -337,6 +341,7 @@ internal class AutoRefreshController(
         const val DEBOUNCE_MILLIS = 150L
         const val RECONCILIATION_INTERVAL_MILLIS = 30_000L
         const val MAX_RETRY_ATTEMPTS = 3
+        const val MAX_MODULE_DISCOVERY_DEPTH = 6
         val RETRY_DELAYS_MILLIS = longArrayOf(1_000L, 5_000L, 30_000L)
         val SOURCE_ROOT_NAMES = setOf("kotlin", "java", "resources")
     }
