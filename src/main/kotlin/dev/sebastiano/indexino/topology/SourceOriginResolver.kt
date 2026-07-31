@@ -41,7 +41,8 @@ internal object SourceOriginResolver {
     fun externalOriginId(root: Path): String {
         val canonicalRoot = root.toRealPath()
         val identity =
-            listOf(gitRemoteUrl(canonicalRoot).orEmpty(), canonicalRoot.toString()).joinToString("\u0000")
+            listOf(gitRemoteUrl(canonicalRoot).orEmpty(), canonicalRoot.toString())
+                .joinToString("\u0000")
         val digest = MessageDigest.getInstance("SHA-256").digest(identity.toByteArray())
         return "external:" +
             digest

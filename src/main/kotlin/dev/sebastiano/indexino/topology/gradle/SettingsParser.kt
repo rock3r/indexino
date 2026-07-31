@@ -20,7 +20,8 @@ internal object SettingsParser {
     fun parseIncludedBuilds(content: String): List<String> =
         includeBuildPattern.findAll(content).map { it.groupValues[1] }.distinct().toList()
 
-    private val includeBuildPattern = Regex("""includeBuild\s*\(\s*"([^"]+)"\s*\)""")
+    private val includeBuildPattern =
+        Regex("""includeBuild\s*(?:\(\s*)?['\"]([^'\"]+)['\"]\s*\)?""")
     private val projectPattern = Regex("""project\s*\(\s*"([^"]+)"\s*\)""")
     private val quotedModulePattern = Regex(""""([^"]+)"""")
 }

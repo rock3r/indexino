@@ -86,7 +86,12 @@ internal class AutoRefreshController(
                         sourcePath.parent?.let(::add)
                         sourceRoot(sourcePath, source.originRoot)?.let(::add)
                     }
-                    topologyRoots.mapTo(this) { it }
+                    topologyRoots.forEach { root ->
+                        add(root)
+                        SOURCE_ROOT_NAMES.mapTo(this) { sourceName ->
+                            root.resolve("src/main").resolve(sourceName)
+                        }
+                    }
                     topologyInputs(sources).mapTo(this) { it.parent ?: workspace }
                 }
                 .filter { directory -> Files.isDirectory(directory) && !excluded(directory) }

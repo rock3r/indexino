@@ -30,8 +30,8 @@ import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.SourceOriginRevision
 import dev.sebastiano.indexino.model.WorkspaceGenerationId
 import dev.sebastiano.indexino.model.WorkspaceRevision
-import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.IndexBuildProgressReporter
+import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.topology.BuildSystem as InternalBuildSystem
 import dev.sebastiano.indexino.topology.TopologyRequest
 import java.io.IOException
@@ -76,7 +76,9 @@ private constructor(
 
     /** Runtime-owned hook that receives the resolved source closure of completed refreshes. */
     @Volatile
-    internal var onRefreshSucceededForRuntime: ((RefreshRequest, List<IndexedSource>, List<Path>) -> Unit)? = null
+    internal var onRefreshSucceededForRuntime:
+        ((RefreshRequest, List<IndexedSource>, List<Path>) -> Unit)? =
+        null
 
     public companion object {
         /**

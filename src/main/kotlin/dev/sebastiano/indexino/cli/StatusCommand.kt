@@ -116,8 +116,7 @@ internal class StatusCommand : CliktCommand(name = "status") {
                                 fresh = false,
                                 available = false,
                                 diagnostic =
-                                    failure.message
-                                        ?: "Unable to resolve the current topology",
+                                    failure.message ?: "Unable to resolve the current topology",
                             )
                         )
                     )
@@ -143,7 +142,8 @@ internal class StatusCommand : CliktCommand(name = "status") {
             topologyResult.externalSources.associate { mount ->
                 mount.root.toRealPath() to (mount.originId to mount.expectedRevision)
             }
-        val origins = ManifestOriginResolver.resolve(project, currentSources, externalOriginMetadata)
+        val origins =
+            ManifestOriginResolver.resolve(project, currentSources, externalOriginMetadata)
         val pluginCoordinates =
             PluginRegistry.load(javaClass.classLoader).selectedCoordinates(manifest.applications)
         val criteria =

@@ -118,25 +118,33 @@ class StatusCommandTest {
         val request = TopologyRequest(buildSystem = BuildSystem.REPO, repoManifest = manifest)
         assertEquals(
             0,
-            IndexCommand().runIndexedBuild(
-                project = workspace,
-                topologyRequest = request,
-                applications = emptyList(),
-            ),
+            IndexCommand()
+                .runIndexedBuild(
+                    project = workspace,
+                    topologyRequest = request,
+                    applications = emptyList(),
+                ),
         )
 
         val freshOutput = StringBuilder()
         assertEquals(
             0,
-            StatusCommand().runStatus(
-                project = workspace,
-                topologyRequest = request,
-                output = { freshOutput.appendLine(it) },
-            ),
+            StatusCommand()
+                .runStatus(
+                    project = workspace,
+                    topologyRequest = request,
+                    output = { freshOutput.appendLine(it) },
+                ),
         )
         assertTrue(freshOutput.toString().contains("\"fresh\":true"), freshOutput.toString())
         val cleanGitStatus =
-            ProcessBuilder("git", "-C", workspace.resolve("tools").toString(), "status", "--porcelain")
+            ProcessBuilder(
+                    "git",
+                    "-C",
+                    workspace.resolve("tools").toString(),
+                    "status",
+                    "--porcelain",
+                )
                 .redirectErrorStream(true)
                 .start()
                 .inputStream
@@ -159,7 +167,13 @@ class StatusCommandTest {
         val untrackedInput = workspace.resolve("tools/untracked.config")
         untrackedInput.writeText("generated input")
         val gitStatus =
-            ProcessBuilder("git", "-C", workspace.resolve("tools").toString(), "status", "--porcelain")
+            ProcessBuilder(
+                    "git",
+                    "-C",
+                    workspace.resolve("tools").toString(),
+                    "status",
+                    "--porcelain",
+                )
                 .redirectErrorStream(true)
                 .start()
                 .inputStream
@@ -182,11 +196,12 @@ class StatusCommandTest {
         val dirtyOutput = StringBuilder()
         assertEquals(
             0,
-            StatusCommand().runStatus(
-                project = workspace,
-                topologyRequest = request,
-                output = { dirtyOutput.appendLine(it) },
-            ),
+            StatusCommand()
+                .runStatus(
+                    project = workspace,
+                    topologyRequest = request,
+                    output = { dirtyOutput.appendLine(it) },
+                ),
         )
         assertFalse(dirtyOutput.toString().contains("\"fresh\":true"), dirtyOutput.toString())
         Files.delete(untrackedInput)
@@ -196,16 +211,18 @@ class StatusCommandTest {
             <manifest>
               <project name="tools" path="tools" revision="two" />
             </manifest>
-            """.trimIndent(),
+            """
+                .trimIndent()
         )
 
         val output = StringBuilder()
         val exitCode =
-            StatusCommand().runStatus(
-                project = workspace,
-                topologyRequest = request,
-                output = { output.appendLine(it) },
-            )
+            StatusCommand()
+                .runStatus(
+                    project = workspace,
+                    topologyRequest = request,
+                    output = { output.appendLine(it) },
+                )
 
         assertEquals(0, exitCode)
         assertFalse(output.toString().contains("\"fresh\":true"), output.toString())
@@ -218,21 +235,23 @@ class StatusCommandTest {
         val request = TopologyRequest(buildSystem = BuildSystem.REPO, repoManifest = manifest)
         assertEquals(
             0,
-            IndexCommand().runIndexedBuild(
-                project = workspace,
-                topologyRequest = request,
-                applications = emptyList(),
-            ),
+            IndexCommand()
+                .runIndexedBuild(
+                    project = workspace,
+                    topologyRequest = request,
+                    applications = emptyList(),
+                ),
         )
         assertTrue(workspace.resolve("tools").toFile().deleteRecursively())
 
         val output = StringBuilder()
         val exitCode =
-            StatusCommand().runStatus(
-                project = workspace,
-                topologyRequest = request,
-                output = { output.appendLine(it) },
-            )
+            StatusCommand()
+                .runStatus(
+                    project = workspace,
+                    topologyRequest = request,
+                    output = { output.appendLine(it) },
+                )
 
         assertEquals(CliExitCodes.TOPOLOGY_FAILED, exitCode)
         assertTrue(output.toString().contains("\"fresh\":false"), output.toString())
@@ -245,21 +264,18 @@ class StatusCommandTest {
         val manifest = workspace.resolve(".repo/manifest.xml")
         assertEquals(
             0,
-            IndexCommand().runIndexedBuild(
-                project = workspace,
-                topologyRequest = TopologyRequest(buildSystem = BuildSystem.REPO, repoManifest = manifest),
-                applications = emptyList(),
-            ),
+            IndexCommand()
+                .runIndexedBuild(
+                    project = workspace,
+                    topologyRequest =
+                        TopologyRequest(buildSystem = BuildSystem.REPO, repoManifest = manifest),
+                    applications = emptyList(),
+                ),
         )
         assertTrue(workspace.resolve("tools").toFile().deleteRecursively())
 
         val result =
-            StatusCommand().test(
-                "--project",
-                workspace.toString(),
-                "--build-system",
-                "repo",
-            )
+            StatusCommand().test("--project", workspace.toString(), "--build-system", "repo")
 
         assertEquals(CliExitCodes.TOPOLOGY_FAILED, result.statusCode)
         assertTrue(result.output.contains("\"fresh\":false"), result.output)
@@ -307,13 +323,16 @@ class StatusCommandTest {
         tempDirs.add(workspace)
         Files.createDirectories(workspace.resolve(".repo"))
         Files.createDirectories(workspace.resolve("tools/src/main/kotlin"))
-        workspace.resolve(".repo/manifest.xml").writeText(
-            """
-            <manifest>
-              <project name="tools" path="tools" revision="one" />
-            </manifest>
-            """.trimIndent(),
-        )
+        workspace
+            .resolve(".repo/manifest.xml")
+            .writeText(
+                """
+                <manifest>
+                  <project name="tools" path="tools" revision="one" />
+                </manifest>
+                """
+                    .trimIndent()
+            )
         Files.writeString(workspace.resolve("tools/src/main/kotlin/Tool.kt"), "class Tool")
         val tools = workspace.resolve("tools")
         runGit(tools, "init")

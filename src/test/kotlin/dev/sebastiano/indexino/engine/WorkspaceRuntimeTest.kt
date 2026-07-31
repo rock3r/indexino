@@ -169,10 +169,12 @@ class WorkspaceRuntimeTest {
 
     @Test
     fun `empty external included build keeps its topology inputs in the watcher closure`() {
-        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-empty-external-")
+        val cacheRoot =
+            Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-empty-external-")
         val fixtureRoot =
             Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-empty-external-root-")
-        val workspace = createGradleWorkspaceWithExternalIncludedBuild(fixtureRoot, withExternalSource = false)
+        val workspace =
+            createGradleWorkspaceWithExternalIncludedBuild(fixtureRoot, withExternalSource = false)
         val externalBuild = fixtureRoot.resolve("build-logic")
         val previousCacheRoot = System.getProperty("indexino.cache.dir")
         System.setProperty("indexino.cache.dir", cacheRoot.toString())

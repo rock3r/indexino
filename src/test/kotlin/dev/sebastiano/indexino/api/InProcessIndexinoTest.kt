@@ -340,13 +340,12 @@ class InProcessIndexinoTest {
                 val snapshot = runSuspend { indexino.snapshot() }
                 try {
                     assertEquals(initial.generation, snapshot.generation)
-                    val symbols =
-                        runSuspend {
-                            snapshot.findSymbols(
-                                SymbolQuery.named("ActionButton"),
-                                QueryOptions.page(1),
-                            )
-                        }
+                    val symbols = runSuspend {
+                        snapshot.findSymbols(
+                            SymbolQuery.named("ActionButton"),
+                            QueryOptions.page(1),
+                        )
+                    }
                     assertEquals(1, symbols.items.size)
                 } finally {
                     snapshot.close()

@@ -20,7 +20,8 @@ internal object GradleTopology {
 
         val settingsContent = settingsFile.readText()
         val includes = SettingsParser.parseIncludes(settingsContent)
-        val externalMounts = resolveExternalMounts(workspace, settingsFile, settingsContent, onStderr)
+        val externalMounts =
+            resolveExternalMounts(workspace, settingsFile, settingsContent, onStderr)
         if (includes.isEmpty()) {
             onStderr("gradle-parse: no included modules in ${settingsFile.fileName}")
         }

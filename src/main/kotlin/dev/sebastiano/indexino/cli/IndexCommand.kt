@@ -19,6 +19,7 @@ import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.IndexManifest
+import dev.sebastiano.indexino.core.manifest.IndexManifestOrigin
 import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.model.PluginId
@@ -155,6 +156,17 @@ internal class IndexCommand : CliktCommand(name = "index") {
                 sourcesContentHash = manifest.stateFingerprint,
                 builtAt = Instant.now().toString(),
                 applications = manifest.applications,
+                origins =
+                    manifest.origins.map { origin ->
+                        IndexManifestOrigin(
+                            originId = origin.originId,
+                            revision = origin.revision,
+                            stateFingerprint = origin.stateFingerprint,
+                            expectedRevision = origin.expectedRevision,
+                            dirty = origin.dirty,
+                            available = origin.available,
+                        )
+                    },
             ),
         )
     }

@@ -20,6 +20,21 @@ class SettingsParserTest {
     }
 
     @Test
+    fun `parses Groovy included build declarations`() {
+        val content =
+            """
+            includeBuild '../build-logic'
+            includeBuild('tools/conventions')
+            """
+                .trimIndent()
+
+        assertEquals(
+            listOf("../build-logic", "tools/conventions"),
+            SettingsParser.parseIncludedBuilds(content),
+        )
+    }
+
+    @Test
     fun `parses include list from settings kts`() {
         val content =
             """

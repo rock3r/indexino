@@ -45,11 +45,14 @@ class GradleIncludedBuildTopologyTest {
     fun `rejects included builds outside the workspace parent policy`() {
         val root = createTempDirectory("indexino-external-policy-").also(temporaryDirectories::add)
         val workspace = root.resolve("app").also { it.createDirectories() }
-        val outside = root.parent.resolve("${root.fileName}-outside").also {
-            it.createDirectories()
-            temporaryDirectories.add(it)
-        }
-        workspace.resolve("settings.gradle.kts").writeText("includeBuild(\"../../${outside.fileName}\")")
+        val outside =
+            root.parent.resolve("${root.fileName}-outside").also {
+                it.createDirectories()
+                temporaryDirectories.add(it)
+            }
+        workspace
+            .resolve("settings.gradle.kts")
+            .writeText("includeBuild(\"../../${outside.fileName}\")")
         outside.resolve("settings.gradle.kts").writeText("rootProject.name = \"outside\"")
 
         val failure =

@@ -25,7 +25,7 @@ internal object ManifestOriginResolver {
                             .joinToString("\n") { source ->
                                 val file = source.originRoot.resolve(source.path)
                                 "${source.path}:${FileHashProducer.contentHash(file.readText())}"
-                            },
+                            }
                     )
                 IndexManifestOrigin(
                     originId = originId,
@@ -67,7 +67,8 @@ internal object ManifestOriginResolver {
 
     private fun expectedSubmoduleRevision(workspace: Path, originRoot: Path): String? {
         val canonicalWorkspace = workspace.toRealPath()
-        if (originRoot == canonicalWorkspace || !originRoot.startsWith(canonicalWorkspace)) return null
+        if (originRoot == canonicalWorkspace || !originRoot.startsWith(canonicalWorkspace))
+            return null
         val mount = canonicalWorkspace.relativize(originRoot).toString().replace('\\', '/')
         val process =
             runCatching {
