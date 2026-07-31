@@ -71,6 +71,7 @@ internal class AutoRefreshController(
         )
     }
 
+    @Suppress("CyclomaticComplexMethod")
     fun register(
         request: RefreshRequest,
         sources: List<IndexedSource>,
@@ -89,8 +90,14 @@ internal class AutoRefreshController(
                     }
                     topologyRoots.forEach { root ->
                         add(root)
-                        SOURCE_ROOT_NAMES.mapTo(this) { sourceName ->
-                            root.resolve("src/main").resolve(sourceName)
+                        SOURCE_ROOT_NAMES.forEach { sourceName ->
+                            root.resolve("src/main").resolve(sourceName).let { sourceRoot ->
+                                if (Files.isDirectory(sourceRoot)) {
+                                    Files.walk(sourceRoot).use { paths ->
+                                        paths.filter(Files::isDirectory).forEach(::add)
+                                    }
+                                }
+                            }
                         }
                     }
                     topologyInputs(sources).mapTo(this) { it.parent ?: workspace }

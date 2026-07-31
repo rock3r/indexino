@@ -14,13 +14,9 @@ import dev.sebastiano.indexino.api.IndexScope
 import dev.sebastiano.indexino.api.Indexino
 import dev.sebastiano.indexino.api.IndexinoConfiguration
 import dev.sebastiano.indexino.api.RefreshRequest
-import dev.sebastiano.indexino.core.Version
 import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.git.GitHeadResolver
-import dev.sebastiano.indexino.core.manifest.IndexManifest
-import dev.sebastiano.indexino.core.manifest.IndexManifestOrigin
-import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.model.PluginId
 import dev.sebastiano.indexino.producer.IndexBuildProgressReporter
@@ -31,7 +27,6 @@ import dev.sebastiano.indexino.topology.TopologyRequest
 import dev.sebastiano.indexino.topology.bazel.BazelProcessRunner
 import dev.sebastiano.indexino.topology.bazel.BazelQueryExecutor
 import java.nio.file.Path
-import java.time.Instant
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -144,31 +139,6 @@ internal class IndexCommand : CliktCommand(name = "index") {
         val commit = GitHeadResolver.resolve(project)
         ContentAddressedPackCache(cacheRoot)
             .materializeDirectory(manifest.packKeys.single(), resolver.resolveBaseStore(commit))
-        ManifestIO.write(
-            resolver.resolveManifest(commit),
-            IndexManifest(
-                commit = commit,
-                indexerVersion = Version.NAME,
-                scope = manifest.scopeValue,
-                topology = manifest.scopeBuildSystem,
-                includeDeps = manifest.includesDependencies,
-                sourceFileCount = 0,
-                sourcesContentHash = manifest.stateFingerprint,
-                builtAt = Instant.now().toString(),
-                applications = manifest.applications,
-                origins =
-                    manifest.origins.map { origin ->
-                        IndexManifestOrigin(
-                            originId = origin.originId,
-                            revision = origin.revision,
-                            stateFingerprint = origin.stateFingerprint,
-                            expectedRevision = origin.expectedRevision,
-                            dirty = origin.dirty,
-                            available = origin.available,
-                        )
-                    },
-            ),
-        )
     }
 
     private fun daemonScope(project: Path): IndexScope {

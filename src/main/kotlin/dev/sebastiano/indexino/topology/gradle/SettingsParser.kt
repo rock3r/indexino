@@ -18,7 +18,13 @@ internal object SettingsParser {
     }
 
     fun parseIncludedBuilds(content: String): List<String> =
-        includeBuildPattern.findAll(content).map { it.groupValues[1] }.distinct().toList()
+        includeBuildPattern
+            .findAll(content.lineSequence().filterNot(::isLineComment).joinToString("\n"))
+            .map { it.groupValues[1] }
+            .distinct()
+            .toList()
+
+    private fun isLineComment(line: String): Boolean = line.trimStart().startsWith("//")
 
     private val includeBuildPattern =
         Regex("""includeBuild\s*(?:\(\s*)?['\"]([^'\"]+)['\"]\s*\)?""")
