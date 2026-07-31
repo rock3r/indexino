@@ -95,8 +95,7 @@ internal class AutoRefreshController(
                                 .filter { directory ->
                                     Files.isDirectory(directory) &&
                                         directory.none { segment ->
-                                            segment.toString() == ".git" ||
-                                                segment.toString() == "build"
+                                            segment.toString() == ".git"
                                         } &&
                                         directory.fileName.toString() in SOURCE_ROOT_NAMES &&
                                         directory.parent?.fileName?.toString() == "main" &&
