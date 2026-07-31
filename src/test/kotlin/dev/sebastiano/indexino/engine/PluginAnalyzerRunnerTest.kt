@@ -42,13 +42,14 @@ class PluginAnalyzerRunnerTest {
                             IndexedSource("git:first", root, "A.kt"),
                             IndexedSource("git:second", root, "B.kt"),
                         ),
+                    resolvedOriginIds = setOf("git:first", "git:second", "git:empty"),
                 )
 
             PluginAnalyzerRunner(registry).analyze(context, setOf(pluginId.value))
 
-            assertEquals(setOf("git:first", "git:second"), processor.origins)
+            assertEquals(setOf("git:empty", "git:first", "git:second"), processor.origins)
             assertEquals(
-                setOf("git:first", "git:second"),
+                setOf("git:empty", "git:first", "git:second"),
                 store
                     .prefixScan("plugin:${pluginId.value}:")
                     .map { it.second as PluginFactRecord }

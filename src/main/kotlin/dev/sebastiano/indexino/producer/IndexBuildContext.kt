@@ -15,6 +15,7 @@ internal data class IndexBuildContext(
     val sources: List<IndexedSource> = sourceFiles.map {
         IndexedSource.workspace(workspaceRoot, it)
     },
+    val resolvedOriginIds: Set<String> = sources.mapTo(linkedSetOf()) { it.originId },
     val progress: ((String) -> Unit)? = null,
     val machineProgress: IndexBuildProgressReporter? = null,
     val activePhase: String? = null,

@@ -227,7 +227,7 @@ class StatusCommandTest {
                 ),
                 mapOf(workspace.resolve("tools").toRealPath() to ("repo:tools" to "one")),
             )
-        assertFalse(cleanOrigins.single().dirty, "$cleanOrigins")
+        assertFalse(cleanOrigins.single { it.originId == "repo:tools" }.dirty, "$cleanOrigins")
         val untrackedInput = workspace.resolve("tools/untracked.config")
         untrackedInput.writeText("generated input")
         val gitStatus =
@@ -256,7 +256,10 @@ class StatusCommandTest {
                 ),
                 mapOf(workspace.resolve("tools").toRealPath() to ("repo:tools" to "one")),
             )
-        assertTrue(dirtyOrigins.single().dirty, "$gitStatus origins=$dirtyOrigins")
+        assertTrue(
+            dirtyOrigins.single { it.originId == "repo:tools" }.dirty,
+            "$gitStatus origins=$dirtyOrigins",
+        )
         val dirtyOutput = StringBuilder()
         assertEquals(
             0,
@@ -442,8 +445,11 @@ class StatusCommandTest {
                     mapOf(externalRoot.toRealPath() to ("gradle:build-logic" to "expected")),
             )
 
-        assertEquals(listOf("gradle:build-logic"), origins.map { it.originId })
-        assertEquals("expected", origins.single().expectedRevision)
+        assertEquals(listOf("gradle:build-logic", "workspace"), origins.map { it.originId })
+        assertEquals(
+            "expected",
+            origins.single { it.originId == "gradle:build-logic" }.expectedRevision,
+        )
         val unlabelledOrigins =
             ManifestOriginResolver.resolve(
                 workspace,
@@ -451,7 +457,7 @@ class StatusCommandTest {
                 externalOriginMetadata = mapOf(externalRoot.toRealPath() to (null to null)),
             )
         assertEquals(
-            listOf(SourceOriginResolver.externalOriginId(externalRoot)),
+            listOf(SourceOriginResolver.externalOriginId(externalRoot), "workspace"),
             unlabelledOrigins.map { it.originId },
         )
     }

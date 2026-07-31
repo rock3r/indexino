@@ -215,6 +215,7 @@ internal class IndexBuildRunner(
                     sourceFiles = sourceFiles,
                     workspaceRoot = project,
                     sources = sources,
+                    resolvedOriginIds = origins.mapTo(linkedSetOf()) { it.originId },
                     progress = progress,
                     machineProgress = machineProgress,
                     changedSourceFiles = changes.changedFiles,

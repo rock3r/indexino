@@ -50,7 +50,18 @@ internal object ManifestOriginResolver {
                         expectedRevision = metadata.second,
                     )
                 }
-        return (sourceOrigins + emptyExternalOrigins).sortedBy { it.originId }
+        val workspaceOrigin =
+            sourceOrigins.firstOrNull { it.originId == WORKSPACE_ORIGIN_ID }
+                ?: origin(
+                    workspace = workspace,
+                    originId = WORKSPACE_ORIGIN_ID,
+                    originRoot = workspace,
+                    sourceFingerprint = FileHashProducer.contentHash(""),
+                    expectedRevision = null,
+                )
+        return (sourceOrigins + emptyExternalOrigins + workspaceOrigin)
+            .distinctBy { it.originId }
+            .sortedBy { it.originId }
     }
 
     private fun origin(
@@ -132,4 +143,5 @@ internal object ManifestOriginResolver {
 
     private const val PORCELAIN_STATUS_PREFIX_LENGTH = 3
     private const val TRANSITIONAL_INDEX_DIRECTORY = ".indexino"
+    private const val WORKSPACE_ORIGIN_ID = "workspace"
 }

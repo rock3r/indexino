@@ -98,10 +98,8 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                     it.pluginId.value == pluginId && it.processor.level == PostProcessLevelV1.SHARD
                 }
                 .forEach { registered ->
-                    context.sources
-                        .map { it.originId }
-                        .distinct()
-                        .ifEmpty { listOf("workspace") }
+                    context.resolvedOriginIds
+                        .ifEmpty { setOf("workspace") }
                         .forEach { originId ->
                             runBlocking {
                                 registered.processor.process(
