@@ -11,6 +11,12 @@ internal enum class AutoRefreshWatcherKind {
  * Selects the platform watcher transport without exposing platform details to refresh scheduling.
  */
 internal object AutoRefreshWatcherFactory {
+    fun configuredKind(
+        platformName: String = System.getProperty("os.name"),
+        override: String? = System.getProperty("indexino.autoRefreshWatcherKind"),
+    ): AutoRefreshWatcherKind =
+        override?.let(AutoRefreshWatcherKind::valueOf) ?: kindForPlatform(platformName)
+
     fun kindForPlatform(
         platformName: String = System.getProperty("os.name")
     ): AutoRefreshWatcherKind =

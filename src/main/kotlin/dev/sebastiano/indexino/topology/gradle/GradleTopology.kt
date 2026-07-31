@@ -20,7 +20,7 @@ internal object GradleTopology {
 
         val settingsContent = settingsFile.readText()
         val includes = SettingsParser.parseIncludes(settingsContent)
-        val externalMounts = resolveExternalMounts(workspace, settingsFile, settingsContent)
+        val externalMounts = resolveExternalMounts(workspace, settingsFile, settingsContent, onStderr)
         if (includes.isEmpty()) {
             onStderr("gradle-parse: no included modules in ${settingsFile.fileName}")
         }
@@ -91,8 +91,10 @@ internal object GradleTopology {
         workspace: Path,
         settingsFile: Path,
         settingsContent: String,
+        onStderr: (String) -> Unit,
     ): List<Path> {
         val canonicalWorkspace = workspace.toRealPath()
+        val allowedExternalRoot = canonicalWorkspace.parent ?: canonicalWorkspace
         val visitedBuilds = linkedSetOf(canonicalWorkspace)
         val externalMounts = linkedSetOf<Path>()
 
@@ -103,8 +105,16 @@ internal object GradleTopology {
                     "Gradle included build mount is unavailable: $declaredRoot"
                 }
                 val buildRoot = declaredRoot.toRealPath()
+                require(buildRoot.startsWith(allowedExternalRoot)) {
+                    "Gradle included build is outside the allowed external root policy: $buildRoot"
+                }
                 if (!visitedBuilds.add(buildRoot)) return@forEach
-                if (buildRoot != canonicalWorkspace) externalMounts.add(buildRoot)
+                if (buildRoot != canonicalWorkspace) {
+                    externalMounts.add(buildRoot)
+                    if (!buildRoot.startsWith(canonicalWorkspace)) {
+                        onStderr("gradle-parse: external included build $buildRoot")
+                    }
+                }
                 val nestedSettings =
                     listOf("settings.gradle.kts", "settings.gradle")
                         .map(buildRoot::resolve)

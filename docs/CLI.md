@@ -90,6 +90,11 @@ otherwise Gradle when `settings.gradle(.kts)` is present; a resolved `.repo/mani
 also detected as repo topology. Pass `--bazel-target` or `--gradle-module` for the scope.
 Embedded API scopes stay explicit (`IndexScope.bazel` / `gradle`); CLI may keep auto-detect.
 
+Gradle `includeBuild` mounts are canonicalized, deduplicated, and cycle-checked. The default
+external-root policy permits included builds inside the workspace or its canonical parent tree,
+which supports sibling builds while rejecting unrelated mounts. Each resolved sibling/external build
+is reported as a `gradle-parse: external included build …` diagnostic and indexed as its own origin.
+
 **Repo topology is not yet available through the daemon-backed `index` command.** The internal
 build runner supports repo-origin discovery and provenance while daemon scope support is being
 completed; use explicit Bazel or Gradle scope selection for daemon-backed indexing.
@@ -187,7 +192,9 @@ indexino status --project /path/to/gradle-repo --gradle-module :ui
 ```
 
 When scope flags are omitted, freshness is checked against the scope and `includeDeps` stored in the
-generation manifest (whether the index is still current for its own configuration). May include
+generation manifest (whether the index is still current for its own configuration). A resolved child
+origin that is unavailable leaves the last complete generation intact but reports `fresh: false`,
+`available: false`, and a diagnostic; the command exits with the topology failure code. May include
 reclaimable-cache hints for operators. **Transitional shipping CLI** may still re-resolve topology
 and rehash — that is a bug relative to the product contract, not a feature to preserve.
 

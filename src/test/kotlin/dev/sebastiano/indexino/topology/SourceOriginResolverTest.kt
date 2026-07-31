@@ -7,6 +7,7 @@ import kotlin.io.path.writeText
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 
 class SourceOriginResolverTest {
     private val temporaryDirectories = mutableListOf<Path>()
@@ -18,7 +19,7 @@ class SourceOriginResolverTest {
     }
 
     @Test
-    fun `uses Git remote identity for external mounts`() {
+    fun `distinguishes external mounts with the same Git remote`() {
         val first = temporaryDirectory("indexino-external-first-")
         val second = temporaryDirectory("indexino-external-second-")
         first.resolve("Source.kt").writeText("class First")
@@ -28,7 +29,7 @@ class SourceOriginResolverTest {
         runGit(first, "remote", "add", "origin", "https://example.invalid/build-logic.git")
         runGit(second, "remote", "add", "origin", "https://example.invalid/build-logic.git")
 
-        assertEquals(
+        assertNotEquals(
             SourceOriginResolver.externalOriginId(first),
             SourceOriginResolver.externalOriginId(second),
         )

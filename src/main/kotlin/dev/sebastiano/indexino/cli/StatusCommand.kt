@@ -7,9 +7,7 @@ import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import com.github.ajalt.clikt.parameters.types.file
-import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.core.Version
-import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.ManifestFreshness
 import dev.sebastiano.indexino.core.manifest.ManifestIO
@@ -24,6 +22,8 @@ import dev.sebastiano.indexino.topology.bazel.BazelProcessRunner
 import dev.sebastiano.indexino.topology.bazel.BazelQueryExecutor
 import java.nio.file.Path
 import kotlin.io.path.exists
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -38,33 +38,19 @@ internal class StatusCommand : CliktCommand(name = "status") {
     private val includeDeps by option("--include-deps").flag(default = false)
 
     override fun run() {
-        val workspace = requireNotNull(project).toPath().toRealPath()
-        val manifest =
-            WorkspaceGenerationManifestStore(
-                    InProcessCacheLayout.cacheRoot(),
-                    InProcessCacheLayout.workspaceId(workspace),
-                )
-                .current()
-        if (manifest == null) {
-            echo(
-                Json.encodeToString(
-                    StatusReport(indexed = false, commit = GitHeadResolver.resolve(workspace))
-                )
+        val exitCode =
+            runStatus(
+                project = requireNotNull(project).toPath().toRealPath(),
+                topologyRequest =
+                    TopologyRequest(
+                        buildSystem = parseBuildSystem(buildSystem),
+                        bazelTarget = bazelTarget,
+                        gradleModule = gradleModule,
+                        includeDeps = includeDeps,
+                    ),
+                output = ::echo,
             )
-            throw ProgramResult(CliExitCodes.ANALYSIS_ERROR)
-        }
-        echo(
-            Json.encodeToString(
-                StatusReport(
-                    indexed = true,
-                    commit = manifest.revision.orEmpty(),
-                    scope = manifest.scopeValue,
-                    topology = manifest.scopeBuildSystem,
-                    applications = manifest.applications,
-                    fresh = true,
-                )
-            )
-        )
+        if (exitCode != CliExitCodes.SUCCESS) throw ProgramResult(exitCode)
     }
 
     fun runStatus(
@@ -107,12 +93,36 @@ internal class StatusCommand : CliktCommand(name = "status") {
                 manifest.includeDeps,
             )
         val topologyResult =
-            TopologyResolver.resolve(
-                project = project,
-                request = request,
-                bazelQueryExecutor = bazelQueryExecutor,
-                bazelProcessRunner = bazelProcessRunner,
-            )
+            runCatching {
+                    TopologyResolver.resolve(
+                        project = project,
+                        request = request,
+                        bazelQueryExecutor = bazelQueryExecutor,
+                        bazelProcessRunner = bazelProcessRunner,
+                    )
+                }
+                .getOrElse { failure ->
+                    output(
+                        Json.encodeToString(
+                            StatusReport(
+                                indexed = true,
+                                commit = commit,
+                                scope = manifest.scope,
+                                topology = manifest.topology,
+                                indexerVersion = manifest.indexerVersion,
+                                sourceFileCount = manifest.sourceFileCount,
+                                builtAt = manifest.builtAt,
+                                applications = manifest.applications,
+                                fresh = false,
+                                available = false,
+                                diagnostic =
+                                    failure.message
+                                        ?: "Unable to resolve the current topology",
+                            )
+                        )
+                    )
+                    return CliExitCodes.TOPOLOGY_FAILED
+                }
         val currentSources =
             SourceOriginResolver.resolve(project, topologyResult.sourceFiles).flatMap { origin ->
                 origin.sourceFiles.map { path ->
@@ -129,6 +139,11 @@ internal class StatusCommand : CliktCommand(name = "status") {
                     }
                 }
         val currentHash = FileHashProducer.combinedIndexedSourcesHash(currentSources)
+        val externalOriginMetadata =
+            topologyResult.externalSources.associate { mount ->
+                mount.root.toRealPath() to (mount.originId to mount.expectedRevision)
+            }
+        val origins = ManifestOriginResolver.resolve(project, currentSources, externalOriginMetadata)
         val pluginCoordinates =
             PluginRegistry.load(javaClass.classLoader).selectedCoordinates(manifest.applications)
         val criteria =
@@ -141,6 +156,8 @@ internal class StatusCommand : CliktCommand(name = "status") {
                 sourcesContentHash = currentHash,
                 applications = manifest.applications,
                 pluginCoordinates = pluginCoordinates,
+                origins = origins,
+                resolvedTopologyDigest = topologyResult.resolvedTopologyDigest,
             )
         val fresh = ManifestFreshness.isFresh(manifest, criteria)
 
@@ -205,6 +222,7 @@ internal class StatusCommand : CliktCommand(name = "status") {
         }
 }
 
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 internal data class StatusReport(
     val indexed: Boolean,
@@ -215,7 +233,9 @@ internal data class StatusReport(
     val sourceFileCount: Int = 0,
     val builtAt: String = "",
     val applications: List<String> = emptyList(),
-    val fresh: Boolean = false,
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS) val fresh: Boolean = false,
+    val available: Boolean = true,
+    val diagnostic: String = "",
     val currentSourcesContentHash: String = "",
     val manifestSourcesContentHash: String = "",
 )

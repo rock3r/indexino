@@ -30,6 +30,7 @@ import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.SourceOriginRevision
 import dev.sebastiano.indexino.model.WorkspaceGenerationId
 import dev.sebastiano.indexino.model.WorkspaceRevision
+import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.IndexBuildProgressReporter
 import dev.sebastiano.indexino.topology.BuildSystem as InternalBuildSystem
 import dev.sebastiano.indexino.topology.TopologyRequest
@@ -75,7 +76,7 @@ private constructor(
 
     /** Runtime-owned hook that receives the resolved source closure of completed refreshes. */
     @Volatile
-    internal var onRefreshSucceededForRuntime: ((RefreshRequest, List<String>) -> Unit)? = null
+    internal var onRefreshSucceededForRuntime: ((RefreshRequest, List<IndexedSource>, List<Path>) -> Unit)? = null
 
     public companion object {
         /**
@@ -302,7 +303,11 @@ private constructor(
                     request.scope,
                     applications,
                 )
-                onRefreshSucceededForRuntime?.invoke(request, execution.sourceFiles)
+                onRefreshSucceededForRuntime?.invoke(
+                    request,
+                    execution.sources,
+                    execution.topologyRoots,
+                )
                 val changedFileCount = execution.changes?.changedFiles?.size ?: 0
                 val removedFileCount = execution.changes?.deletedFiles?.size ?: 0
                 val result =

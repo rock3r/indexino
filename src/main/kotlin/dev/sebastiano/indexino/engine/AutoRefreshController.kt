@@ -5,6 +5,7 @@ import dev.sebastiano.indexino.api.FreshnessPolicy
 import dev.sebastiano.indexino.api.RefreshHandle
 import dev.sebastiano.indexino.api.RefreshRequest
 import dev.sebastiano.indexino.api.SnapshotFreshness
+import dev.sebastiano.indexino.producer.IndexedSource
 import java.io.IOException
 import java.nio.file.FileSystems
 import java.nio.file.Files
@@ -30,10 +31,7 @@ internal class AutoRefreshController(
     private val reconciliationIntervalMillis: Long = RECONCILIATION_INTERVAL_MILLIS,
 ) : AutoCloseable {
     private val closed = AtomicBoolean()
-    private val watcherKind = AutoRefreshWatcherFactory.kindForPlatform()
-    private val watchService: WatchService? =
-        if (watcherKind == AutoRefreshWatcherKind.MAC_FSEVENTS) null
-        else FileSystems.getDefault().newWatchService()
+    private val watcherKind = AutoRefreshWatcherFactory.configuredKind()
     private val scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "indexino-auto-refresh").apply { isDaemon = true }
     }
@@ -47,18 +45,21 @@ internal class AutoRefreshController(
     private val automatic = ConcurrentHashMap.newKeySet<RefreshRequest>()
     private val retryAttempts = ConcurrentHashMap<RefreshRequest, Int>()
     private val uncovered = ConcurrentHashMap.newKeySet<RefreshRequest>()
+    private val macWatcher: MacFseventsWatcher? =
+        if (watcherKind == AutoRefreshWatcherKind.MAC_FSEVENTS) {
+            runCatching { MacFseventsWatcher(workspace, ::onMacPathChanged, ::onWatcherOverflow) }
+                .getOrNull()
+        } else {
+            null
+        }
+    // FSEvents is the primary macOS transport; WatchService supplies portable fallback coverage.
+    private val watchService: WatchService? = FileSystems.getDefault().newWatchService()
     private val watcher: Thread? = watchService?.let {
         Thread(::watch, "indexino-source-watcher").apply {
             isDaemon = true
             start()
         }
     }
-    private val macWatcher: MacFseventsWatcher? =
-        if (watcherKind == AutoRefreshWatcherKind.MAC_FSEVENTS) {
-            MacFseventsWatcher(workspace, ::onMacPathChanged, ::onWatcherOverflow)
-        } else {
-            null
-        }
 
     init {
         scheduler.scheduleWithFixedDelay(
@@ -69,24 +70,31 @@ internal class AutoRefreshController(
         )
     }
 
-    fun register(request: RefreshRequest, sourceFiles: List<String>) {
+    fun register(
+        request: RefreshRequest,
+        sources: List<IndexedSource>,
+        topologyRoots: List<Path> = emptyList(),
+    ) {
         if (closed.get()) return
         val directories =
             buildSet {
-                    sourceFiles.forEach { source ->
-                        val sourcePath = workspace.resolve(source).normalize()
+                    sources.forEach { source ->
+                        val sourcePath = source.originRoot.resolve(source.path).normalize()
+                        require(sourcePath.startsWith(source.originRoot)) {
+                            "Indexed source escapes its origin root: ${source.path}"
+                        }
                         sourcePath.parent?.let(::add)
-                        sourceRoot(sourcePath)?.let(::add)
+                        sourceRoot(sourcePath, source.originRoot)?.let(::add)
                     }
-                    topologyInputs(sourceFiles).mapTo(this) { it.parent ?: workspace }
+                    topologyRoots.mapTo(this) { it }
+                    topologyInputs(sources).mapTo(this) { it.parent ?: workspace }
                 }
-                .filter { directory ->
-                    Files.isDirectory(directory) &&
-                        directory.startsWith(workspace) &&
-                        !excluded(directory)
-                }
+                .filter { directory -> Files.isDirectory(directory) && !excluded(directory) }
                 .toSet()
-        directoriesByRequest[request] = directories
+        val previousDirectories = directoriesByRequest.put(request, directories).orEmpty()
+        (previousDirectories - directories).forEach { directory ->
+            removeRequestFromDirectory(directory, request)
+        }
         var coverageComplete = directories.isNotEmpty()
         directories.forEach { directory ->
             if (keys.size >= maxWatchedDirectories && keys.values.none { it == directory }) {
@@ -100,6 +108,11 @@ internal class AutoRefreshController(
         }
         if (coverageComplete) uncovered.remove(request) else uncovered.add(request)
     }
+
+    internal fun directoriesForTests(request: RefreshRequest): Set<Path> =
+        directoriesByRequest[request].orEmpty()
+
+    internal fun onPathChangedForTests(path: Path) = onMacPathChanged(path)
 
     fun onRefreshStarted(request: RefreshRequest, handle: RefreshHandle) {
         active[request] = handle.id.value
@@ -230,8 +243,20 @@ internal class AutoRefreshController(
         )
     }
 
+    private fun removeRequestFromDirectory(directory: Path, request: RefreshRequest) {
+        val requests = requestsByDirectory[directory] ?: return
+        requests.remove(request)
+        if (requests.isNotEmpty() || !requestsByDirectory.remove(directory, requests)) return
+        keys.entries
+            .filter { (_, registered) -> registered == directory }
+            .forEach { (key, _) ->
+                keys.remove(key)
+                key.cancel()
+            }
+    }
+
     private fun registerDirectory(directory: Path): Boolean {
-        if (watchService == null) return true
+        if (watchService == null) return macWatcher != null
         if (keys.values.any { registered -> registered == directory }) return true
         return try {
             val key = directory.register(watchService, ENTRY_CREATE, ENTRY_DELETE, ENTRY_MODIFY)
@@ -254,31 +279,28 @@ internal class AutoRefreshController(
         uncovered.addAll(directoriesByRequest.keys)
     }
 
-    private fun sourceRoot(sourcePath: Path): Path? =
+    private fun sourceRoot(sourcePath: Path, originRoot: Path): Path? =
         generateSequence(sourcePath.parent) { current -> current.parent }
-            .takeWhile { current -> current.startsWith(workspace) }
+            .takeWhile { current -> current.startsWith(originRoot) }
             .firstOrNull { current ->
                 current.fileName.toString() in SOURCE_ROOT_NAMES &&
                     current.parent?.parent?.fileName?.toString() == "src"
             }
 
-    private fun topologyInputs(sourceFiles: List<String>): List<Path> =
+    private fun topologyInputs(sources: List<IndexedSource>): List<Path> =
         buildSet {
-                add(workspace.resolve("settings.gradle.kts"))
-                add(workspace.resolve("settings.gradle"))
-                add(workspace.resolve("build.gradle.kts"))
-                add(workspace.resolve("build.gradle"))
-                add(workspace.resolve("MODULE.bazel"))
-                add(workspace.resolve("WORKSPACE"))
-                add(workspace.resolve("WORKSPACE.bazel"))
-                sourceFiles.forEach { source ->
-                    generateSequence(workspace.resolve(source).normalize().parent) { current ->
-                            current.parent
-                        }
-                        .takeWhile { current -> current.startsWith(workspace) }
+                sources.forEach { source ->
+                    val sourcePath = source.originRoot.resolve(source.path).normalize()
+                    generateSequence(sourcePath.parent) { current -> current.parent }
+                        .takeWhile { current -> current.startsWith(source.originRoot) }
                         .forEach { directory ->
+                            add(directory.resolve("settings.gradle.kts"))
+                            add(directory.resolve("settings.gradle"))
                             add(directory.resolve("build.gradle.kts"))
                             add(directory.resolve("build.gradle"))
+                            add(directory.resolve("MODULE.bazel"))
+                            add(directory.resolve("WORKSPACE"))
+                            add(directory.resolve("WORKSPACE.bazel"))
                             add(directory.resolve("BUILD"))
                             add(directory.resolve("BUILD.bazel"))
                         }

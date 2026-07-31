@@ -60,6 +60,9 @@ private constructor(
 
     internal fun snapshotLeaseCountForTests(): Int = snapshotDispatcher.leaseCountForTests()
 
+    internal fun watchedDirectoriesForTests(request: RefreshRequest): Set<Path> =
+        autoRefreshController.directoriesForTests(request)
+
     private fun rehydratePublishedScope() {
         val manifest = WorkspaceGenerationManifestStore(cacheRoot, workspaceId).current() ?: return
         val scope =

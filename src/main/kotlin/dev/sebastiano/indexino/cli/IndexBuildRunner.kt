@@ -27,7 +27,6 @@ import dev.sebastiano.indexino.topology.bazel.BazelQueryExecutor
 import java.nio.file.Path
 import java.time.Instant
 import kotlin.io.path.exists
-import kotlin.io.path.readText
 
 internal class IndexBuildRunner(
     private val project: Path,
@@ -42,12 +41,22 @@ internal class IndexBuildRunner(
     private var latestChanges: SourceChangeSet? = null
     private var latestManifest: IndexManifest? = null
     private var latestSourceFiles: List<String> = emptyList()
+    private var latestSources: List<IndexedSource> = emptyList()
+    private var latestTopologyRoots: List<Path> = emptyList()
     private var reusedFreshIndex: Boolean = false
 
     fun runDetailed(): IndexBuildExecution {
         val exitCode = run()
         if (exitCode != CliExitCodes.SUCCESS) {
-            return IndexBuildExecution(exitCode, null, null, latestSourceFiles, reusedFreshIndex)
+            return IndexBuildExecution(
+                exitCode,
+                null,
+                null,
+                latestSourceFiles,
+                latestSources,
+                latestTopologyRoots,
+                reusedFreshIndex,
+            )
         }
         return IndexBuildExecution(
             exitCode = exitCode,
@@ -55,6 +64,8 @@ internal class IndexBuildRunner(
                 checkNotNull(latestManifest) { "Successful index run did not produce a manifest" },
             changes = latestChanges,
             sourceFiles = latestSourceFiles,
+            sources = latestSources,
+            topologyRoots = latestTopologyRoots,
             reusedFreshIndex = reusedFreshIndex,
         )
     }
@@ -63,6 +74,8 @@ internal class IndexBuildRunner(
         latestChanges = null
         latestManifest = null
         latestSourceFiles = emptyList()
+        latestSources = emptyList()
+        latestTopologyRoots = emptyList()
         reusedFreshIndex = false
         val topologyResult =
             TopologyResolver.resolve(
@@ -100,6 +113,8 @@ internal class IndexBuildRunner(
                     }
                 }
         latestSourceFiles = sourceFiles
+        latestSources = sources
+        latestTopologyRoots = topologyResult.externalMounts
         val pluginRegistry = PluginRegistry.load(javaClass.classLoader)
         val unknownApplications = applications.filter {
             PluginId.of(it) !in pluginRegistry.pluginIds()
@@ -116,7 +131,7 @@ internal class IndexBuildRunner(
         val resolver = IndexPathResolver(project, storeRootOverride = storeRootOverride)
         val manifestPath = resolver.resolveManifest(commit)
         val previewHash = previewHash(sources)
-        val origins = manifestOrigins(sources, externalOriginMetadata)
+        val origins = ManifestOriginResolver.resolve(project, sources, externalOriginMetadata)
         val criteria =
             ManifestFreshness.criteriaFrom(
                 commit = commit,
@@ -233,75 +248,6 @@ internal class IndexBuildRunner(
         }
     }
 
-    private fun manifestOrigins(
-        sources: List<IndexedSource>,
-        externalOriginMetadata: Map<Path, Pair<String?, String?>>,
-    ): List<IndexManifestOrigin> =
-        sources
-            .groupBy { it.originId to it.originRoot }
-            .map { (identity, originSources) ->
-                val (originId, originRoot) = identity
-                val stateFingerprint =
-                    FileHashProducer.contentHash(
-                        originSources
-                            .sortedBy { it.path }
-                            .joinToString("\n") { source ->
-                                val file = source.originRoot.resolve(source.path)
-                                "${source.path}:${FileHashProducer.contentHash(file.readText())}"
-                            }
-                    )
-                IndexManifestOrigin(
-                    originId = originId,
-                    revision =
-                        GitHeadResolver.resolve(originRoot)
-                            .takeUnless(GitHeadResolver::isFilesystemRevision),
-                    stateFingerprint = stateFingerprint,
-                    expectedRevision =
-                        externalOriginMetadata[originRoot.toRealPath()]?.second
-                            ?: expectedSubmoduleRevision(originRoot),
-                    dirty = isGitDirty(originRoot),
-                )
-            }
-            .sortedBy { it.originId }
-
-    private fun isGitDirty(originRoot: Path): Boolean {
-        val process =
-            runCatching {
-                    ProcessBuilder("git", "-C", originRoot.toString(), "status", "--porcelain")
-                        .redirectErrorStream(true)
-                        .start()
-                }
-                .getOrNull() ?: return false
-        val output = process.inputStream.bufferedReader().readText()
-        return process.waitFor() == 0 && output.isNotBlank()
-    }
-
-    private fun expectedSubmoduleRevision(originRoot: Path): String? {
-        val canonicalWorkspace = project.toRealPath()
-        if (originRoot == canonicalWorkspace || !originRoot.startsWith(canonicalWorkspace))
-            return null
-        val mount = canonicalWorkspace.relativize(originRoot).toString().replace('\\', '/')
-        val process =
-            runCatching {
-                    ProcessBuilder(
-                            "git",
-                            "-C",
-                            canonicalWorkspace.toString(),
-                            "ls-tree",
-                            "HEAD",
-                            "--",
-                            mount,
-                        )
-                        .redirectErrorStream(true)
-                        .start()
-                }
-                .getOrNull() ?: return null
-        val output = process.inputStream.bufferedReader().readText().trim()
-        if (process.waitFor() != 0) return null
-        val fields = output.substringBefore('\t').split(' ')
-        return fields.getOrNull(0)?.takeIf { it == "160000" }?.let { fields.getOrNull(2) }
-    }
-
     private fun detectChanges(
         store: XodusCodeIndexStore,
         sources: List<IndexedSource>,
@@ -340,5 +286,7 @@ internal data class IndexBuildExecution(
     val manifest: IndexManifest?,
     val changes: SourceChangeSet?,
     val sourceFiles: List<String>,
+    val sources: List<IndexedSource>,
+    val topologyRoots: List<Path>,
     val reusedFreshIndex: Boolean,
 )
