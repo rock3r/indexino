@@ -28,7 +28,7 @@ internal data class RepoManifest(val projects: List<RepoProject>) {
 internal object RepoManifestParser {
     fun parse(manifestPath: Path): RepoManifest {
         val manifestDirectory = manifestPath.parent.toRealPath()
-        val projects = linkedMapOf<String, RepoProject>()
+        val projects = linkedMapOf<Pair<String, String>, RepoProject>()
         val visited = mutableSetOf<Path>()
 
         fun apply(document: Path) {
@@ -45,15 +45,28 @@ internal object RepoManifestParser {
                 }
                 apply(includedDocument)
             }
-            directives.projects.forEach { project -> projects[project.name] = project }
-            directives.removedProjects.forEach(projects::remove)
+            directives.projects.forEach { project ->
+                projects[project.name to project.path] = project
+            }
+            directives.removedProjects.forEach { removal ->
+                projects.keys
+                    .filter { (name, path) ->
+                        name == removal.name && (removal.path == null || path == removal.path)
+                    }
+                    .forEach(projects::remove)
+            }
             directives.extensions.forEach { extension ->
-                val project = projects[extension.name] ?: return@forEach
-                projects[extension.name] =
-                    project.copy(
-                        path = extension.path ?: project.path,
-                        revision = extension.revision ?: project.revision,
-                    )
+                projects.entries
+                    .filter { (key, _) ->
+                        key.first == extension.name &&
+                            (extension.path == null || key.second == extension.path)
+                    }
+                    .forEach { (key, project) ->
+                        projects.remove(key)
+                        val updated =
+                            project.copy(revision = extension.revision ?: project.revision)
+                        projects[updated.name to updated.path] = updated
+                    }
             }
         }
 
@@ -79,7 +92,7 @@ internal object RepoManifestParser {
         var defaultRevision: String? = null
         val projects = mutableListOf<RepoProject>()
         val includes = mutableListOf<String>()
-        val removedProjects = mutableListOf<String>()
+        val removedProjects = mutableListOf<RepoProjectSelector>()
         val extensions = mutableListOf<RepoProjectExtension>()
         while (reader.hasNext()) {
             if (reader.next() != XMLStreamConstants.START_ELEMENT) continue
@@ -97,8 +110,12 @@ internal object RepoManifestParser {
                             reader.getAttributeValue(null, "revision") ?: defaultRevision,
                         )
                 }
-                "remove-project" ->
-                    removedProjects += requiredAttribute(reader, "name", "repo remove-project")
+                "remove-project" -> {
+                    val name = requiredAttribute(reader, "name", "repo remove-project")
+                    val path = reader.getAttributeValue(null, "path")
+                    path?.let(::requireSafePath)
+                    removedProjects += RepoProjectSelector(name, path)
+                }
                 "extend-project" -> {
                     val name = requiredAttribute(reader, "name", "repo extend-project")
                     val path = reader.getAttributeValue(null, "path")
@@ -128,8 +145,10 @@ internal object RepoManifestParser {
 private data class RepoManifestDirectives(
     val projects: List<RepoProject>,
     val includes: List<String>,
-    val removedProjects: List<String>,
+    val removedProjects: List<RepoProjectSelector>,
     val extensions: List<RepoProjectExtension>,
 )
+
+private data class RepoProjectSelector(val name: String, val path: String?)
 
 private data class RepoProjectExtension(val name: String, val path: String?, val revision: String?)

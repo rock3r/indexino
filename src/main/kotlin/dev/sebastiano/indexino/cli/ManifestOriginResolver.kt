@@ -83,10 +83,35 @@ internal object ManifestOriginResolver {
             revision =
                 GitHeadResolver.resolve(originRoot)
                     .takeUnless(GitHeadResolver::isFilesystemRevision),
-            stateFingerprint = sourceFingerprint,
+            stateFingerprint =
+                FileHashProducer.contentHash(
+                    "$sourceFingerprint:${workingTreeFingerprint(originRoot)}"
+                ),
             expectedRevision = expectedRevision ?: expectedSubmoduleRevision(workspace, originRoot),
             dirty = isGitDirty(originRoot),
         )
+
+    private fun workingTreeFingerprint(originRoot: Path): String {
+        val process =
+            runCatching {
+                    ProcessBuilder(
+                            "git",
+                            "-C",
+                            originRoot.toString(),
+                            "diff",
+                            "--no-ext-diff",
+                            "--binary",
+                            "HEAD",
+                            "--",
+                            ".",
+                        )
+                        .redirectErrorStream(true)
+                        .start()
+                }
+                .getOrNull() ?: return ""
+        val output = process.inputStream.bufferedReader().readText()
+        return if (process.waitFor() == 0) FileHashProducer.contentHash(output) else ""
+    }
 
     private fun isGitDirty(originRoot: Path): Boolean {
         val process =
