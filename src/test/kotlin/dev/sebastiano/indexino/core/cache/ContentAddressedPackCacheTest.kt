@@ -63,6 +63,30 @@ class ContentAddressedPackCacheTest {
     }
 
     @Test
+    fun `replacement rollback failure retains the backup`() {
+        val root = createTempDirectory("indexino-pack-cache-").also(tempDirs::add)
+        val source = createTempDirectory("indexino-pack-source-").also(tempDirs::add)
+        source.resolve("facts.json").writeText("replacement")
+        val destination = root.resolve("restored")
+        Files.createDirectories(destination)
+        destination.resolve("facts.json").writeText("current")
+        val contentKey = ContentAddressedPackCache(root).installDirectory(source)
+        var moveCount = 0
+        val cache =
+            ContentAddressedPackCache(root) { from, to ->
+                moveCount += 1
+                if (moveCount in 2..3) throw IOException("simulated replacement failure")
+                Files.move(from, to)
+            }
+
+        assertFailsWith<IOException> { cache.replaceMaterializedDirectory(contentKey, destination) }
+
+        Files.list(root).use { paths ->
+            assertTrue(paths.anyMatch { it.fileName.toString().startsWith("restored.backup-") })
+        }
+    }
+
+    @Test
     fun `replacement failure restores the current materialization`() {
         val root = createTempDirectory("indexino-pack-cache-").also(tempDirs::add)
         val source = createTempDirectory("indexino-pack-source-").also(tempDirs::add)

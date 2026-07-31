@@ -4,6 +4,7 @@ import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.IndexManifestOrigin
 import dev.sebastiano.indexino.producer.FileHashProducer
 import dev.sebastiano.indexino.producer.IndexedSource
+import dev.sebastiano.indexino.topology.SourceOriginResolver
 import java.nio.file.Path
 import kotlin.io.path.readText
 
@@ -42,7 +43,8 @@ internal object ManifestOriginResolver {
                 .map { (originRoot, metadata) ->
                     origin(
                         workspace = workspace,
-                        originId = metadata.first ?: "external:${originRoot}",
+                        originId =
+                            metadata.first ?: SourceOriginResolver.externalOriginId(originRoot),
                         originRoot = originRoot,
                         sourceFingerprint = FileHashProducer.contentHash(""),
                         expectedRevision = metadata.second,

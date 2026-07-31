@@ -106,23 +106,27 @@ internal class ContentAddressedPackCache(
         val backup =
             destination.resolveSibling("${destination.fileName}.backup-${UUID.randomUUID()}")
         var destinationMoved = false
+        var retainBackup = false
         try {
             materializeDirectory(contentKey, replacement)
             if (Files.exists(destination)) {
                 moveDirectoryAction(destination, backup)
                 destinationMoved = true
+                retainBackup = true
             }
             try {
                 moveDirectoryAction(replacement, destination)
+                retainBackup = false
             } catch (failure: java.io.IOException) {
                 if (destinationMoved && !Files.exists(destination) && Files.exists(backup)) {
                     moveDirectoryAction(backup, destination)
+                    retainBackup = false
                 }
                 throw failure
             }
         } finally {
             if (Files.exists(replacement)) replacement.toFile().deleteRecursively()
-            if (Files.exists(backup)) backup.toFile().deleteRecursively()
+            if (!retainBackup && Files.exists(backup)) backup.toFile().deleteRecursively()
         }
     }
 

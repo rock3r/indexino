@@ -9,6 +9,7 @@ import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.topology.BuildSystem
+import dev.sebastiano.indexino.topology.SourceOriginResolver
 import dev.sebastiano.indexino.topology.TopologyRequest
 import dev.sebastiano.indexino.topology.bazel.MockBazelQueryExecutor
 import java.nio.file.Files
@@ -443,6 +444,16 @@ class StatusCommandTest {
 
         assertEquals(listOf("gradle:build-logic"), origins.map { it.originId })
         assertEquals("expected", origins.single().expectedRevision)
+        val unlabelledOrigins =
+            ManifestOriginResolver.resolve(
+                workspace,
+                sources = emptyList(),
+                externalOriginMetadata = mapOf(externalRoot.toRealPath() to (null to null)),
+            )
+        assertEquals(
+            listOf(SourceOriginResolver.externalOriginId(externalRoot)),
+            unlabelledOrigins.map { it.originId },
+        )
     }
 
     private fun createGradleWorkspace(): java.nio.file.Path {
