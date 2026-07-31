@@ -169,13 +169,12 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             val parameterNames =
                 target
                     ?.let { resolved ->
-                        projectSymbols
-                            .singleOrNull {
-                                it.originId == originId &&
-                                    it.fqn == resolved.symbolFqn &&
-                                    (it.arity == null || it.arity >= explicitArgumentCount)
-                            }
-                            ?.parameterNames
+                        parameterNames(
+                            projectSymbols,
+                            resolved.symbolFqn,
+                            originId,
+                            explicitArgumentCount,
+                        )
                             ?: storedParameterNames(
                                 store,
                                 resolved.symbolFqn,
@@ -212,6 +211,20 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         }
     }
 
+    private fun parameterNames(
+        symbols: List<ResolvedSymbol>,
+        fqn: String,
+        preferredOriginId: String,
+        argumentCount: Int,
+    ): List<String>? {
+        val candidates = symbols.filter {
+            it.fqn == fqn && (it.arity == null || it.arity >= argumentCount)
+        }
+        return (candidates.singleOrNull { it.originId == preferredOriginId }
+                ?: candidates.singleOrNull())
+            ?.parameterNames
+    }
+
     private fun storedParameterNames(
         store: CodeIndexStore,
         fqn: String,
@@ -223,14 +236,15 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             if (
                 record is SymbolRecord &&
                     record.fqn == fqn &&
-                    record.originId == originId &&
                     (record.arity == null || record.arity >= argumentCount)
             ) {
                 candidates += record
             }
             true
         }
-        return candidates.singleOrNull()?.parameterNames.orEmpty()
+        return (candidates.singleOrNull { it.originId == originId } ?: candidates.singleOrNull())
+            ?.parameterNames
+            .orEmpty()
     }
 
     private fun callArguments(
