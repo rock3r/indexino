@@ -11,6 +11,7 @@ import dev.sebastiano.indexino.model.PluginId
 import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.QueryPage
 import dev.sebastiano.indexino.model.SourceFile
+import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.SourceRange
 
 @OptIn(IndexinoInternalApi::class)
@@ -137,7 +138,11 @@ public interface PostProcessorV1 {
 @Suppress("EqualityMembers")
 @IndexinoInternalApi
 public class PostProcessContextV1
-public constructor(public val facts: PluginFactSinkV1, private val active: () -> Boolean) {
+public constructor(
+    public val facts: PluginFactSinkV1,
+    public val originId: SourceOriginId? = null,
+    private val active: () -> Boolean,
+) {
     public fun ensureActive(): Unit = check(active()) { "Plugin post-processing was cancelled" }
 }
 

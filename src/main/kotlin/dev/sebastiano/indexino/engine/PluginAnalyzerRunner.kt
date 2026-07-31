@@ -113,6 +113,7 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                                                 POST_PROCESSOR_FILE,
                                                 originId,
                                             ),
+                                        originId = SourceOriginId.of(originId),
                                         active = { true },
                                     )
                                 )

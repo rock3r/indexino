@@ -81,10 +81,12 @@ package dev.sebastiano.indexino.plugin.api {
   }
 
   @dev.sebastiano.indexino.model.IndexinoInternalApi public final class PostProcessContextV1 {
-    ctor public PostProcessContextV1(dev.sebastiano.indexino.plugin.api.PluginFactSinkV1 facts, kotlin.jvm.functions.Function0<java.lang.Boolean> active);
+    ctor public PostProcessContextV1(dev.sebastiano.indexino.plugin.api.PluginFactSinkV1 facts, optional dev.sebastiano.indexino.model.SourceOriginId? originId, kotlin.jvm.functions.Function0<java.lang.Boolean> active);
     method public void ensureActive();
     method @InaccessibleFromKotlin public dev.sebastiano.indexino.plugin.api.PluginFactSinkV1 getFacts();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceOriginId? getOriginId();
     property public dev.sebastiano.indexino.plugin.api.PluginFactSinkV1 facts;
+    property public dev.sebastiano.indexino.model.SourceOriginId? originId;
   }
 
   public enum PostProcessLevelV1 {

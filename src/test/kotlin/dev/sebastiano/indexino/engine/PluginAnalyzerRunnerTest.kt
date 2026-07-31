@@ -22,14 +22,13 @@ class PluginAnalyzerRunnerTest {
         val store = XodusCodeIndexStore.open(root.resolve("store"))
         try {
             val pluginId = PluginId.of("dev.example.shard")
+            val processor = ShardFactProcessor()
             val registry =
                 PluginRegistry(
                     descriptors = emptyMap(),
                     fileAnalyzers = emptyList(),
                     postProcessors =
-                        listOf(
-                            PluginRegistry.RegisteredPostProcessor(pluginId, ShardFactProcessor())
-                        ),
+                        listOf(PluginRegistry.RegisteredPostProcessor(pluginId, processor)),
                     checks = emptyList(),
                 )
             val context =
@@ -47,6 +46,7 @@ class PluginAnalyzerRunnerTest {
 
             PluginAnalyzerRunner(registry).analyze(context, setOf(pluginId.value))
 
+            assertEquals(setOf("git:first", "git:second"), processor.origins)
             assertEquals(
                 setOf("git:first", "git:second"),
                 store
@@ -62,12 +62,15 @@ class PluginAnalyzerRunnerTest {
     }
 
     private class ShardFactProcessor : PostProcessorV1 {
+        val origins = mutableSetOf<String>()
+
         override val id: String = "shard-facts"
         override val level: PostProcessLevelV1 = PostProcessLevelV1.SHARD
         override val readsBasicFactFamilies: Set<String> = emptySet()
         override val readsPluginNamespaces: Set<String> = emptySet()
 
         override suspend fun process(context: PostProcessContextV1) {
+            origins += requireNotNull(context.originId).value
             context.facts.put("processed", PluginFactValue.Text.of("yes"))
         }
     }

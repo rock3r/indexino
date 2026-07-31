@@ -294,8 +294,8 @@ private constructor(
                 (originId == requestedFile.originId.value && relativeFile == requestedFile.path)
         val enclosingMatches =
             enclosing == null ||
-                enclosingSymbolFqn == enclosing.fqn ||
-                enclosingSymbolFqn in enclosing.aliases
+                (originId == enclosing.originId &&
+                    enclosingSymbolFqn in (enclosing.aliases + enclosing.fqn))
         return fileMatches &&
             (query.calleeName == null || calleeName == query.calleeName) &&
             (query.callSiteId == null || with(queries) { callSiteId() == query.callSiteId }) &&
