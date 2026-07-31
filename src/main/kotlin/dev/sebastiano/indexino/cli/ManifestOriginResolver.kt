@@ -14,6 +14,7 @@ internal object ManifestOriginResolver {
         workspace: Path,
         sources: List<IndexedSource>,
         externalOriginMetadata: Map<Path, Pair<String?, String?>>,
+        includeWorkspaceWithoutSources: Boolean = false,
     ): List<IndexManifestOrigin> {
         val sourceOrigins =
             sources
@@ -51,17 +52,23 @@ internal object ManifestOriginResolver {
                     )
                 }
         val workspaceOrigin =
-            sourceOrigins.firstOrNull { it.originId == WORKSPACE_ORIGIN_ID }
-                ?: origin(
-                    workspace = workspace,
-                    originId = WORKSPACE_ORIGIN_ID,
-                    originRoot = workspace,
-                    sourceFingerprint = FileHashProducer.contentHash(""),
-                    expectedRevision = null,
+            if (
+                includeWorkspaceWithoutSources &&
+                    sourceOrigins.none { it.originId == WORKSPACE_ORIGIN_ID }
+            ) {
+                listOf(
+                    origin(
+                        workspace = workspace,
+                        originId = WORKSPACE_ORIGIN_ID,
+                        originRoot = workspace,
+                        sourceFingerprint = FileHashProducer.contentHash(""),
+                        expectedRevision = null,
+                    )
                 )
-        return (sourceOrigins + emptyExternalOrigins + workspaceOrigin)
-            .distinctBy { it.originId }
-            .sortedBy { it.originId }
+            } else {
+                emptyList()
+            }
+        return (sourceOrigins + emptyExternalOrigins + workspaceOrigin).sortedBy { it.originId }
     }
 
     private fun origin(

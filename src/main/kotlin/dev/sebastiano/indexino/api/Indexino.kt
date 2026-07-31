@@ -31,6 +31,7 @@ import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.SourceOriginRevision
 import dev.sebastiano.indexino.model.WorkspaceGenerationId
 import dev.sebastiano.indexino.model.WorkspaceRevision
+import dev.sebastiano.indexino.producer.FileHashProducer
 import dev.sebastiano.indexino.producer.IndexBuildProgressReporter
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.topology.BuildSystem as InternalBuildSystem
@@ -658,8 +659,12 @@ private constructor(
         val cacheRoot = InProcessCacheLayout.cacheRoot()
         val packKey =
             ContentAddressedPackCache(cacheRoot).installDirectory(source, BASIC_FACT_SCHEMA_VERSION)
+        val emptyOriginFingerprint = FileHashProducer.contentHash("")
         val legacyOrigin =
-            revision.origins.firstOrNull { it.originId.value == "workspace" }
+            revision.origins.firstOrNull {
+                it.originId.value == "workspace" && it.stateFingerprint != emptyOriginFingerprint
+            }
+                ?: revision.origins.firstOrNull { it.stateFingerprint != emptyOriginFingerprint }
                 ?: revision.origins.first()
         WorkspaceGenerationManifestStore(cacheRoot, InProcessCacheLayout.workspaceId(workspace))
             .publish(

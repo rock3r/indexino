@@ -443,6 +443,7 @@ class StatusCommandTest {
                 sources = emptyList(),
                 externalOriginMetadata =
                     mapOf(externalRoot.toRealPath() to ("gradle:build-logic" to "expected")),
+                includeWorkspaceWithoutSources = true,
             )
 
         assertEquals(listOf("gradle:build-logic", "workspace"), origins.map { it.originId })
@@ -455,6 +456,7 @@ class StatusCommandTest {
                 workspace,
                 sources = emptyList(),
                 externalOriginMetadata = mapOf(externalRoot.toRealPath() to (null to null)),
+                includeWorkspaceWithoutSources = true,
             )
         assertEquals(
             listOf(SourceOriginResolver.externalOriginId(externalRoot), "workspace"),

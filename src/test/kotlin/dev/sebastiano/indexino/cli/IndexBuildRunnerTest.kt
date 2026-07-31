@@ -215,8 +215,9 @@ class IndexBuildRunnerTest {
                 .runDetailed()
 
         assertEquals(CliExitCodes.SUCCESS, execution.exitCode)
-        assertEquals(childRevision, execution.manifest?.origins?.single()?.expectedRevision)
-        assertEquals(true, execution.manifest?.origins?.single()?.dirty)
+        val submoduleOrigin = execution.manifest?.origins?.single { it.originId == "git:ui" }
+        assertEquals(childRevision, submoduleOrigin?.expectedRevision)
+        assertEquals(true, submoduleOrigin?.dirty)
     }
 
     @Test
@@ -319,7 +320,10 @@ class IndexBuildRunnerTest {
         }
         val initial = runner().runDetailed()
         assertEquals(CliExitCodes.SUCCESS, initial.exitCode)
-        assertEquals(setOf("git:ui"), initial.manifest?.origins?.map { it.originId }?.toSet())
+        assertEquals(
+            setOf("git:ui", "workspace"),
+            initial.manifest?.origins?.map { it.originId }?.toSet(),
+        )
         val source = nested.resolve("src/main/kotlin/Panel.kt")
         source.writeText(source.readText() + "\nfun nestedChange() = Unit\n")
 
