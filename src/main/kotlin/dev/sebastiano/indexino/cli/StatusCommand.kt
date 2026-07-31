@@ -151,7 +151,12 @@ internal class StatusCommand : CliktCommand(name = "status") {
                 mount.root.toRealPath() to (mount.originId to mount.expectedRevision)
             }
         val origins =
-            ManifestOriginResolver.resolve(project, currentSources, externalOriginMetadata)
+            ManifestOriginResolver.resolve(
+                project,
+                currentSources,
+                externalOriginMetadata,
+                includeWorkspaceWithoutSources = topologyResult.topology == "gradle-parse",
+            )
         val pluginCoordinates =
             PluginRegistry.load(javaClass.classLoader).selectedCoordinates(manifest.applications)
         val criteria =
