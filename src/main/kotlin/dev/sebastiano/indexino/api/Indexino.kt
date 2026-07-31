@@ -46,7 +46,7 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.atomic.AtomicBoolean
 
-private const val BASIC_FACT_SCHEMA_VERSION = 1
+private const val BASIC_FACT_SCHEMA_VERSION = 2
 
 @Suppress("LargeClass", "TooManyFunctions")
 public class Indexino
