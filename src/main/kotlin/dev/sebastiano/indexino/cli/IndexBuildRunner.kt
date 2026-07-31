@@ -174,7 +174,15 @@ internal class IndexBuildRunner(
 
     private fun previewHash(sources: List<IndexedSource>): String {
         machineProgress?.phaseStarted(SOURCE_HASH_PREVIEW_PHASE, sources.size)
-        val previewHash = FileHashProducer.combinedIndexedSourcesHash(sources)
+        val previewHash =
+            FileHashProducer.combinedIndexedSourcesHash(sources) { index, total, source ->
+                machineProgress?.fileProgress(
+                    SOURCE_HASH_PREVIEW_PHASE,
+                    index,
+                    total,
+                    "${source.originId}:${source.path}",
+                )
+            }
         machineProgress?.phaseCompleted(SOURCE_HASH_PREVIEW_PHASE, sources.size)
         return previewHash
     }

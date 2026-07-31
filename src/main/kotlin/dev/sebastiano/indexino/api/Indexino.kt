@@ -628,6 +628,7 @@ private constructor(
                         topology,
                         includeDeps.toString(),
                         sourcesContentHash,
+                        resolvedTopologyDigest.orEmpty(),
                         origins.joinToString("\u0001") { origin ->
                             listOf(
                                     origin.originId.value,

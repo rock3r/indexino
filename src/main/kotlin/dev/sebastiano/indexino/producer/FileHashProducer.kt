@@ -59,15 +59,22 @@ internal class FileHashProducer : IndexProducer {
                 sourceContentOverrides = context.sourceContentOverrides,
             )
 
-        fun combinedIndexedSourcesHash(sources: List<IndexedSource>): String =
-            contentHash(
-                sources
-                    .sortedWith(compareBy(IndexedSource::originId, IndexedSource::path))
-                    .joinToString("\n") { source ->
+        fun combinedIndexedSourcesHash(
+            sources: List<IndexedSource>,
+            onFileProcessed: ((index: Int, total: Int, source: IndexedSource) -> Unit)? = null,
+        ): String {
+            val sortedSources =
+                sources.sortedWith(compareBy(IndexedSource::originId, IndexedSource::path))
+            return contentHash(
+                sortedSources
+                    .mapIndexed { index, source ->
+                        onFileProcessed?.invoke(index + 1, sortedSources.size, source)
                         val file = source.originRoot.resolve(source.path)
                         "${source.originId}:${source.path}:${contentHash(file.readText())}"
                     }
+                    .joinToString("\n")
             )
+        }
 
         fun combinedSourcesHash(
             workspaceRoot: Path,

@@ -63,6 +63,13 @@ class IndexBuildRunnerTest {
             machineProgress.first { it.contains("discovery_completed") },
             "\"phaseTotal\":2",
         )
+        assertContains(
+            machineProgress.first {
+                it.contains("\"event\":\"progress\"") &&
+                    it.contains("\"phase\":\"source-hash-preview\"")
+            },
+            "\"phaseTotal\":2",
+        )
         assertEquals(2, execution.manifest?.sourceFileCount, "manifest=${execution.manifest}")
         assertEquals(2, execution.manifest?.origins?.size, "manifest=${execution.manifest}")
     }
