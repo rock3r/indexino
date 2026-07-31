@@ -90,14 +90,19 @@ internal class AutoRefreshController(
                     }
                     topologyRoots.forEach { root ->
                         add(root)
-                        SOURCE_ROOT_NAMES.forEach { sourceName ->
-                            root.resolve("src/main").resolve(sourceName).let { sourceRoot ->
-                                if (Files.isDirectory(sourceRoot)) {
-                                    Files.walk(sourceRoot).use { paths ->
-                                        paths.filter(Files::isDirectory).forEach(::add)
+                        Files.walk(root).use { paths ->
+                            paths
+                                .filter { directory ->
+                                    Files.isDirectory(directory) &&
+                                        directory.fileName.toString() in SOURCE_ROOT_NAMES &&
+                                        directory.parent?.fileName?.toString() == "main" &&
+                                        directory.parent?.parent?.fileName?.toString() == "src"
+                                }
+                                .forEach { sourceRoot ->
+                                    Files.walk(sourceRoot).use { sourcePaths ->
+                                        sourcePaths.filter(Files::isDirectory).forEach(::add)
                                     }
                                 }
-                            }
                         }
                     }
                     topologyInputs(sources).mapTo(this) { it.parent ?: workspace }

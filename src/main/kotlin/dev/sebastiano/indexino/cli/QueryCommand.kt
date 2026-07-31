@@ -149,6 +149,7 @@ internal class QueryCommand : CliktCommand(name = "query") {
                 put("message", finding.message)
                 finding.range?.let { range ->
                     putJsonObject("range") {
+                        put("originId", range.start.file.originId.value)
                         put("file", range.start.file.path)
                         put("line", range.start.line)
                         range.start.column?.let { put("column", it) }
