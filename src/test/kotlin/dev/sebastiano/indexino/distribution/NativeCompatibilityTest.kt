@@ -364,6 +364,8 @@ class NativeCompatibilityTest {
                 "builtAt",
                 "applications",
                 "pluginCoordinates",
+                "origins",
+                "resolvedTopologyDigest",
             ),
             json.keys,
         )

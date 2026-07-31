@@ -126,7 +126,7 @@ internal class IndexBuildRunner(
             return CliExitCodes.INVALID_ARGUMENTS
         }
         val pluginCoordinates = pluginRegistry.selectedCoordinates(applications)
-        machineProgress?.discoveryCompleted(sourceFiles.size)
+        machineProgress?.discoveryCompleted(sources.size)
         val commit = GitHeadResolver.resolve(project)
         val resolver = IndexPathResolver(project, storeRootOverride = storeRootOverride)
         val manifestPath = resolver.resolveManifest(commit)

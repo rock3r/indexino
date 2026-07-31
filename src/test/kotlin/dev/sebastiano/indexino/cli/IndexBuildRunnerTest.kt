@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.cli
 
+import dev.sebastiano.indexino.producer.JsonlIndexBuildProgressReporter
 import dev.sebastiano.indexino.topology.BuildSystem
 import dev.sebastiano.indexino.topology.TopologyRequest
 import java.nio.file.Files
@@ -40,6 +41,7 @@ class IndexBuildRunnerTest {
         git(workspace, "add", ".")
         git(workspace, "commit", "-m", "workspace")
 
+        val machineProgress = mutableListOf<String>()
         val execution =
             IndexBuildRunner(
                     project = workspace,
@@ -49,12 +51,16 @@ class IndexBuildRunnerTest {
                     bazelQueryExecutor = null,
                     bazelProcessRunner = null,
                     progress = {},
-                    machineProgress = null,
+                    machineProgress = JsonlIndexBuildProgressReporter(machineProgress::add),
                     storeRootOverride = tempDir.resolve("store"),
                 )
                 .runDetailed()
 
         assertEquals(CliExitCodes.SUCCESS, execution.exitCode)
+        assertContains(
+            machineProgress.first { it.contains("discovery_completed") },
+            "\"phaseTotal\":2",
+        )
         assertEquals(2, execution.manifest?.sourceFileCount, "manifest=${execution.manifest}")
         assertEquals(2, execution.manifest?.origins?.size, "manifest=${execution.manifest}")
     }

@@ -1,6 +1,12 @@
 package dev.sebastiano.indexino.cli
 
 import com.github.ajalt.clikt.testing.test
+import dev.sebastiano.indexino.api.InProcessCacheLayout
+import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifest
+import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
+import dev.sebastiano.indexino.core.git.GitHeadResolver
+import dev.sebastiano.indexino.core.manifest.ManifestIO
+import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.topology.BuildSystem
 import dev.sebastiano.indexino.topology.TopologyRequest
@@ -59,6 +65,62 @@ class StatusCommandTest {
         assertTrue(text.contains("\"fresh\":true"), text)
         assertTrue(text.contains("\"sourceFileCount\":3"), text)
         assertTrue(text.contains("selection-context"), text)
+    }
+
+    @Test
+    fun `status reads the published generation when no compatibility projection exists`() {
+        val workspace = createGitWorkspace()
+        val cacheRoot = createTempDirectory("status-generation-cache-").also(tempDirs::add)
+        val previousCacheRoot = System.getProperty("indexino.cache.dir")
+        try {
+            System.setProperty("indexino.cache.dir", cacheRoot.toString())
+            val mockOutput =
+                Path("src/test/resources/fixtures/bazel/mock-query-output.txt").readText().lines()
+            IndexCommand()
+                .runIndexedBuild(
+                    project = workspace,
+                    bazelTarget = "//plugins/foo/ui:ui",
+                    applications = listOf("dev.sebastiano.selection-context"),
+                    queryExecutor = MockBazelQueryExecutor(mockOutput),
+                )
+            val commit = GitHeadResolver.resolve(workspace)
+            val resolver = IndexPathResolver(workspace)
+            val manifest = ManifestIO.read(resolver.resolveManifest(commit))
+            WorkspaceGenerationManifestStore(cacheRoot, InProcessCacheLayout.workspaceId(workspace))
+                .publish(
+                    WorkspaceGenerationManifest(
+                        generation = "generation",
+                        workspaceRevisionFingerprint = "revision",
+                        originId = "workspace",
+                        revision = commit,
+                        stateFingerprint = "state",
+                        packKeys = listOf("pack"),
+                        compatibilityManifest = manifest,
+                    )
+                )
+            Files.delete(resolver.resolveManifest(commit))
+
+            val output = StringBuilder()
+            val exitCode =
+                StatusCommand()
+                    .runStatus(
+                        project = workspace,
+                        topologyRequest =
+                            TopologyRequest(
+                                buildSystem = BuildSystem.BAZEL,
+                                bazelTarget = "//plugins/foo/ui:ui",
+                                includeDeps = true,
+                            ),
+                        bazelQueryExecutor = MockBazelQueryExecutor(mockOutput),
+                        output = { output.appendLine(it) },
+                    )
+
+            assertEquals(CliExitCodes.SUCCESS, exitCode)
+            assertTrue(output.toString().contains("\"fresh\":true"), output.toString())
+        } finally {
+            if (previousCacheRoot == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheRoot)
+        }
     }
 
     @Test

@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.suspendCancellableCoroutine
 
+@Suppress("CloseGuard")
 public class RefreshHandle
 private constructor(
     public val id: RefreshId,
@@ -18,7 +19,7 @@ private constructor(
     private val terminalEvent: CompletableFuture<RefreshEvent>,
     private val stopAction: () -> Unit,
     @Suppress("UnusedParameter") marker: Unit,
-) : AutoCloseable {
+) {
     @IndexinoInternalApi
     public constructor(
         id: RefreshId,
@@ -39,9 +40,7 @@ private constructor(
         emit(awaitFuture(terminalEvent))
     }
 
-    public suspend fun stop(): Unit = close()
-
-    override fun close(): Unit = stopAction()
+    public suspend fun stop(): Unit = stopAction()
 
     private suspend fun <T> awaitFuture(future: CompletableFuture<T>): T =
         suspendCancellableCoroutine { continuation ->

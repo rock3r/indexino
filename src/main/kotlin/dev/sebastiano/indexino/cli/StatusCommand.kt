@@ -7,7 +7,9 @@ import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import com.github.ajalt.clikt.parameters.types.file
+import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.core.Version
+import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.ManifestFreshness
 import dev.sebastiano.indexino.core.manifest.ManifestIO
@@ -79,13 +81,18 @@ internal class StatusCommand : CliktCommand(name = "status") {
     ): Int {
         val commit = GitHeadResolver.resolve(project)
         val resolver = IndexPathResolver(project)
-        val manifestPath = resolver.resolveManifest(commit)
-        if (!manifestPath.exists()) {
-            output(Json.encodeToString(StatusReport(indexed = false, commit = commit)))
-            return CliExitCodes.ANALYSIS_ERROR
-        }
-
-        val manifest = ManifestIO.read(manifestPath)
+        val manifest =
+            WorkspaceGenerationManifestStore(
+                    InProcessCacheLayout.cacheRoot(),
+                    InProcessCacheLayout.workspaceId(project),
+                )
+                .current()
+                ?.compatibilityManifest
+                ?: resolver.resolveManifest(commit).takeIf { it.exists() }?.let(ManifestIO::read)
+                ?: run {
+                    output(Json.encodeToString(StatusReport(indexed = false, commit = commit)))
+                    return CliExitCodes.ANALYSIS_ERROR
+                }
         val request =
             resolveRequestForManifest(
                 topologyRequest,
