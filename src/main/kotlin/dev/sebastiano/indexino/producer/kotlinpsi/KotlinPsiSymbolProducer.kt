@@ -58,7 +58,12 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             val indexedFiles = ktFiles.mapIndexed { index, source ->
                 context.reportFileProgress(index + 1, ktFiles.size, source.path)
                 val file = parser.parseFile(source.path, context.readSource(source))
-                IndexedKotlinFile(source.originId, source.path, file, collectSymbols(file))
+                IndexedKotlinFile(
+                    source.originId,
+                    source.path,
+                    file,
+                    collectSymbols(file).map { it.copy(originId = source.originId) },
+                )
             }
             val projectSymbols = indexedFiles.flatMap { it.symbols }
             indexedFiles.forEach { indexedFile -> indexFile(indexedFile, projectSymbols, store) }
@@ -166,13 +171,15 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                     ?.let { resolved ->
                         projectSymbols
                             .singleOrNull {
-                                it.fqn == resolved.symbolFqn &&
+                                it.originId == originId &&
+                                    it.fqn == resolved.symbolFqn &&
                                     (it.arity == null || it.arity >= explicitArgumentCount)
                             }
                             ?.parameterNames
                             ?: storedParameterNames(
                                 store,
                                 resolved.symbolFqn,
+                                originId,
                                 explicitArgumentCount,
                             )
                     }
@@ -208,6 +215,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
     private fun storedParameterNames(
         store: CodeIndexStore,
         fqn: String,
+        originId: String,
         argumentCount: Int,
     ): List<String> {
         val candidates = mutableListOf<SymbolRecord>()
@@ -215,6 +223,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             if (
                 record is SymbolRecord &&
                     record.fqn == fqn &&
+                    record.originId == originId &&
                     (record.arity == null || record.arity >= argumentCount)
             ) {
                 candidates += record
@@ -663,6 +672,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
 
     private data class ResolvedSymbol(
         val fqn: String,
+        val originId: String = "workspace",
         val name: String,
         val line: Int,
         val column: Int,

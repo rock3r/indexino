@@ -310,7 +310,7 @@ internal class AutoRefreshController(
                         .forEach { directory -> addTopologyInputs(this, directory) }
                 }
             }
-            .filter(Files::exists)
+            .toList()
 
     private fun addTopologyInputs(inputs: MutableSet<Path>, directory: Path) {
         inputs.add(directory.resolve("settings.gradle.kts"))
