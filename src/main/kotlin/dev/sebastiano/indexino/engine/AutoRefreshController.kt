@@ -302,24 +302,27 @@ internal class AutoRefreshController(
 
     private fun topologyInputs(sources: List<IndexedSource>): List<Path> =
         buildSet {
+                addTopologyInputs(this, workspace)
                 sources.forEach { source ->
                     val sourcePath = source.originRoot.resolve(source.path).normalize()
                     generateSequence(sourcePath.parent) { current -> current.parent }
                         .takeWhile { current -> current.startsWith(source.originRoot) }
-                        .forEach { directory ->
-                            add(directory.resolve("settings.gradle.kts"))
-                            add(directory.resolve("settings.gradle"))
-                            add(directory.resolve("build.gradle.kts"))
-                            add(directory.resolve("build.gradle"))
-                            add(directory.resolve("MODULE.bazel"))
-                            add(directory.resolve("WORKSPACE"))
-                            add(directory.resolve("WORKSPACE.bazel"))
-                            add(directory.resolve("BUILD"))
-                            add(directory.resolve("BUILD.bazel"))
-                        }
+                        .forEach { directory -> addTopologyInputs(this, directory) }
                 }
             }
             .filter(Files::exists)
+
+    private fun addTopologyInputs(inputs: MutableSet<Path>, directory: Path) {
+        inputs.add(directory.resolve("settings.gradle.kts"))
+        inputs.add(directory.resolve("settings.gradle"))
+        inputs.add(directory.resolve("build.gradle.kts"))
+        inputs.add(directory.resolve("build.gradle"))
+        inputs.add(directory.resolve("MODULE.bazel"))
+        inputs.add(directory.resolve("WORKSPACE"))
+        inputs.add(directory.resolve("WORKSPACE.bazel"))
+        inputs.add(directory.resolve("BUILD"))
+        inputs.add(directory.resolve("BUILD.bazel"))
+    }
 
     private fun excluded(path: Path): Boolean =
         path.any { segment -> segment.toString() == ".git" } ||

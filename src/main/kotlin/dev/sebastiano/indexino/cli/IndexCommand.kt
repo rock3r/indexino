@@ -17,6 +17,7 @@ import dev.sebastiano.indexino.api.RefreshRequest
 import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.git.GitHeadResolver
+import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.model.PluginId
 import dev.sebastiano.indexino.producer.IndexBuildProgressReporter
@@ -139,6 +140,12 @@ internal class IndexCommand : CliktCommand(name = "index") {
         val commit = GitHeadResolver.resolve(project)
         ContentAddressedPackCache(cacheRoot)
             .materializeDirectory(manifest.packKeys.single(), resolver.resolveBaseStore(commit))
+        ManifestIO.write(
+            resolver.resolveManifest(commit),
+            requireNotNull(manifest.compatibilityManifest) {
+                "Published generation does not contain a CLI compatibility manifest"
+            },
+        )
     }
 
     private fun daemonScope(project: Path): IndexScope {

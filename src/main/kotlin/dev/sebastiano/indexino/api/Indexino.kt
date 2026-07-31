@@ -304,14 +304,15 @@ private constructor(
                     revision,
                     request.scope,
                     applications,
+                    manifest,
                 )
                 onRefreshSucceededForRuntime?.invoke(
                     request,
                     execution.sources,
                     execution.topologyRoots,
                 )
-                val changedFileCount = execution.changes?.changedFiles?.size ?: 0
-                val removedFileCount = execution.changes?.deletedFiles?.size ?: 0
+                val changedFileCount = execution.changes?.changedSources?.size ?: 0
+                val removedFileCount = execution.changes?.deletedSources?.size ?: 0
                 val result =
                     RefreshResult(
                         refreshId = refreshId,
@@ -380,9 +381,10 @@ private constructor(
         revision: WorkspaceRevision,
         scope: IndexScope,
         applications: List<String>,
+        manifest: IndexManifest,
     ) {
         val publishedStore =
-            publishGenerationStore(commit, generation, revision, scope, applications)
+            publishGenerationStore(commit, generation, revision, scope, applications, manifest)
         afterPublishGenerationStoreForTests?.invoke()
         synchronized(generationLock) {
             if (closed.get()) {
@@ -665,6 +667,7 @@ private constructor(
         revision: WorkspaceRevision,
         scope: IndexScope,
         applications: List<String>,
+        compatibilityManifest: IndexManifest,
     ): PublishedStore {
         val destination =
             InProcessCacheLayout.generationStore(workspace, clientId, generation.value)
@@ -700,6 +703,7 @@ private constructor(
                     scopeValue = scope.value,
                     includesDependencies = scope.includesDependencies,
                     applications = applications,
+                    compatibilityManifest = compatibilityManifest,
                 )
             )
         val packs = ContentAddressedPackCache(cacheRoot)

@@ -3,6 +3,7 @@ package dev.sebastiano.indexino.topology.repo
 import dev.sebastiano.indexino.topology.ExternalSourceMount
 import dev.sebastiano.indexino.topology.TopologyResult
 import dev.sebastiano.indexino.topology.gradle.ModuleSourceRoots
+import java.nio.file.Files
 import java.nio.file.Path
 
 internal object RepoTopology {
@@ -18,9 +19,23 @@ internal object RepoTopology {
                 require(root.toFile().isDirectory) {
                     "repo project mount is unavailable: ${project.name} at $root"
                 }
+                val moduleRoots =
+                    Files.walk(root).use { paths ->
+                        paths
+                            .filter(Files::isDirectory)
+                            .filter { path -> path.fileName.toString() == "src" }
+                            .map { sourceRoot -> sourceRoot.parent }
+                            .toList()
+                    }
                 ExternalSourceMount(
                     root = root,
-                    sourceFiles = ModuleSourceRoots.collectKotlinSources(root, root),
+                    sourceFiles =
+                        moduleRoots
+                            .flatMap { moduleRoot ->
+                                ModuleSourceRoots.collectKotlinSources(moduleRoot, root)
+                            }
+                            .distinct()
+                            .sorted(),
                     originId = "repo:${project.name}",
                     expectedRevision = project.revision,
                 )

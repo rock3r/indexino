@@ -269,9 +269,9 @@ internal class IndexBuildRunner(
                 detectedChanges
             }
         machineProgress?.countersAvailable(
-            changedFiles = changes.changedFiles.size,
+            changedFiles = changes.changedSources.size,
             unchangedFiles = sources.size - changes.changedSources.size,
-            removedFiles = changes.deletedFiles.size,
+            removedFiles = changes.deletedSources.size,
         )
         return changes
     }

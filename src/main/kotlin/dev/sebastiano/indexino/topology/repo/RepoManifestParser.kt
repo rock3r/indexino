@@ -3,6 +3,7 @@ package dev.sebastiano.indexino.topology.repo
 import java.io.StringReader
 import java.nio.file.Path
 import java.security.MessageDigest
+import java.util.Locale
 import javax.xml.stream.XMLInputFactory
 import javax.xml.stream.XMLStreamConstants
 import kotlin.io.path.exists
@@ -20,7 +21,7 @@ internal data class RepoManifest(val projects: List<RepoProject>) {
                     .joinToString("\n") { "${it.name}\t${it.path}\t${it.revision.orEmpty()}" }
                     .toByteArray()
             )
-            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+            .joinToString("") { "%02x".format(Locale.ROOT, it.toInt() and 0xff) }
 }
 
 /** Parses the resolved Android repo manifest into repository identities and local mounts. */

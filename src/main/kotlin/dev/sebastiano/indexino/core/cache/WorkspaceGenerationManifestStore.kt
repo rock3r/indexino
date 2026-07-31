@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.core.cache
 
+import dev.sebastiano.indexino.core.manifest.IndexManifest
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -32,6 +33,7 @@ internal data class WorkspaceGenerationManifest(
     val applications: List<String> = emptyList(),
     val origins: List<WorkspaceGenerationOrigin> =
         listOf(WorkspaceGenerationOrigin(originId, revision, stateFingerprint)),
+    val compatibilityManifest: IndexManifest? = null,
 )
 
 /** Publishes immutable workspace generation manifests through a short current pointer. */

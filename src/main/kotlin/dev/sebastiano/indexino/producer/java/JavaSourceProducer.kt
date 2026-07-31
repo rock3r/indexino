@@ -405,12 +405,7 @@ internal class JavaSourceProducer : IndexProducer {
         private fun storedParameterNames(fqn: String, argumentCount: Int): List<String> {
             val candidates = mutableListOf<SymbolRecord>()
             store.forEachPrefix("sym:$fqn:") { _, record ->
-                if (
-                    record is SymbolRecord &&
-                        record.fqn == fqn &&
-                        record.originId == originId &&
-                        record.arity == argumentCount
-                ) {
+                if (record is SymbolRecord && record.fqn == fqn && record.arity == argumentCount) {
                     candidates += record
                 }
                 true
