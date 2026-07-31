@@ -116,10 +116,7 @@ class IndexBuildRunnerTest {
                 .runDetailed()
 
         assertEquals(CliExitCodes.SUCCESS, execution.exitCode)
-        assertEquals(
-            "repo:platform/tools/base:local/tools/base",
-            execution.manifest?.origins?.single()?.originId,
-        )
+        assertEquals("repo:platform/tools/base", execution.manifest?.origins?.single()?.originId)
         assertEquals("deadbeef", execution.manifest?.origins?.single()?.expectedRevision)
     }
 

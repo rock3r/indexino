@@ -76,7 +76,9 @@ doc). Payload values use the durable `PluginFactValue` model in `indexino-model`
 - Git commit is **provenance** for a Git origin and a delta anchor, not the primary cache key.
 - Non-Git origins use a durable filesystem-origin identity.
 - Android `repo` projects use `repo:<manifest-project-name>` identity, never their local mount
-  path; the resolved manifest revision is recorded as expected origin provenance.
+  path; the resolved manifest revision is recorded as expected origin provenance. If a resolved
+  manifest contains duplicate project names, each conflicting mount is disambiguated as
+  `repo:<manifest-project-name>:<mount-path>`.
 
 ### Runtime (not storage API)
 

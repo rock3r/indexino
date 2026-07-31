@@ -24,6 +24,12 @@ internal object RepoTopology {
                 }
                 project to root
             }
+        val duplicateProjectNames =
+            projectRoots
+                .groupingBy { (project, _) -> project.name }
+                .eachCount()
+                .filterValues { it > 1 }
+                .keys
         val mounts = projectRoots.map { (project, root) ->
             val nestedMounts =
                 projectRoots.map { it.second }.filter { it != root && it.startsWith(root) }.toSet()
@@ -37,7 +43,12 @@ internal object RepoTopology {
                         }
                         .distinct()
                         .sorted(),
-                originId = "repo:${project.name}:${project.path}",
+                originId =
+                    if (project.name in duplicateProjectNames) {
+                        "repo:${project.name}:${project.path}"
+                    } else {
+                        "repo:${project.name}"
+                    },
                 expectedRevision = project.revision,
             )
         }

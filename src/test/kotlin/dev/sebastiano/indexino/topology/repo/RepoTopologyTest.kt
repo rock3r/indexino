@@ -103,11 +103,44 @@ class RepoTopologyTest {
 
         assertEquals(
             listOf("src/main/kotlin/Parent.kt"),
-            result.externalSources.single { it.originId == "repo:parent:tools" }.sourceFiles,
+            result.externalSources.single { it.originId == "repo:parent" }.sourceFiles,
         )
         assertEquals(
             listOf("src/main/kotlin/Child.kt"),
-            result.externalSources.single { it.originId == "repo:child:tools/child" }.sourceFiles,
+            result.externalSources.single { it.originId == "repo:child" }.sourceFiles,
+        )
+    }
+
+    @Test
+    fun `disambiguates duplicate project names by mount path`() {
+        val workspace = createTempDirectory("indexino-repo-").also(temporaryDirectories::add)
+        val manifest = workspace.resolve(".repo/manifest.xml")
+        manifest.parent.createDirectories()
+        manifest.writeText(
+            """
+            <manifest>
+              <project name="shared" path="tools/one"/>
+              <project name="shared" path="tools/two"/>
+            </manifest>
+            """
+                .trimIndent()
+        )
+        listOf("one", "two").forEach { mount ->
+            workspace
+                .resolve("tools/$mount/src/main/kotlin/$mount.kt")
+                .also { it.parent.createDirectories() }
+                .writeText("class $mount")
+        }
+
+        val result =
+            TopologyResolver.resolve(
+                workspace,
+                TopologyRequest(buildSystem = BuildSystem.REPO, repoManifest = manifest),
+            )
+
+        assertEquals(
+            listOf("repo:shared:tools/one", "repo:shared:tools/two"),
+            result.externalSources.map { it.originId },
         )
     }
 
@@ -136,10 +169,7 @@ class RepoTopologyTest {
             )
 
         assertEquals(1, result.externalSources.size)
-        assertEquals(
-            "repo:platform/tools/base:tools/base-local",
-            result.externalSources.single().originId,
-        )
+        assertEquals("repo:platform/tools/base", result.externalSources.single().originId)
         assertEquals("deadbeef", result.externalSources.single().expectedRevision)
         assertEquals(listOf("src/main/kotlin/Base.kt"), result.externalSources.single().sourceFiles)
     }
