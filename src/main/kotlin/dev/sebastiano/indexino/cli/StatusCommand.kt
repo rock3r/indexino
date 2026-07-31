@@ -155,7 +155,7 @@ internal class StatusCommand : CliktCommand(name = "status") {
                 project,
                 currentSources,
                 externalOriginMetadata,
-                includeWorkspaceWithoutSources = topologyResult.topology == "gradle-parse",
+                includeWorkspaceWithoutSources = topologyResult.topology != "repo-manifest",
             )
         val pluginCoordinates =
             PluginRegistry.load(javaClass.classLoader).selectedCoordinates(manifest.applications)

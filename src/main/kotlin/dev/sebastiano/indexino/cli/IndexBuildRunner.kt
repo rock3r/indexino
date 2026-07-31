@@ -181,7 +181,7 @@ internal class IndexBuildRunner(
             project,
             sources,
             externalOriginMetadata,
-            includeWorkspaceWithoutSources = topology == "gradle-parse",
+            includeWorkspaceWithoutSources = topology != "repo-manifest",
         )
 
     private fun previewHash(sources: List<IndexedSource>): String {

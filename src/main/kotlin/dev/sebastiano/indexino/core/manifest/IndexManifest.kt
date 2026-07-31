@@ -53,6 +53,7 @@ internal fun IndexManifest.workspaceRevisionFingerprint(): String {
                         origin.revision.orEmpty(),
                         origin.stateFingerprint,
                         origin.expectedRevision.orEmpty(),
+                        origin.dirty.toString(),
                     )
                     .joinToString("\u0002")
             }

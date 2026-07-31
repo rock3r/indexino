@@ -410,7 +410,10 @@ internal class JavaSourceProducer : IndexProducer {
                 }
                 true
             }
-            return candidates.singleOrNull()?.parameterNames.orEmpty()
+            return (candidates.singleOrNull { it.originId == originId }
+                    ?: candidates.singleOrNull())
+                ?.parameterNames
+                .orEmpty()
         }
 
         private fun resolveInvocation(select: Tree): InvocationTarget? =
