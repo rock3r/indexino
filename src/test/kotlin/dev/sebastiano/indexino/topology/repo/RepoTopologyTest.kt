@@ -103,11 +103,11 @@ class RepoTopologyTest {
 
         assertEquals(
             listOf("src/main/kotlin/Parent.kt"),
-            result.externalSources.single { it.originId == "repo:parent" }.sourceFiles,
+            result.externalSources.single { it.originId == "repo:parent:tools" }.sourceFiles,
         )
         assertEquals(
             listOf("src/main/kotlin/Child.kt"),
-            result.externalSources.single { it.originId == "repo:child" }.sourceFiles,
+            result.externalSources.single { it.originId == "repo:child:tools/child" }.sourceFiles,
         )
     }
 
@@ -136,7 +136,10 @@ class RepoTopologyTest {
             )
 
         assertEquals(1, result.externalSources.size)
-        assertEquals("repo:platform/tools/base", result.externalSources.single().originId)
+        assertEquals(
+            "repo:platform/tools/base:tools/base-local",
+            result.externalSources.single().originId,
+        )
         assertEquals("deadbeef", result.externalSources.single().expectedRevision)
         assertEquals(listOf("src/main/kotlin/Base.kt"), result.externalSources.single().sourceFiles)
     }

@@ -37,7 +37,7 @@ internal object RepoTopology {
                         }
                         .distinct()
                         .sorted(),
-                originId = "repo:${project.name}",
+                originId = "repo:${project.name}:${project.path}",
                 expectedRevision = project.revision,
             )
         }
