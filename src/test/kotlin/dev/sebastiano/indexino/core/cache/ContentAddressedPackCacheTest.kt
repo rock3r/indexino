@@ -43,6 +43,11 @@ class ContentAddressedPackCacheTest {
         cache.materializeDirectory(first, restored)
         assertEquals("facts", Files.readString(restored.resolve("facts.json")))
         assertEquals("meta", Files.readString(restored.resolve("nested/meta.txt")))
+        source.resolve("facts.json").writeText("updated")
+        val updated = cache.installDirectory(source)
+        cache.replaceMaterializedDirectory(updated, restored)
+        assertEquals("updated", Files.readString(restored.resolve("facts.json")))
+
         ZipFile(pack.toFile()).use { zip ->
             assertEquals(
                 "facts",

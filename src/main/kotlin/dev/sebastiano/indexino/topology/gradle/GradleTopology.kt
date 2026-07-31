@@ -43,6 +43,7 @@ internal object GradleTopology {
                 graph.closure(normalizedModule, includeDeps)
             }
 
+        val scopedExternalMounts = if (rootScope || includeDeps) externalMounts else emptyList()
         val sourceFiles =
             modules
                 .flatMap { module ->
@@ -65,7 +66,7 @@ internal object GradleTopology {
             scope = normalizedModule,
             externalMounts = externalMounts,
             externalSources =
-                externalMounts.map { mount ->
+                scopedExternalMounts.map { mount ->
                     ExternalSourceMount(root = mount, sourceFiles = collectBuildSources(mount))
                 },
         )

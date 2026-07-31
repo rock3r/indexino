@@ -95,6 +95,30 @@ internal class ContentAddressedPackCache(private val cacheRoot: Path) {
         }
     }
 
+    fun replaceMaterializedDirectory(contentKey: String, destination: Path) {
+        val replacement =
+            destination.resolveSibling("${destination.fileName}.replace-${UUID.randomUUID()}")
+        try {
+            materializeDirectory(contentKey, replacement)
+            try {
+                Files.move(
+                    replacement,
+                    destination,
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                destination.toFile().deleteRecursively()
+                Files.move(replacement, destination, StandardCopyOption.REPLACE_EXISTING)
+            } catch (_: java.nio.file.FileSystemException) {
+                destination.toFile().deleteRecursively()
+                Files.move(replacement, destination, StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally {
+            if (Files.exists(replacement)) replacement.toFile().deleteRecursively()
+        }
+    }
+
     fun packPath(contentKey: String): Path {
         require(contentKey.length >= FANOUT_PREFIX_LENGTH * 2) { "Content key is too short" }
         return cacheRoot

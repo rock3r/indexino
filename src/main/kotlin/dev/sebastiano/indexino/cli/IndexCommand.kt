@@ -139,7 +139,10 @@ internal class IndexCommand : CliktCommand(name = "index") {
         val resolver = IndexPathResolver(project)
         val commit = GitHeadResolver.resolve(project)
         ContentAddressedPackCache(cacheRoot)
-            .materializeDirectory(manifest.packKeys.single(), resolver.resolveBaseStore(commit))
+            .replaceMaterializedDirectory(
+                manifest.packKeys.single(),
+                resolver.resolveBaseStore(commit),
+            )
         ManifestIO.write(
             resolver.resolveManifest(commit),
             requireNotNull(manifest.compatibilityManifest) {

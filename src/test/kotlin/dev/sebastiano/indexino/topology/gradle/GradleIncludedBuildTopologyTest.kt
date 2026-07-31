@@ -89,6 +89,9 @@ class GradleIncludedBuildTopologyTest {
             listOf("src/main/kotlin/Convention.kt"),
             result.externalSources.single().sourceFiles,
         )
+        val moduleOnly = GradleTopology.resolveSources(":app", workspace, includeDeps = false)
+        assertEquals(listOf(includedBuild.toRealPath()), moduleOnly.externalMounts)
+        assertEquals(emptyList(), moduleOnly.externalSources)
     }
 
     @Test
