@@ -64,7 +64,10 @@ class IndexMachineProgressCliTest {
             }
         assertEquals("1", javaProgress.value("phaseCompleted"))
         assertEquals("1", javaProgress.value("phaseTotal"))
-        assertEquals("app/src/main/java/sample/Panel.java", javaProgress.value("currentFile"))
+        assertEquals(
+            "workspace:app/src/main/java/sample/Panel.java",
+            javaProgress.value("currentFile"),
+        )
     }
 
     @Test
@@ -173,7 +176,7 @@ class IndexMachineProgressCliTest {
         assertEquals(0, result.exitCode, result.stderr)
         assertEquals("", result.stdout)
         assertTrue(result.stderr.contains("JavaSourceProducer"))
-        assertTrue(result.stderr.contains("[1/1] app/src/main/java/sample/Panel.java"))
+        assertTrue(result.stderr.contains("[1/1] workspace:app/src/main/java/sample/Panel.java"))
         assertFalse(result.stderr.contains("\"event\""))
     }
 
