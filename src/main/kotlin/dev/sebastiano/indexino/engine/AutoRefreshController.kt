@@ -8,14 +8,17 @@ import dev.sebastiano.indexino.api.SnapshotFreshness
 import dev.sebastiano.indexino.producer.IndexedSource
 import java.io.IOException
 import java.nio.file.FileSystems
+import java.nio.file.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardWatchEventKinds.ENTRY_CREATE
 import java.nio.file.StandardWatchEventKinds.ENTRY_DELETE
 import java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY
 import java.nio.file.StandardWatchEventKinds.OVERFLOW
 import java.nio.file.WatchKey
 import java.nio.file.WatchService
+import java.nio.file.attribute.BasicFileAttributes
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -90,21 +93,8 @@ internal class AutoRefreshController(
                     }
                     topologyRoots.filter(Files::isDirectory).forEach { root ->
                         add(root)
-                        Files.walk(root, MAX_MODULE_DISCOVERY_DEPTH).use { paths ->
-                            paths
-                                .filter { directory ->
-                                    Files.isDirectory(directory) &&
-                                        directory.none { segment ->
-                                            segment.toString() == ".git"
-                                        } &&
-                                        directory.fileName.toString() in SOURCE_ROOT_NAMES &&
-                                        directory.parent?.parent?.fileName?.toString() == "src"
-                                }
-                                .forEach { sourceRoot ->
-                                    Files.walk(sourceRoot).use { sourcePaths ->
-                                        sourcePaths.filter(Files::isDirectory).forEach(::add)
-                                    }
-                                }
+                        discoverSourceRoots(root).forEach { sourceRoot ->
+                            discoverDirectories(sourceRoot).forEach(::add)
                         }
                     }
                     topologyInputs(sources).mapTo(this) { it.parent ?: workspace }
@@ -274,6 +264,33 @@ internal class AutoRefreshController(
                 key.cancel()
             }
     }
+
+    private fun discoverSourceRoots(root: Path): Set<Path> =
+        discoverDirectories(root, MAX_MODULE_DISCOVERY_DEPTH).filterTo(linkedSetOf()) { directory ->
+            directory.fileName.toString() in SOURCE_ROOT_NAMES &&
+                directory.parent?.parent?.fileName?.toString() == "src"
+        }
+
+    private fun discoverDirectories(root: Path, maxDepth: Int = Int.MAX_VALUE): Set<Path> =
+        buildSet {
+            runCatching {
+                Files.walkFileTree(
+                    root,
+                    emptySet(),
+                    maxDepth,
+                    object : SimpleFileVisitor<Path>() {
+                        override fun preVisitDirectory(
+                            directory: Path,
+                            attributes: BasicFileAttributes,
+                        ): FileVisitResult {
+                            if (excluded(directory)) return FileVisitResult.SKIP_SUBTREE
+                            add(directory)
+                            return FileVisitResult.CONTINUE
+                        }
+                    },
+                )
+            }
+        }
 
     private fun registerDirectory(directory: Path): Boolean {
         if (watchService == null) return macWatcher != null
