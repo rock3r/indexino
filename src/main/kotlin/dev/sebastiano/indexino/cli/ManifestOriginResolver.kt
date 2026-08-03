@@ -112,7 +112,7 @@ internal object ManifestOriginResolver {
                 .sorted()
                 .joinToString("\n") { path ->
                     val file = originRoot.resolve(path)
-                    "$path:${runCatching { FileHashProducer.contentHash(file.readText()) }.getOrNull()}"
+                    "$path:${runCatching { FileHashProducer.contentHash(Files.readAllBytes(file)) }.getOrNull()}"
                 }
         return FileHashProducer.contentHash("$diff\n$untrackedFingerprint")
     }
@@ -130,7 +130,7 @@ internal object ManifestOriginResolver {
                 }
                 .sortedBy { (path, _) -> path }
                 .joinToString("\n") { (path, file) ->
-                    "$path:${runCatching { FileHashProducer.contentHash(file.readText()) }.getOrNull()}"
+                    "$path:${runCatching { FileHashProducer.contentHash(Files.readAllBytes(file)) }.getOrNull()}"
                 }
                 .let(FileHashProducer::contentHash)
         }

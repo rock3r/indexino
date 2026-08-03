@@ -372,7 +372,14 @@ private constructor(
         return calls.associateWith { call ->
             val calleeCandidates =
                 call.candidateSymbolFqns.flatMap { name ->
-                    val candidates = candidatesByName[name].orEmpty()
+                    val candidates =
+                        candidatesByName[name].orEmpty().filter { candidate ->
+                            candidate.arity == null ||
+                                candidate.arity == call.arguments.size ||
+                                (candidate.language == "kotlin" &&
+                                    candidate.arity > call.arguments.size) ||
+                                (candidate.isVararg && candidate.arity - 1 <= call.arguments.size)
+                        }
                     candidates.filter { it.originId == call.originId }.ifEmpty { candidates }
                 }
             val enclosingCandidates =

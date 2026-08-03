@@ -1,6 +1,8 @@
 package dev.sebastiano.indexino.cli
 
+import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.core.Version
+import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.IndexManifest
 import dev.sebastiano.indexino.core.manifest.IndexManifestOrigin
@@ -132,8 +134,14 @@ internal class IndexBuildRunner(
         val preservesExistingTopology =
             existingManifest?.scope == topologyResult.scope &&
                 existingManifest.topology == topologyResult.topology &&
-                existingManifest.includeDeps == topologyResult.includeDeps
+                existingManifest.includeDeps == topologyResult.includeDeps &&
+                existingManifest.resolvedTopologyDigest == topologyResult.resolvedTopologyDigest
         if (preservesExistingTopology && vanishedOrigins.isNotEmpty()) {
+            WorkspaceGenerationManifestStore(
+                    InProcessCacheLayout.cacheRoot(),
+                    InProcessCacheLayout.workspaceId(project),
+                )
+                .markOriginsUnavailable(vanishedOrigins)
             val message = "topology origin unavailable: ${vanishedOrigins.sorted().joinToString()}"
             progress(message)
             machineProgress?.failed(CliExitCodes.TOPOLOGY_FAILED, message)

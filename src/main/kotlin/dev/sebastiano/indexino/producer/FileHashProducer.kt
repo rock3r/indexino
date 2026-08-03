@@ -47,8 +47,10 @@ internal class FileHashProducer : IndexProducer {
     }
 
     companion object {
-        fun contentHash(content: String): String {
-            val digest = MessageDigest.getInstance("SHA-256").digest(content.toByteArray())
+        fun contentHash(content: String): String = contentHash(content.toByteArray())
+
+        fun contentHash(content: ByteArray): String {
+            val digest = MessageDigest.getInstance("SHA-256").digest(content)
             return "sha256:" + digest.joinToString("") { "%02x".format(Locale.ROOT, it) }
         }
 

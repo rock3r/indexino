@@ -40,12 +40,20 @@ internal data class WorkspaceGenerationManifest(
 internal class WorkspaceGenerationManifestStore(cacheRoot: Path, workspaceId: String) {
     private val workspaceRoot = cacheRoot.resolve("workspaces").resolve(workspaceId)
     private val currentPointer = workspaceRoot.resolve("current")
+    private val unavailableOriginsPath = workspaceRoot.resolve("unavailable-origins.json")
     private val json = Json {
         encodeDefaults = true
         ignoreUnknownKeys = true
     }
 
+    fun markOriginsUnavailable(originIds: Set<String>) {
+        if (originIds.isEmpty()) return
+        Files.createDirectories(workspaceRoot)
+        Files.writeString(unavailableOriginsPath, json.encodeToString(originIds.sorted()))
+    }
+
     fun publish(manifest: WorkspaceGenerationManifest) {
+        Files.deleteIfExists(unavailableOriginsPath)
         val manifestPath =
             workspaceRoot
                 .resolve("generations")
@@ -71,9 +79,30 @@ internal class WorkspaceGenerationManifestStore(cacheRoot: Path, workspaceId: St
         val manifestPath =
             workspaceRoot.resolve("generations").resolve(generation).resolve("manifest.json")
         if (!Files.isRegularFile(manifestPath)) return null
-        return json.decodeFromString(
-            WorkspaceGenerationManifest.serializer(),
-            Files.readString(manifestPath),
+        val manifest =
+            json.decodeFromString(
+                WorkspaceGenerationManifest.serializer(),
+                Files.readString(manifestPath),
+            )
+        val unavailable =
+            unavailableOriginsPath
+                .takeIf(Files::isRegularFile)
+                ?.let { json.decodeFromString<Set<String>>(Files.readString(it)) }
+                .orEmpty()
+        if (unavailable.isEmpty()) return manifest
+        return manifest.copy(
+            origins =
+                manifest.origins.map { origin ->
+                    if (origin.originId in unavailable) origin.copy(available = false) else origin
+                },
+            compatibilityManifest =
+                manifest.compatibilityManifest?.copy(
+                    origins =
+                        manifest.compatibilityManifest.origins.map { origin ->
+                            if (origin.originId in unavailable) origin.copy(available = false)
+                            else origin
+                        }
+                ),
         )
     }
 
