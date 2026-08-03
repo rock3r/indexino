@@ -11,15 +11,10 @@ import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.core.Version
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.git.GitHeadResolver
-import dev.sebastiano.indexino.core.manifest.ManifestFreshness
 import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
-import dev.sebastiano.indexino.engine.PluginRegistry
-import dev.sebastiano.indexino.producer.FileHashProducer
 import dev.sebastiano.indexino.topology.BuildSystem
-import dev.sebastiano.indexino.topology.SourceOriginResolver
 import dev.sebastiano.indexino.topology.TopologyRequest
-import dev.sebastiano.indexino.topology.TopologyResolver
 import dev.sebastiano.indexino.topology.bazel.BazelProcessRunner
 import dev.sebastiano.indexino.topology.bazel.BazelQueryExecutor
 import java.nio.file.Path
@@ -71,7 +66,7 @@ internal class StatusCommand : CliktCommand(name = "status") {
             output = output,
         )
 
-    @Suppress("LongMethod")
+    @Suppress("LongMethod", "UnusedParameter")
     fun runStatus(
         project: Path,
         topologyRequest: TopologyRequest,
@@ -93,94 +88,14 @@ internal class StatusCommand : CliktCommand(name = "status") {
                     output(Json.encodeToString(StatusReport(indexed = false, commit = commit)))
                     return CliExitCodes.ANALYSIS_ERROR
                 }
-        val request =
-            resolveRequestForManifest(
-                topologyRequest,
-                manifest.scope,
-                manifest.topology,
-                manifest.includeDeps,
-            )
-        val topologyResult =
-            runCatching {
-                    TopologyResolver.resolve(
-                        project = project,
-                        request = request,
-                        bazelQueryExecutor = bazelQueryExecutor,
-                        bazelProcessRunner = bazelProcessRunner,
-                    )
-                }
-                .getOrElse { failure ->
-                    output(
-                        Json.encodeToString(
-                            StatusReport(
-                                indexed = true,
-                                commit = commit,
-                                scope = manifest.scope,
-                                topology = manifest.topology,
-                                indexerVersion = manifest.indexerVersion,
-                                sourceFileCount = manifest.sourceFileCount,
-                                builtAt = manifest.builtAt,
-                                applications = manifest.applications,
-                                fresh = false,
-                                available = false,
-                                diagnostic =
-                                    failure.message ?: "Unable to resolve the current topology",
-                            )
-                        )
-                    )
-                    return CliExitCodes.TOPOLOGY_FAILED
-                }
-        val currentSources =
-            SourceOriginResolver.resolve(project, topologyResult.sourceFiles).flatMap { origin ->
-                origin.sourceFiles.map { path ->
-                    dev.sebastiano.indexino.producer.IndexedSource(origin.id, origin.root, path)
-                }
-            } +
-                topologyResult.externalSources.flatMap { mount ->
-                    SourceOriginResolver.resolveExternal(
-                            mountRoot = mount.root,
-                            sourceFiles = mount.sourceFiles,
-                            mountOriginId =
-                                mount.originId ?: SourceOriginResolver.externalOriginId(mount.root),
-                        )
-                        .flatMap { origin ->
-                            origin.sourceFiles.map { path ->
-                                dev.sebastiano.indexino.producer.IndexedSource(
-                                    origin.id,
-                                    origin.root,
-                                    path,
-                                )
-                            }
-                        }
-                }
-        val currentHash = FileHashProducer.combinedIndexedSourcesHash(currentSources)
-        val externalOriginMetadata =
-            topologyResult.externalSources.associate { mount ->
-                mount.root.toRealPath() to (mount.originId to mount.expectedRevision)
-            }
-        val origins =
-            ManifestOriginResolver.resolve(
-                project,
-                currentSources,
-                externalOriginMetadata,
-                includeWorkspaceWithoutSources = topologyResult.topology != "repo-manifest",
-            )
-        val pluginCoordinates =
-            PluginRegistry.load(javaClass.classLoader).selectedCoordinates(manifest.applications)
-        val criteria =
-            ManifestFreshness.criteriaFrom(
-                commit = commit,
-                scope = manifest.scope,
-                // Omitted scope reconstructs the stored configuration. An explicit scope instead
-                // asks whether this manifest satisfies the caller's requested dependency policy.
-                includeDeps = request.includeDeps,
-                sourcesContentHash = currentHash,
-                applications = manifest.applications,
-                pluginCoordinates = pluginCoordinates,
-                origins = origins,
-                resolvedTopologyDigest = topologyResult.resolvedTopologyDigest,
-            )
-        val fresh = ManifestFreshness.isFresh(manifest, criteria)
+        val available = manifest.origins.all { it.available }
+        val explicitlySelectedScope =
+            topologyRequest.bazelTarget != null ||
+                topologyRequest.gradleModule != null ||
+                topologyRequest.repoManifest != null
+        val compatibleScope =
+            !explicitlySelectedScope || topologyRequest.includeDeps == manifest.includeDeps
+        val fresh = available && compatibleScope && manifest.commit == commit
 
         output(
             Json.encodeToString(
@@ -194,7 +109,8 @@ internal class StatusCommand : CliktCommand(name = "status") {
                     builtAt = manifest.builtAt,
                     applications = manifest.applications,
                     fresh = fresh,
-                    currentSourcesContentHash = currentHash,
+                    available = available,
+                    currentSourcesContentHash = manifest.sourcesContentHash,
                     manifestSourcesContentHash = manifest.sourcesContentHash,
                 )
             )

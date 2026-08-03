@@ -121,6 +121,19 @@ internal class IndexBuildRunner(
         val manifestPath = resolver.resolveManifest(commit)
         val previewHash = previewHash(sources)
         val origins = resolveOrigins(sources, externalOriginMetadata, topologyResult.topology)
+        val existingManifest = manifestPath.takeIf { it.exists() }?.let(ManifestIO::read)
+        val vanishedOrigins =
+            existingManifest
+                ?.origins
+                ?.mapTo(linkedSetOf()) { it.originId }
+                ?.minus(origins.mapTo(linkedSetOf()) { it.originId })
+                .orEmpty()
+        if (vanishedOrigins.isNotEmpty()) {
+            val message = "topology origin unavailable: ${vanishedOrigins.sorted().joinToString()}"
+            progress(message)
+            machineProgress?.failed(CliExitCodes.TOPOLOGY_FAILED, message)
+            return CliExitCodes.TOPOLOGY_FAILED
+        }
         val criteria =
             ManifestFreshness.criteriaFrom(
                 commit = commit,
@@ -132,7 +145,6 @@ internal class IndexBuildRunner(
                 origins = origins,
                 resolvedTopologyDigest = topologyResult.resolvedTopologyDigest,
             )
-        val existingManifest = manifestPath.takeIf { it.exists() }?.let(ManifestIO::read)
         if (existingManifest != null && ManifestFreshness.isFresh(existingManifest, criteria)) {
             latestManifest = existingManifest
             reusedFreshIndex = true
@@ -181,7 +193,8 @@ internal class IndexBuildRunner(
                     SOURCE_HASH_PREVIEW_PHASE,
                     index,
                     total,
-                    "${source.originId}:${source.path}",
+                    source.originId,
+                    source.path,
                 )
             }
         machineProgress?.phaseCompleted(SOURCE_HASH_PREVIEW_PHASE, sources.size)
@@ -286,8 +299,14 @@ internal class IndexBuildRunner(
     ): SourceChangeSet {
         machineProgress?.phaseStarted(SOURCE_CHANGE_DETECTION_PHASE, sources.size)
         val detectedChanges =
-            SourceChangeDetector.detect(store, sources) { index, total, path ->
-                machineProgress?.fileProgress(SOURCE_CHANGE_DETECTION_PHASE, index, total, path)
+            SourceChangeDetector.detect(store, sources) { index, total, source ->
+                machineProgress?.fileProgress(
+                    SOURCE_CHANGE_DETECTION_PHASE,
+                    index,
+                    total,
+                    source.originId,
+                    source.path,
+                )
             }
         machineProgress?.phaseCompleted(SOURCE_CHANGE_DETECTION_PHASE, sources.size)
         val changes =

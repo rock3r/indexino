@@ -47,6 +47,24 @@ class AutoRefreshControllerTest {
     }
 
     @Test
+    fun `watches empty non-main source roots discovered from topology`() {
+        val root = Files.createTempDirectory(Path.of("/tmp"), "indexino-empty-source-root-")
+        val workspace = root.resolve("workspace")
+        val sourceRoot = workspace.resolve("module/src/commonMain/kotlin")
+        Files.createDirectories(sourceRoot)
+        val controller = AutoRefreshController(workspace, AutoRefreshMode.ENABLED, refresh = {})
+        try {
+            val request = RefreshRequest.forScope(IndexScope.gradle(":module"))
+            controller.register(request, sources = emptyList(), topologyRoots = listOf(workspace))
+
+            assertTrue(sourceRoot in controller.directoriesForTests(request))
+        } finally {
+            controller.close()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `refreshed closure stops watching removed external roots`() {
         val root = Files.createTempDirectory(Path.of("/tmp"), "indexino-watch-replace-")
         val workspace = root.resolve("workspace")

@@ -177,7 +177,7 @@ class StatusCommandTest {
 
     @Suppress("LongMethod")
     @Test
-    fun `status marks resolved repo manifest changes stale`() {
+    fun `status reports last known state without resolving a repo manifest`() {
         val workspace = createRepoWorkspace()
         val manifest = workspace.resolve(".repo/manifest.xml")
         val request = TopologyRequest(buildSystem = BuildSystem.REPO, repoManifest = manifest)
@@ -201,7 +201,7 @@ class StatusCommandTest {
                     output = { freshOutput.appendLine(it) },
                 ),
         )
-        assertTrue(freshOutput.toString().contains("\"fresh\":true"), freshOutput.toString())
+        assertTrue(freshOutput.toString().contains("\"indexed\":true"), freshOutput.toString())
         val cleanGitStatus =
             ProcessBuilder(
                     "git",
@@ -307,11 +307,11 @@ class StatusCommandTest {
                 )
 
         assertEquals(0, exitCode)
-        assertFalse(output.toString().contains("\"fresh\":true"), output.toString())
+        assertTrue(output.toString().contains("\"indexed\":true"), output.toString())
     }
 
     @Test
-    fun `status reports a missing repo child origin as unavailable`() {
+    fun `status reports cached state when a repo child origin is missing`() {
         val workspace = createRepoWorkspace()
         val manifest = workspace.resolve(".repo/manifest.xml")
         val request = TopologyRequest(buildSystem = BuildSystem.REPO, repoManifest = manifest)
@@ -335,13 +335,12 @@ class StatusCommandTest {
                     output = { output.appendLine(it) },
                 )
 
-        assertEquals(CliExitCodes.TOPOLOGY_FAILED, exitCode)
-        assertTrue(output.toString().contains("\"fresh\":false"), output.toString())
-        assertTrue(output.toString().contains("\"available\":false"), output.toString())
+        assertEquals(CliExitCodes.SUCCESS, exitCode)
+        assertTrue(output.toString().contains("\"indexed\":true"), output.toString())
     }
 
     @Test
-    fun `status CLI reports a missing repo child origin as unavailable`() {
+    fun `status CLI reports cached state when a repo child origin is missing`() {
         val workspace = createRepoWorkspace()
         val manifest = workspace.resolve(".repo/manifest.xml")
         assertEquals(
@@ -359,9 +358,8 @@ class StatusCommandTest {
         val result =
             StatusCommand().test("--project", workspace.toString(), "--build-system", "repo")
 
-        assertEquals(CliExitCodes.TOPOLOGY_FAILED, result.statusCode)
-        assertTrue(result.output.contains("\"fresh\":false"), result.output)
-        assertTrue(result.output.contains("\"available\":false"), result.output)
+        assertEquals(CliExitCodes.SUCCESS, result.statusCode)
+        assertTrue(result.output.contains("\"indexed\":true"), result.output)
     }
 
     @Test

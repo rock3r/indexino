@@ -88,7 +88,7 @@ internal class AutoRefreshController(
                         sourcePath.parent?.let(::add)
                         sourceRoot(sourcePath, source.originRoot)?.let(::add)
                     }
-                    topologyRoots.forEach { root ->
+                    topologyRoots.filter(Files::isDirectory).forEach { root ->
                         add(root)
                         Files.walk(root, MAX_MODULE_DISCOVERY_DEPTH).use { paths ->
                             paths
@@ -98,7 +98,6 @@ internal class AutoRefreshController(
                                             segment.toString() == ".git"
                                         } &&
                                         directory.fileName.toString() in SOURCE_ROOT_NAMES &&
-                                        directory.parent?.fileName?.toString() == "main" &&
                                         directory.parent?.parent?.fileName?.toString() == "src"
                                 }
                                 .forEach { sourceRoot ->
@@ -342,6 +341,6 @@ internal class AutoRefreshController(
         const val MAX_RETRY_ATTEMPTS = 3
         const val MAX_MODULE_DISCOVERY_DEPTH = 6
         val RETRY_DELAYS_MILLIS = longArrayOf(1_000L, 5_000L, 30_000L)
-        val SOURCE_ROOT_NAMES = setOf("kotlin", "java", "resources")
+        val SOURCE_ROOT_NAMES = setOf("kotlin", "java", "resources", "res")
     }
 }

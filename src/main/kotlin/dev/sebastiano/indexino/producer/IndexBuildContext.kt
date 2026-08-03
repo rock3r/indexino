@@ -46,12 +46,11 @@ internal data class IndexBuildContext(
     fun readSource(source: IndexedSource): String =
         sourceContentOverrides[source.path] ?: source.originRoot.resolve(source.path).readText()
 
-    fun reportFileProgress(index: Int, total: Int, source: IndexedSource) =
-        reportFileProgress(index, total, "${source.originId}:${source.path}")
-
-    fun reportFileProgress(index: Int, total: Int, relativePath: String) {
-        progress?.invoke("[$index/$total] $relativePath")
-        activePhase?.let { machineProgress?.fileProgress(it, index, total, relativePath) }
+    fun reportFileProgress(index: Int, total: Int, source: IndexedSource) {
+        progress?.invoke("[$index/$total] ${source.originId}:${source.path}")
+        activePhase?.let {
+            machineProgress?.fileProgress(it, index, total, source.originId, source.path)
+        }
     }
 
     companion object {
