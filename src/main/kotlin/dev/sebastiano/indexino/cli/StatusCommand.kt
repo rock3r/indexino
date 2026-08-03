@@ -17,6 +17,7 @@ import dev.sebastiano.indexino.topology.BuildSystem
 import dev.sebastiano.indexino.topology.TopologyRequest
 import dev.sebastiano.indexino.topology.bazel.BazelProcessRunner
 import dev.sebastiano.indexino.topology.bazel.BazelQueryExecutor
+import dev.sebastiano.indexino.topology.gradle.GradleTopology
 import java.nio.file.Path
 import kotlin.io.path.exists
 import kotlinx.serialization.EncodeDefault
@@ -95,8 +96,8 @@ internal class StatusCommand : CliktCommand(name = "status") {
                 topologyRequest.repoManifest != null
         val requestedScope =
             topologyRequest.bazelTarget
-                ?: topologyRequest.gradleModule
-                ?: topologyRequest.repoManifest?.toString()
+                ?: topologyRequest.gradleModule?.let(GradleTopology::normalizeModule)
+                ?: topologyRequest.repoManifest?.toRealPath()?.toString()
         val compatibleScope =
             !explicitlySelectedScope ||
                 (requestedScope == manifest.scope &&
