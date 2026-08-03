@@ -39,7 +39,7 @@ internal constructor(
     )
 
     internal companion object {
-        private val HOST_BASIC_FACT_SCHEMA: BasicFactSchemaVersion = BasicFactSchemaVersion.of(1)
+        private val HOST_BASIC_FACT_SCHEMA: BasicFactSchemaVersion = BasicFactSchemaVersion.of(2)
 
         @OptIn(IndexinoInternalApi::class)
         internal fun load(classLoader: ClassLoader): PluginRegistry {

@@ -169,16 +169,26 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             val parameterNames =
                 target
                     ?.let { resolved ->
-                        parameterNames(
+                        sameOriginParameterNames(
                             projectSymbols,
                             resolved.symbolFqn,
                             originId,
                             explicitArgumentCount,
                         )
-                            ?: storedParameterNames(
+                            ?: storedSameOriginParameterNames(
                                 store,
                                 resolved.symbolFqn,
                                 originId,
+                                explicitArgumentCount,
+                            )
+                            ?: parameterNames(
+                                projectSymbols,
+                                resolved.symbolFqn,
+                                explicitArgumentCount,
+                            )
+                            ?: storedParameterNames(
+                                store,
+                                resolved.symbolFqn,
                                 explicitArgumentCount,
                             )
                     }
@@ -211,26 +221,42 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         }
     }
 
+    private fun sameOriginParameterNames(
+        symbols: List<ResolvedSymbol>,
+        fqn: String,
+        originId: String,
+        argumentCount: Int,
+    ): List<String>? =
+        symbols
+            .singleOrNull {
+                it.fqn == fqn &&
+                    it.originId == originId &&
+                    (it.arity == null || it.arity >= argumentCount)
+            }
+            ?.parameterNames
+
     private fun parameterNames(
         symbols: List<ResolvedSymbol>,
         fqn: String,
-        preferredOriginId: String,
         argumentCount: Int,
-    ): List<String>? {
-        val candidates = symbols.filter {
-            it.fqn == fqn && (it.arity == null || it.arity >= argumentCount)
-        }
-        return (candidates.singleOrNull { it.originId == preferredOriginId }
-                ?: candidates.singleOrNull())
+    ): List<String>? =
+        symbols
+            .singleOrNull { it.fqn == fqn && (it.arity == null || it.arity >= argumentCount) }
             ?.parameterNames
-    }
 
-    private fun storedParameterNames(
+    private fun storedSameOriginParameterNames(
         store: CodeIndexStore,
         fqn: String,
         originId: String,
         argumentCount: Int,
-    ): List<String> {
+    ): List<String>? = storedParameterNames(store, fqn, argumentCount) { it.originId == originId }
+
+    private fun storedParameterNames(
+        store: CodeIndexStore,
+        fqn: String,
+        argumentCount: Int,
+        predicate: (SymbolRecord) -> Boolean = { true },
+    ): List<String>? {
         val candidates = mutableListOf<SymbolRecord>()
         store.forEachPrefix("sym:$fqn:") { _, record ->
             if (
@@ -238,13 +264,11 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                     record.fqn == fqn &&
                     (record.arity == null || record.arity >= argumentCount)
             ) {
-                candidates += record
+                if (predicate(record)) candidates += record
             }
             true
         }
-        return (candidates.singleOrNull { it.originId == originId } ?: candidates.singleOrNull())
-            ?.parameterNames
-            .orEmpty()
+        return candidates.singleOrNull()?.parameterNames
     }
 
     private fun callArguments(

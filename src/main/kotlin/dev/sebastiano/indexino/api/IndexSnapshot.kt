@@ -39,7 +39,7 @@ private constructor(
     private val store: CodeIndexStore?,
     public val revision: WorkspaceRevision,
     override val generation: WorkspaceGenerationId,
-    override val basicFactSchemaVersion: BasicFactSchemaVersion = BasicFactSchemaVersion.of(1),
+    override val basicFactSchemaVersion: BasicFactSchemaVersion = BasicFactSchemaVersion.of(2),
     public val freshnessAtAcquisition: SnapshotFreshness,
     private val onClose: () -> Unit,
     private val pluginRegistry: PluginRegistry?,
