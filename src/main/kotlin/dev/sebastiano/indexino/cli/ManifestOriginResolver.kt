@@ -125,7 +125,8 @@ internal object ManifestOriginResolver {
                 .filter(Path::isRegularFile)
                 .map { file -> originRoot.relativize(file).toString().replace('\\', '/') to file }
                 .filterNot { (path, _) ->
-                    isTransitionalPath(path) || path.split('/').any { it == ".git" }
+                    isTransitionalPath(path) ||
+                        path.split('/').any { it in TRANSIENT_DIRECTORY_NAMES }
                 }
                 .sortedBy { (path, _) -> path }
                 .joinToString("\n") { (path, file) ->
@@ -211,5 +212,7 @@ internal object ManifestOriginResolver {
 
     private const val PORCELAIN_STATUS_PREFIX_LENGTH = 3
     private const val TRANSITIONAL_INDEX_DIRECTORY = ".indexino"
+    private val TRANSIENT_DIRECTORY_NAMES =
+        setOf(".git", ".gradle", ".idea", "build", "out", "target")
     private const val WORKSPACE_ORIGIN_ID = "workspace"
 }

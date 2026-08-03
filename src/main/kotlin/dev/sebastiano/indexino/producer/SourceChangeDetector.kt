@@ -32,7 +32,11 @@ internal object SourceChangeDetector {
         val currentSources = sources.associateBy { it.originId to it.path }
         val changedSources =
             sources.filterIndexedTo(linkedSetOf()) { index, source ->
-                onFileProcessed?.invoke(index + 1, sources.size, source.path)
+                onFileProcessed?.invoke(
+                    index + 1,
+                    sources.size,
+                    "${source.originId}:${source.path}",
+                )
                 val currentHash =
                     FileHashProducer.contentHash(source.originRoot.resolve(source.path).readText())
                 previousHashes[source.originId to source.path] != currentHash
