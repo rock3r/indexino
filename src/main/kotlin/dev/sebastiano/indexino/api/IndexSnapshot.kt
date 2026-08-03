@@ -370,9 +370,11 @@ private constructor(
                 }
             )
         return calls.associateWith { call ->
-            (call.candidateSymbolFqns + listOfNotNull(call.enclosingSymbolFqn))
-                .flatMap { candidatesByName[it].orEmpty() }
-                .distinct()
+            val candidates =
+                (call.candidateSymbolFqns + listOfNotNull(call.enclosingSymbolFqn))
+                    .flatMap { candidatesByName[it].orEmpty() }
+                    .distinct()
+            candidates.filter { it.originId == call.originId }.ifEmpty { candidates }
         }
     }
 

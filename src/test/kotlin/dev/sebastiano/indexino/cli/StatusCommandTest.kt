@@ -21,6 +21,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class StatusCommandTest {
@@ -260,6 +261,20 @@ class StatusCommandTest {
             dirtyOrigins.single { it.originId == "repo:tools" }.dirty,
             "$gitStatus origins=$dirtyOrigins",
         )
+        untrackedInput.writeText("changed generated input")
+        val changedDirtyOrigins =
+            ManifestOriginResolver.resolve(
+                workspace,
+                listOf(
+                    IndexedSource(
+                        "repo:tools",
+                        workspace.resolve("tools"),
+                        "src/main/kotlin/Tool.kt",
+                    )
+                ),
+                mapOf(workspace.resolve("tools").toRealPath() to ("repo:tools" to "one")),
+            )
+        assertNotEquals(dirtyOrigins, changedDirtyOrigins)
         val dirtyOutput = StringBuilder()
         assertEquals(
             0,

@@ -36,6 +36,45 @@ class SourceOriginResolverTest {
     }
 
     @Test
+    fun `assigns nested Git sources within an external mount to a mount-qualified origin`() {
+        val mount = temporaryDirectory("indexino-external-mount-")
+        mount
+            .resolve("src/main/kotlin/Root.kt")
+            .also { it.parent.createDirectories() }
+            .writeText("class Root")
+        initializeGitRepository(mount)
+        val child = mount.resolve("nested")
+        child
+            .resolve("src/main/kotlin/Child.kt")
+            .also { it.parent.createDirectories() }
+            .writeText("class Child")
+        initializeGitRepository(child)
+
+        val origins =
+            SourceOriginResolver.resolveExternal(
+                mountRoot = mount,
+                mountOriginId = "repo:build-logic",
+                sourceFiles = listOf("src/main/kotlin/Root.kt", "nested/src/main/kotlin/Child.kt"),
+            )
+
+        assertEquals(
+            listOf(
+                ResolvedSourceOrigin(
+                    id = "repo:build-logic",
+                    root = mount.toRealPath(),
+                    sourceFiles = listOf("src/main/kotlin/Root.kt"),
+                ),
+                ResolvedSourceOrigin(
+                    id = "repo:build-logic:git:nested",
+                    root = child.toRealPath(),
+                    sourceFiles = listOf("src/main/kotlin/Child.kt"),
+                ),
+            ),
+            origins,
+        )
+    }
+
+    @Test
     fun `assigns nested Git sources to their nearest origin`() {
         val workspace = temporaryDirectory("indexino-origin-workspace-")
         workspace

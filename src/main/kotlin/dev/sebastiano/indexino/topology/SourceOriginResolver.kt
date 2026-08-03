@@ -41,6 +41,42 @@ internal object SourceOriginResolver {
             )
     }
 
+    fun resolveExternal(
+        mountRoot: Path,
+        sourceFiles: List<String>,
+        mountOriginId: String = externalOriginId(mountRoot),
+    ): List<ResolvedSourceOrigin> {
+        val canonicalMountRoot = mountRoot.toRealPath()
+        val gitRoots = mutableMapOf<Path, Path?>()
+        val origins = linkedMapOf<Path, MutableList<String>>()
+        sourceFiles.forEach { sourceFile ->
+            val sourcePath = canonicalMountRoot.resolve(sourceFile).normalize()
+            require(sourcePath.startsWith(canonicalMountRoot)) {
+                "External mount source path escapes mount: $sourceFile"
+            }
+            val sourceDirectory = sourcePath.parent
+            val gitRoot =
+                cachedGitRoot(sourceDirectory, gitRoots)
+                    ?: gitRoots.getOrPut(sourceDirectory) { findGitRoot(sourceDirectory) }
+            val originRoot =
+                gitRoot?.takeIf { it.startsWith(canonicalMountRoot) && it != canonicalMountRoot }
+                    ?: canonicalMountRoot
+            origins.getOrPut(originRoot) { mutableListOf() } +=
+                originRoot.relativize(sourcePath).invariantSeparatorsPathString
+        }
+        return origins.entries
+            .map { (root, files) ->
+                val id =
+                    if (root == canonicalMountRoot) {
+                        mountOriginId
+                    } else {
+                        "$mountOriginId:git:${canonicalMountRoot.relativize(root).invariantSeparatorsPathString}"
+                    }
+                ResolvedSourceOrigin(id = id, root = root, sourceFiles = files.sorted())
+            }
+            .sortedBy { it.id }
+    }
+
     private fun cachedGitRoot(directory: Path, gitRoots: Map<Path, Path?>): Path? {
         val cachedRoot =
             gitRoots.values

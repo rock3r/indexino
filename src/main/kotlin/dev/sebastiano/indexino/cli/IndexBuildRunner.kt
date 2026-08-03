@@ -104,13 +104,17 @@ internal class IndexBuildRunner(
                 origin.sourceFiles.map { path -> IndexedSource(origin.id, origin.root, path) }
             } +
                 topologyResult.externalSources.flatMap { mount ->
-                    mount.sourceFiles.map { path ->
-                        IndexedSource(
-                            mount.originId ?: SourceOriginResolver.externalOriginId(mount.root),
-                            mount.root,
-                            path,
+                    SourceOriginResolver.resolveExternal(
+                            mountRoot = mount.root,
+                            sourceFiles = mount.sourceFiles,
+                            mountOriginId =
+                                mount.originId ?: SourceOriginResolver.externalOriginId(mount.root),
                         )
-                    }
+                        .flatMap { origin ->
+                            origin.sourceFiles.map { path ->
+                                IndexedSource(origin.id, origin.root, path)
+                            }
+                        }
                 }
         latestSourceFiles = sourceFiles
         latestSources = sources

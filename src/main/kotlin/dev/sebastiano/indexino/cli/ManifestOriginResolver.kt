@@ -5,7 +5,9 @@ import dev.sebastiano.indexino.core.manifest.IndexManifestOrigin
 import dev.sebastiano.indexino.producer.FileHashProducer
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.topology.SourceOriginResolver
+import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.io.path.isRegularFile
 import kotlin.io.path.readText
 
 /** Builds current origin provenance for manifest freshness checks and publication. */
@@ -80,9 +82,7 @@ internal object ManifestOriginResolver {
     ): IndexManifestOrigin =
         IndexManifestOrigin(
             originId = originId,
-            revision =
-                GitHeadResolver.resolve(originRoot)
-                    .takeUnless(GitHeadResolver::isFilesystemRevision),
+            revision = revisionAtOriginRoot(originRoot),
             stateFingerprint =
                 FileHashProducer.contentHash(
                     "$sourceFingerprint:${workingTreeFingerprint(originRoot)}"
@@ -91,27 +91,63 @@ internal object ManifestOriginResolver {
             dirty = isGitDirty(originRoot),
         )
 
+    private fun revisionAtOriginRoot(originRoot: Path): String? {
+        val canonicalRoot = originRoot.toRealPath()
+        val topLevel = runGit(canonicalRoot, "rev-parse", "--show-toplevel")?.trim()?.let(Path::of)
+        if (topLevel?.toRealPath() != canonicalRoot) return null
+        return GitHeadResolver.resolve(canonicalRoot)
+            .takeUnless(GitHeadResolver::isFilesystemRevision)
+    }
+
     private fun workingTreeFingerprint(originRoot: Path): String {
+        val diff = runGit(originRoot, "diff", "--no-ext-diff", "--binary", "HEAD", "--", ".")
+        val untracked =
+            runGit(originRoot, "ls-files", "--others", "--exclude-standard", "-z", "--", ".")
+        if (diff == null || untracked == null) return filesystemInventoryFingerprint(originRoot)
+        val untrackedFingerprint =
+            untracked
+                .split('\u0000')
+                .filter(String::isNotEmpty)
+                .filterNot(::isTransitionalPath)
+                .sorted()
+                .joinToString("\n") { path ->
+                    val file = originRoot.resolve(path)
+                    "$path:${runCatching { FileHashProducer.contentHash(file.readText()) }.getOrNull()}"
+                }
+        return FileHashProducer.contentHash("$diff\n$untrackedFingerprint")
+    }
+
+    private fun filesystemInventoryFingerprint(originRoot: Path): String =
+        Files.walk(originRoot).use { paths ->
+            paths
+                .iterator()
+                .asSequence()
+                .filter(Path::isRegularFile)
+                .map { file -> originRoot.relativize(file).toString().replace('\\', '/') to file }
+                .filterNot { (path, _) ->
+                    isTransitionalPath(path) || path.split('/').any { it == ".git" }
+                }
+                .sortedBy { (path, _) -> path }
+                .joinToString("\n") { (path, file) ->
+                    "$path:${runCatching { FileHashProducer.contentHash(file.readText()) }.getOrNull()}"
+                }
+                .let(FileHashProducer::contentHash)
+        }
+
+    private fun runGit(originRoot: Path, vararg arguments: String): String? {
         val process =
             runCatching {
-                    ProcessBuilder(
-                            "git",
-                            "-C",
-                            originRoot.toString(),
-                            "diff",
-                            "--no-ext-diff",
-                            "--binary",
-                            "HEAD",
-                            "--",
-                            ".",
-                        )
+                    ProcessBuilder(listOf("git", "-C", originRoot.toString()) + arguments)
                         .redirectErrorStream(true)
                         .start()
                 }
-                .getOrNull() ?: return ""
+                .getOrNull() ?: return null
         val output = process.inputStream.bufferedReader().readText()
-        return if (process.waitFor() == 0) FileHashProducer.contentHash(output) else ""
+        return output.takeIf { process.waitFor() == 0 }
     }
+
+    private fun isTransitionalPath(path: String): Boolean =
+        path.split('/').any { segment -> segment == TRANSITIONAL_INDEX_DIRECTORY }
 
     private fun isGitDirty(originRoot: Path): Boolean {
         val process =

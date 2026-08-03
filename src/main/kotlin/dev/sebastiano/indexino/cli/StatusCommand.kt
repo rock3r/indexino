@@ -137,13 +137,21 @@ internal class StatusCommand : CliktCommand(name = "status") {
                 }
             } +
                 topologyResult.externalSources.flatMap { mount ->
-                    mount.sourceFiles.map { path ->
-                        dev.sebastiano.indexino.producer.IndexedSource(
-                            mount.originId ?: SourceOriginResolver.externalOriginId(mount.root),
-                            mount.root,
-                            path,
+                    SourceOriginResolver.resolveExternal(
+                            mountRoot = mount.root,
+                            sourceFiles = mount.sourceFiles,
+                            mountOriginId =
+                                mount.originId ?: SourceOriginResolver.externalOriginId(mount.root),
                         )
-                    }
+                        .flatMap { origin ->
+                            origin.sourceFiles.map { path ->
+                                dev.sebastiano.indexino.producer.IndexedSource(
+                                    origin.id,
+                                    origin.root,
+                                    path,
+                                )
+                            }
+                        }
                 }
         val currentHash = FileHashProducer.combinedIndexedSourcesHash(currentSources)
         val externalOriginMetadata =
