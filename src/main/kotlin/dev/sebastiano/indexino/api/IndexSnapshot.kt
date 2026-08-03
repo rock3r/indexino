@@ -370,11 +370,16 @@ private constructor(
                 }
             )
         return calls.associateWith { call ->
-            val candidates =
-                (call.candidateSymbolFqns + listOfNotNull(call.enclosingSymbolFqn))
-                    .flatMap { candidatesByName[it].orEmpty() }
-                    .distinct()
-            candidates.filter { it.originId == call.originId }.ifEmpty { candidates }
+            val calleeCandidates =
+                call.candidateSymbolFqns.flatMap { name ->
+                    val candidates = candidatesByName[name].orEmpty()
+                    candidates.filter { it.originId == call.originId }.ifEmpty { candidates }
+                }
+            val enclosingCandidates =
+                call.enclosingSymbolFqn
+                    ?.let { candidatesByName[it].orEmpty().filter { it.originId == call.originId } }
+                    .orEmpty()
+            (calleeCandidates + enclosingCandidates).distinct()
         }
     }
 
