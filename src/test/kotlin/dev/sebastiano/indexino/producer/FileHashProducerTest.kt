@@ -2,6 +2,7 @@ package dev.sebastiano.indexino.producer
 
 import dev.sebastiano.indexino.core.record.FileHashRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
+import java.nio.file.Files
 import kotlin.io.path.Path
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
@@ -50,6 +51,35 @@ class FileHashProducerTest {
             assertTrue(fileRecord.contentHash.startsWith("sha256:"))
             assertTrue(context.sourceFiles.contains(fileRecord.relativePath))
         }
+    }
+
+    @Test
+    fun `reports origin-qualified progress for duplicate paths`() {
+        val firstOrigin = tempDir.resolve("first").also { Files.createDirectories(it) }
+        val secondOrigin = tempDir.resolve("second").also { Files.createDirectories(it) }
+        Files.writeString(firstOrigin.resolve("Shared.kt"), "class First")
+        Files.writeString(secondOrigin.resolve("Shared.kt"), "class Second")
+        val progress = mutableListOf<String>()
+        val sources =
+            listOf(
+                IndexedSource("repo:first", firstOrigin, "Shared.kt"),
+                IndexedSource("repo:second", secondOrigin, "Shared.kt"),
+            )
+
+        FileHashProducer()
+            .produce(
+                IndexBuildContext(
+                    store = store,
+                    commitHash = "abc123",
+                    sourceFiles = sources.map(IndexedSource::path),
+                    sources = sources,
+                    changedSourceSet = sources.toSet(),
+                    progress = progress::add,
+                ),
+                store,
+            )
+
+        assertEquals(listOf("[1/2] repo:first:Shared.kt", "[2/2] repo:second:Shared.kt"), progress)
     }
 
     @Test

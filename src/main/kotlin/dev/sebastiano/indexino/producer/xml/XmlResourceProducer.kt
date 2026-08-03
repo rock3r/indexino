@@ -30,7 +30,7 @@ internal class XmlResourceProducer : IndexProducer {
         SourceRecordCleanup.deleteXmlOriginRecords(store, affectedSources)
         val xmlFiles = context.changedSources.filter { it.path.endsWith(".xml") }
         xmlFiles.forEachIndexed { index, indexedSource ->
-            context.reportFileProgress(index + 1, xmlFiles.size, indexedSource.path)
+            context.reportFileProgress(index + 1, xmlFiles.size, indexedSource)
             parse(indexedSource, context.readSource(indexedSource), store)
         }
     }

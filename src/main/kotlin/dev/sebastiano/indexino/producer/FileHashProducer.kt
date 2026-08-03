@@ -33,7 +33,7 @@ internal class FileHashProducer : IndexProducer {
             .forEach(store::delete)
         val files = context.changedSources
         files.forEachIndexed { index, source ->
-            context.reportFileProgress(index + 1, files.size, source.path)
+            context.reportFileProgress(index + 1, files.size, source)
             val hash = contentHash(context.readSource(source))
             store.put(
                 CodeIndexKey.file("${source.originId}:${source.path}", hash),

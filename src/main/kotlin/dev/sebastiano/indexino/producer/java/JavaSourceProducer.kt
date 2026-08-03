@@ -60,7 +60,7 @@ internal class JavaSourceProducer : IndexProducer {
         // while letting caller files resolve parameter names from callees later in source order.
         javaFiles.forEach { source -> parse(source, context.readSource(source), store) }
         javaFiles.forEachIndexed { index, source ->
-            context.reportFileProgress(index + 1, javaFiles.size, source.path)
+            context.reportFileProgress(index + 1, javaFiles.size, source)
             parse(source, context.readSource(source), store)
         }
     }

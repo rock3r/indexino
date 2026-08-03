@@ -34,28 +34,117 @@ internal object RepoManifestParser {
         fun apply(document: Path) {
             val canonicalDocument = document.toRealPath()
             if (!visited.add(canonicalDocument)) return
-            val directives = parseDirectives(canonicalDocument.readText())
-            directives.includes.forEach { include ->
-                val includedDocument = canonicalDocument.parent.resolve(include).normalize()
+            parseDirectives(canonicalDocument.readText()).directives.forEach { directive ->
+                applyDirective(directive, canonicalDocument, manifestDirectory, projects, ::apply)
+            }
+        }
+
+        apply(manifestPath)
+        val localManifests = manifestDirectory.resolve("local_manifests")
+        if (localManifests.exists() && localManifests.isDirectory()) {
+            localManifests.listDirectoryEntries("*.xml").sorted().forEach(::apply)
+        }
+        return RepoManifest(projects.values.sortedBy { it.name })
+    }
+
+    fun parse(content: String): RepoManifest =
+        RepoManifest(
+            parseDirectives(content)
+                .directives
+                .filterIsInstance<RepoManifestDirective.Project>()
+                .map(RepoManifestDirective.Project::project)
+                .sortedBy { it.name }
+        )
+
+    private fun parseDirectives(content: String): RepoManifestDirectives {
+        val reader =
+            XMLInputFactory.newFactory()
+                .apply {
+                    setProperty(XMLInputFactory.SUPPORT_DTD, false)
+                    setProperty("javax.xml.stream.isSupportingExternalEntities", false)
+                }
+                .createXMLStreamReader(StringReader(content))
+        var defaultRevision: String? = null
+        val directives = mutableListOf<RepoManifestDirective>()
+        while (reader.hasNext()) {
+            if (reader.next() != XMLStreamConstants.START_ELEMENT) continue
+            when (reader.localName) {
+                "default" -> defaultRevision = reader.getAttributeValue(null, "revision")
+                "include" ->
+                    directives +=
+                        RepoManifestDirective.Include(
+                            requiredAttribute(reader, "name", "repo manifest include")
+                        )
+                "project" -> {
+                    val name = requiredAttribute(reader, "name", "repo project")
+                    val path = reader.getAttributeValue(null, "path") ?: name
+                    requireSafePath(path)
+                    directives +=
+                        RepoManifestDirective.Project(
+                            RepoProject(
+                                name,
+                                path,
+                                reader.getAttributeValue(null, "revision") ?: defaultRevision,
+                            )
+                        )
+                }
+                "remove-project" -> {
+                    val name = requiredAttribute(reader, "name", "repo remove-project")
+                    val path = reader.getAttributeValue(null, "path")
+                    path?.let(::requireSafePath)
+                    directives += RepoManifestDirective.Removal(RepoProjectSelector(name, path))
+                }
+                "extend-project" -> {
+                    val name = requiredAttribute(reader, "name", "repo extend-project")
+                    val path = reader.getAttributeValue(null, "path")
+                    path?.let(::requireSafePath)
+                    directives +=
+                        RepoManifestDirective.Extension(
+                            RepoProjectExtension(
+                                name,
+                                path,
+                                reader.getAttributeValue(null, "revision"),
+                            )
+                        )
+                }
+            }
+        }
+        reader.close()
+        return RepoManifestDirectives(directives)
+    }
+
+    private fun applyDirective(
+        directive: RepoManifestDirective,
+        document: Path,
+        manifestDirectory: Path,
+        projects: MutableMap<Pair<String, String>, RepoProject>,
+        apply: (Path) -> Unit,
+    ) {
+        when (directive) {
+            is RepoManifestDirective.Include -> {
+                val includedDocument = document.parent.resolve(directive.name).normalize()
                 require(includedDocument.startsWith(manifestDirectory)) {
-                    "repo manifest include escapes manifest root: $include"
+                    "repo manifest include escapes manifest root: ${directive.name}"
                 }
                 require(includedDocument.exists()) {
-                    "repo manifest include is unavailable: $include"
+                    "repo manifest include is unavailable: ${directive.name}"
                 }
                 apply(includedDocument)
             }
-            directives.projects.forEach { project ->
+            is RepoManifestDirective.Project -> {
+                val project = directive.project
                 projects[project.name to project.path] = project
             }
-            directives.removedProjects.forEach { removal ->
+            is RepoManifestDirective.Removal -> {
+                val removal = directive.selector
                 projects.keys
                     .filter { (name, path) ->
                         name == removal.name && (removal.path == null || path == removal.path)
                     }
                     .forEach(projects::remove)
             }
-            directives.extensions.forEach { extension ->
+            is RepoManifestDirective.Extension -> {
+                val extension = directive.extension
                 projects.entries
                     .filter { (key, _) ->
                         key.first == extension.name &&
@@ -69,64 +158,6 @@ internal object RepoManifestParser {
                     }
             }
         }
-
-        apply(manifestPath)
-        val localManifests = manifestDirectory.resolve("local_manifests")
-        if (localManifests.exists() && localManifests.isDirectory()) {
-            localManifests.listDirectoryEntries("*.xml").sorted().forEach(::apply)
-        }
-        return RepoManifest(projects.values.sortedBy { it.name })
-    }
-
-    fun parse(content: String): RepoManifest =
-        RepoManifest(parseDirectives(content).projects.sortedBy { it.name })
-
-    private fun parseDirectives(content: String): RepoManifestDirectives {
-        val reader =
-            XMLInputFactory.newFactory()
-                .apply {
-                    setProperty(XMLInputFactory.SUPPORT_DTD, false)
-                    setProperty("javax.xml.stream.isSupportingExternalEntities", false)
-                }
-                .createXMLStreamReader(StringReader(content))
-        var defaultRevision: String? = null
-        val projects = mutableListOf<RepoProject>()
-        val includes = mutableListOf<String>()
-        val removedProjects = mutableListOf<RepoProjectSelector>()
-        val extensions = mutableListOf<RepoProjectExtension>()
-        while (reader.hasNext()) {
-            if (reader.next() != XMLStreamConstants.START_ELEMENT) continue
-            when (reader.localName) {
-                "default" -> defaultRevision = reader.getAttributeValue(null, "revision")
-                "include" -> includes += requiredAttribute(reader, "name", "repo manifest include")
-                "project" -> {
-                    val name = requiredAttribute(reader, "name", "repo project")
-                    val path = reader.getAttributeValue(null, "path") ?: name
-                    requireSafePath(path)
-                    projects +=
-                        RepoProject(
-                            name,
-                            path,
-                            reader.getAttributeValue(null, "revision") ?: defaultRevision,
-                        )
-                }
-                "remove-project" -> {
-                    val name = requiredAttribute(reader, "name", "repo remove-project")
-                    val path = reader.getAttributeValue(null, "path")
-                    path?.let(::requireSafePath)
-                    removedProjects += RepoProjectSelector(name, path)
-                }
-                "extend-project" -> {
-                    val name = requiredAttribute(reader, "name", "repo extend-project")
-                    val path = reader.getAttributeValue(null, "path")
-                    path?.let(::requireSafePath)
-                    extensions +=
-                        RepoProjectExtension(name, path, reader.getAttributeValue(null, "revision"))
-                }
-            }
-        }
-        reader.close()
-        return RepoManifestDirectives(projects, includes, removedProjects, extensions)
     }
 
     private fun requiredAttribute(
@@ -142,12 +173,17 @@ internal object RepoManifestParser {
     }
 }
 
-private data class RepoManifestDirectives(
-    val projects: List<RepoProject>,
-    val includes: List<String>,
-    val removedProjects: List<RepoProjectSelector>,
-    val extensions: List<RepoProjectExtension>,
-)
+private data class RepoManifestDirectives(val directives: List<RepoManifestDirective>)
+
+private sealed interface RepoManifestDirective {
+    data class Include(val name: String) : RepoManifestDirective
+
+    data class Project(val project: RepoProject) : RepoManifestDirective
+
+    data class Removal(val selector: RepoProjectSelector) : RepoManifestDirective
+
+    data class Extension(val extension: RepoProjectExtension) : RepoManifestDirective
+}
 
 private data class RepoProjectSelector(val name: String, val path: String?)
 

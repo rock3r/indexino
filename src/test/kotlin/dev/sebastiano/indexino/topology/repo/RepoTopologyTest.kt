@@ -145,6 +145,43 @@ class RepoTopologyTest {
     }
 
     @Test
+    fun `applies local manifest replacements in directive order`() {
+        val workspace = createTempDirectory("indexino-repo-").also(temporaryDirectories::add)
+        val manifestDirectory = workspace.resolve(".repo")
+        val manifest = manifestDirectory.resolve("manifest.xml")
+        manifestDirectory.createDirectories()
+        manifest.writeText("<manifest><project name=\"base\" path=\"old\"/></manifest>")
+        manifestDirectory.resolve("local_manifests").createDirectories()
+        manifestDirectory
+            .resolve("local_manifests/replace.xml")
+            .writeText(
+                """
+                <manifest>
+                  <remove-project name="base"/>
+                  <project name="base" path="replacement"/>
+                </manifest>
+                """
+                    .trimIndent()
+            )
+        workspace
+            .resolve("replacement/src/main/kotlin/Replacement.kt")
+            .also { it.parent.createDirectories() }
+            .writeText("class Replacement")
+
+        val result =
+            TopologyResolver.resolve(
+                workspace,
+                TopologyRequest(buildSystem = BuildSystem.REPO, repoManifest = manifest),
+            )
+
+        assertEquals(listOf("repo:base"), result.externalSources.map { it.originId })
+        assertEquals(
+            listOf("src/main/kotlin/Replacement.kt"),
+            result.externalSources.single().sourceFiles,
+        )
+    }
+
+    @Test
     fun `resolves each manifest project source closure`() {
         val workspace = createTempDirectory("indexino-repo-").also(temporaryDirectories::add)
         val manifest = workspace.resolve(".repo/manifest.xml")
