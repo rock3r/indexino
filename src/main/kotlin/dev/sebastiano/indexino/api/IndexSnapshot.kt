@@ -377,7 +377,11 @@ private constructor(
                 }
             val enclosingCandidates =
                 call.enclosingSymbolFqn
-                    ?.let { candidatesByName[it].orEmpty().filter { it.originId == call.originId } }
+                    ?.let { enclosing ->
+                        candidatesByName[enclosing].orEmpty().filter { candidate ->
+                            candidate.originId == call.originId
+                        }
+                    }
                     .orEmpty()
             (calleeCandidates + enclosingCandidates).distinct()
         }
