@@ -1,8 +1,11 @@
 package dev.sebastiano.indexino.cli
 
+import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.core.Version
+import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.IndexManifest
+import dev.sebastiano.indexino.core.manifest.IndexManifestOrigin
 import dev.sebastiano.indexino.core.manifest.ManifestFreshness
 import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
@@ -13,10 +16,13 @@ import dev.sebastiano.indexino.model.PluginId
 import dev.sebastiano.indexino.producer.FileHashProducer
 import dev.sebastiano.indexino.producer.IndexBuildContext
 import dev.sebastiano.indexino.producer.IndexBuildProgressReporter
+import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.ProducerRegistry
 import dev.sebastiano.indexino.producer.SOURCE_CHANGE_DETECTION_PHASE
 import dev.sebastiano.indexino.producer.SourceChangeDetector
 import dev.sebastiano.indexino.producer.SourceChangeSet
+import dev.sebastiano.indexino.topology.ExternalSourceMount
+import dev.sebastiano.indexino.topology.SourceOriginResolver
 import dev.sebastiano.indexino.topology.TopologyRequest
 import dev.sebastiano.indexino.topology.TopologyResolver
 import dev.sebastiano.indexino.topology.bazel.BazelProcessRunner
@@ -38,12 +44,22 @@ internal class IndexBuildRunner(
     private var latestChanges: SourceChangeSet? = null
     private var latestManifest: IndexManifest? = null
     private var latestSourceFiles: List<String> = emptyList()
+    private var latestSources: List<IndexedSource> = emptyList()
+    private var latestTopologyRoots: List<Path> = emptyList()
     private var reusedFreshIndex: Boolean = false
 
     fun runDetailed(): IndexBuildExecution {
         val exitCode = run()
         if (exitCode != CliExitCodes.SUCCESS) {
-            return IndexBuildExecution(exitCode, null, null, latestSourceFiles, reusedFreshIndex)
+            return IndexBuildExecution(
+                exitCode,
+                null,
+                null,
+                latestSourceFiles,
+                latestSources,
+                latestTopologyRoots,
+                reusedFreshIndex,
+            )
         }
         return IndexBuildExecution(
             exitCode = exitCode,
@@ -51,14 +67,19 @@ internal class IndexBuildRunner(
                 checkNotNull(latestManifest) { "Successful index run did not produce a manifest" },
             changes = latestChanges,
             sourceFiles = latestSourceFiles,
+            sources = latestSources,
+            topologyRoots = latestTopologyRoots,
             reusedFreshIndex = reusedFreshIndex,
         )
     }
 
+    @Suppress("LongMethod")
     fun run(): Int {
         latestChanges = null
         latestManifest = null
         latestSourceFiles = emptyList()
+        latestSources = emptyList()
+        latestTopologyRoots = emptyList()
         reusedFreshIndex = false
         val topologyResult =
             TopologyResolver.resolve(
@@ -68,14 +89,24 @@ internal class IndexBuildRunner(
                 bazelProcessRunner = bazelProcessRunner,
                 onStderr = progress,
             )
-        if (topologyResult.sourceFiles.isEmpty()) {
+        if (
+            topologyResult.sourceFiles.isEmpty() &&
+                topologyResult.externalSources.none { it.sourceFiles.isNotEmpty() }
+        ) {
             progress("topology discovery failed: no source files")
             machineProgress?.failed(CliExitCodes.TOPOLOGY_FAILED, "no source files")
             return CliExitCodes.TOPOLOGY_FAILED
         }
 
         val sourceFiles = topologyResult.sourceFiles
+        val externalOriginMetadata =
+            topologyResult.externalSources.associate { mount ->
+                mount.root.toRealPath() to (mount.originId to mount.expectedRevision)
+            }
+        val sources = resolveSources(sourceFiles, topologyResult.externalSources)
         latestSourceFiles = sourceFiles
+        latestSources = sources
+        latestTopologyRoots = (listOf(project) + topologyResult.externalMounts).distinct()
         val pluginRegistry = PluginRegistry.load(javaClass.classLoader)
         val unknownApplications = applications.filter {
             PluginId.of(it) !in pluginRegistry.pluginIds()
@@ -87,11 +118,35 @@ internal class IndexBuildRunner(
             return CliExitCodes.INVALID_ARGUMENTS
         }
         val pluginCoordinates = pluginRegistry.selectedCoordinates(applications)
-        machineProgress?.discoveryCompleted(sourceFiles.size)
+        machineProgress?.discoveryCompleted(sources.size)
         val commit = GitHeadResolver.resolve(project)
         val resolver = IndexPathResolver(project, storeRootOverride = storeRootOverride)
         val manifestPath = resolver.resolveManifest(commit)
-        val previewHash = previewHash(sourceFiles)
+        val previewHash = previewHash(sources)
+        val origins = resolveOrigins(sources, externalOriginMetadata, topologyResult.topology)
+        val existingManifest = manifestPath.takeIf { it.exists() }?.let(ManifestIO::read)
+        val vanishedOrigins =
+            existingManifest
+                ?.origins
+                ?.mapTo(linkedSetOf()) { it.originId }
+                ?.minus(origins.mapTo(linkedSetOf()) { it.originId })
+                .orEmpty()
+        val preservesExistingTopology =
+            existingManifest?.scope == topologyResult.scope &&
+                existingManifest.topology == topologyResult.topology &&
+                existingManifest.includeDeps == topologyResult.includeDeps &&
+                existingManifest.resolvedTopologyDigest == topologyResult.resolvedTopologyDigest
+        if (preservesExistingTopology && vanishedOrigins.isNotEmpty()) {
+            WorkspaceGenerationManifestStore(
+                    InProcessCacheLayout.cacheRoot(),
+                    InProcessCacheLayout.workspaceId(project),
+                )
+                .markOriginsUnavailable(vanishedOrigins)
+            val message = "topology origin unavailable: ${vanishedOrigins.sorted().joinToString()}"
+            progress(message)
+            machineProgress?.failed(CliExitCodes.TOPOLOGY_FAILED, message)
+            return CliExitCodes.TOPOLOGY_FAILED
+        }
         val criteria =
             ManifestFreshness.criteriaFrom(
                 commit = commit,
@@ -100,8 +155,9 @@ internal class IndexBuildRunner(
                 sourcesContentHash = previewHash,
                 applications = applications,
                 pluginCoordinates = pluginCoordinates,
+                origins = origins,
+                resolvedTopologyDigest = topologyResult.resolvedTopologyDigest,
             )
-        val existingManifest = manifestPath.takeIf { it.exists() }?.let(ManifestIO::read)
         if (existingManifest != null && ManifestFreshness.isFresh(existingManifest, criteria)) {
             latestManifest = existingManifest
             reusedFreshIndex = true
@@ -115,8 +171,11 @@ internal class IndexBuildRunner(
             commit = commit,
             scope = topologyResult.scope,
             topology = topologyResult.topology,
+            resolvedTopologyDigest = topologyResult.resolvedTopologyDigest,
             includeDeps = topologyResult.includeDeps,
             sourceFiles = sourceFiles,
+            sources = sources,
+            origins = origins,
             previewHash = previewHash,
             pluginRegistry = pluginRegistry,
             pluginCoordinates = pluginCoordinates,
@@ -127,27 +186,65 @@ internal class IndexBuildRunner(
         return CliExitCodes.SUCCESS
     }
 
-    private fun previewHash(sourceFiles: List<String>): String {
-        machineProgress?.phaseStarted(SOURCE_HASH_PREVIEW_PHASE, sourceFiles.size)
+    private fun resolveOrigins(
+        sources: List<IndexedSource>,
+        externalOriginMetadata: Map<Path, Pair<String?, String?>>,
+        topology: String,
+    ): List<IndexManifestOrigin> =
+        ManifestOriginResolver.resolve(
+            project,
+            sources,
+            externalOriginMetadata,
+            includeWorkspaceWithoutSources = topology != "repo-manifest",
+        )
+
+    private fun previewHash(sources: List<IndexedSource>): String {
+        machineProgress?.phaseStarted(SOURCE_HASH_PREVIEW_PHASE, sources.size)
         val previewHash =
-            FileHashProducer.combinedSourcesHash(
-                workspaceRoot = project,
-                sourceFiles = sourceFiles,
-                onFileProcessed = { index, total, path ->
-                    machineProgress?.fileProgress(SOURCE_HASH_PREVIEW_PHASE, index, total, path)
-                },
-            )
-        machineProgress?.phaseCompleted(SOURCE_HASH_PREVIEW_PHASE, sourceFiles.size)
+            FileHashProducer.combinedIndexedSourcesHash(sources) { index, total, source ->
+                machineProgress?.fileProgress(
+                    SOURCE_HASH_PREVIEW_PHASE,
+                    index,
+                    total,
+                    source.originId,
+                    source.path,
+                )
+            }
+        machineProgress?.phaseCompleted(SOURCE_HASH_PREVIEW_PHASE, sources.size)
         return previewHash
     }
+
+    private fun resolveSources(
+        sourceFiles: List<String>,
+        externalSources: List<ExternalSourceMount>,
+    ): List<IndexedSource> =
+        SourceOriginResolver.resolve(project, sourceFiles).flatMap { origin ->
+            origin.sourceFiles.map { path -> IndexedSource(origin.id, origin.root, path) }
+        } +
+            externalSources.flatMap { mount ->
+                SourceOriginResolver.resolveExternal(
+                        mountRoot = mount.root,
+                        sourceFiles = mount.sourceFiles,
+                        mountOriginId =
+                            mount.originId ?: SourceOriginResolver.externalOriginId(mount.root),
+                    )
+                    .flatMap { origin ->
+                        origin.sourceFiles.map { path ->
+                            IndexedSource(origin.id, origin.root, path)
+                        }
+                    }
+            }
 
     private fun buildStore(
         resolver: IndexPathResolver,
         commit: String,
         scope: String,
         topology: String,
+        resolvedTopologyDigest: String?,
         includeDeps: Boolean,
         sourceFiles: List<String>,
+        sources: List<IndexedSource>,
+        origins: List<IndexManifestOrigin>,
         previewHash: String,
         pluginRegistry: PluginRegistry,
         pluginCoordinates: Map<String, String>,
@@ -156,7 +253,7 @@ internal class IndexBuildRunner(
         val store = XodusCodeIndexStore.open(resolver.resolveBaseStore(commit))
         val previousRecords = store.prefixScan("").toList()
         try {
-            val changes = detectChanges(store, sourceFiles, forceFullRebuild)
+            val changes = detectChanges(store, sources, forceFullRebuild)
             latestChanges = changes
             val context =
                 IndexBuildContext(
@@ -165,10 +262,14 @@ internal class IndexBuildRunner(
                     scope = scope,
                     sourceFiles = sourceFiles,
                     workspaceRoot = project,
+                    sources = sources,
+                    resolvedOriginIds = origins.mapTo(linkedSetOf()) { it.originId },
                     progress = progress,
                     machineProgress = machineProgress,
                     changedSourceFiles = changes.changedFiles,
                     deletedSourceFiles = changes.deletedFiles,
+                    changedSourceSet = changes.changedSources,
+                    deletedSourceSet = changes.deletedSources,
                 )
             ProducerRegistry.forApplications(applications).forEach { producer ->
                 progress(producer.displayName)
@@ -185,11 +286,13 @@ internal class IndexBuildRunner(
                     scope = scope,
                     topology = topology,
                     includeDeps = includeDeps,
-                    sourceFileCount = sourceFiles.size,
+                    sourceFileCount = sources.size,
                     sourcesContentHash = previewHash,
                     builtAt = Instant.now().toString(),
                     applications = applications,
                     pluginCoordinates = pluginCoordinates,
+                    origins = origins,
+                    resolvedTopologyDigest = resolvedTopologyDigest,
                 )
             ManifestIO.write(resolver.resolveManifest(commit), manifest)
             latestManifest = manifest
@@ -204,25 +307,34 @@ internal class IndexBuildRunner(
 
     private fun detectChanges(
         store: XodusCodeIndexStore,
-        sourceFiles: List<String>,
+        sources: List<IndexedSource>,
         forceFullRebuild: Boolean,
     ): SourceChangeSet {
-        machineProgress?.phaseStarted(SOURCE_CHANGE_DETECTION_PHASE, sourceFiles.size)
+        machineProgress?.phaseStarted(SOURCE_CHANGE_DETECTION_PHASE, sources.size)
         val detectedChanges =
-            SourceChangeDetector.detect(store, project, sourceFiles) { index, total, path ->
-                machineProgress?.fileProgress(SOURCE_CHANGE_DETECTION_PHASE, index, total, path)
+            SourceChangeDetector.detect(store, sources) { index, total, source ->
+                machineProgress?.fileProgress(
+                    SOURCE_CHANGE_DETECTION_PHASE,
+                    index,
+                    total,
+                    source.originId,
+                    source.path,
+                )
             }
-        machineProgress?.phaseCompleted(SOURCE_CHANGE_DETECTION_PHASE, sourceFiles.size)
+        machineProgress?.phaseCompleted(SOURCE_CHANGE_DETECTION_PHASE, sources.size)
         val changes =
             if (forceFullRebuild) {
-                SourceChangeSet(sourceFiles.toSet(), detectedChanges.deletedFiles)
+                SourceChangeSet(
+                    changedSources = sources.toCollection(linkedSetOf()),
+                    deletedSources = detectedChanges.deletedSources,
+                )
             } else {
                 detectedChanges
             }
         machineProgress?.countersAvailable(
-            changedFiles = changes.changedFiles.size,
-            unchangedFiles = sourceFiles.size - changes.changedFiles.size,
-            removedFiles = changes.deletedFiles.size,
+            changedFiles = changes.changedSources.size,
+            unchangedFiles = sources.size - changes.changedSources.size,
+            removedFiles = changes.deletedSources.size,
         )
         return changes
     }
@@ -237,5 +349,7 @@ internal data class IndexBuildExecution(
     val manifest: IndexManifest?,
     val changes: SourceChangeSet?,
     val sourceFiles: List<String>,
+    val sources: List<IndexedSource>,
+    val topologyRoots: List<Path>,
     val reusedFreshIndex: Boolean,
 )

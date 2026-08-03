@@ -86,9 +86,18 @@ indexino index \
 ```
 
 When `--build-system auto` (default), Bazel is chosen if `MODULE.bazel` / `WORKSPACE` exists;
-otherwise Gradle when `settings.gradle(.kts)` is present. Pass `--bazel-target` or
-`--gradle-module` for the scope. Embedded API scopes stay explicit (`IndexScope.bazel` /
-`gradle`); CLI may keep auto-detect.
+otherwise Gradle when `settings.gradle(.kts)` is present; a resolved `.repo/manifest.xml` is
+also detected as repo topology. Pass `--bazel-target` or `--gradle-module` for the scope.
+Embedded API scopes stay explicit (`IndexScope.bazel` / `gradle`); CLI may keep auto-detect.
+
+Gradle `includeBuild` mounts are canonicalized, deduplicated, and cycle-checked. The default
+external-root policy permits included builds inside the workspace or its canonical parent tree,
+which supports sibling builds while rejecting unrelated mounts. Each resolved sibling/external build
+is reported as a `gradle-parse: external included build …` diagnostic and indexed as its own origin.
+
+**Repo topology is not yet available through the daemon-backed `index` command.** The internal
+build runner supports repo-origin discovery and provenance while daemon scope support is being
+completed; use explicit Bazel or Gradle scope selection for daemon-backed indexing.
 
 **Current shipping behaviour (transitional):** resolves `git rev-parse HEAD`, discovers sources via
 Bazel/Gradle, may open a commit-addressed store under the project, runs core producers plus
@@ -106,9 +115,10 @@ object per line. Stdout is otherwise unused by `index`, so a parent process can 
 stream without parsing human stderr. `--progress-format text` is the default and emits no machine
 stream. This flag is independent of the query `--format` flag.
 
-Every JSONL event has `version: 1` and `event`. Fields are emitted in the documented order, events
+Every JSONL event has `version: 2` and `event`. Fields are emitted in the documented order, events
 are emitted in phase order, and no timestamps or global percentages are included. `currentFile` is
-always a normalized, workspace-relative path using `/` separators. File-update events are emitted
+always a normalized, origin-relative path using `/` separators. Progress events carry its `originId`
+separately. File-update events are emitted
 for the first file, every 25th file, and the final file of each phase; their `phaseCompleted` value
 may therefore advance by more than one.
 
@@ -117,14 +127,14 @@ may therefore advance by more than one.
 | `discovery_started` | `phase: "discovery"`, `phaseTotal: null` | Source discovery has begun; its total is not known yet. |
 | `discovery_completed` | `phase`, `phaseCompleted`, `phaseTotal` | Discovery resolved the source set. |
 | `phase_started` | `phase`, `phaseCompleted: 0`, `phaseTotal` | A named phase has begun. `phaseTotal` is `null` only if that phase cannot determine a total. |
-| `progress` | `phase`, `phaseCompleted`, `phaseTotal`, `currentFile` | Work has reached a file in that phase. Totals are phase-local, not global. |
+| `progress` | `phase`, `phaseCompleted`, `phaseTotal`, `originId`, `currentFile` | Work has reached a file in that phase. Totals are phase-local, not global. |
 | `phase_completed` | `phase`, `phaseCompleted`, `phaseTotal` | A phase completed, including empty phases (`0` of `0`); both counts are `null` when the phase total is unknowable. |
 | `changes_detected` | `phase: "source-change-detection"`, change counters | File-change classification is available. |
 | `completed` | `outcome` | Terminal success; `outcome` is `indexed` or `fresh`. |
 | `failed` | `exitCode`, `message` | Terminal failure before the index command exits or rethrows its error. |
 
 Event keys always appear in this order when present:
-`version`, `event`, `phase`, `phaseCompleted`, `phaseTotal`, `currentFile`, `changedFiles`,
+`version`, `event`, `phase`, `phaseCompleted`, `phaseTotal`, `originId`, `currentFile`, `changedFiles`,
 `unchangedFiles`, `removedFiles`, `outcome`, `exitCode`, `message`. The three counters first appear
 on `changes_detected` and are repeated unchanged on subsequent events. They are non-negative and
 monotonic for a build:
@@ -146,7 +156,7 @@ phase-local fraction such as `Kotlin symbols: 109 of 182`, not as a synthetic gl
 Example:
 
 ```json
-{"version":1,"event":"discovery_started","phase":"discovery","phaseTotal":null}
+{"version":2,"event":"discovery_started","phase":"discovery","phaseTotal":null}
 {"version":1,"event":"phase_started","phase":"java-source","phaseCompleted":0,"phaseTotal":2,"changedFiles":2,"unchangedFiles":1,"removedFiles":0}
 {"version":1,"event":"progress","phase":"java-source","phaseCompleted":1,"phaseTotal":2,"currentFile":"app/src/main/java/sample/Panel.java","changedFiles":2,"unchangedFiles":1,"removedFiles":0}
 {"version":1,"event":"completed","changedFiles":2,"unchangedFiles":1,"removedFiles":0,"outcome":"indexed"}
@@ -182,10 +192,11 @@ indexino status --project /path/to/monorepo [--bazel-target //pkg:ui]
 indexino status --project /path/to/gradle-repo --gradle-module :ui
 ```
 
-When scope flags are omitted, freshness is checked against the scope and `includeDeps` stored in the
-generation manifest (whether the index is still current for its own configuration). May include
-reclaimable-cache hints for operators. **Transitional shipping CLI** may still re-resolve topology
-and rehash — that is a bug relative to the product contract, not a feature to preserve.
+When scope flags are omitted, `status` reports the scope and `includeDeps` stored in the generation
+manifest. `fresh` is the last published state: it remains true only while that manifest matches the
+current Git revision and has no unavailable persisted origin. It does not rediscover topology or
+rehash sources; use `index` to reconcile a workspace. An explicit scope with incompatible
+`includeDeps` reports `fresh: false`. May include reclaimable-cache hints for operators.
 
 ### `script` (Alpha; requires script-host on the distribution)
 
@@ -298,7 +309,7 @@ queries and direct plugin-fact reads are intentionally not a core CLI contract.
 | Flag | Description |
 |------|-------------|
 | `--project` | Monorepo root (required) |
-| `--build-system` | `auto`, `bazel`, `gradle` |
+| `--build-system` | `auto`, `bazel`, `gradle`, `repo` |
 | `--bazel-target` | Bazel label, e.g. `//pkg:ui` |
 | `--gradle-module` | Gradle path, e.g. `:foo:ui` (bonus backend) |
 | `--include-deps` | Include dependency target/module sources |

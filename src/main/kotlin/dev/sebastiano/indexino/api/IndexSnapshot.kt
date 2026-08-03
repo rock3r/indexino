@@ -23,7 +23,6 @@ import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.QueryPage
 import dev.sebastiano.indexino.model.Reference
 import dev.sebastiano.indexino.model.ReferenceQuery
-import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.Symbol
 import dev.sebastiano.indexino.model.SymbolId
 import dev.sebastiano.indexino.model.SymbolQuery
@@ -40,7 +39,7 @@ private constructor(
     private val store: CodeIndexStore?,
     public val revision: WorkspaceRevision,
     override val generation: WorkspaceGenerationId,
-    override val basicFactSchemaVersion: BasicFactSchemaVersion = BasicFactSchemaVersion.of(1),
+    override val basicFactSchemaVersion: BasicFactSchemaVersion = BasicFactSchemaVersion.of(2),
     public val freshnessAtAcquisition: SnapshotFreshness,
     private val onClose: () -> Unit,
     private val pluginRegistry: PluginRegistry?,
@@ -67,6 +66,7 @@ private constructor(
                 comparator =
                     compareBy(
                         SymbolRecord::fqn,
+                        SymbolRecord::originId,
                         SymbolRecord::relativeFile,
                         SymbolRecord::line,
                         { it.signature.orEmpty() },
@@ -107,10 +107,15 @@ private constructor(
                 if (targetSymbol == null) unknownReferenceNamesForId(query.symbolId)
                 else UnknownReferenceNames()
             val unknownTargetCandidates = candidatesByName(unknownTargetNames.all)
+            val targetCandidates =
+                targetSymbol
+                    ?.let { candidatesByName((it.aliases + it.fqn).toSet()).values.flatten() }
+                    .orEmpty()
             orderedPage(
                 options = options,
                 comparator =
                     compareBy(
+                        ReferenceRecord::originId,
                         ReferenceRecord::relativeFile,
                         ReferenceRecord::line,
                         ReferenceRecord::column,
@@ -123,7 +128,11 @@ private constructor(
                             val matches =
                                 with(queries) {
                                     if (targetSymbol != null) {
-                                        record.canTarget(targetSymbol)
+                                        record.canTarget(targetSymbol) &&
+                                            record.matchesTargetOrigin(
+                                                targetCandidates,
+                                                targetSymbol.originId,
+                                            )
                                     } else {
                                         record.matchesUnknownSymbolId(
                                             externalNames = unknownTargetNames.external,
@@ -164,6 +173,7 @@ private constructor(
                 options = options,
                 comparator =
                     compareBy(
+                        CallSiteRecord::originId,
                         CallSiteRecord::relativeFile,
                         CallSiteRecord::startOffset,
                         CallSiteRecord::endOffset,
@@ -271,7 +281,7 @@ private constructor(
         val requestedFile = query.file
         val fileMatches =
             requestedFile == null ||
-                (requestedFile.originId == WORKSPACE_ORIGIN && relativeFile == requestedFile.path)
+                (originId == requestedFile.originId.value && relativeFile == requestedFile.path)
         val kindMatches = query.kind == null || kind == query.kind
         val languageMatches = query.language == null || language == query.language
         val requestedName = query.name
@@ -292,11 +302,11 @@ private constructor(
         val requestedFile = query.file
         val fileMatches =
             requestedFile == null ||
-                (requestedFile.originId == WORKSPACE_ORIGIN && relativeFile == requestedFile.path)
+                (originId == requestedFile.originId.value && relativeFile == requestedFile.path)
         val enclosingMatches =
             enclosing == null ||
-                enclosingSymbolFqn == enclosing.fqn ||
-                enclosingSymbolFqn in enclosing.aliases
+                (originId == enclosing.originId &&
+                    enclosingSymbolFqn in (enclosing.aliases + enclosing.fqn))
         return fileMatches &&
             (query.calleeName == null || calleeName == query.calleeName) &&
             (query.callSiteId == null || with(queries) { callSiteId() == query.callSiteId }) &&
@@ -360,10 +370,38 @@ private constructor(
                 }
             )
         return calls.associateWith { call ->
-            (call.candidateSymbolFqns + listOfNotNull(call.enclosingSymbolFqn))
-                .flatMap { candidatesByName[it].orEmpty() }
-                .distinct()
+            val calleeCandidates =
+                call.candidateSymbolFqns.flatMap { name ->
+                    val candidates =
+                        candidatesByName[name].orEmpty().filter { candidate ->
+                            candidate.arity == null ||
+                                candidate.arity == call.arguments.size ||
+                                (candidate.language == "kotlin" &&
+                                    candidate.arity > call.arguments.size) ||
+                                (candidate.isVararg && candidate.arity - 1 <= call.arguments.size)
+                        }
+                    candidates.filter { it.originId == call.originId }.ifEmpty { candidates }
+                }
+            val enclosingCandidates =
+                call.enclosingSymbolFqn
+                    ?.let { enclosing ->
+                        candidatesByName[enclosing].orEmpty().filter { candidate ->
+                            candidate.originId == call.originId
+                        }
+                    }
+                    .orEmpty()
+            (calleeCandidates + enclosingCandidates).distinct()
         }
+    }
+
+    private fun ReferenceRecord.matchesTargetOrigin(
+        candidates: List<SymbolRecord>,
+        targetOriginId: String,
+    ): Boolean {
+        val sameOrigin = candidates.any {
+            it.originId == originId && with(queries) { isArityCompatibleWith(it) }
+        }
+        return !sameOrigin || originId == targetOriginId
     }
 
     private fun ReferenceRecord.matchesUnknownSymbolId(
@@ -417,7 +455,8 @@ private constructor(
             for (name in namesByReference.getValue(reference)) {
                 matchesByReference[reference]?.get(name)?.let(candidates::addAll)
             }
-            candidates.toList()
+            val sameOrigin = candidates.filter { it.originId == reference.originId }
+            (sameOrigin.ifEmpty { candidates }).toList()
         }
     }
 
@@ -438,7 +477,9 @@ private constructor(
                 }
                 for (owner in owners) {
                     for (symbol in symbolsByOwner.getValue(owner)) {
-                        candidates.getValue(symbol).consider(owner, symbol.relativeFile, record)
+                        candidates
+                            .getValue(symbol)
+                            .consider(owner, symbol.originId, symbol.relativeFile, record)
                     }
                 }
             }
@@ -459,7 +500,13 @@ private constructor(
         private var exact: SymbolRecord? = null
         private var alias: SymbolRecord? = null
 
-        fun consider(owner: String, symbolFile: String, candidate: SymbolRecord) {
+        fun consider(
+            owner: String,
+            symbolOriginId: String,
+            symbolFile: String,
+            candidate: SymbolRecord,
+        ) {
+            if (candidate.originId != symbolOriginId) return
             when {
                 candidate.fqn == owner && candidate.relativeFile == symbolFile ->
                     sameFileExact = sameFileExact ?: candidate
@@ -615,7 +662,6 @@ private constructor(
         // settles exact default page limits in docs/PUBLIC-API-DESIGN.html.
         private const val HOST_QUERY_LIMIT_MAXIMUM: Int = 10_000
         private const val HOST_QUERY_WINDOW_MAXIMUM: Int = 10_000
-        private val WORKSPACE_ORIGIN: SourceOriginId = SourceOriginId.of("workspace")
 
         internal fun createRemote(
             client: RuntimeSnapshotClient,

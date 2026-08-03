@@ -45,7 +45,7 @@ class IndexMachineProgressCliTest {
         assertEquals(0, result.exitCode, result.stderr)
         val firstEvent = result.stdout.lineSequence().first()
         assertEquals(
-            "{\"version\":1,\"event\":\"discovery_started\",\"phase\":\"discovery\",\"phaseTotal\":null}",
+            "{\"version\":2,\"event\":\"discovery_started\",\"phase\":\"discovery\",\"phaseTotal\":null}",
             firstEvent,
         )
         assertNull(
@@ -65,6 +65,7 @@ class IndexMachineProgressCliTest {
         assertEquals("1", javaProgress.value("phaseCompleted"))
         assertEquals("1", javaProgress.value("phaseTotal"))
         assertEquals("app/src/main/java/sample/Panel.java", javaProgress.value("currentFile"))
+        assertEquals("workspace", javaProgress.value("originId"))
     }
 
     @Test
@@ -173,7 +174,7 @@ class IndexMachineProgressCliTest {
         assertEquals(0, result.exitCode, result.stderr)
         assertEquals("", result.stdout)
         assertTrue(result.stderr.contains("JavaSourceProducer"))
-        assertTrue(result.stderr.contains("[1/1] app/src/main/java/sample/Panel.java"))
+        assertTrue(result.stderr.contains("[1/1] workspace:app/src/main/java/sample/Panel.java"))
         assertFalse(result.stderr.contains("\"event\""))
     }
 

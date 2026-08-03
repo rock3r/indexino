@@ -37,31 +37,33 @@ import org.jetbrains.kotlin.psi.KtSuperTypeCallEntry
 import org.jetbrains.kotlin.psi.KtThisExpression
 import org.jetbrains.kotlin.psi.KtUnaryExpression
 
-@Suppress("TooManyFunctions")
+@Suppress("TooManyFunctions", "LargeClass")
 internal class KotlinPsiSymbolProducer : IndexProducer {
     override val id: String = "kotlin-psi-symbols"
     override val namespace: String = "sym"
     override val displayName: String = "KotlinPsiSymbolProducer"
 
     override val progressTotal: (IndexBuildContext) -> Int = { context ->
-        context.sourceFiles.count { it.endsWith(".kt") && it in context.changedSourceFiles }
+        context.changedSources.count { it.path.endsWith(".kt") }
     }
 
     override fun produce(context: IndexBuildContext, store: CodeIndexStore) {
-        val affectedFiles =
-            (context.changedSourceFiles + context.deletedSourceFiles).filterTo(linkedSetOf()) {
-                it.endsWith(".kt")
+        val affectedSources =
+            (context.changedSources + context.deletedSources).filterTo(linkedSetOf()) {
+                it.path.endsWith(".kt")
             }
-        SourceRecordCleanup.deleteLanguageRecords(store, LANGUAGE, ".kt", affectedFiles)
+        SourceRecordCleanup.deleteLanguageOriginRecords(store, LANGUAGE, ".kt", affectedSources)
         KotlinPsiParser().use { parser ->
-            val ktFiles =
-                context.sourceFiles.filter {
-                    it.endsWith(".kt") && it in context.changedSourceFiles
-                }
-            val indexedFiles = ktFiles.mapIndexed { index, relativePath ->
-                context.reportFileProgress(index + 1, ktFiles.size, relativePath)
-                val file = parser.parseFile(relativePath, context.readSource(relativePath))
-                IndexedKotlinFile(relativePath, file, collectSymbols(file))
+            val ktFiles = context.changedSources.filter { it.path.endsWith(".kt") }
+            val indexedFiles = ktFiles.mapIndexed { index, source ->
+                context.reportFileProgress(index + 1, ktFiles.size, source)
+                val file = parser.parseFile(source.path, context.readSource(source))
+                IndexedKotlinFile(
+                    source.originId,
+                    source.path,
+                    file,
+                    collectSymbols(file).map { it.copy(originId = source.originId) },
+                )
             }
             val projectSymbols = indexedFiles.flatMap { it.symbols }
             indexedFiles.forEach { indexedFile -> indexFile(indexedFile, projectSymbols, store) }
@@ -78,6 +80,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             store.put(
                 CodeIndexKey.symbolDefinition(
                     symbol.fqn,
+                    indexedFile.originId,
                     indexedFile.relativePath,
                     symbol.line,
                     symbol.column,
@@ -85,6 +88,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                 SymbolRecord(
                     fqn = symbol.fqn,
                     relativeFile = indexedFile.relativePath,
+                    originId = indexedFile.originId,
                     line = symbol.line,
                     kind = symbol.kind,
                     name = symbol.name,
@@ -115,10 +119,17 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             val line = call.lineNumber()
             val column = call.columnNumber()
             store.put(
-                CodeIndexKey.ref(target.symbolFqn, indexedFile.relativePath, line, column),
+                CodeIndexKey.ref(
+                    target.symbolFqn,
+                    indexedFile.originId,
+                    indexedFile.relativePath,
+                    line,
+                    column,
+                ),
                 ReferenceRecord(
                     symbolFqn = target.symbolFqn,
                     relativeFile = indexedFile.relativePath,
+                    originId = indexedFile.originId,
                     line = line,
                     column = column,
                     context = "call",
@@ -132,17 +143,19 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         }
         indexCalls(
             file,
+            indexedFile.originId,
             indexedFile.relativePath,
             indexedFile.symbols,
             projectSymbols,
             imports,
             store,
         )
-        indexMemberReferences(file, indexedFile.relativePath, store, imports)
+        indexMemberReferences(file, indexedFile.originId, indexedFile.relativePath, store, imports)
     }
 
     private fun indexCalls(
         file: KtFile,
+        originId: String,
         relativePath: String,
         fileSymbols: List<ResolvedSymbol>,
         projectSymbols: List<ResolvedSymbol>,
@@ -150,18 +163,29 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         store: CodeIndexStore,
     ) {
         for (call in file.collectDescendantsOfType<KtCallExpression>()) {
-            val identity = callIdentity(relativePath, call)
+            val identity = callIdentity(originId, relativePath, call)
             val target = resolveCall(file, call, projectSymbols, imports, store)
             val explicitArgumentCount = call.valueArguments.size + call.lambdaArguments.size
             val parameterNames =
                 target
                     ?.let { resolved ->
-                        projectSymbols
-                            .singleOrNull {
-                                it.fqn == resolved.symbolFqn &&
-                                    (it.arity == null || it.arity >= explicitArgumentCount)
-                            }
-                            ?.parameterNames
+                        sameOriginParameterNames(
+                            projectSymbols,
+                            resolved.symbolFqn,
+                            originId,
+                            explicitArgumentCount,
+                        )
+                            ?: storedSameOriginParameterNames(
+                                store,
+                                resolved.symbolFqn,
+                                originId,
+                                explicitArgumentCount,
+                            )
+                            ?: parameterNames(
+                                projectSymbols,
+                                resolved.symbolFqn,
+                                explicitArgumentCount,
+                            )
                             ?: storedParameterNames(
                                 store,
                                 resolved.symbolFqn,
@@ -181,26 +205,58 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                         generateSequence(call.parent) { it.parent }
                             .filterIsInstance<KtCallExpression>()
                             .firstOrNull()
-                            ?.let { parent -> callIdentity(relativePath, parent) },
+                            ?.let { parent -> callIdentity(originId, relativePath, parent) },
                     relativeFile = relativePath,
+                    originId = originId,
                     startLine = call.lineNumber(),
                     startColumn = call.columnNumber(),
                     startOffset = call.textRange.startOffset,
                     endLine = call.endLineNumber(),
                     endColumn = call.endColumnNumber(),
                     endOffset = call.inclusiveEndOffset(),
-                    arguments = callArguments(call, relativePath, parameterNames),
+                    arguments = callArguments(call, originId, relativePath, parameterNames),
                     confidence = if (target == null) "UNRESOLVED" else "HEURISTIC",
                 ),
             )
         }
     }
 
+    private fun sameOriginParameterNames(
+        symbols: List<ResolvedSymbol>,
+        fqn: String,
+        originId: String,
+        argumentCount: Int,
+    ): List<String>? =
+        symbols
+            .singleOrNull {
+                it.fqn == fqn &&
+                    it.originId == originId &&
+                    (it.arity == null || it.arity >= argumentCount)
+            }
+            ?.parameterNames
+
+    private fun parameterNames(
+        symbols: List<ResolvedSymbol>,
+        fqn: String,
+        argumentCount: Int,
+    ): List<String>? =
+        symbols
+            .singleOrNull { it.fqn == fqn && (it.arity == null || it.arity >= argumentCount) }
+            ?.parameterNames
+
+    private fun storedSameOriginParameterNames(
+        store: CodeIndexStore,
+        fqn: String,
+        originId: String,
+        argumentCount: Int,
+    ): List<String>? = storedParameterNames(store, fqn, argumentCount) { it.originId == originId }
+
     private fun storedParameterNames(
         store: CodeIndexStore,
         fqn: String,
         argumentCount: Int,
-    ): List<String> {
+        predicate: (SymbolRecord) -> Boolean = { true },
+    ): List<String>? {
         val candidates = mutableListOf<SymbolRecord>()
         store.forEachPrefix("sym:$fqn:") { _, record ->
             if (
@@ -208,15 +264,16 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                     record.fqn == fqn &&
                     (record.arity == null || record.arity >= argumentCount)
             ) {
-                candidates += record
+                if (predicate(record)) candidates += record
             }
             true
         }
-        return candidates.singleOrNull()?.parameterNames.orEmpty()
+        return candidates.singleOrNull()?.parameterNames
     }
 
     private fun callArguments(
         call: KtCallExpression,
+        originId: String,
         relativePath: String,
         parameterNames: List<String>,
     ): List<CallArgumentRecord> = buildList {
@@ -230,6 +287,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                             ?: parameterNames.getOrNull(position),
                     kind = if (expression is KtLambdaExpression) "LAMBDA" else "VALUE",
                     relativePath = relativePath,
+                    originId = originId,
                 )
             )
         }
@@ -246,6 +304,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                         resolvedName = parameterNames.lastOrNull(),
                         kind = "TRAILING_LAMBDA",
                         relativePath = relativePath,
+                        originId = originId,
                     )
                 )
             }
@@ -256,6 +315,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         resolvedName: String?,
         kind: String,
         relativePath: String,
+        originId: String,
     ): CallArgumentRecord =
         CallArgumentRecord(
             position = position,
@@ -269,7 +329,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             endOffset = inclusiveEndOffset(),
             nestedCallIdentities =
                 collectDescendantsOfType<KtCallExpression>().map { call ->
-                    callIdentity(relativePath, call)
+                    callIdentity(originId, relativePath, call)
                 },
         )
 
@@ -285,8 +345,11 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         }
     }
 
-    private fun callIdentity(relativePath: String, call: KtCallExpression): String =
-        "$relativePath:${call.textRange.startOffset}"
+    private fun callIdentity(
+        originId: String,
+        relativePath: String,
+        call: KtCallExpression,
+    ): String = "$originId:$relativePath:${call.textRange.startOffset}"
 
     private fun collectSymbols(file: KtFile): List<ResolvedSymbol> {
         val results = mutableListOf<ResolvedSymbol>()
@@ -414,6 +477,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
 
     private fun indexMemberReferences(
         file: KtFile,
+        originId: String,
         relativePath: String,
         store: CodeIndexStore,
         imports: Map<String, String>,
@@ -452,10 +516,11 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             val line = selector.lineNumber()
             val column = selector.columnNumber()
             store.put(
-                CodeIndexKey.ref(target, relativePath, line, column),
+                CodeIndexKey.ref(target, originId, relativePath, line, column),
                 ReferenceRecord(
                     symbolFqn = target,
                     relativeFile = relativePath,
+                    originId = originId,
                     line = line,
                     column = column,
                     context = if (isWrite) "member-write" else "member",
@@ -645,6 +710,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
 
     private data class ResolvedSymbol(
         val fqn: String,
+        val originId: String = "workspace",
         val name: String,
         val line: Int,
         val column: Int,
@@ -658,6 +724,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
     )
 
     private data class IndexedKotlinFile(
+        val originId: String,
         val relativePath: String,
         val file: KtFile,
         val symbols: List<ResolvedSymbol>,

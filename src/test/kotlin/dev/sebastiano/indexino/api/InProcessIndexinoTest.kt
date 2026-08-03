@@ -316,6 +316,50 @@ class InProcessIndexinoTest {
     }
 
     @Test
+    fun `failed child origin refresh retains the published snapshot`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-missing-child-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            val indexino = Indexino.connectBlocking(workspace)
+            try {
+                val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+                val initial = runSuspend { indexino.refresh(request).await() }
+                val settings = workspace.resolve("settings.gradle.kts")
+                Files.writeString(
+                    settings,
+                    Files.readString(settings) + "\nincludeBuild(\"../missing-build\")\n",
+                )
+
+                assertFailsWith<IndexinoException> {
+                    runSuspend { indexino.refresh(request).await() }
+                }
+
+                val snapshot = runSuspend { indexino.snapshot() }
+                try {
+                    assertEquals(initial.generation, snapshot.generation)
+                    val symbols = runSuspend {
+                        snapshot.findSymbols(
+                            SymbolQuery.named("ActionButton"),
+                            QueryOptions.page(1),
+                        )
+                    }
+                    assertEquals(1, symbols.items.size)
+                } finally {
+                    snapshot.close()
+                }
+            } finally {
+                indexino.close()
+            }
+        } finally {
+            if (previousCacheDirectory == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheDirectory)
+        }
+    }
+
+    @Test
     fun `refresh maps topology resolution failures to IndexinoException`() {
         val workspace = createTempDirectory("indexino-no-topology-")
         tempDirs.add(workspace)

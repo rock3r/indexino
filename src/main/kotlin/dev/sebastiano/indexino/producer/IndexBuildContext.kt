@@ -12,18 +12,45 @@ internal data class IndexBuildContext(
     val sourceFiles: List<String>,
     val workspaceRoot: Path = Path("."),
     val sourceContentOverrides: Map<String, String> = emptyMap(),
+    val sources: List<IndexedSource> = sourceFiles.map {
+        IndexedSource.workspace(workspaceRoot, it)
+    },
+    val resolvedOriginIds: Set<String> = sources.mapTo(linkedSetOf()) { it.originId },
     val progress: ((String) -> Unit)? = null,
     val machineProgress: IndexBuildProgressReporter? = null,
     val activePhase: String? = null,
     val changedSourceFiles: Set<String> = sourceFiles.toSet(),
     val deletedSourceFiles: Set<String> = emptySet(),
+    val changedSourceSet: Set<IndexedSource>? = null,
+    val deletedSourceSet: Set<IndexedSource>? = null,
 ) {
-    fun readSource(relativePath: String): String =
-        sourceContentOverrides[relativePath] ?: workspaceRoot.resolve(relativePath).readText()
+    val changedSources: Set<IndexedSource> =
+        changedSourceSet
+            ?: sources.filterTo(linkedSetOf()) { source ->
+                source.path in changedSourceFiles ||
+                    runCatching {
+                            workspaceRoot
+                                .relativize(source.originRoot.resolve(source.path))
+                                .toString()
+                                .replace('\\', '/')
+                        }
+                        .getOrNull() in changedSourceFiles
+            }
 
-    fun reportFileProgress(index: Int, total: Int, relativePath: String) {
-        progress?.invoke("[$index/$total] $relativePath")
-        activePhase?.let { machineProgress?.fileProgress(it, index, total, relativePath) }
+    val deletedSources: Set<IndexedSource> =
+        deletedSourceSet
+            ?: deletedSourceFiles.mapTo(linkedSetOf()) {
+                IndexedSource.workspace(workspaceRoot, it)
+            }
+
+    fun readSource(source: IndexedSource): String =
+        sourceContentOverrides[source.path] ?: source.originRoot.resolve(source.path).readText()
+
+    fun reportFileProgress(index: Int, total: Int, source: IndexedSource) {
+        progress?.invoke("[$index/$total] ${source.originId}:${source.path}")
+        activePhase?.let {
+            machineProgress?.fileProgress(it, index, total, source.originId, source.path)
+        }
     }
 
     companion object {

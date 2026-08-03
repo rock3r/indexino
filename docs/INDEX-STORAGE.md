@@ -75,6 +75,10 @@ doc). Payload values use the durable `PluginFactValue` model in `indexino-model`
   generation (public types are composite even when the first engine is one-shard).
 - Git commit is **provenance** for a Git origin and a delta anchor, not the primary cache key.
 - Non-Git origins use a durable filesystem-origin identity.
+- Android `repo` projects use `repo:<manifest-project-name>` identity, never their local mount
+  path; the resolved manifest revision is recorded as expected origin provenance. If a resolved
+  manifest contains duplicate project names, each conflicting mount is disambiguated as
+  `repo:<manifest-project-name>:<mount-path>`.
 
 ### Runtime (not storage API)
 
@@ -128,8 +132,10 @@ Refresh writes mutable incremental output only beneath
 `workspaces/<workspace-id>/staging/in-process-writer/`. On a completed refresh, indexino installs an
 immutable content-addressed pack in `chunks/<ab>/<cd>/<content-key>`, writes a generation manifest
 under `workspaces/<workspace-id>/generations/<generation-id>/manifest.json`, then atomically updates
-that workspace's `current` pointer. The manifest records the basic-fact schema coordinate, revision
-identity, and pack keys.
+that workspace's `current` pointer. The manifest records the basic-fact schema coordinate, ordered
+origin graph (origin ID, actual revision, expected revision when applicable, and origin-local state
+fingerprint), workspace revision fingerprint, and pack keys. Older single-origin entries remain
+readable through their legacy workspace-origin fields.
 
 Each client materializes a referenced immutable pack atomically into its own
 `workspaces/<workspace-id>/refs/<client-id>/<generation-id>/store/` directory before opening a

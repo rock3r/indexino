@@ -1,11 +1,14 @@
 package dev.sebastiano.indexino.cli
 
+import dev.sebastiano.indexino.core.manifest.IndexManifest
+import dev.sebastiano.indexino.core.manifest.workspaceRevisionFingerprint
 import dev.sebastiano.indexino.topology.bazel.MockBazelQueryExecutor
 import java.nio.file.Files
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class QueryCommandTest {
@@ -44,6 +47,25 @@ class QueryCommandTest {
             output.lines().any {
                 it.contains("ActionButton is interactive inside SelectionContainer")
             }
+        )
+    }
+
+    @Test
+    fun `fallback workspace revision includes resolved topology digest`() {
+        val base =
+            IndexManifest(
+                commit = "commit",
+                indexerVersion = "version",
+                scope = "scope",
+                topology = "topology",
+                sourceFileCount = 0,
+                sourcesContentHash = "sources",
+                builtAt = "now",
+            )
+
+        assertNotEquals(
+            base.workspaceRevisionFingerprint(),
+            base.copy(resolvedTopologyDigest = "topology-digest").workspaceRevisionFingerprint(),
         )
     }
 

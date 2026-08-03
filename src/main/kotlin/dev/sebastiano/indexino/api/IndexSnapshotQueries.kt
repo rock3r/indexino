@@ -42,6 +42,7 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
                     listOf(
                             generation.value,
                             fqn,
+                            originId,
                             relativeFile,
                             line.toString(),
                             signature.orEmpty(),
@@ -53,7 +54,7 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
 
     @OptIn(IndexinoInternalApi::class)
     fun SymbolRecord.toPublicSymbol(ownerId: SymbolId?): Symbol {
-        val location = sourceLocation(relativeFile, line, null)
+        val location = sourceLocation(originId, relativeFile, line, null)
         return Symbol(
             id = definitionId(),
             name = name,
@@ -98,7 +99,8 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
                 enclosingSymbolFqn?.let { enclosing ->
                     candidates
                         .firstOrNull {
-                            it.relativeFile == relativeFile &&
+                            it.originId == originId &&
+                                it.relativeFile == relativeFile &&
                                 (it.fqn == enclosing || enclosing in it.aliases)
                         }
                         ?.let { symbol -> symbol.definitionId() } ?: externalSymbolId(enclosing)
@@ -106,6 +108,7 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
             parentCallId = parentCallIdentity?.let { identity -> callSiteId(identity) },
             range =
                 sourceRange(
+                    originId,
                     relativeFile,
                     startLine,
                     startColumn,
@@ -114,12 +117,15 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
                     endColumn,
                     endOffset,
                 ),
-            arguments = arguments.map { it.toPublicCallArgument(relativeFile) },
+            arguments = arguments.map { it.toPublicCallArgument(originId, relativeFile) },
             confidence = confidence(),
         )
 
     @OptIn(IndexinoInternalApi::class)
-    private fun CallArgumentRecord.toPublicCallArgument(relativeFile: String): CallArgument =
+    private fun CallArgumentRecord.toPublicCallArgument(
+        originId: String,
+        relativeFile: String,
+    ): CallArgument =
         CallArgument(
             position = position,
             resolvedName = resolvedName,
@@ -131,6 +137,7 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
                 },
             range =
                 sourceRange(
+                    originId,
                     relativeFile,
                     startLine,
                     startColumn,
@@ -182,7 +189,7 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
             symbolId = direct,
             referencedName = referencedName,
             language = language,
-            location = sourceLocation(relativeFile, line, column.takeIf { it >= 1 }),
+            location = sourceLocation(originId, relativeFile, line, column.takeIf { it >= 1 }),
             qualifier = qualifier,
             candidateSymbolIds = candidateIds,
             arity = arity,
@@ -234,6 +241,7 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
         HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.toByteArray()))
 
     private fun sourceRange(
+        originId: String,
         path: String,
         startLine: Int,
         startColumn: Int,
@@ -242,19 +250,20 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
         endColumn: Int,
         endOffset: Int,
     ): SourceRange {
-        val file = SourceFile.of(WORKSPACE_ORIGIN, path, path)
+        val file = SourceFile.of(SourceOriginId.of(originId), path, path)
         return SourceRange.of(
             SourceLocation.of(file, startLine, startColumn, startOffset),
             SourceLocation.of(file, endLine, endColumn, endOffset),
         )
     }
 
-    private fun sourceLocation(path: String, line: Int, column: Int?): SourceLocation {
-        val file = SourceFile.of(WORKSPACE_ORIGIN, path, path)
+    private fun sourceLocation(
+        originId: String,
+        path: String,
+        line: Int,
+        column: Int?,
+    ): SourceLocation {
+        val file = SourceFile.of(SourceOriginId.of(originId), path, path)
         return SourceLocation.of(file, line, column, null)
-    }
-
-    private companion object {
-        private val WORKSPACE_ORIGIN: SourceOriginId = SourceOriginId.of("workspace")
     }
 }

@@ -2,6 +2,7 @@ package dev.sebastiano.indexino.engine
 
 import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.plugin.StorePluginFactSink
+import dev.sebastiano.indexino.core.record.PluginFactRecord
 import dev.sebastiano.indexino.model.SourceFile
 import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.plugin.api.FileAnalysisContextV1
@@ -23,6 +24,7 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
         }
     }
 
+    @Suppress("LongMethod")
     private fun analyzeMutable(context: IndexBuildContext, selectedPluginIds: Set<String>) {
         registry
             .pluginIds()
@@ -40,27 +42,46 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                 .groupBy { it.pluginId.value }
         selectedPluginIds.forEach { pluginId ->
             val analyzers = analyzersByPlugin[pluginId].orEmpty()
-            (context.sourceFiles + context.deletedSourceFiles + POST_PROCESSOR_FILE).forEach {
-                relativeFile ->
-                context.store
-                    .prefixScan(CodeIndexKey.pluginFactFilePrefix(pluginId, relativeFile))
-                    .forEach { (key, _) -> context.store.delete(key) }
-            }
+            val affectedSources = context.sources + context.deletedSources
+            context.store
+                .prefixScan(CodeIndexKey.pluginFactPluginPrefix(pluginId))
+                .filter { (_, record) ->
+                    record is PluginFactRecord &&
+                        affectedSources.any { source ->
+                            record.originId == source.originId && record.relativeFile == source.path
+                        }
+                }
+                .map { it.first }
+                .toList()
+                .forEach(context.store::delete)
+            context.store
+                .prefixScan(CodeIndexKey.pluginFactPluginPrefix(pluginId))
+                .filter { (_, record) ->
+                    record is PluginFactRecord && record.relativeFile == POST_PROCESSOR_FILE
+                }
+                .map { it.first }
+                .toList()
+                .forEach(context.store::delete)
             try {
-                context.sourceFiles.forEach { relativeFile ->
+                context.sources.forEach { source ->
                     analyzers.forEach { registered ->
                         runBlocking {
                             registered.analyzer.analyze(
                                 FileAnalysisContextV1(
                                     file =
                                         SourceFile.of(
-                                            SourceOriginId.of("workspace"),
-                                            relativeFile,
-                                            relativeFile,
+                                            SourceOriginId.of(source.originId),
+                                            source.path,
+                                            source.path,
                                         ),
-                                    sourceText = context.readSource(relativeFile),
+                                    sourceText = context.readSource(source),
                                     facts =
-                                        StorePluginFactSink(context.store, pluginId, relativeFile),
+                                        StorePluginFactSink(
+                                            context.store,
+                                            pluginId,
+                                            source.path,
+                                            source.originId,
+                                        ),
                                     active = { true },
                                 )
                             )
@@ -77,19 +98,25 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                     it.pluginId.value == pluginId && it.processor.level == PostProcessLevelV1.SHARD
                 }
                 .forEach { registered ->
-                    runBlocking {
-                        registered.processor.process(
-                            PostProcessContextV1(
-                                facts =
-                                    StorePluginFactSink(
-                                        context.store,
-                                        pluginId,
-                                        POST_PROCESSOR_FILE,
-                                    ),
-                                active = { true },
-                            )
-                        )
-                    }
+                    context.resolvedOriginIds
+                        .ifEmpty { setOf("workspace") }
+                        .forEach { originId ->
+                            runBlocking {
+                                registered.processor.process(
+                                    PostProcessContextV1(
+                                        facts =
+                                            StorePluginFactSink(
+                                                context.store,
+                                                pluginId,
+                                                POST_PROCESSOR_FILE,
+                                                originId,
+                                            ),
+                                        originId = SourceOriginId.of(originId),
+                                        active = { true },
+                                    )
+                                )
+                            }
+                        }
                 }
             registry.postProcessors
                 .filter {

@@ -14,36 +14,43 @@ internal class FileHashProducer : IndexProducer {
     override val displayName: String = "FileHashProducer"
 
     override val progressTotal: (IndexBuildContext) -> Int = { context ->
-        context.sourceFiles.count { it in context.changedSourceFiles }
+        context.changedSources.size
     }
 
     override fun produce(context: IndexBuildContext, store: CodeIndexStore) {
-        val currentFiles = context.sourceFiles.toSet()
+        val currentFiles = context.sources.map { it.originId to it.path }.toSet()
         store
             .prefixScan("file:")
             .filter { (_, record) ->
                 record is FileHashRecord &&
-                    (record.relativePath !in currentFiles ||
-                        record.relativePath in context.changedSourceFiles)
+                    (record.originId to record.relativePath !in currentFiles ||
+                        context.changedSources.any {
+                            it.originId == record.originId && it.path == record.relativePath
+                        })
             }
             .map { it.first }
             .toList()
             .forEach(store::delete)
-        val files = context.sourceFiles.filter { it in context.changedSourceFiles }
-        files.forEachIndexed { index, relativePath ->
-            context.reportFileProgress(index + 1, files.size, relativePath)
-            val content = context.readSource(relativePath)
-            val hash = contentHash(content)
+        val files = context.changedSources
+        files.forEachIndexed { index, source ->
+            context.reportFileProgress(index + 1, files.size, source)
+            val hash = contentHash(context.readSource(source))
             store.put(
-                CodeIndexKey.file(relativePath, hash),
-                FileHashRecord(relativePath = relativePath, contentHash = hash),
+                CodeIndexKey.file("${source.originId}:${source.path}", hash),
+                FileHashRecord(
+                    relativePath = source.path,
+                    contentHash = hash,
+                    originId = source.originId,
+                ),
             )
         }
     }
 
     companion object {
-        fun contentHash(content: String): String {
-            val digest = MessageDigest.getInstance("SHA-256").digest(content.toByteArray())
+        fun contentHash(content: String): String = contentHash(content.toByteArray())
+
+        fun contentHash(content: ByteArray): String {
+            val digest = MessageDigest.getInstance("SHA-256").digest(content)
             return "sha256:" + digest.joinToString("") { "%02x".format(Locale.ROOT, it) }
         }
 
@@ -53,6 +60,23 @@ internal class FileHashProducer : IndexProducer {
                 sourceFiles = sourceFiles,
                 sourceContentOverrides = context.sourceContentOverrides,
             )
+
+        fun combinedIndexedSourcesHash(
+            sources: List<IndexedSource>,
+            onFileProcessed: ((index: Int, total: Int, source: IndexedSource) -> Unit)? = null,
+        ): String {
+            val sortedSources =
+                sources.sortedWith(compareBy(IndexedSource::originId, IndexedSource::path))
+            return contentHash(
+                sortedSources
+                    .mapIndexed { index, source ->
+                        onFileProcessed?.invoke(index + 1, sortedSources.size, source)
+                        val file = source.originRoot.resolve(source.path)
+                        "${source.originId}:${source.path}:${contentHash(file.readText())}"
+                    }
+                    .joinToString("\n")
+            )
+        }
 
         fun combinedSourcesHash(
             workspaceRoot: Path,

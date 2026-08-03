@@ -14,7 +14,13 @@ internal interface IndexBuildProgressReporter {
 
     fun phaseStarted(phase: String, phaseTotal: Int?)
 
-    fun fileProgress(phase: String, phaseCompleted: Int, phaseTotal: Int, currentFile: String)
+    fun fileProgress(
+        phase: String,
+        phaseCompleted: Int,
+        phaseTotal: Int,
+        originId: String,
+        currentFile: String,
+    )
 
     fun countersAvailable(changedFiles: Int, unchangedFiles: Int, removedFiles: Int)
 
@@ -63,6 +69,7 @@ internal class JsonlIndexBuildProgressReporter(private val emitLine: (String) ->
         phase: String,
         phaseCompleted: Int,
         phaseTotal: Int,
+        originId: String,
         currentFile: String,
     ) {
         if (phaseCompleted !in 1..phaseTotal) {
@@ -75,6 +82,7 @@ internal class JsonlIndexBuildProgressReporter(private val emitLine: (String) ->
                 phaseCompleted = phaseCompleted,
                 phaseTotal = phaseTotal,
                 includePhaseTotal = true,
+                originId = originId,
                 currentFile = normalizeWorkspaceRelativePath(currentFile),
             )
         }
@@ -127,6 +135,7 @@ internal class JsonlIndexBuildProgressReporter(private val emitLine: (String) ->
         includePhaseCompleted: Boolean = false,
         phaseTotal: Int? = null,
         includePhaseTotal: Boolean = false,
+        originId: String? = null,
         currentFile: String? = null,
         outcome: String? = null,
         exitCode: Int? = null,
@@ -142,6 +151,7 @@ internal class JsonlIndexBuildProgressReporter(private val emitLine: (String) ->
         if (includePhaseTotal) {
             fields["phaseTotal"] = phaseTotal?.let(::JsonPrimitive) ?: JsonNull
         }
+        originId?.let { fields["originId"] = JsonPrimitive(it) }
         currentFile?.let { fields["currentFile"] = JsonPrimitive(it) }
         counters?.let {
             fields["changedFiles"] = JsonPrimitive(it.changedFiles)
@@ -170,7 +180,7 @@ internal class JsonlIndexBuildProgressReporter(private val emitLine: (String) ->
     }
 }
 
-internal const val MACHINE_PROGRESS_PROTOCOL_VERSION = 1
+internal const val MACHINE_PROGRESS_PROTOCOL_VERSION = 2
 internal const val SOURCE_CHANGE_DETECTION_PHASE = "source-change-detection"
 
 internal fun normalizeWorkspaceRelativePath(path: String): String {

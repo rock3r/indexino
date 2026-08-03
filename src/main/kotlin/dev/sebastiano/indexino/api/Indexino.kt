@@ -8,8 +8,10 @@ import dev.sebastiano.indexino.cli.IndexBuildRunner
 import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifest
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
+import dev.sebastiano.indexino.core.cache.WorkspaceGenerationOrigin
 import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.IndexManifest
+import dev.sebastiano.indexino.core.manifest.workspaceRevisionFingerprint
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.store.IndexStoreOpener
@@ -29,7 +31,9 @@ import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.SourceOriginRevision
 import dev.sebastiano.indexino.model.WorkspaceGenerationId
 import dev.sebastiano.indexino.model.WorkspaceRevision
+import dev.sebastiano.indexino.producer.FileHashProducer
 import dev.sebastiano.indexino.producer.IndexBuildProgressReporter
+import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.topology.BuildSystem as InternalBuildSystem
 import dev.sebastiano.indexino.topology.TopologyRequest
 import java.io.IOException
@@ -42,9 +46,9 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.atomic.AtomicBoolean
 
-private const val BASIC_FACT_SCHEMA_VERSION = 1
+private const val BASIC_FACT_SCHEMA_VERSION = 2
 
-@Suppress("TooManyFunctions")
+@Suppress("LargeClass", "TooManyFunctions")
 public class Indexino
 private constructor(
     private val workspace: Path,
@@ -74,7 +78,9 @@ private constructor(
 
     /** Runtime-owned hook that receives the resolved source closure of completed refreshes. */
     @Volatile
-    internal var onRefreshSucceededForRuntime: ((RefreshRequest, List<String>) -> Unit)? = null
+    internal var onRefreshSucceededForRuntime:
+        ((RefreshRequest, List<IndexedSource>, List<Path>) -> Unit)? =
+        null
 
     public companion object {
         /**
@@ -300,10 +306,15 @@ private constructor(
                     revision,
                     request.scope,
                     applications,
+                    manifest,
                 )
-                onRefreshSucceededForRuntime?.invoke(request, execution.sourceFiles)
-                val changedFileCount = execution.changes?.changedFiles?.size ?: 0
-                val removedFileCount = execution.changes?.deletedFiles?.size ?: 0
+                onRefreshSucceededForRuntime?.invoke(
+                    request,
+                    execution.sources,
+                    execution.topologyRoots,
+                )
+                val changedFileCount = execution.changes?.changedSources?.size ?: 0
+                val removedFileCount = execution.changes?.deletedSources?.size ?: 0
                 val result =
                     RefreshResult(
                         refreshId = refreshId,
@@ -372,9 +383,10 @@ private constructor(
         revision: WorkspaceRevision,
         scope: IndexScope,
         applications: List<String>,
+        manifest: IndexManifest,
     ) {
         val publishedStore =
-            publishGenerationStore(commit, generation, revision, scope, applications)
+            publishGenerationStore(commit, generation, revision, scope, applications, manifest)
         afterPublishGenerationStoreForTests?.invoke()
         synchronized(generationLock) {
             if (closed.get()) {
@@ -591,19 +603,26 @@ private constructor(
 
     @OptIn(IndexinoInternalApi::class)
     private fun IndexManifest.toWorkspaceRevision(): WorkspaceRevision {
-        val fingerprint =
-            sha256(
-                listOf(commit, scope, topology, includeDeps.toString(), sourcesContentHash)
-                    .joinToString(separator = "\u0000")
-            )
-        val origin =
-            SourceOriginRevision(
-                originId = SourceOriginId.of("workspace"),
-                revision = commit.takeUnless(GitHeadResolver::isFilesystemRevision),
-                stateFingerprint = sourcesContentHash,
-                expectedRevision = null,
-            )
-        return WorkspaceRevision(fingerprint, listOf(origin))
+        val origins =
+            origins
+                .ifEmpty {
+                    listOf(
+                        dev.sebastiano.indexino.core.manifest.IndexManifestOrigin(
+                            originId = "workspace",
+                            revision = commit.takeUnless(GitHeadResolver::isFilesystemRevision),
+                            stateFingerprint = sourcesContentHash,
+                        )
+                    )
+                }
+                .map { origin ->
+                    SourceOriginRevision(
+                        originId = SourceOriginId.of(origin.originId),
+                        revision = origin.revision,
+                        stateFingerprint = origin.stateFingerprint,
+                        expectedRevision = origin.expectedRevision,
+                    )
+                }
+        return WorkspaceRevision(workspaceRevisionFingerprint(), origins)
     }
 
     private fun IndexManifest.toGenerationId(revision: WorkspaceRevision): WorkspaceGenerationId =
@@ -630,6 +649,7 @@ private constructor(
         revision: WorkspaceRevision,
         scope: IndexScope,
         applications: List<String>,
+        compatibilityManifest: IndexManifest,
     ): PublishedStore {
         val destination =
             InProcessCacheLayout.generationStore(workspace, clientId, generation.value)
@@ -639,20 +659,37 @@ private constructor(
         val cacheRoot = InProcessCacheLayout.cacheRoot()
         val packKey =
             ContentAddressedPackCache(cacheRoot).installDirectory(source, BASIC_FACT_SCHEMA_VERSION)
+        val emptyOriginFingerprint = FileHashProducer.contentHash("")
+        val legacyOrigin =
+            revision.origins.firstOrNull {
+                it.originId.value == "workspace" && it.stateFingerprint != emptyOriginFingerprint
+            }
+                ?: revision.origins.firstOrNull { it.stateFingerprint != emptyOriginFingerprint }
+                ?: revision.origins.first()
         WorkspaceGenerationManifestStore(cacheRoot, InProcessCacheLayout.workspaceId(workspace))
             .publish(
                 WorkspaceGenerationManifest(
                     basicFactSchemaVersion = BASIC_FACT_SCHEMA_VERSION,
                     generation = generation.value,
                     workspaceRevisionFingerprint = revision.fingerprint,
-                    originId = revision.origins.single().originId.value,
-                    revision = revision.origins.single().revision,
-                    stateFingerprint = revision.origins.single().stateFingerprint,
+                    originId = legacyOrigin.originId.value,
+                    revision = legacyOrigin.revision,
+                    stateFingerprint = legacyOrigin.stateFingerprint,
+                    origins =
+                        revision.origins.map { origin ->
+                            WorkspaceGenerationOrigin(
+                                originId = origin.originId.value,
+                                revision = origin.revision,
+                                stateFingerprint = origin.stateFingerprint,
+                                expectedRevision = origin.expectedRevision,
+                            )
+                        },
                     packKeys = listOf(packKey),
                     scopeBuildSystem = scope.buildSystem.value,
                     scopeValue = scope.value,
                     includesDependencies = scope.includesDependencies,
                     applications = applications,
+                    compatibilityManifest = compatibilityManifest,
                 )
             )
         val packs = ContentAddressedPackCache(cacheRoot)
@@ -690,14 +727,14 @@ private constructor(
         val revision =
             WorkspaceRevision(
                 manifest.workspaceRevisionFingerprint,
-                listOf(
+                manifest.origins.map { origin ->
                     SourceOriginRevision(
-                        originId = SourceOriginId.of(manifest.originId),
-                        revision = manifest.revision,
-                        stateFingerprint = manifest.stateFingerprint,
-                        expectedRevision = null,
+                        originId = SourceOriginId.of(origin.originId),
+                        revision = origin.revision,
+                        stateFingerprint = origin.stateFingerprint,
+                        expectedRevision = origin.expectedRevision,
                     )
-                ),
+                },
             )
         val restored = PublishedGeneration(storePath, revision, generation)
         generationStores[generation] = storePath

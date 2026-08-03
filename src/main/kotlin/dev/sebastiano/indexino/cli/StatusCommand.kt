@@ -11,18 +11,17 @@ import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.core.Version
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.git.GitHeadResolver
-import dev.sebastiano.indexino.core.manifest.ManifestFreshness
 import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
-import dev.sebastiano.indexino.engine.PluginRegistry
-import dev.sebastiano.indexino.producer.FileHashProducer
 import dev.sebastiano.indexino.topology.BuildSystem
 import dev.sebastiano.indexino.topology.TopologyRequest
-import dev.sebastiano.indexino.topology.TopologyResolver
 import dev.sebastiano.indexino.topology.bazel.BazelProcessRunner
 import dev.sebastiano.indexino.topology.bazel.BazelQueryExecutor
+import dev.sebastiano.indexino.topology.gradle.GradleTopology
 import java.nio.file.Path
 import kotlin.io.path.exists
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -37,33 +36,19 @@ internal class StatusCommand : CliktCommand(name = "status") {
     private val includeDeps by option("--include-deps").flag(default = false)
 
     override fun run() {
-        val workspace = requireNotNull(project).toPath().toRealPath()
-        val manifest =
-            WorkspaceGenerationManifestStore(
-                    InProcessCacheLayout.cacheRoot(),
-                    InProcessCacheLayout.workspaceId(workspace),
-                )
-                .current()
-        if (manifest == null) {
-            echo(
-                Json.encodeToString(
-                    StatusReport(indexed = false, commit = GitHeadResolver.resolve(workspace))
-                )
+        val exitCode =
+            runStatus(
+                project = requireNotNull(project).toPath().toRealPath(),
+                topologyRequest =
+                    TopologyRequest(
+                        buildSystem = parseBuildSystem(buildSystem),
+                        bazelTarget = bazelTarget,
+                        gradleModule = gradleModule,
+                        includeDeps = includeDeps,
+                    ),
+                output = ::echo,
             )
-            throw ProgramResult(CliExitCodes.ANALYSIS_ERROR)
-        }
-        echo(
-            Json.encodeToString(
-                StatusReport(
-                    indexed = true,
-                    commit = manifest.revision.orEmpty(),
-                    scope = manifest.scopeValue,
-                    topology = manifest.scopeBuildSystem,
-                    applications = manifest.applications,
-                    fresh = true,
-                )
-            )
-        )
+        if (exitCode != CliExitCodes.SUCCESS) throw ProgramResult(exitCode)
     }
 
     fun runStatus(
@@ -82,6 +67,7 @@ internal class StatusCommand : CliktCommand(name = "status") {
             output = output,
         )
 
+    @Suppress("LongMethod", "UnusedParameter")
     fun runStatus(
         project: Path,
         topologyRequest: TopologyRequest,
@@ -91,42 +77,32 @@ internal class StatusCommand : CliktCommand(name = "status") {
     ): Int {
         val commit = GitHeadResolver.resolve(project)
         val resolver = IndexPathResolver(project)
-        val manifestPath = resolver.resolveManifest(commit)
-        if (!manifestPath.exists()) {
-            output(Json.encodeToString(StatusReport(indexed = false, commit = commit)))
-            return CliExitCodes.ANALYSIS_ERROR
-        }
-
-        val manifest = ManifestIO.read(manifestPath)
-        val request =
-            resolveRequestForManifest(
-                topologyRequest,
-                manifest.scope,
-                manifest.topology,
-                manifest.includeDeps,
-            )
-        val topologyResult =
-            TopologyResolver.resolve(
-                project = project,
-                request = request,
-                bazelQueryExecutor = bazelQueryExecutor,
-                bazelProcessRunner = bazelProcessRunner,
-            )
-        val currentHash = FileHashProducer.combinedSourcesHash(project, topologyResult.sourceFiles)
-        val pluginCoordinates =
-            PluginRegistry.load(javaClass.classLoader).selectedCoordinates(manifest.applications)
-        val criteria =
-            ManifestFreshness.criteriaFrom(
-                commit = commit,
-                scope = manifest.scope,
-                // Omitted scope reconstructs the stored configuration. An explicit scope instead
-                // asks whether this manifest satisfies the caller's requested dependency policy.
-                includeDeps = request.includeDeps,
-                sourcesContentHash = currentHash,
-                applications = manifest.applications,
-                pluginCoordinates = pluginCoordinates,
-            )
-        val fresh = ManifestFreshness.isFresh(manifest, criteria)
+        val manifest =
+            WorkspaceGenerationManifestStore(
+                    InProcessCacheLayout.cacheRoot(),
+                    InProcessCacheLayout.workspaceId(project),
+                )
+                .current()
+                ?.compatibilityManifest
+                ?: resolver.resolveManifest(commit).takeIf { it.exists() }?.let(ManifestIO::read)
+                ?: run {
+                    output(Json.encodeToString(StatusReport(indexed = false, commit = commit)))
+                    return CliExitCodes.ANALYSIS_ERROR
+                }
+        val available = manifest.origins.all { it.available }
+        val explicitlySelectedScope =
+            topologyRequest.bazelTarget != null ||
+                topologyRequest.gradleModule != null ||
+                topologyRequest.repoManifest != null
+        val requestedScope =
+            topologyRequest.bazelTarget
+                ?: topologyRequest.gradleModule?.let(GradleTopology::normalizeModule)
+                ?: topologyRequest.repoManifest?.toRealPath()?.toString()
+        val compatibleScope =
+            !explicitlySelectedScope ||
+                (requestedScope == manifest.scope &&
+                    topologyRequest.includeDeps == manifest.includeDeps)
+        val fresh = available && compatibleScope && manifest.commit == commit
 
         output(
             Json.encodeToString(
@@ -140,7 +116,8 @@ internal class StatusCommand : CliktCommand(name = "status") {
                     builtAt = manifest.builtAt,
                     applications = manifest.applications,
                     fresh = fresh,
-                    currentSourcesContentHash = currentHash,
+                    available = available,
+                    currentSourcesContentHash = manifest.sourcesContentHash,
                     manifestSourcesContentHash = manifest.sourcesContentHash,
                 )
             )
@@ -157,18 +134,25 @@ internal class StatusCommand : CliktCommand(name = "status") {
         if (cli.bazelTarget != null || cli.gradleModule != null) {
             return cli
         }
-        return if (manifestTopology.startsWith("gradle")) {
-            cli.copy(
-                buildSystem = BuildSystem.GRADLE,
-                gradleModule = manifestScope,
-                includeDeps = manifestIncludeDeps,
-            )
-        } else {
-            cli.copy(
-                buildSystem = BuildSystem.BAZEL,
-                bazelTarget = manifestScope,
-                includeDeps = manifestIncludeDeps,
-            )
+        return when {
+            manifestTopology == "repo-manifest" ->
+                cli.copy(
+                    buildSystem = BuildSystem.REPO,
+                    repoManifest = Path.of(manifestScope),
+                    includeDeps = manifestIncludeDeps,
+                )
+            manifestTopology.startsWith("gradle") ->
+                cli.copy(
+                    buildSystem = BuildSystem.GRADLE,
+                    gradleModule = manifestScope,
+                    includeDeps = manifestIncludeDeps,
+                )
+            else ->
+                cli.copy(
+                    buildSystem = BuildSystem.BAZEL,
+                    bazelTarget = manifestScope,
+                    includeDeps = manifestIncludeDeps,
+                )
         }
     }
 
@@ -177,10 +161,12 @@ internal class StatusCommand : CliktCommand(name = "status") {
             "auto" -> BuildSystem.AUTO
             "bazel" -> BuildSystem.BAZEL
             "gradle" -> BuildSystem.GRADLE
+            "repo" -> BuildSystem.REPO
             else -> error("Unknown --build-system: $raw")
         }
 }
 
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 internal data class StatusReport(
     val indexed: Boolean,
@@ -191,7 +177,9 @@ internal data class StatusReport(
     val sourceFileCount: Int = 0,
     val builtAt: String = "",
     val applications: List<String> = emptyList(),
-    val fresh: Boolean = false,
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS) val fresh: Boolean = false,
+    val available: Boolean = true,
+    val diagnostic: String = "",
     val currentSourcesContentHash: String = "",
     val manifestSourcesContentHash: String = "",
 )

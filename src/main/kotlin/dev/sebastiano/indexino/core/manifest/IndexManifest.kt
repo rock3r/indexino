@@ -1,9 +1,22 @@
 package dev.sebastiano.indexino.core.manifest
 
+import dev.sebastiano.indexino.core.git.GitHeadResolver
 import java.nio.file.Path
+import java.security.MessageDigest
+import java.util.HexFormat
 import kotlin.io.path.readText
 import kotlin.io.path.writeText
 import kotlinx.serialization.Serializable
+
+@Serializable
+internal data class IndexManifestOrigin(
+    val originId: String,
+    val revision: String?,
+    val stateFingerprint: String,
+    val expectedRevision: String? = null,
+    val dirty: Boolean = false,
+    val available: Boolean = true,
+)
 
 @Serializable
 internal data class IndexManifest(
@@ -17,7 +30,47 @@ internal data class IndexManifest(
     val builtAt: String,
     val applications: List<String> = emptyList(),
     val pluginCoordinates: Map<String, String> = emptyMap(),
+    val origins: List<IndexManifestOrigin> = emptyList(),
+    val resolvedTopologyDigest: String? = null,
 )
+
+internal fun IndexManifest.workspaceRevisionFingerprint(): String {
+    val graph =
+        origins
+            .ifEmpty {
+                listOf(
+                    IndexManifestOrigin(
+                        originId = "workspace",
+                        revision = commit.takeUnless(GitHeadResolver::isFilesystemRevision),
+                        stateFingerprint = sourcesContentHash,
+                    )
+                )
+            }
+            .sortedBy { it.originId }
+            .joinToString("\u0001") { origin ->
+                listOf(
+                        origin.originId,
+                        origin.revision.orEmpty(),
+                        origin.stateFingerprint,
+                        origin.expectedRevision.orEmpty(),
+                        origin.dirty.toString(),
+                    )
+                    .joinToString("\u0002")
+            }
+    val input =
+        listOf(
+                commit,
+                scope,
+                topology,
+                includeDeps.toString(),
+                sourcesContentHash,
+                resolvedTopologyDigest.orEmpty(),
+                graph,
+            )
+            .joinToString("\u0000")
+    return HexFormat.of()
+        .formatHex(MessageDigest.getInstance("SHA-256").digest(input.toByteArray()))
+}
 
 internal object ManifestIO {
     private val json =

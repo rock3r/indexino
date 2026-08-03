@@ -229,6 +229,7 @@ private fun symbolRecord(symbol: dev.sebastiano.indexino.model.Symbol): SymbolRe
         signature = symbol.signature,
         arity = symbol.arity,
         aliases = symbol.aliases,
+        originId = symbol.location.file.originId.value,
     )
 
 private fun legacySymbolFqn(symbol: String): String =
@@ -248,6 +249,7 @@ private fun referenceRecord(
         qualifier = reference.qualifier,
         candidateSymbolFqns = reference.candidateSymbolIds.map { it.value },
         arity = reference.arity,
+        originId = reference.location.file.originId.value,
     )
 
 private fun <T> withStore(project: Path, sessionId: String?, block: (CodeIndexStore) -> T): T {

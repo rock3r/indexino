@@ -11,7 +11,12 @@ import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 
 /** Installs immutable analysis packs under the cache-root two-level content-key fanout. */
-internal class ContentAddressedPackCache(private val cacheRoot: Path) {
+internal class ContentAddressedPackCache(
+    private val cacheRoot: Path,
+    private val moveDirectoryAction: (Path, Path) -> Unit = { source, destination ->
+        moveDirectory(source, destination)
+    },
+) {
     fun installDirectory(directory: Path, basicFactSchemaVersion: Int = 1): String {
         val entries =
             Files.walk(directory).use { paths ->
@@ -95,6 +100,36 @@ internal class ContentAddressedPackCache(private val cacheRoot: Path) {
         }
     }
 
+    fun replaceMaterializedDirectory(contentKey: String, destination: Path) {
+        val replacement =
+            destination.resolveSibling("${destination.fileName}.replace-${UUID.randomUUID()}")
+        val backup =
+            destination.resolveSibling("${destination.fileName}.backup-${UUID.randomUUID()}")
+        var destinationMoved = false
+        var retainBackup = false
+        try {
+            materializeDirectory(contentKey, replacement)
+            if (Files.exists(destination)) {
+                moveDirectoryAction(destination, backup)
+                destinationMoved = true
+                retainBackup = true
+            }
+            try {
+                moveDirectoryAction(replacement, destination)
+                retainBackup = false
+            } catch (failure: java.io.IOException) {
+                if (destinationMoved && !Files.exists(destination) && Files.exists(backup)) {
+                    moveDirectoryAction(backup, destination)
+                    retainBackup = false
+                }
+                throw failure
+            }
+        } finally {
+            if (Files.exists(replacement)) replacement.toFile().deleteRecursively()
+            if (!retainBackup && Files.exists(backup)) backup.toFile().deleteRecursively()
+        }
+    }
+
     fun packPath(contentKey: String): Path {
         require(contentKey.length >= FANOUT_PREFIX_LENGTH * 2) { "Content key is too short" }
         return cacheRoot
@@ -127,5 +162,13 @@ internal class ContentAddressedPackCache(private val cacheRoot: Path) {
     private companion object {
         const val FANOUT_PREFIX_LENGTH: Int = 2
         const val BUFFER_SIZE: Int = 8_192
+
+        fun moveDirectory(source: Path, destination: Path) {
+            try {
+                Files.move(source, destination, StandardCopyOption.ATOMIC_MOVE)
+            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                Files.move(source, destination)
+            }
+        }
     }
 }

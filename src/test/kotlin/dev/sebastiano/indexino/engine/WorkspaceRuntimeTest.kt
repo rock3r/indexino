@@ -135,6 +135,75 @@ class WorkspaceRuntimeTest {
     }
 
     @Test
+    fun `external included build sources join the watcher closure`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-external-")
+        val fixtureRoot =
+            Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-external-root-")
+        val workspace = createGradleWorkspaceWithExternalIncludedBuild(fixtureRoot)
+        val externalSource = fixtureRoot.resolve("build-logic/src/main/kotlin/Convention.kt")
+        val previousCacheRoot = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheRoot.toString())
+        val runtime =
+            WorkspaceRuntime.start(
+                workspace,
+                cacheRoot,
+                dev.sebastiano.indexino.api.AutoRefreshMode.DISABLED,
+            )
+        try {
+            val request = RefreshRequest.forScope(IndexScope.gradle(":app"))
+            RuntimeConnection.connect(runtime.endpoint).use { connection ->
+                RuntimeRefreshClient(connection).refresh(request).await()
+            }
+            assertTrue(
+                externalSource.parent.toRealPath() in runtime.watchedDirectoriesForTests(request),
+                "registered=${runtime.watchedDirectoriesForTests(request)}",
+            )
+        } finally {
+            runtime.close()
+            cacheRoot.toFile().deleteRecursively()
+            fixtureRoot.toFile().deleteRecursively()
+            if (previousCacheRoot == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheRoot)
+        }
+    }
+
+    @Test
+    fun `empty external included build keeps its topology inputs in the watcher closure`() {
+        val cacheRoot =
+            Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-empty-external-")
+        val fixtureRoot =
+            Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-empty-external-root-")
+        val workspace =
+            createGradleWorkspaceWithExternalIncludedBuild(fixtureRoot, withExternalSource = false)
+        val externalBuild = fixtureRoot.resolve("build-logic")
+        val previousCacheRoot = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheRoot.toString())
+        val runtime =
+            WorkspaceRuntime.start(
+                workspace,
+                cacheRoot,
+                dev.sebastiano.indexino.api.AutoRefreshMode.DISABLED,
+            )
+        try {
+            val request = RefreshRequest.forScope(IndexScope.gradle(":app"))
+            RuntimeConnection.connect(runtime.endpoint).use { connection ->
+                RuntimeRefreshClient(connection).refresh(request).await()
+            }
+
+            assertTrue(
+                externalBuild.toRealPath() in runtime.watchedDirectoriesForTests(request),
+                "registered=${runtime.watchedDirectoriesForTests(request)}",
+            )
+        } finally {
+            runtime.close()
+            cacheRoot.toFile().deleteRecursively()
+            fixtureRoot.toFile().deleteRecursively()
+            if (previousCacheRoot == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheRoot)
+        }
+    }
+
+    @Test
     fun `await current promotes a debounced automatic refresh`() {
         val cacheRoot =
             Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-await-current-")
@@ -449,6 +518,36 @@ class WorkspaceRuntimeTest {
             Thread.sleep(WORKSPACE_LOSS_WAIT_MILLIS)
         }
         assertTrue(condition(), "Timed out waiting for workspace-loss shutdown")
+    }
+
+    private fun createGradleWorkspaceWithExternalIncludedBuild(
+        root: Path,
+        withExternalSource: Boolean = true,
+    ): Path {
+        val workspace = root.resolve("app")
+        Files.createDirectories(workspace.resolve("app/src/main/kotlin"))
+        Files.writeString(
+            workspace.resolve("settings.gradle.kts"),
+            "rootProject.name = \"test\"\ninclude(\":app\")\nincludeBuild(\"../build-logic\")\n",
+        )
+        Files.writeString(
+            workspace.resolve("app/src/main/kotlin/Panel.kt"),
+            "package sample\nclass Panel\n",
+        )
+        val externalBuild = root.resolve("build-logic")
+        Files.createDirectories(externalBuild)
+        Files.writeString(
+            externalBuild.resolve("settings.gradle.kts"),
+            "rootProject.name = \"logic\"\n",
+        )
+        if (withExternalSource) {
+            Files.createDirectories(externalBuild.resolve("src/main/kotlin"))
+            Files.writeString(
+                externalBuild.resolve("src/main/kotlin/Convention.kt"),
+                "package logic\nclass Convention\n",
+            )
+        }
+        return workspace
     }
 
     private fun createGradleWorkspace(): Path {

@@ -12,7 +12,7 @@ import dev.sebastiano.indexino.plugin.api.PostProcessorV1
 import java.util.ServiceLoader
 
 internal class PluginRegistry
-private constructor(
+internal constructor(
     private val descriptors: Map<PluginId, PluginDescriptor>,
     internal val fileAnalyzers: List<RegisteredFileAnalyzer>,
     internal val postProcessors: List<RegisteredPostProcessor>,
@@ -39,7 +39,7 @@ private constructor(
     )
 
     internal companion object {
-        private val HOST_BASIC_FACT_SCHEMA: BasicFactSchemaVersion = BasicFactSchemaVersion.of(1)
+        private val HOST_BASIC_FACT_SCHEMA: BasicFactSchemaVersion = BasicFactSchemaVersion.of(2)
 
         @OptIn(IndexinoInternalApi::class)
         internal fun load(classLoader: ClassLoader): PluginRegistry {

@@ -14,11 +14,9 @@ import dev.sebastiano.indexino.api.IndexScope
 import dev.sebastiano.indexino.api.Indexino
 import dev.sebastiano.indexino.api.IndexinoConfiguration
 import dev.sebastiano.indexino.api.RefreshRequest
-import dev.sebastiano.indexino.core.Version
 import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.git.GitHeadResolver
-import dev.sebastiano.indexino.core.manifest.IndexManifest
 import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.model.PluginId
@@ -30,7 +28,6 @@ import dev.sebastiano.indexino.topology.TopologyRequest
 import dev.sebastiano.indexino.topology.bazel.BazelProcessRunner
 import dev.sebastiano.indexino.topology.bazel.BazelQueryExecutor
 import java.nio.file.Path
-import java.time.Instant
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -142,20 +139,15 @@ internal class IndexCommand : CliktCommand(name = "index") {
         val resolver = IndexPathResolver(project)
         val commit = GitHeadResolver.resolve(project)
         ContentAddressedPackCache(cacheRoot)
-            .materializeDirectory(manifest.packKeys.single(), resolver.resolveBaseStore(commit))
+            .replaceMaterializedDirectory(
+                manifest.packKeys.single(),
+                resolver.resolveBaseStore(commit),
+            )
         ManifestIO.write(
             resolver.resolveManifest(commit),
-            IndexManifest(
-                commit = commit,
-                indexerVersion = Version.NAME,
-                scope = manifest.scopeValue,
-                topology = manifest.scopeBuildSystem,
-                includeDeps = manifest.includesDependencies,
-                sourceFileCount = 0,
-                sourcesContentHash = manifest.stateFingerprint,
-                builtAt = Instant.now().toString(),
-                applications = manifest.applications,
-            ),
+            requireNotNull(manifest.compatibilityManifest) {
+                "Published generation does not contain a CLI compatibility manifest"
+            },
         )
     }
 
@@ -186,6 +178,11 @@ internal class IndexCommand : CliktCommand(name = "index") {
                     )
                 if (includeDeps) scope.includingDependencies() else scope
             }
+            BuildSystem.REPO ->
+                throw UsageError(
+                    "Daemon-backed repo indexing is not available yet",
+                    "--build-system",
+                )
             BuildSystem.AUTO -> error("unreachable")
         }
     }
@@ -250,6 +247,7 @@ internal class IndexCommand : CliktCommand(name = "index") {
             "auto" -> BuildSystem.AUTO
             "bazel" -> BuildSystem.BAZEL
             "gradle" -> BuildSystem.GRADLE
-            else -> error("Unknown --build-system: $raw (expected auto, bazel, gradle)")
+            "repo" -> BuildSystem.REPO
+            else -> error("Unknown --build-system: $raw (expected auto, bazel, gradle, repo)")
         }
 }

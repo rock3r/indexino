@@ -4,14 +4,57 @@ import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.producer.IndexBuildContext
+import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.ProducerRegistry
+import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
+import kotlin.io.path.writeText
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class XmlResourceProducerTest {
+    @Test
+    fun `keeps equal resource paths from separate origins distinct`() {
+        val firstRoot = createTempDirectory("indexino-resource-origin-first-")
+        val secondRoot = createTempDirectory("indexino-resource-origin-second-")
+        val relativePath = "src/main/res/values/strings.xml"
+        firstRoot
+            .resolve(relativePath)
+            .also { it.parent.createDirectories() }
+            .writeText("<resources><string name=\"title\">First</string></resources>")
+        secondRoot
+            .resolve(relativePath)
+            .also { it.parent.createDirectories() }
+            .writeText("<resources><string name=\"title\">Second</string></resources>")
+
+        withStore { store ->
+            val producer = assertNotNull(ProducerRegistry.get("xml-resources"))
+            producer.produce(
+                IndexBuildContext(
+                    store = store,
+                    commitHash = "abc",
+                    sourceFiles = listOf(relativePath),
+                    sources =
+                        listOf(
+                            IndexedSource("git:first", firstRoot, relativePath),
+                            IndexedSource("git:second", secondRoot, relativePath),
+                        ),
+                )
+            )
+
+            val resources =
+                store.prefixScan("res:").map { it.second }.filterIsInstance<SymbolRecord>().toList()
+            assertEquals(
+                setOf("git:first", "git:second"),
+                resources.filter { it.fqn == "res:string:title" }.map { it.originId }.toSet(),
+            )
+            assertTrue(resources.all { it.relativeFile == relativePath })
+        }
+    }
+
     @Test
     fun `indexes file values and id resources with references`() {
         val values =

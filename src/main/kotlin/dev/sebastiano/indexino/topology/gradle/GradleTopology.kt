@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.topology.gradle
 
+import dev.sebastiano.indexino.topology.ExternalSourceMount
 import dev.sebastiano.indexino.topology.TopologyResult
 import java.nio.file.Path
 import kotlin.io.path.exists
@@ -17,7 +18,10 @@ internal object GradleTopology {
                 .map { workspace.resolve(it) }
                 .firstOrNull { it.exists() } ?: error("No settings.gradle(.kts) in $workspace")
 
-        val includes = SettingsParser.parseIncludes(settingsFile.readText())
+        val settingsContent = settingsFile.readText()
+        val includes = SettingsParser.parseIncludes(settingsContent)
+        val externalMounts =
+            resolveExternalMounts(workspace, settingsFile, settingsContent, onStderr)
         if (includes.isEmpty()) {
             onStderr("gradle-parse: no included modules in ${settingsFile.fileName}")
         }
@@ -39,6 +43,7 @@ internal object GradleTopology {
                 graph.closure(normalizedModule, includeDeps)
             }
 
+        val scopedExternalMounts = if (rootScope || includeDeps) externalMounts else emptyList()
         val sourceFiles =
             modules
                 .flatMap { module ->
@@ -59,7 +64,70 @@ internal object GradleTopology {
             // provenance record.
             includeDeps = if (rootScope) true else includeDeps,
             scope = normalizedModule,
+            externalMounts = externalMounts,
+            externalSources =
+                scopedExternalMounts.map { mount ->
+                    ExternalSourceMount(root = mount, sourceFiles = collectBuildSources(mount))
+                },
         )
+    }
+
+    private fun collectBuildSources(buildRoot: Path): List<String> {
+        val settings =
+            listOf("settings.gradle.kts", "settings.gradle").map(buildRoot::resolve).firstOrNull {
+                it.exists()
+            }
+        val modules =
+            listOf(":") + settings?.let { SettingsParser.parseIncludes(it.readText()) }.orEmpty()
+        return modules
+            .flatMap { module ->
+                ModuleSourceRoots.collectKotlinSources(
+                    ModuleSourceRoots.moduleDirectory(buildRoot, module),
+                    buildRoot,
+                )
+            }
+            .distinct()
+            .sorted()
+    }
+
+    private fun resolveExternalMounts(
+        workspace: Path,
+        settingsFile: Path,
+        settingsContent: String,
+        onStderr: (String) -> Unit,
+    ): List<Path> {
+        val canonicalWorkspace = workspace.toRealPath()
+        val allowedExternalRoot = canonicalWorkspace.parent ?: canonicalWorkspace
+        val visitedBuilds = linkedSetOf(canonicalWorkspace)
+        val externalMounts = linkedSetOf<Path>()
+
+        fun visit(settings: Path, content: String) {
+            SettingsParser.parseIncludedBuilds(content).forEach { declaredPath ->
+                val declaredRoot = settings.parent.resolve(declaredPath).normalize()
+                require(declaredRoot.toFile().isDirectory) {
+                    "Gradle included build mount is unavailable: $declaredRoot"
+                }
+                val buildRoot = declaredRoot.toRealPath()
+                require(buildRoot.startsWith(allowedExternalRoot)) {
+                    "Gradle included build is outside the allowed external root policy: $buildRoot"
+                }
+                if (!visitedBuilds.add(buildRoot)) return@forEach
+                if (buildRoot != canonicalWorkspace) {
+                    externalMounts.add(buildRoot)
+                    if (!buildRoot.startsWith(canonicalWorkspace)) {
+                        onStderr("gradle-parse: external included build $buildRoot")
+                    }
+                }
+                val nestedSettings =
+                    listOf("settings.gradle.kts", "settings.gradle")
+                        .map(buildRoot::resolve)
+                        .firstOrNull { it.exists() } ?: return@forEach
+                visit(nestedSettings, nestedSettings.readText())
+            }
+        }
+
+        visit(settingsFile, settingsContent)
+        return externalMounts.toList()
     }
 
     fun normalizeModule(raw: String): String = if (raw.startsWith(":")) raw else ":$raw"

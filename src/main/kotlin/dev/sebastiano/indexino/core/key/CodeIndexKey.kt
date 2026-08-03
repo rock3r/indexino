@@ -17,6 +17,7 @@ internal value class CodeIndexKey(val value: String) {
 
     override fun toString(): String = value
 
+    @Suppress("TooManyFunctions")
     companion object {
         fun parse(raw: String): CodeIndexKey = CodeIndexKey(raw)
 
@@ -29,22 +30,53 @@ internal value class CodeIndexKey(val value: String) {
             column: Int,
         ): CodeIndexKey = CodeIndexKey("sym:$fqn:$relativeFile:$line:$column")
 
+        fun symbolDefinition(
+            fqn: String,
+            originId: String,
+            relativeFile: String,
+            line: Int,
+            column: Int,
+        ): CodeIndexKey = CodeIndexKey("sym:$fqn:$originId:$relativeFile:$line:$column")
+
         fun ref(symbolFqn: String, relativeFile: String, line: Int): CodeIndexKey =
             CodeIndexKey("ref:$symbolFqn:$relativeFile:$line")
 
         fun ref(symbolFqn: String, relativeFile: String, line: Int, column: Int): CodeIndexKey =
             CodeIndexKey("ref:$symbolFqn:$relativeFile:$line:$column")
 
+        fun ref(
+            symbolFqn: String,
+            originId: String,
+            relativeFile: String,
+            line: Int,
+            column: Int,
+        ): CodeIndexKey = CodeIndexKey("ref:$symbolFqn:$originId:$relativeFile:$line:$column")
+
         fun call(identity: String): CodeIndexKey = CodeIndexKey("call:$identity")
 
         fun resource(type: String, name: String, relativeFile: String, line: Int): CodeIndexKey =
             CodeIndexKey("res:$type:$name:$relativeFile:$line")
+
+        fun resource(
+            type: String,
+            name: String,
+            originId: String,
+            relativeFile: String,
+            line: Int,
+        ): CodeIndexKey = CodeIndexKey("res:$type:$name:$originId:$relativeFile:$line")
 
         fun file(relativeFile: String, contentHash: String): CodeIndexKey =
             CodeIndexKey("file:$relativeFile:$contentHash")
 
         fun pluginFact(pluginId: String, relativeFile: String, factKey: String): CodeIndexKey =
             CodeIndexKey("plugin:$pluginId:$relativeFile:$factKey")
+
+        fun pluginFact(
+            pluginId: String,
+            originId: String,
+            relativeFile: String,
+            factKey: String,
+        ): CodeIndexKey = CodeIndexKey("plugin:$pluginId:$originId:$relativeFile:$factKey")
 
         fun pluginFactFilePrefix(pluginId: String, relativeFile: String): String =
             "plugin:$pluginId:$relativeFile:"

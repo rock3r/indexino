@@ -32,6 +32,20 @@ class ManifestFreshnessTest {
     }
 
     @Test
+    fun `stale when origin graph differs`() {
+        val manifest =
+            sampleManifest()
+                .copy(origins = listOf(IndexManifestOrigin("git:first", "first", "sha256:first")))
+        val criteria =
+            sampleCriteria()
+                .copy(
+                    origins = listOf(IndexManifestOrigin("git:second", "second", "sha256:second"))
+                )
+
+        assertFalse(ManifestFreshness.isFresh(manifest, criteria))
+    }
+
+    @Test
     fun `stale when sources hash differs`() {
         val manifest = sampleManifest(sourcesContentHash = "sha256:old")
         val criteria = sampleCriteria(sourcesContentHash = "sha256:new")

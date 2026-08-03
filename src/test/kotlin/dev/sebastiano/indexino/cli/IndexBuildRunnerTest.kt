@@ -1,15 +1,341 @@
 package dev.sebastiano.indexino.cli
 
+import dev.sebastiano.indexino.producer.IndexedSource
+import dev.sebastiano.indexino.producer.JsonlIndexBuildProgressReporter
 import dev.sebastiano.indexino.topology.BuildSystem
+import dev.sebastiano.indexino.topology.SourceOriginResolver
 import dev.sebastiano.indexino.topology.TopologyRequest
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.Path
+import kotlin.io.path.readText
+import kotlin.io.path.writeText
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import org.junit.jupiter.api.io.TempDir
 
 class IndexBuildRunnerTest {
+    @Test
+    fun `indexes external included build sources in composite manifest`() {
+        val root = tempDir.resolve("included")
+        val workspace = root.resolve("app")
+        val includedBuild = root.resolve("build-logic")
+        Files.createDirectories(workspace.resolve("src/main/kotlin"))
+        Files.createDirectories(includedBuild.resolve("src/main/kotlin"))
+        Files.writeString(
+            workspace.resolve("settings.gradle.kts"),
+            "includeBuild(\"../build-logic\")",
+        )
+        Files.writeString(workspace.resolve("src/main/kotlin/App.kt"), "class App")
+        Files.writeString(
+            includedBuild.resolve("settings.gradle.kts"),
+            "rootProject.name = \"logic\"",
+        )
+        Files.writeString(
+            includedBuild.resolve("src/main/kotlin/Convention.kt"),
+            "class Convention",
+        )
+        git(workspace, "init")
+        git(workspace, "config", "user.email", "test@example.invalid")
+        git(workspace, "config", "user.name", "Indexino Test")
+        git(workspace, "add", ".")
+        git(workspace, "commit", "-m", "workspace")
+
+        val machineProgress = mutableListOf<String>()
+        val execution =
+            IndexBuildRunner(
+                    project = workspace,
+                    topologyRequest =
+                        TopologyRequest(buildSystem = BuildSystem.GRADLE, gradleModule = ":"),
+                    applications = emptyList(),
+                    bazelQueryExecutor = null,
+                    bazelProcessRunner = null,
+                    progress = {},
+                    machineProgress = JsonlIndexBuildProgressReporter(machineProgress::add),
+                    storeRootOverride = tempDir.resolve("store"),
+                )
+                .runDetailed()
+
+        assertEquals(CliExitCodes.SUCCESS, execution.exitCode)
+        assertContains(
+            machineProgress.first { it.contains("discovery_completed") },
+            "\"phaseTotal\":2",
+        )
+        assertContains(
+            machineProgress.first {
+                it.contains("\"event\":\"progress\"") &&
+                    it.contains("\"phase\":\"source-hash-preview\"")
+            },
+            "\"phaseTotal\":2",
+        )
+        assertEquals(2, execution.manifest?.sourceFileCount, "manifest=${execution.manifest}")
+        assertEquals(2, execution.manifest?.origins?.size, "manifest=${execution.manifest}")
+    }
+
+    @Test
+    fun `indexes repo manifest project with manifest identity and revision`() {
+        val workspace = tempDir.resolve("repo-workspace")
+        Files.createDirectories(workspace.resolve(".repo"))
+        Files.createDirectories(workspace.resolve("local/tools/base/src/main/kotlin"))
+        Files.writeString(
+            workspace.resolve(".repo/manifest.xml"),
+            """
+            <manifest>
+              <project name="platform/tools/base" path="local/tools/base" revision="deadbeef"/>
+            </manifest>
+            """
+                .trimIndent(),
+        )
+        Files.writeString(
+            workspace.resolve("local/tools/base/src/main/kotlin/Base.kt"),
+            "class Base",
+        )
+        git(workspace, "init")
+        git(workspace, "config", "user.email", "test@example.invalid")
+        git(workspace, "config", "user.name", "Indexino Test")
+        git(workspace, "add", ".")
+        git(workspace, "commit", "-m", "repo workspace")
+
+        val execution =
+            IndexBuildRunner(
+                    project = workspace,
+                    topologyRequest =
+                        TopologyRequest(
+                            buildSystem = BuildSystem.REPO,
+                            repoManifest = workspace.resolve(".repo/manifest.xml"),
+                        ),
+                    applications = emptyList(),
+                    bazelQueryExecutor = null,
+                    bazelProcessRunner = null,
+                    progress = {},
+                    machineProgress = null,
+                    storeRootOverride = tempDir.resolve("store"),
+                )
+                .runDetailed()
+
+        assertEquals(CliExitCodes.SUCCESS, execution.exitCode)
+        assertEquals("repo:platform/tools/base", execution.manifest?.origins?.single()?.originId)
+        assertEquals("deadbeef", execution.manifest?.origins?.single()?.expectedRevision)
+    }
+
+    @Test
+    fun `rejects unavailable repo manifest projects`() {
+        val workspace = tempDir.resolve("partial-repo-workspace")
+        Files.createDirectories(workspace.resolve(".repo"))
+        Files.createDirectories(workspace.resolve("checked-out/src/main/kotlin"))
+        Files.writeString(
+            workspace.resolve(".repo/manifest.xml"),
+            """
+            <manifest>
+              <project name="checked" path="checked-out" revision="one"/>
+              <project name="missing" path="not-synced" revision="two"/>
+            </manifest>
+            """
+                .trimIndent(),
+        )
+        Files.writeString(
+            workspace.resolve("checked-out/src/main/kotlin/Checked.kt"),
+            "class Checked",
+        )
+        git(workspace, "init")
+        git(workspace, "config", "user.email", "test@example.invalid")
+        git(workspace, "config", "user.name", "Indexino Test")
+        git(workspace, "add", ".")
+        git(workspace, "commit", "-m", "partial repo workspace")
+
+        val failure =
+            assertFailsWith<IllegalArgumentException> {
+                IndexBuildRunner(
+                        project = workspace,
+                        topologyRequest =
+                            TopologyRequest(
+                                buildSystem = BuildSystem.REPO,
+                                repoManifest = workspace.resolve(".repo/manifest.xml"),
+                            ),
+                        applications = emptyList(),
+                        bazelQueryExecutor = null,
+                        bazelProcessRunner = null,
+                        progress = {},
+                        machineProgress = null,
+                        storeRootOverride = tempDir.resolve("store"),
+                    )
+                    .runDetailed()
+            }
+
+        assertContains(failure.message.orEmpty(), "repo project mount is unavailable: missing")
+    }
+
+    @Test
+    fun `manifest records expected revision for Git submodule origin`() {
+        val child = tempDir.resolve("child")
+        Files.createDirectories(child.resolve("src/main/kotlin"))
+        Files.writeString(child.resolve("settings.gradle.kts"), "rootProject.name = \\\"child\\\"")
+        Files.writeString(child.resolve("src/main/kotlin/Child.kt"), "class Child")
+        git(child, "init")
+        git(child, "config", "user.email", "test@example.invalid")
+        git(child, "config", "user.name", "Indexino Test")
+        git(child, "add", ".")
+        git(child, "commit", "-m", "child")
+        val childRevision = git(child, "rev-parse", "HEAD").trim()
+
+        val workspace = tempDir.resolve("workspace")
+        copyFixture(Path("src/test/resources/gradle-fixtures/multi-module"), workspace)
+        workspace.resolve("ui").toFile().deleteRecursively()
+        git(workspace, "init")
+        git(workspace, "config", "user.email", "test@example.invalid")
+        git(workspace, "config", "user.name", "Indexino Test")
+        git(workspace, "add", ".")
+        git(workspace, "commit", "-m", "root")
+        git(
+            workspace,
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            child.toString(),
+            "ui",
+        )
+        git(workspace, "commit", "-m", "add submodule")
+        Files.writeString(workspace.resolve("ui/src/main/kotlin/Child.kt"), "class DirtyChild")
+
+        val execution =
+            IndexBuildRunner(
+                    project = workspace,
+                    topologyRequest =
+                        TopologyRequest(buildSystem = BuildSystem.GRADLE, gradleModule = ":ui"),
+                    applications = emptyList(),
+                    bazelQueryExecutor = null,
+                    bazelProcessRunner = null,
+                    progress = {},
+                    machineProgress = null,
+                    storeRootOverride = tempDir.resolve("store"),
+                )
+                .runDetailed()
+
+        assertEquals(CliExitCodes.SUCCESS, execution.exitCode)
+        val submoduleOrigin = execution.manifest?.origins?.single { it.originId == "git:ui" }
+        assertEquals(childRevision, submoduleOrigin?.expectedRevision)
+        assertEquals(true, submoduleOrigin?.dirty)
+    }
+
+    @Test
+    fun `manifest resolves nested submodule revision from its parent`() {
+        val child = tempDir.resolve("child")
+        Files.createDirectories(child.resolve("src/main/kotlin"))
+        Files.writeString(child.resolve("src/main/kotlin/Child.kt"), "class Child")
+        git(child, "init")
+        git(child, "config", "user.email", "test@example.invalid")
+        git(child, "config", "user.name", "Indexino Test")
+        git(child, "add", ".")
+        git(child, "commit", "-m", "child")
+        val childRevision = git(child, "rev-parse", "HEAD").trim()
+
+        val parent = tempDir.resolve("parent")
+        Files.createDirectories(parent)
+        git(parent, "init")
+        git(parent, "config", "user.email", "test@example.invalid")
+        git(parent, "config", "user.name", "Indexino Test")
+        git(
+            parent,
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            child.toString(),
+            "nested",
+        )
+        git(parent, "commit", "-m", "add child")
+
+        val workspace = tempDir.resolve("workspace")
+        Files.createDirectories(workspace)
+        git(workspace, "init")
+        git(workspace, "config", "user.email", "test@example.invalid")
+        git(workspace, "config", "user.name", "Indexino Test")
+        git(
+            workspace,
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            parent.toString(),
+            "parent",
+        )
+        git(workspace, "commit", "-m", "add parent")
+        git(
+            workspace,
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "update",
+            "--init",
+            "--recursive",
+        )
+        val nestedRoot = workspace.resolve("parent/nested")
+
+        val origins =
+            ManifestOriginResolver.resolve(
+                workspace,
+                listOf(
+                    IndexedSource(
+                        SourceOriginResolver.externalOriginId(nestedRoot),
+                        nestedRoot,
+                        "src/main/kotlin/Child.kt",
+                    )
+                ),
+                emptyMap(),
+            )
+
+        assertEquals(childRevision, origins.single().expectedRevision)
+    }
+
+    @Test
+    fun `incremental build retains nested origin identity`() {
+        val workspace = tempDir.resolve("workspace")
+        copyFixture(Path("src/test/resources/gradle-fixtures/multi-module"), workspace)
+        git(workspace, "init")
+        git(workspace, "config", "user.email", "test@example.invalid")
+        git(workspace, "config", "user.name", "Indexino Test")
+        git(workspace, "add", ".")
+        git(workspace, "commit", "-m", "initial fixture")
+        val nested = workspace.resolve("ui")
+        git(nested, "init")
+        git(nested, "config", "user.email", "test@example.invalid")
+        git(nested, "config", "user.name", "Indexino Test")
+        git(nested, "add", ".")
+        git(nested, "commit", "-m", "nested fixture")
+        val runner = {
+            IndexBuildRunner(
+                project = workspace,
+                topologyRequest =
+                    TopologyRequest(buildSystem = BuildSystem.GRADLE, gradleModule = ":ui"),
+                applications = emptyList(),
+                bazelQueryExecutor = null,
+                bazelProcessRunner = null,
+                progress = {},
+                machineProgress = null,
+                storeRootOverride = tempDir.resolve("store"),
+            )
+        }
+        val initial = runner().runDetailed()
+        assertEquals(CliExitCodes.SUCCESS, initial.exitCode)
+        assertEquals(
+            setOf("git:ui", "workspace"),
+            initial.manifest?.origins?.map { it.originId }?.toSet(),
+        )
+        val source = nested.resolve("src/main/kotlin/Panel.kt")
+        source.writeText(source.readText() + "\nfun nestedChange() = Unit\n")
+
+        val execution = runner().runDetailed()
+
+        assertEquals(CliExitCodes.SUCCESS, execution.exitCode)
+        assertEquals(
+            setOf("git:ui"),
+            execution.changes?.changedSources?.map { it.originId }?.toSet(),
+        )
+    }
+
     @TempDir lateinit var tempDir: Path
 
     @Test

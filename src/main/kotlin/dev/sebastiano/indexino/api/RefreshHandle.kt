@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.suspendCancellableCoroutine
 
+@Suppress("NotCloseable")
 public class RefreshHandle
 private constructor(
     public val id: RefreshId,

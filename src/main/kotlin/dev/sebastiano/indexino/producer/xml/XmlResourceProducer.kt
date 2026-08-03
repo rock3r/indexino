@@ -6,6 +6,7 @@ import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.producer.IndexBuildContext
 import dev.sebastiano.indexino.producer.IndexProducer
+import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.SourceRecordCleanup
 import java.io.StringReader
 import javax.xml.stream.XMLInputFactory
@@ -18,27 +19,27 @@ internal class XmlResourceProducer : IndexProducer {
     override val displayName: String = "XmlResourceProducer"
 
     override val progressTotal: (IndexBuildContext) -> Int = { context ->
-        context.sourceFiles.count { it.endsWith(".xml") && it in context.changedSourceFiles }
+        context.changedSources.count { it.path.endsWith(".xml") }
     }
 
     override fun produce(context: IndexBuildContext, store: CodeIndexStore) {
-        val affectedFiles =
-            (context.changedSourceFiles + context.deletedSourceFiles).filterTo(linkedSetOf()) {
-                it.endsWith(".xml")
+        val affectedSources =
+            (context.changedSources + context.deletedSources).filterTo(linkedSetOf()) {
+                it.path.endsWith(".xml")
             }
-        SourceRecordCleanup.deleteXmlRecords(store, affectedFiles)
-        val xmlFiles =
-            context.sourceFiles.filter { it.endsWith(".xml") && it in context.changedSourceFiles }
-        xmlFiles.forEachIndexed { index, relativePath ->
-            context.reportFileProgress(index + 1, xmlFiles.size, relativePath)
-            parse(relativePath, context.readSource(relativePath), store)
+        SourceRecordCleanup.deleteXmlOriginRecords(store, affectedSources)
+        val xmlFiles = context.changedSources.filter { it.path.endsWith(".xml") }
+        xmlFiles.forEachIndexed { index, indexedSource ->
+            context.reportFileProgress(index + 1, xmlFiles.size, indexedSource)
+            parse(indexedSource, context.readSource(indexedSource), store)
         }
     }
 
-    private fun parse(relativePath: String, source: String, store: CodeIndexStore) {
+    private fun parse(indexedSource: IndexedSource, source: String, store: CodeIndexStore) {
+        val relativePath = indexedSource.path
         val pathResource = resourceFromPath(relativePath)
         if (pathResource != null && pathResource.type != "values") {
-            putResource(store, relativePath, pathResource.type, pathResource.name, 1)
+            putResource(store, indexedSource, pathResource.type, pathResource.name, 1)
         }
         val factory = secureFactory()
         try {
@@ -55,12 +56,12 @@ internal class XmlResourceProducer : IndexProducer {
                                     reader.getAttributeValue(null, "type"),
                                     reader.getAttributeValue(null, "name"),
                                 )
-                                ?.let { putResource(store, relativePath, it.type, it.name, line) }
+                                ?.let { putResource(store, indexedSource, it.type, it.name, line) }
                         }
                         for (attributeIndex in 0 until reader.attributeCount) {
                             indexAttribute(
                                 store,
-                                relativePath,
+                                indexedSource,
                                 reader.getAttributeValue(attributeIndex),
                                 line,
                                 reader.location.columnNumber.coerceAtLeast(1) + attributeIndex,
@@ -72,7 +73,7 @@ internal class XmlResourceProducer : IndexProducer {
                     XMLStreamConstants.CDATA ->
                         indexAttribute(
                             store,
-                            relativePath,
+                            indexedSource,
                             reader.text,
                             reader.location.lineNumber.coerceAtLeast(1),
                             reader.location.columnNumber.coerceAtLeast(1),
@@ -87,7 +88,7 @@ internal class XmlResourceProducer : IndexProducer {
 
     private fun indexAttribute(
         store: CodeIndexStore,
-        relativePath: String,
+        indexedSource: IndexedSource,
         value: String,
         line: Int,
         column: Int,
@@ -98,14 +99,21 @@ internal class XmlResourceProducer : IndexProducer {
             val type = match.groupValues[RESOURCE_TYPE_GROUP]
             val name = match.groupValues[RESOURCE_NAME_GROUP]
             if (createsId && packageName == null && type == "id") {
-                putResource(store, relativePath, type, name, line)
+                putResource(store, indexedSource, type, name, line)
             } else {
                 val target = resourceFqn(packageName, type, name)
                 store.put(
-                    CodeIndexKey.ref(target, relativePath, line, column),
+                    CodeIndexKey.ref(
+                        target,
+                        indexedSource.originId,
+                        indexedSource.path,
+                        line,
+                        column,
+                    ),
                     ReferenceRecord(
                         symbolFqn = target,
-                        relativeFile = relativePath,
+                        relativeFile = indexedSource.path,
+                        originId = indexedSource.originId,
                         line = line,
                         column = column,
                         context = "resource",
@@ -121,18 +129,19 @@ internal class XmlResourceProducer : IndexProducer {
 
     private fun putResource(
         store: CodeIndexStore,
-        relativePath: String,
+        indexedSource: IndexedSource,
         type: String,
         name: String,
         line: Int,
     ) {
         val fqn = resourceFqn(type, name)
         store.put(
-            CodeIndexKey.resource(type, name, relativePath, line),
+            CodeIndexKey.resource(type, name, indexedSource.originId, indexedSource.path, line),
             SymbolRecord(
                 fqn = fqn,
-                relativeFile = relativePath,
+                relativeFile = indexedSource.path,
                 line = line,
+                originId = indexedSource.originId,
                 kind = "resource",
                 name = name,
                 language = LANGUAGE,

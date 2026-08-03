@@ -32,20 +32,20 @@ Build the fat JAR:
 
 ```bash
 ./gradlew shadowJar
-# → build/libs/indexino-0.2.0-SNAPSHOT-all.jar
+# → build/libs/indexino-0.3.0-SNAPSHOT-all.jar
 ```
 
 Build and verify the internal R8 native-packaging input:
 
 ```bash
 ./gradlew shrunkCliJar verifyShrunkCli
-# → build/libs/indexino-0.2.0-SNAPSHOT-shrunk.jar
+# → build/libs/indexino-0.3.0-SNAPSHOT-shrunk.jar
 ```
 
 Run via Gradle during development, or invoke the JAR directly:
 
 ```bash
-JAR=build/libs/indexino-0.2.0-SNAPSHOT-all.jar
+JAR=build/libs/indexino-0.3.0-SNAPSHOT-all.jar
 
 # Build or refresh the index for a Bazel target
 java -jar "$JAR" index \

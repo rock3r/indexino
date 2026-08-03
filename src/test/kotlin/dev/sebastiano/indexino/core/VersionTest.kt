@@ -6,6 +6,6 @@ import kotlin.test.assertEquals
 class VersionTest {
     @Test
     fun `version is defined`() {
-        assertEquals("0.2.0-SNAPSHOT", Version.NAME)
+        assertEquals("0.3.0-SNAPSHOT", Version.NAME)
     }
 }

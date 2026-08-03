@@ -11,6 +11,7 @@ import dev.sebastiano.indexino.api.IndexinoException
 import dev.sebastiano.indexino.api.SnapshotFreshness
 import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.ManifestIO
+import dev.sebastiano.indexino.core.manifest.workspaceRevisionFingerprint
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.core.store.IndexStoreOpener
 import dev.sebastiano.indexino.model.CheckRequest
@@ -88,16 +89,27 @@ internal class QueryCommand : CliktCommand(name = "query") {
         val store = IndexStoreOpener.openForQuery(project, commit, sessionId)
         val revision =
             WorkspaceRevision(
-                fingerprint = manifest.sourcesContentHash,
+                fingerprint = manifest.workspaceRevisionFingerprint(),
                 origins =
-                    listOf(
-                        SourceOriginRevision(
-                            originId = SourceOriginId.of("workspace"),
-                            revision = commit.takeUnless(GitHeadResolver::isFilesystemRevision),
-                            stateFingerprint = manifest.sourcesContentHash,
-                            expectedRevision = null,
-                        )
-                    ),
+                    manifest.origins
+                        .ifEmpty {
+                            listOf(
+                                dev.sebastiano.indexino.core.manifest.IndexManifestOrigin(
+                                    originId = "workspace",
+                                    revision =
+                                        commit.takeUnless(GitHeadResolver::isFilesystemRevision),
+                                    stateFingerprint = manifest.sourcesContentHash,
+                                )
+                            )
+                        }
+                        .map { origin ->
+                            SourceOriginRevision(
+                                originId = SourceOriginId.of(origin.originId),
+                                revision = origin.revision,
+                                stateFingerprint = origin.stateFingerprint,
+                                expectedRevision = origin.expectedRevision,
+                            )
+                        },
             )
         val snapshot =
             IndexSnapshot.create(
@@ -137,6 +149,7 @@ internal class QueryCommand : CliktCommand(name = "query") {
                 put("message", finding.message)
                 finding.range?.let { range ->
                     putJsonObject("range") {
+                        put("originId", range.start.file.originId.value)
                         put("file", range.start.file.path)
                         put("line", range.start.line)
                         range.start.column?.let { put("column", it) }
