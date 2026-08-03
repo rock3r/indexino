@@ -93,8 +93,14 @@ internal class StatusCommand : CliktCommand(name = "status") {
             topologyRequest.bazelTarget != null ||
                 topologyRequest.gradleModule != null ||
                 topologyRequest.repoManifest != null
+        val requestedScope =
+            topologyRequest.bazelTarget
+                ?: topologyRequest.gradleModule
+                ?: topologyRequest.repoManifest?.toString()
         val compatibleScope =
-            !explicitlySelectedScope || topologyRequest.includeDeps == manifest.includeDeps
+            !explicitlySelectedScope ||
+                (requestedScope == manifest.scope &&
+                    topologyRequest.includeDeps == manifest.includeDeps)
         val fresh = available && compatibleScope && manifest.commit == commit
 
         output(

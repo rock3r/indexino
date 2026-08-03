@@ -71,6 +71,7 @@ internal class IndexBuildRunner(
         )
     }
 
+    @Suppress("LongMethod")
     fun run(): Int {
         latestChanges = null
         latestManifest = null
@@ -128,7 +129,11 @@ internal class IndexBuildRunner(
                 ?.mapTo(linkedSetOf()) { it.originId }
                 ?.minus(origins.mapTo(linkedSetOf()) { it.originId })
                 .orEmpty()
-        if (vanishedOrigins.isNotEmpty()) {
+        val preservesExistingTopology =
+            existingManifest?.scope == topologyResult.scope &&
+                existingManifest.topology == topologyResult.topology &&
+                existingManifest.includeDeps == topologyResult.includeDeps
+        if (preservesExistingTopology && vanishedOrigins.isNotEmpty()) {
             val message = "topology origin unavailable: ${vanishedOrigins.sorted().joinToString()}"
             progress(message)
             machineProgress?.failed(CliExitCodes.TOPOLOGY_FAILED, message)
