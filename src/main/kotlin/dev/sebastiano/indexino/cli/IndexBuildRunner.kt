@@ -19,6 +19,7 @@ import dev.sebastiano.indexino.producer.ProducerRegistry
 import dev.sebastiano.indexino.producer.SOURCE_CHANGE_DETECTION_PHASE
 import dev.sebastiano.indexino.producer.SourceChangeDetector
 import dev.sebastiano.indexino.producer.SourceChangeSet
+import dev.sebastiano.indexino.topology.ExternalSourceMount
 import dev.sebastiano.indexino.topology.SourceOriginResolver
 import dev.sebastiano.indexino.topology.TopologyRequest
 import dev.sebastiano.indexino.topology.TopologyResolver
@@ -99,23 +100,7 @@ internal class IndexBuildRunner(
             topologyResult.externalSources.associate { mount ->
                 mount.root.toRealPath() to (mount.originId to mount.expectedRevision)
             }
-        val sources =
-            SourceOriginResolver.resolve(project, sourceFiles).flatMap { origin ->
-                origin.sourceFiles.map { path -> IndexedSource(origin.id, origin.root, path) }
-            } +
-                topologyResult.externalSources.flatMap { mount ->
-                    SourceOriginResolver.resolveExternal(
-                            mountRoot = mount.root,
-                            sourceFiles = mount.sourceFiles,
-                            mountOriginId =
-                                mount.originId ?: SourceOriginResolver.externalOriginId(mount.root),
-                        )
-                        .flatMap { origin ->
-                            origin.sourceFiles.map { path ->
-                                IndexedSource(origin.id, origin.root, path)
-                            }
-                        }
-                }
+        val sources = resolveSources(sourceFiles, topologyResult.externalSources)
         latestSourceFiles = sourceFiles
         latestSources = sources
         latestTopologyRoots = (listOf(project) + topologyResult.externalMounts).distinct()
@@ -202,6 +187,27 @@ internal class IndexBuildRunner(
         machineProgress?.phaseCompleted(SOURCE_HASH_PREVIEW_PHASE, sources.size)
         return previewHash
     }
+
+    private fun resolveSources(
+        sourceFiles: List<String>,
+        externalSources: List<ExternalSourceMount>,
+    ): List<IndexedSource> =
+        SourceOriginResolver.resolve(project, sourceFiles).flatMap { origin ->
+            origin.sourceFiles.map { path -> IndexedSource(origin.id, origin.root, path) }
+        } +
+            externalSources.flatMap { mount ->
+                SourceOriginResolver.resolveExternal(
+                        mountRoot = mount.root,
+                        sourceFiles = mount.sourceFiles,
+                        mountOriginId =
+                            mount.originId ?: SourceOriginResolver.externalOriginId(mount.root),
+                    )
+                    .flatMap { origin ->
+                        origin.sourceFiles.map { path ->
+                            IndexedSource(origin.id, origin.root, path)
+                        }
+                    }
+            }
 
     private fun buildStore(
         resolver: IndexPathResolver,
