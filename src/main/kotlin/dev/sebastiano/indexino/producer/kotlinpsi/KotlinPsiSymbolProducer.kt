@@ -213,14 +213,19 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                 return@forEach
             }
             val chain = qualifiedNameChain(expression) ?: return@forEach
-            val rIndex = resourceClassIndex(chain.segments, imports) ?: return@forEach
+            val accessor = resourceAccessor(chain.segments, imports) ?: return@forEach
+            val rIndex = accessor.index
             val explicitPackage = chain.segments.take(rIndex).joinToString(".").ifBlank { null }
             val importedOwner = imports[chain.segments[rIndex]]
             val packageName =
-                explicitPackage
-                    ?: importedOwner?.substringBeforeLast('.', "")?.takeIf(String::isNotBlank)
-                    ?: defaultResourcePackage
-                    ?: file.packageFqName.asString().ifBlank { null }
+                if (accessor.compose) {
+                    defaultResourcePackage ?: file.packageFqName.asString().ifBlank { null }
+                } else {
+                    explicitPackage
+                        ?: importedOwner?.substringBeforeLast('.', "")?.takeIf(String::isNotBlank)
+                        ?: defaultResourcePackage
+                        ?: file.packageFqName.asString().ifBlank { null }
+                }
             val type = chain.segments[rIndex + 1]
             val name = chain.segments[rIndex + 2]
             val selector = chain.selectors.getOrNull(rIndex + 1) ?: return@forEach
@@ -249,12 +254,22 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         }
     }
 
-    private fun resourceClassIndex(segments: List<String>, imports: Map<String, String>): Int? =
-        segments.indices.firstOrNull { index ->
-            index + 2 <= segments.lastIndex &&
-                (segments[index] == "R" ||
-                    imports[segments[index]]?.substringAfterLast('.') == "R") &&
-                segments[index + 1] in ResourceMetadata.RESOURCE_TYPES
+    private data class ResourceAccessor(val index: Int, val compose: Boolean)
+
+    private fun resourceAccessor(
+        segments: List<String>,
+        imports: Map<String, String>,
+    ): ResourceAccessor? =
+        segments.indices.firstNotNullOfOrNull { index ->
+            if (index + 2 > segments.lastIndex) return@firstNotNullOfOrNull null
+            val importedSimpleName = imports[segments[index]]?.substringAfterLast('.')
+            when {
+                segments[index] == "Res" || importedSimpleName == "Res" ->
+                    ResourceAccessor(index, compose = true)
+                segments[index] == "R" || importedSimpleName == "R" ->
+                    ResourceAccessor(index, compose = false)
+                else -> null
+            }?.takeIf { segments[index + 1] in ResourceMetadata.RESOURCE_TYPES }
         }
 
     private data class QualifiedNameChain(

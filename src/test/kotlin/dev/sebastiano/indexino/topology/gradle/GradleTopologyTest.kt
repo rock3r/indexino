@@ -34,6 +34,11 @@ class GradleTopologyTest {
         )
         Files.createDirectories(workspace.resolve("app/src/commonMain/composeResources/values"))
         Files.createDirectories(workspace.resolve("app/src/commonTest/composeResources/values"))
+        Files.createDirectories(workspace.resolve("app/src/main/resources/META-INF"))
+        Files.writeString(
+            workspace.resolve("app/src/main/resources/META-INF/logback.xml"),
+            "<configuration />",
+        )
         Files.writeString(
             workspace.resolve("app/src/commonMain/composeResources/values/strings.xml"),
             "<resources />",

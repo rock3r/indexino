@@ -61,6 +61,6 @@ internal object ModuleSourceRoots {
     }
 
     private val CODE_SOURCE_DIRS = setOf("kotlin", "java")
-    private val RESOURCE_SOURCE_DIRS = setOf("res", "resources", "composeResources")
+    private val RESOURCE_SOURCE_DIRS = setOf("res", "composeResources")
     private const val MIN_SOURCE_PATH_SEGMENTS = 3
 }

@@ -167,6 +167,7 @@ class KotlinPsiSymbolProducerTest {
             class Screen {
                 val title = R.string.title
                 val styleable = R.styleable.CustomView
+                val composeTitle = Res.string.compose_title
                 val titleLength = R.string.title.length()
                 val subtitle = FeatureR.string.subtitle
                 val icon = com.example.assets.R.drawable.icon
@@ -195,11 +196,12 @@ class KotlinPsiSymbolProducerTest {
                 .map { it.second }
                 .filterIsInstance<ResourceUsageRecord>()
                 .toList()
-        assertEquals(5, usages.size)
+        assertEquals(6, usages.size)
         assertEquals(
             setOf(
                 "com.example.namespace:string:title",
                 "com.example.namespace:styleable:CustomView",
+                "com.example.namespace:string:compose_title",
                 "com.example.feature:string:subtitle",
                 "com.example.assets:drawable:icon",
             ),
