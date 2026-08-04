@@ -11,6 +11,7 @@ import dev.sebastiano.indexino.core.store.hasSymbol
 import dev.sebastiano.indexino.parse.KotlinPsiParser
 import dev.sebastiano.indexino.producer.IndexBuildContext
 import dev.sebastiano.indexino.producer.IndexProducer
+import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.SourceRecordCleanup
 import dev.sebastiano.indexino.producer.xml.ResourceMetadata
 import org.jetbrains.kotlin.com.intellij.psi.PsiElement
@@ -47,17 +48,22 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
     override val displayName: String = "KotlinPsiSymbolProducer"
 
     override val progressTotal: (IndexBuildContext) -> Int = { context ->
-        context.changedSources.count { it.path.endsWith(".kt") }
+        sourceFilesToProcess(context, ".kt").size
     }
 
     override fun produce(context: IndexBuildContext, store: CodeIndexStore) {
         val affectedSources =
-            (context.changedSources + context.deletedSources).filterTo(linkedSetOf()) {
-                it.path.endsWith(".kt")
-            }
-        SourceRecordCleanup.deleteLanguageOriginRecords(store, LANGUAGE, ".kt", affectedSources)
+            ((context.changedSources + context.deletedSources).filter { it.path.endsWith(".kt") } +
+                    metadataDependentSources(context, ".kt"))
+                .distinctBy { it.originId to it.path }
+        SourceRecordCleanup.deleteLanguageOriginRecords(
+            store,
+            LANGUAGE,
+            ".kt",
+            affectedSources.toSet(),
+        )
         KotlinPsiParser().use { parser ->
-            val ktFiles = context.changedSources.filter { it.path.endsWith(".kt") }
+            val ktFiles = sourceFilesToProcess(context, ".kt")
             val indexedFiles = ktFiles.mapIndexed { index, source ->
                 context.reportFileProgress(index + 1, ktFiles.size, source)
                 val file = parser.parseFile(source.path, context.readSource(source))
@@ -71,6 +77,30 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             }
             val projectSymbols = indexedFiles.flatMap { it.symbols }
             indexedFiles.forEach { indexedFile -> indexFile(indexedFile, projectSymbols, store) }
+        }
+    }
+
+    private fun sourceFilesToProcess(
+        context: IndexBuildContext,
+        extension: String,
+    ): List<IndexedSource> =
+        (context.changedSources.filter { it.path.endsWith(extension) } +
+                metadataDependentSources(context, extension))
+            .distinctBy { it.originId to it.path }
+
+    private fun metadataDependentSources(
+        context: IndexBuildContext,
+        extension: String,
+    ): List<IndexedSource> {
+        val metadataModules =
+            (context.changedSources + context.deletedSources).mapNotNull { source ->
+                ResourceMetadata.metadataModule(source.path)?.let { source.originId to it }
+            }
+        if (metadataModules.isEmpty()) return emptyList()
+        return context.sources.filter { source ->
+            source.path.endsWith(extension) &&
+                (source.originId to ResourceMetadata.moduleDirectory(source.path)) in
+                    metadataModules
         }
     }
 

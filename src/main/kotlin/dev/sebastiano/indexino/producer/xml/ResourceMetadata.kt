@@ -74,19 +74,25 @@ internal object ResourceMetadata {
         }
     }
 
-    fun resourcePackage(context: IndexBuildContext, indexedSource: IndexedSource): String? =
-        metadataPathsForResource(indexedSource.path).firstNotNullOfOrNull { metadataPath ->
-            val metadata =
-                metadataContent(context, indexedSource, metadataPath)
-                    ?: return@firstNotNullOfOrNull null
-            when {
-                metadataPath.endsWith("AndroidManifest.xml") ->
-                    MANIFEST_PACKAGE.find(metadata)?.groupValues?.get(1)
-                else ->
-                    GRADLE_NAMESPACE.find(metadata)?.groupValues?.get(1)
-                        ?: GRADLE_APPLICATION_ID.find(metadata)?.groupValues?.get(1)
+    fun resourcePackage(context: IndexBuildContext, indexedSource: IndexedSource): String? {
+        val metadata =
+            metadataPathsForResource(indexedSource.path).mapNotNull { metadataPath ->
+                metadataContent(context, indexedSource, metadataPath)?.let { metadataPath to it }
             }
+        return metadata.firstNotNullOfOrNull { (_, content) ->
+            GRADLE_NAMESPACE.find(content)?.groupValues?.get(1)
         }
+            ?: metadata.firstNotNullOfOrNull { (path, content) ->
+                if (path.endsWith("AndroidManifest.xml")) {
+                    MANIFEST_PACKAGE.find(content)?.groupValues?.get(1)
+                } else {
+                    null
+                }
+            }
+            ?: metadata.firstNotNullOfOrNull { (_, content) ->
+                GRADLE_APPLICATION_ID.find(content)?.groupValues?.get(1)
+            }
+    }
 
     fun metadataPathsForResource(relativePath: String): List<String> {
         val moduleDirectory = moduleDirectory(relativePath)

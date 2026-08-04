@@ -662,6 +662,41 @@ class JavaSourceProducerTest {
         }
     }
 
+    @Test
+    fun `namespace metadata changes reindex Java R usages`() {
+        val source = "package com.example.app; class Screen { int title = R.string.title; }"
+        val initial =
+            mapOf(
+                "app/build.gradle.kts" to "android { namespace = \"com.example.old\" }",
+                "app/src/main/java/com/example/app/Screen.java" to source,
+            )
+
+        withStore { store ->
+            val producer = assertNotNull(ProducerRegistry.get("java-source"))
+            producer.produce(IndexBuildContext.forInlineSources(store, "initial", initial))
+            val updated =
+                initial + ("app/build.gradle.kts" to "android { namespace = \"com.example.new\" }")
+            producer.produce(
+                IndexBuildContext(
+                    store = store,
+                    commitHash = "updated",
+                    sourceFiles = updated.keys.toList(),
+                    sourceContentOverrides = updated,
+                    changedSourceFiles = setOf("app/build.gradle.kts"),
+                )
+            )
+
+            val packages =
+                store
+                    .prefixScan("resuse:")
+                    .map { it.second }
+                    .filterIsInstance<ResourceUsageRecord>()
+                    .map { it.packageName }
+                    .toSet()
+            assertEquals(setOf("com.example.new"), packages)
+        }
+    }
+
     private fun withStore(block: (XodusCodeIndexStore) -> Unit) {
         val store =
             XodusCodeIndexStore.open(createTempDirectory("java-source-producer-").resolve("index"))

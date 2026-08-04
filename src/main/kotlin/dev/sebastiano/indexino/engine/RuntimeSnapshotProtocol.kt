@@ -442,10 +442,14 @@ internal object RuntimeSnapshotProtocol {
         val packageName = input.readNullableUtf()
         val type = input.readNullableUtf()
         val name = input.readNullableUtf()
-        return if (packageName == null && type == null && name == null) {
-            ResourceQuery.all()
-        } else {
-            ResourceQuery.of(packageName, type, name)
+        val exactIdentity = input.readBoolean()
+        return when {
+            exactIdentity ->
+                ResourceQuery.named(
+                    ResourceId.of(packageName, checkNotNull(type), checkNotNull(name))
+                )
+            packageName == null && type == null && name == null -> ResourceQuery.all()
+            else -> ResourceQuery.of(packageName, type, name)
         }
     }
 
@@ -476,6 +480,7 @@ internal object RuntimeSnapshotProtocol {
         writeNullableUtf(query.packageName)
         writeNullableUtf(query.type)
         writeNullableUtf(query.name)
+        writeBoolean(query.id != null)
     }
 
     @OptIn(IndexinoInternalApi::class)

@@ -212,6 +212,39 @@ class KotlinPsiSymbolProducerTest {
         assertTrue(usages.all { it.relativeFile.endsWith("Screen.kt") })
     }
 
+    @Test
+    fun `namespace metadata changes reindex Kotlin R usages`() {
+        val source = "package com.example.app\nclass Screen { val title = R.string.title }"
+        val initial =
+            mapOf(
+                "app/build.gradle.kts" to "android { namespace = \"com.example.old\" }",
+                "app/src/main/kotlin/com/example/app/Screen.kt" to source,
+            )
+        val producer = checkNotNull(ProducerRegistry.get("kotlin-psi-symbols"))
+        producer.produce(IndexBuildContext.forInlineSources(store, "initial", initial), store)
+        val updated =
+            initial + ("app/build.gradle.kts" to "android { namespace = \"com.example.new\" }")
+        producer.produce(
+            IndexBuildContext(
+                store = store,
+                commitHash = "updated",
+                sourceFiles = updated.keys.toList(),
+                sourceContentOverrides = updated,
+                changedSourceFiles = setOf("app/build.gradle.kts"),
+            ),
+            store,
+        )
+
+        val packages =
+            store
+                .prefixScan("resuse:")
+                .map { it.second }
+                .filterIsInstance<ResourceUsageRecord>()
+                .map { it.packageName }
+                .toSet()
+        assertEquals(setOf("com.example.new"), packages)
+    }
+
     private lateinit var store: XodusCodeIndexStore
     private lateinit var tempDir: java.nio.file.Path
 

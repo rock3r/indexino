@@ -47,16 +47,22 @@ internal class JavaSourceProducer : IndexProducer {
     override val displayName: String = "JavaSourceProducer"
 
     override val progressTotal: (IndexBuildContext) -> Int = { context ->
-        context.changedSources.count { it.path.endsWith(".java") }
+        sourceFilesToProcess(context).size
     }
 
     override fun produce(context: IndexBuildContext, store: CodeIndexStore) {
         val affectedSources =
-            (context.changedSources + context.deletedSources).filterTo(linkedSetOf()) {
-                it.path.endsWith(".java")
-            }
-        SourceRecordCleanup.deleteLanguageOriginRecords(store, LANGUAGE, ".java", affectedSources)
-        val javaFiles = context.changedSources.filter { it.path.endsWith(".java") }
+            ((context.changedSources + context.deletedSources).filter {
+                    it.path.endsWith(".java")
+                } + metadataDependentSources(context))
+                .distinctBy { it.originId to it.path }
+        SourceRecordCleanup.deleteLanguageOriginRecords(
+            store,
+            LANGUAGE,
+            ".java",
+            affectedSources.toSet(),
+        )
+        val javaFiles = sourceFilesToProcess(context)
         // Seed declarations from every changed file before final call materialization. The parser
         // writes deterministic keys, so the final pass overwrites equivalent symbol/reference facts
         // while letting caller files resolve parameter names from callees later in source order.
@@ -64,6 +70,24 @@ internal class JavaSourceProducer : IndexProducer {
         javaFiles.forEachIndexed { index, source ->
             context.reportFileProgress(index + 1, javaFiles.size, source)
             parse(source, context.readSource(source), store, context)
+        }
+    }
+
+    private fun sourceFilesToProcess(context: IndexBuildContext): List<IndexedSource> =
+        (context.changedSources.filter { it.path.endsWith(".java") } +
+                metadataDependentSources(context))
+            .distinctBy { it.originId to it.path }
+
+    private fun metadataDependentSources(context: IndexBuildContext): List<IndexedSource> {
+        val metadataModules =
+            (context.changedSources + context.deletedSources).mapNotNull { source ->
+                ResourceMetadata.metadataModule(source.path)?.let { source.originId to it }
+            }
+        if (metadataModules.isEmpty()) return emptyList()
+        return context.sources.filter { source ->
+            source.path.endsWith(".java") &&
+                (source.originId to ResourceMetadata.moduleDirectory(source.path)) in
+                    metadataModules
         }
     }
 

@@ -455,6 +455,37 @@ class XmlResourceProducerTest {
     }
 
     @Test
+    fun `manifest package outranks application id when namespace is absent`() {
+        val sources =
+            mapOf(
+                "app/src/main/AndroidManifest.xml" to
+                    "<manifest package=\"com.example.manifest\" />",
+                "app/build.gradle.kts" to "android { applicationId = \"com.example.application\" }",
+                "app/src/main/res/values/strings.xml" to
+                    "<resources><string name=\"title\">Hello</string></resources>",
+            )
+
+        withStore { store ->
+            val producer = assertNotNull(ProducerRegistry.get("xml-resources"))
+            producer.produce(
+                IndexBuildContext.forInlineSources(
+                    store = store,
+                    commitHash = "resources",
+                    sourceFiles = sources,
+                )
+            )
+
+            val definition =
+                store
+                    .prefixScan("resdef:")
+                    .map { it.second }
+                    .filterIsInstance<ResourceDefinitionRecord>()
+                    .single()
+            assertEquals("com.example.manifest", definition.packageName)
+        }
+    }
+
+    @Test
     fun `resolves Bazel resource metadata from the owning package root`() {
         val root = createTempDirectory("indexino-bazel-resource-root-")
         root

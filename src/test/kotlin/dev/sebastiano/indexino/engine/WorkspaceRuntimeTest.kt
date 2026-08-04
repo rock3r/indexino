@@ -407,7 +407,9 @@ class WorkspaceRuntimeTest {
         try {
             RuntimeConnection.connect(runtime.endpoint).use { connection ->
                 RuntimeRefreshClient(connection)
-                    .refresh(RefreshRequest.forScope(IndexScope.gradle(":app")))
+                    .refresh(
+                        RefreshRequest.forScope(IndexScope.gradle(":").includingDependencies())
+                    )
                     .await()
                 val snapshots = RuntimeSnapshotClient(connection)
                 val lease = snapshots.acquire(FreshnessPolicy.PUBLISHED)
@@ -427,7 +429,34 @@ class WorkspaceRuntimeTest {
                             dev.sebastiano.indexino.model.QueryOptions.page(10),
                         )
                     }
-                    assertEquals(listOf("title"), definitions.items.map { it.id.name })
+                    assertEquals(listOf("title", "title"), definitions.items.map { it.id.name })
+                    assertEquals(
+                        listOf(null, "com.example.feature"),
+                        definitions.items.map { it.id.packageName },
+                    )
+                    val exactNullPackage = runBlocking {
+                        remoteSnapshot.findResources(
+                            dev.sebastiano.indexino.model.ResourceQuery.named(
+                                dev.sebastiano.indexino.model.ResourceId.of(null, "string", "title")
+                            ),
+                            dev.sebastiano.indexino.model.QueryOptions.page(10),
+                        )
+                    }
+                    assertEquals(listOf(null), exactNullPackage.items.map { it.id.packageName })
+                    val wildcardPackage = runBlocking {
+                        remoteSnapshot.findResources(
+                            dev.sebastiano.indexino.model.ResourceQuery.of(
+                                packageName = null,
+                                type = "string",
+                                name = "title",
+                            ),
+                            dev.sebastiano.indexino.model.QueryOptions.page(10),
+                        )
+                    }
+                    assertEquals(
+                        listOf(null, "com.example.feature"),
+                        wildcardPackage.items.map { it.id.packageName },
+                    )
                     val usages = runBlocking {
                         remoteSnapshot.findResourceUsages(
                             dev.sebastiano.indexino.model.ResourceQuery.named(
@@ -615,10 +644,11 @@ class WorkspaceRuntimeTest {
         val workspace = Files.createTempDirectory(Path.of("/tmp"), "indexino-resource-workspace-")
         Files.writeString(
             workspace.resolve("settings.gradle.kts"),
-            "rootProject.name = \"test\"\ninclude(\":app\")\n",
+            "rootProject.name = \"test\"\ninclude(\":app\")\ninclude(\":feature\")\n",
         )
         Files.createDirectories(workspace.resolve("app/src/main/kotlin"))
         Files.createDirectories(workspace.resolve("app/src/main/res/values"))
+        Files.createDirectories(workspace.resolve("feature/src/main/res/values"))
         Files.writeString(
             workspace.resolve("app/src/main/kotlin/Panel.kt"),
             "package sample\nclass Panel { val title = R.string.title }\n",
@@ -626,6 +656,14 @@ class WorkspaceRuntimeTest {
         Files.writeString(
             workspace.resolve("app/src/main/res/values/strings.xml"),
             "<resources><string name=\"title\">Title</string></resources>",
+        )
+        Files.writeString(
+            workspace.resolve("feature/build.gradle.kts"),
+            "android { namespace = \"com.example.feature\" }",
+        )
+        Files.writeString(
+            workspace.resolve("feature/src/main/res/values/strings.xml"),
+            "<resources><string name=\"title\">Feature</string></resources>",
         )
         return workspace
     }
