@@ -300,7 +300,7 @@ class XmlResourceProducerTest {
                 <string name="title">Hello</string>
                 <item type="color" name="accent">#ff0000</item>
                 <item type="color" name="accent_alias">@color/accent</item>
-                <declare-styleable name="CustomView" />
+                <declare-styleable name="CustomView"><attr name="accent" /></declare-styleable>
                 <string-array name="items"><item>One</item></string-array>
             </resources>
             """
@@ -338,6 +338,8 @@ class XmlResourceProducerTest {
             assertTrue(resources.any { it.fqn == "res:layout:main_screen" })
             assertTrue(resources.any { it.fqn == "res:id:title_view" })
             assertTrue(resources.any { it.fqn == "res:styleable:CustomView" })
+            assertTrue(resources.any { it.fqn == "res:attr:accent" })
+            assertTrue(resources.any { it.fqn == "res:styleable:CustomView_accent" })
             assertTrue(resources.any { it.fqn == "res:array:items" })
 
             val references =

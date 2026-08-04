@@ -14,7 +14,9 @@ import java.io.StringReader
 import javax.xml.stream.XMLInputFactory
 import javax.xml.stream.XMLStreamConstants
 import javax.xml.stream.XMLStreamException
+import javax.xml.stream.XMLStreamReader
 
+@Suppress("TooManyFunctions")
 internal class XmlResourceProducer : IndexProducer {
     override val id: String = "xml-resources"
     override val namespace: String = "res"
@@ -83,6 +85,7 @@ internal class XmlResourceProducer : IndexProducer {
             val reader = factory.createXMLStreamReader(StringReader(source))
             var depth = 0
             var elementSearchOffset = 0
+            var declareStyleableName: String? = null
             while (reader.hasNext()) {
                 when (reader.next()) {
                     XMLStreamConstants.START_ELEMENT -> {
@@ -97,43 +100,29 @@ internal class XmlResourceProducer : IndexProducer {
                                 elementEnd,
                                 sourcePositions.isXml11,
                             )
-                        if (pathResource?.type == "values" && depth == RESOURCE_CHILD_DEPTH) {
-                            valuesResource(
-                                    reader.localName,
-                                    reader.getAttributeValue(null, "type"),
-                                    reader.getAttributeValue(null, "name"),
-                                )
-                                ?.let {
-                                    val declarationPosition = sourcePositions.at(elementStart)
-                                    putResource(
-                                        store,
-                                        indexedSource,
-                                        it.type,
-                                        it.name,
-                                        declarationPosition.line,
-                                        declarationPosition.column,
-                                        elementStart,
-                                        packageName,
-                                    )
-                                }
-                        }
-                        for (attributeIndex in 0 until reader.attributeCount) {
-                            val qualifiedName = reader.attributeQualifiedName(attributeIndex)
-                            val rawAttribute =
-                                checkNotNull(attributeValueOffsets[qualifiedName]) {
-                                    "Missing raw XML attribute $qualifiedName in ${attributeValueOffsets.keys}"
-                                }
-                            indexRawValue(
-                                store,
-                                indexedSource,
-                                source.substring(rawAttribute.valueStart, rawAttribute.valueEnd),
-                                sourcePositions,
-                                rawAttribute.valueStart,
-                                packageName,
+                        declareStyleableName =
+                            indexStartElement(
+                                store = store,
+                                indexedSource = indexedSource,
+                                source = source,
+                                reader = reader,
+                                depth = depth,
+                                pathResource = pathResource,
+                                declareStyleableName = declareStyleableName,
+                                packageName = packageName,
+                                sourcePositions = sourcePositions,
+                                elementStart = elementStart,
+                                attributeValueOffsets = attributeValueOffsets,
                             )
-                        }
                     }
-                    XMLStreamConstants.END_ELEMENT -> depth--
+                    XMLStreamConstants.END_ELEMENT -> {
+                        if (
+                            depth == RESOURCE_CHILD_DEPTH && reader.localName == "declare-styleable"
+                        ) {
+                            declareStyleableName = null
+                        }
+                        depth--
+                    }
                 }
             }
             reader.close()
@@ -141,6 +130,111 @@ internal class XmlResourceProducer : IndexProducer {
         } catch (exception: XMLStreamException) {
             throw IllegalArgumentException("$relativePath: ${exception.message}", exception)
         }
+    }
+
+    private fun indexStartElement(
+        store: CodeIndexStore,
+        indexedSource: IndexedSource,
+        source: String,
+        reader: XMLStreamReader,
+        depth: Int,
+        pathResource: ResourcePath?,
+        declareStyleableName: String?,
+        packageName: String?,
+        sourcePositions: XmlSourcePositions,
+        elementStart: Int,
+        attributeValueOffsets: Map<String, RawAttribute>,
+    ): String? {
+        var activeDeclareStyleable = declareStyleableName
+        val declarationPosition = sourcePositions.at(elementStart)
+        if (pathResource?.type == "values" && depth == RESOURCE_CHILD_DEPTH) {
+            valuesResource(
+                    reader.localName,
+                    reader.getAttributeValue(null, "type"),
+                    reader.getAttributeValue(null, "name"),
+                )
+                ?.let {
+                    if (reader.localName == "declare-styleable") {
+                        activeDeclareStyleable = it.name
+                    }
+                    putResource(
+                        store,
+                        indexedSource,
+                        it.type,
+                        it.name,
+                        declarationPosition.line,
+                        declarationPosition.column,
+                        elementStart,
+                        packageName,
+                    )
+                }
+        } else if (
+            pathResource?.type == "values" &&
+                depth == DECLARE_STYLEABLE_CHILD_DEPTH &&
+                reader.localName == "attr" &&
+                activeDeclareStyleable != null
+        ) {
+            putNestedStyleableAttribute(
+                store,
+                indexedSource,
+                activeDeclareStyleable,
+                reader,
+                declarationPosition.line,
+                declarationPosition.column,
+                elementStart,
+                packageName,
+            )
+        }
+        for (attributeIndex in 0 until reader.attributeCount) {
+            val qualifiedName = reader.attributeQualifiedName(attributeIndex)
+            val rawAttribute =
+                checkNotNull(attributeValueOffsets[qualifiedName]) {
+                    "Missing raw XML attribute $qualifiedName in ${attributeValueOffsets.keys}"
+                }
+            indexRawValue(
+                store,
+                indexedSource,
+                source.substring(rawAttribute.valueStart, rawAttribute.valueEnd),
+                sourcePositions,
+                rawAttribute.valueStart,
+                packageName,
+            )
+        }
+        return activeDeclareStyleable
+    }
+
+    private fun putNestedStyleableAttribute(
+        store: CodeIndexStore,
+        indexedSource: IndexedSource,
+        declareStyleableName: String,
+        reader: XMLStreamReader,
+        line: Int,
+        column: Int,
+        offset: Int,
+        packageName: String?,
+    ) {
+        val attributeName =
+            reader.getAttributeValue(null, "name")?.takeIf(String::isNotBlank) ?: return
+        putResource(
+            store,
+            indexedSource,
+            "attr",
+            attributeName,
+            line,
+            column,
+            offset,
+            packageName,
+        )
+        putResource(
+            store,
+            indexedSource,
+            "styleable",
+            "${declareStyleableName}_$attributeName",
+            line,
+            column,
+            offset,
+            packageName,
+        )
     }
 
     private fun indexRawValue(
@@ -355,7 +449,7 @@ internal class XmlResourceProducer : IndexProducer {
         )
     }
 
-    private fun javax.xml.stream.XMLStreamReader.attributeQualifiedName(index: Int): String {
+    private fun XMLStreamReader.attributeQualifiedName(index: Int): String {
         val prefix = getAttributePrefix(index)
         return if (prefix.isNullOrBlank()) getAttributeLocalName(index)
         else "$prefix:${getAttributeLocalName(index)}"
@@ -422,6 +516,7 @@ internal class XmlResourceProducer : IndexProducer {
     private companion object {
         const val LANGUAGE = "xml"
         const val RESOURCE_CHILD_DEPTH = 2
+        const val DECLARE_STYLEABLE_CHILD_DEPTH = 3
         const val CREATE_MARKER_GROUP = 1
         const val RESOURCE_PACKAGE_GROUP = 2
         const val RESOURCE_TYPE_GROUP = 3

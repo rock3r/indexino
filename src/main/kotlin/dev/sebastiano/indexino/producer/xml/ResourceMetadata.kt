@@ -12,6 +12,7 @@ internal object ResourceMetadata {
             "animator",
             "array",
             "attr",
+            "attr",
             "bool",
             "color",
             "dimen",

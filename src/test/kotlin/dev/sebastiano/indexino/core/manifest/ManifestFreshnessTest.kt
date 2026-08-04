@@ -33,6 +33,14 @@ class ManifestFreshnessTest {
     }
 
     @Test
+    fun `stale when basic fact schema differs`() {
+        val manifest = sampleManifest()
+        val criteria = sampleCriteria().copy(basicFactSchemaVersion = 2)
+
+        assertFalse(ManifestFreshness.isFresh(manifest, criteria))
+    }
+
+    @Test
     fun `stale when origin graph differs`() {
         val manifest =
             sampleManifest()
