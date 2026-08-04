@@ -398,6 +398,67 @@ class WorkspaceRuntimeTest {
     }
 
     @Test
+    fun `daemon snapshot routes resource usage queries`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-resource-runtime-")
+        val workspace = createGradleResourceWorkspace()
+        val previousCacheRoot = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheRoot.toString())
+        val runtime = WorkspaceRuntime.start(workspace, cacheRoot)
+        try {
+            RuntimeConnection.connect(runtime.endpoint).use { connection ->
+                RuntimeRefreshClient(connection)
+                    .refresh(RefreshRequest.forScope(IndexScope.gradle(":app")))
+                    .await()
+                val snapshots = RuntimeSnapshotClient(connection)
+                val lease = snapshots.acquire(FreshnessPolicy.PUBLISHED)
+                val remoteSnapshot =
+                    IndexSnapshot.createRemote(
+                        client = snapshots,
+                        leaseId = lease.id,
+                        revision = lease.revision,
+                        generation = lease.generation,
+                        freshnessAtAcquisition = lease.freshness,
+                        onClose = { snapshots.release(lease.id) },
+                    )
+                try {
+                    val definitions = runBlocking {
+                        remoteSnapshot.findResources(
+                            dev.sebastiano.indexino.model.ResourceQuery.all(),
+                            dev.sebastiano.indexino.model.QueryOptions.page(10),
+                        )
+                    }
+                    assertEquals(listOf("title"), definitions.items.map { it.id.name })
+                    val usages = runBlocking {
+                        remoteSnapshot.findResourceUsages(
+                            dev.sebastiano.indexino.model.ResourceQuery.named(
+                                dev.sebastiano.indexino.model.ResourceId.of(
+                                    "sample",
+                                    "string",
+                                    "title",
+                                )
+                            ),
+                            dev.sebastiano.indexino.model.QueryOptions.page(10),
+                        )
+                    }
+                    assertEquals(listOf("kotlin"), usages.items.map { it.language })
+                    assertEquals(
+                        listOf("app/src/main/kotlin/Panel.kt"),
+                        usages.items.map { it.location.file.path },
+                    )
+                } finally {
+                    remoteSnapshot.close()
+                }
+            }
+        } finally {
+            runtime.close()
+            cacheRoot.toFile().deleteRecursively()
+            workspace.toFile().deleteRecursively()
+            if (previousCacheRoot == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheRoot)
+        }
+    }
+
+    @Test
     fun `disconnecting the initiator does not cancel a daemon owned refresh`() {
         val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-reconnect-")
         val workspace = createGradleWorkspace()
@@ -547,6 +608,25 @@ class WorkspaceRuntimeTest {
                 "package logic\nclass Convention\n",
             )
         }
+        return workspace
+    }
+
+    private fun createGradleResourceWorkspace(): Path {
+        val workspace = Files.createTempDirectory(Path.of("/tmp"), "indexino-resource-workspace-")
+        Files.writeString(
+            workspace.resolve("settings.gradle.kts"),
+            "rootProject.name = \"test\"\ninclude(\":app\")\n",
+        )
+        Files.createDirectories(workspace.resolve("app/src/main/kotlin"))
+        Files.createDirectories(workspace.resolve("app/src/main/res/values"))
+        Files.writeString(
+            workspace.resolve("app/src/main/kotlin/Panel.kt"),
+            "package sample\nclass Panel { val title = R.string.title }\n",
+        )
+        Files.writeString(
+            workspace.resolve("app/src/main/res/values/strings.xml"),
+            "<resources><string name=\"title\">Title</string></resources>",
+        )
         return workspace
     }
 

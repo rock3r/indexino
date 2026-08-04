@@ -4,6 +4,7 @@ import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.CallArgumentRecord
 import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
+import dev.sebastiano.indexino.core.record.ResourceUsageRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.store.hasSymbol
@@ -11,6 +12,7 @@ import dev.sebastiano.indexino.parse.KotlinPsiParser
 import dev.sebastiano.indexino.producer.IndexBuildContext
 import dev.sebastiano.indexino.producer.IndexProducer
 import dev.sebastiano.indexino.producer.SourceRecordCleanup
+import dev.sebastiano.indexino.producer.xml.ResourceMetadata
 import org.jetbrains.kotlin.com.intellij.psi.PsiElement
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.KtBinaryExpression
@@ -26,6 +28,7 @@ import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtForExpression
 import org.jetbrains.kotlin.psi.KtFunctionLiteral
+import org.jetbrains.kotlin.psi.KtImportDirective
 import org.jetbrains.kotlin.psi.KtLambdaExpression
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
 import org.jetbrains.kotlin.psi.KtNamedFunction
@@ -152,7 +155,95 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             store,
         )
         indexMemberReferences(file, indexedFile.originId, indexedFile.relativePath, store, imports)
+        indexResourceUsages(file, indexedFile.originId, indexedFile.relativePath, imports, store)
     }
+
+    private fun indexResourceUsages(
+        file: KtFile,
+        originId: String,
+        relativePath: String,
+        imports: Map<String, String>,
+        store: CodeIndexStore,
+    ) {
+        file.collectDescendantsOfType<KtQualifiedExpression>().forEach { expression ->
+            if (generateSequence(expression.parent) { it.parent }.any { it is KtImportDirective }) {
+                return@forEach
+            }
+            val parent = expression.parent
+            if (parent is KtQualifiedExpression && parent.receiverExpression == expression) {
+                return@forEach
+            }
+            val chain = qualifiedNameChain(expression) ?: return@forEach
+            val rIndex = resourceClassIndex(chain.segments, imports) ?: return@forEach
+            val explicitPackage = chain.segments.take(rIndex).joinToString(".").ifBlank { null }
+            val importedOwner = imports[chain.segments[rIndex]]
+            val packageName =
+                explicitPackage
+                    ?: importedOwner?.substringBeforeLast('.', "")?.takeIf(String::isNotBlank)
+                    ?: file.packageFqName.asString().ifBlank { null }
+            val type = chain.segments[rIndex + 1]
+            val name = chain.segments[rIndex + 2]
+            val selector = chain.selectors.getOrNull(rIndex + 1) ?: return@forEach
+            store.put(
+                CodeIndexKey.resourceUsage(
+                    packageName = packageName,
+                    type = type,
+                    name = name,
+                    originId = originId,
+                    relativeFile = relativePath,
+                    line = selector.lineNumber(),
+                    column = selector.columnNumber(),
+                ),
+                ResourceUsageRecord(
+                    packageName = packageName,
+                    type = type,
+                    name = name,
+                    relativeFile = relativePath,
+                    line = selector.lineNumber(),
+                    column = selector.columnNumber(),
+                    offset = selector.textOffset,
+                    language = LANGUAGE,
+                    originId = originId,
+                ),
+            )
+        }
+    }
+
+    private fun resourceClassIndex(segments: List<String>, imports: Map<String, String>): Int? =
+        segments.indices.firstOrNull { index ->
+            index + 2 <= segments.lastIndex &&
+                (segments[index] == "R" ||
+                    imports[segments[index]]?.substringAfterLast('.') == "R") &&
+                segments[index + 1] in ResourceMetadata.RESOURCE_TYPES
+        }
+
+    private data class QualifiedNameChain(
+        val segments: List<String>,
+        val selectors: List<KtExpression>,
+    )
+
+    private fun qualifiedNameChain(expression: KtExpression): QualifiedNameChain? =
+        when (expression) {
+            is KtNameReferenceExpression ->
+                QualifiedNameChain(listOf(expression.getReferencedName()), emptyList())
+            is KtQualifiedExpression -> {
+                val receiver = qualifiedNameChain(expression.receiverExpression) ?: return null
+                val selectorExpression = expression.selectorExpression ?: return null
+                val selectorName =
+                    when (selectorExpression) {
+                        is KtNameReferenceExpression -> selectorExpression.getReferencedName()
+                        is KtCallExpression ->
+                            (selectorExpression.calleeExpression as? KtNameReferenceExpression)
+                                ?.getReferencedName() ?: return null
+                        else -> return null
+                    }
+                QualifiedNameChain(
+                    receiver.segments + selectorName,
+                    receiver.selectors + selectorExpression,
+                )
+            }
+            else -> null
+        }
 
     private fun indexCalls(
         file: KtFile,

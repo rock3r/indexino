@@ -23,6 +23,7 @@ import dev.sebastiano.indexino.producer.SOURCE_CHANGE_DETECTION_PHASE
 import dev.sebastiano.indexino.producer.SourceChangeDetector
 import dev.sebastiano.indexino.producer.SourceChangeSet
 import dev.sebastiano.indexino.producer.SourceContentSnapshot
+import dev.sebastiano.indexino.producer.xml.ResourceMetadata
 import dev.sebastiano.indexino.topology.ExternalSourceMount
 import dev.sebastiano.indexino.topology.SourceOriginResolver
 import dev.sebastiano.indexino.topology.TopologyRequest
@@ -234,7 +235,9 @@ internal class IndexBuildRunner(
         externalSources: List<ExternalSourceMount>,
     ): List<IndexedSource> =
         SourceOriginResolver.resolve(project, sourceFiles).flatMap { origin ->
-            origin.sourceFiles.map { path -> IndexedSource(origin.id, origin.root, path) }
+            (origin.sourceFiles +
+                    ResourceMetadata.additionalMetadataPaths(origin.root, origin.sourceFiles))
+                .map { path -> IndexedSource(origin.id, origin.root, path) }
         } +
             externalSources.flatMap { mount ->
                 SourceOriginResolver.resolveExternal(
@@ -244,9 +247,12 @@ internal class IndexBuildRunner(
                             mount.originId ?: SourceOriginResolver.externalOriginId(mount.root),
                     )
                     .flatMap { origin ->
-                        origin.sourceFiles.map { path ->
-                            IndexedSource(origin.id, origin.root, path)
-                        }
+                        (origin.sourceFiles +
+                                ResourceMetadata.additionalMetadataPaths(
+                                    origin.root,
+                                    origin.sourceFiles,
+                                ))
+                            .map { path -> IndexedSource(origin.id, origin.root, path) }
                     }
             }
 

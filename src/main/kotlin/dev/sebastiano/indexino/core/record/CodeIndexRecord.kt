@@ -53,6 +53,34 @@ internal data class ReferenceRecord(
 ) : CodeIndexRecord
 
 @Serializable
+@SerialName("resource_definition")
+internal data class ResourceDefinitionRecord(
+    val packageName: String? = null,
+    @SerialName("resourceType") val type: String,
+    val name: String,
+    val qualifiers: String,
+    val relativeFile: String,
+    val line: Int,
+    val column: Int = 1,
+    val offset: Int = 0,
+    val originId: String = "workspace",
+) : CodeIndexRecord
+
+@Serializable
+@SerialName("resource_usage")
+internal data class ResourceUsageRecord(
+    val packageName: String? = null,
+    @SerialName("resourceType") val type: String,
+    val name: String,
+    val relativeFile: String,
+    val line: Int,
+    val column: Int,
+    val offset: Int = 0,
+    val language: String,
+    val originId: String = "workspace",
+) : CodeIndexRecord
+
+@Serializable
 internal data class CallArgumentRecord(
     val position: Int,
     val resolvedName: String? = null,

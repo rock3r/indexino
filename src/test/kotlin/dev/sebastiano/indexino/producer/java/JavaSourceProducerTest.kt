@@ -3,6 +3,7 @@ package dev.sebastiano.indexino.producer.java
 import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.CodeIndexRecordCodec
 import dev.sebastiano.indexino.core.record.ReferenceRecord
+import dev.sebastiano.indexino.core.record.ResourceUsageRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.producer.IndexBuildContext
@@ -599,6 +600,57 @@ class JavaSourceProducerTest {
                     .toList()
             assertEquals(1, references.count { it.symbolFqn == "sample.Second#render" })
             assertEquals(1, references.count { it.symbolFqn == "sample.First#render" })
+        }
+    }
+
+    @Test
+    fun `indexes Java R resource usages with package identity`() {
+        val source =
+            """
+            package com.example.app;
+
+            import com.example.feature.R;
+
+            class Screen {
+                int title = R.string.title;
+                int[] styleable = R.styleable.CustomView;
+                int titleLength = R.string.title.length();
+                int icon = com.example.assets.R.drawable.icon;
+                int notResource = foo.R.state.ordinal();
+            }
+            """
+                .trimIndent()
+
+        withStore { store ->
+            val producer = assertNotNull(ProducerRegistry.get("java-source"))
+            producer.produce(
+                IndexBuildContext.forInlineSources(
+                    store = store,
+                    commitHash = "resources",
+                    sourceFiles = mapOf("src/main/java/com/example/app/Screen.java" to source),
+                )
+            )
+
+            val usages =
+                store
+                    .prefixScan("resuse:")
+                    .map { it.second }
+                    .filterIsInstance<ResourceUsageRecord>()
+                    .toList()
+            assertEquals(4, usages.size)
+            assertEquals(
+                setOf(
+                    "com.example.feature:string:title",
+                    "com.example.feature:styleable:CustomView",
+                    "com.example.assets:drawable:icon",
+                ),
+                usages
+                    .map { listOf(it.packageName.orEmpty(), it.type, it.name).joinToString(":") }
+                    .toSet(),
+            )
+            assertTrue(usages.all { it.language == "java" })
+            assertTrue(usages.all { it.offset > 0 })
+            assertTrue(usages.all { it.relativeFile.endsWith("Screen.java") })
         }
     }
 

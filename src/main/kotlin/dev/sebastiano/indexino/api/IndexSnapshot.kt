@@ -1,4 +1,4 @@
-@file:Suppress("RedundantSuspendModifier", "TooManyFunctions")
+@file:Suppress("LargeClass", "RedundantSuspendModifier", "TooManyFunctions")
 
 package dev.sebastiano.indexino.api
 
@@ -6,6 +6,8 @@ import dev.sebastiano.indexino.core.BASIC_FACT_SCHEMA_VERSION
 import dev.sebastiano.indexino.core.plugin.StorePluginFactView
 import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
+import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
+import dev.sebastiano.indexino.core.record.ResourceUsageRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.engine.PluginRegistry
@@ -24,6 +26,13 @@ import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.QueryPage
 import dev.sebastiano.indexino.model.Reference
 import dev.sebastiano.indexino.model.ReferenceQuery
+import dev.sebastiano.indexino.model.ResourceDefinition
+import dev.sebastiano.indexino.model.ResourceId
+import dev.sebastiano.indexino.model.ResourceQuery
+import dev.sebastiano.indexino.model.ResourceUsage
+import dev.sebastiano.indexino.model.SourceFile
+import dev.sebastiano.indexino.model.SourceLocation
+import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.Symbol
 import dev.sebastiano.indexino.model.SymbolId
 import dev.sebastiano.indexino.model.SymbolQuery
@@ -157,6 +166,77 @@ private constructor(
                         with(queries) { record.toPublicReference(checkNotNull(candidates[record])) }
                     }
                 },
+            )
+        }
+    }
+
+    override suspend fun findResources(
+        query: ResourceQuery,
+        options: QueryOptions,
+    ): QueryPage<ResourceDefinition> {
+        ensureOpen()
+        remoteClient?.let { client ->
+            return mapUnexpectedFailures {
+                client.findResources(checkNotNull(remoteLeaseId), query, options)
+            }
+        }
+        validateQueryOptions(options)
+        return mapUnexpectedFailures {
+            orderedPage(
+                options = options,
+                comparator =
+                    compareBy(
+                        { it.packageName.orEmpty() },
+                        ResourceDefinitionRecord::type,
+                        ResourceDefinitionRecord::name,
+                        ResourceDefinitionRecord::qualifiers,
+                        ResourceDefinitionRecord::originId,
+                        ResourceDefinitionRecord::relativeFile,
+                        ResourceDefinitionRecord::line,
+                    ),
+                scan = { accept ->
+                    localStore.forEachPrefix("resdef:") { _, record ->
+                        if (record is ResourceDefinitionRecord && record.matches(query))
+                            accept(record)
+                        true
+                    }
+                },
+                transform = { records -> records.map(::toPublicResourceDefinition) },
+            )
+        }
+    }
+
+    override suspend fun findResourceUsages(
+        query: ResourceQuery,
+        options: QueryOptions,
+    ): QueryPage<ResourceUsage> {
+        ensureOpen()
+        remoteClient?.let { client ->
+            return mapUnexpectedFailures {
+                client.findResourceUsages(checkNotNull(remoteLeaseId), query, options)
+            }
+        }
+        validateQueryOptions(options)
+        return mapUnexpectedFailures {
+            orderedPage(
+                options = options,
+                comparator =
+                    compareBy(
+                        { it.packageName.orEmpty() },
+                        ResourceUsageRecord::type,
+                        ResourceUsageRecord::name,
+                        ResourceUsageRecord::originId,
+                        ResourceUsageRecord::relativeFile,
+                        ResourceUsageRecord::line,
+                        ResourceUsageRecord::column,
+                    ),
+                scan = { accept ->
+                    localStore.forEachPrefix("resuse:") { _, record ->
+                        if (record is ResourceUsageRecord && record.matches(query)) accept(record)
+                        true
+                    }
+                },
+                transform = { records -> records.map(::toPublicResourceUsage) },
             )
         }
     }
@@ -584,6 +664,52 @@ private constructor(
     }
 
     @OptIn(IndexinoInternalApi::class)
+    private fun toPublicResourceDefinition(record: ResourceDefinitionRecord): ResourceDefinition =
+        ResourceDefinition(
+            ResourceId.of(record.packageName, record.type, record.name),
+            record.qualifiers,
+            SourceLocation.of(
+                SourceFile.of(
+                    SourceOriginId.of(record.originId),
+                    record.relativeFile,
+                    record.relativeFile,
+                ),
+                record.line,
+                record.column,
+                record.offset,
+            ),
+        )
+
+    @OptIn(IndexinoInternalApi::class)
+    private fun toPublicResourceUsage(record: ResourceUsageRecord): ResourceUsage =
+        ResourceUsage(
+            ResourceId.of(record.packageName, record.type, record.name),
+            SourceLocation.of(
+                SourceFile.of(
+                    SourceOriginId.of(record.originId),
+                    record.relativeFile,
+                    record.relativeFile,
+                ),
+                record.line,
+                record.column,
+                record.offset,
+            ),
+            record.language,
+        )
+
+    private fun ResourceDefinitionRecord.matches(query: ResourceQuery): Boolean =
+        query.id?.let { it.packageName == packageName && it.type == type && it.name == name }
+            ?: ((query.packageName == null || query.packageName == packageName) &&
+                (query.type == null || query.type == type) &&
+                (query.name == null || query.name == name))
+
+    private fun ResourceUsageRecord.matches(query: ResourceQuery): Boolean =
+        query.id?.let { it.packageName == packageName && it.type == type && it.name == name }
+            ?: ((query.packageName == null || query.packageName == packageName) &&
+                (query.type == null || query.type == type) &&
+                (query.name == null || query.name == name))
+
+    @OptIn(IndexinoInternalApi::class)
     private fun <T, R> orderedPage(
         options: QueryOptions,
         comparator: Comparator<T>,
@@ -661,6 +787,7 @@ private constructor(
 
     internal companion object {
         private const val CURSOR_PREFIX: String = "indexino:v1:"
+        private const val BASIC_FACT_SCHEMA_VERSION: Int = 3
         // Host policy for this in-process facade. Not a public ABI constant until the owner
         // settles exact default page limits in docs/PUBLIC-API-DESIGN.html.
         private const val HOST_QUERY_LIMIT_MAXIMUM: Int = 10_000

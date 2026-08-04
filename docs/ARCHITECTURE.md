@@ -135,7 +135,7 @@ source tree walks. Extraction to `indexino-selection-context` is slice S4.
 
 - **kotlin-compiler-embeddable** — PSI for Kotlin/Compose (Detekt-independent)
 - **JDK compiler trees** — parse-only Java extraction
-- **JDK StAX** — XML/resource extraction (resources public API in S10)
+- **JDK StAX** — XML/resource extraction for public Android/CMP resource definitions and usages
 - **Xodus** — generation-local indexes referencing content-addressed packs
 - **Clikt** — CLI only (not on library POM)
 - **Shadow + R8** — standalone / native-packaging inputs

@@ -2,6 +2,7 @@ package dev.sebastiano.indexino.producer.xml
 
 import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.ReferenceRecord
+import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.producer.IndexBuildContext
@@ -9,6 +10,7 @@ import dev.sebastiano.indexino.producer.IndexProducer
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.SourceRecordCleanup
 import java.io.StringReader
+import java.nio.file.Files
 import javax.xml.stream.XMLInputFactory
 import javax.xml.stream.XMLStreamConstants
 import javax.xml.stream.XMLStreamException
@@ -19,28 +21,62 @@ internal class XmlResourceProducer : IndexProducer {
     override val displayName: String = "XmlResourceProducer"
 
     override val progressTotal: (IndexBuildContext) -> Int = { context ->
-        context.changedSources.count { it.path.endsWith(".xml") }
+        resourceFilesToProcess(context).size
     }
 
     override fun produce(context: IndexBuildContext, store: CodeIndexStore) {
-        val affectedSources =
-            (context.changedSources + context.deletedSources).filterTo(linkedSetOf()) {
-                it.path.endsWith(".xml")
-            }
-        SourceRecordCleanup.deleteXmlOriginRecords(store, affectedSources)
-        val xmlFiles = context.changedSources.filter { it.path.endsWith(".xml") }
+        SourceRecordCleanup.deleteXmlOriginRecords(store, affectedResourceSources(context).toSet())
+        val xmlFiles = resourceFilesToProcess(context)
         xmlFiles.forEachIndexed { index, indexedSource ->
             context.reportFileProgress(index + 1, xmlFiles.size, indexedSource)
-            parse(indexedSource, context.readSource(indexedSource), store)
+            parse(indexedSource, context.readSource(indexedSource), store, context)
         }
     }
 
-    private fun parse(indexedSource: IndexedSource, source: String, store: CodeIndexStore) {
+    private fun affectedResourceSources(context: IndexBuildContext): List<IndexedSource> =
+        ((context.changedSources + context.deletedSources).filter { it.path.endsWith(".xml") } +
+                dependentResources(context))
+            .distinctBy { it.originId to it.path }
+
+    private fun resourceFilesToProcess(context: IndexBuildContext): List<IndexedSource> =
+        (context.changedSources.filter { it.path.endsWith(".xml") } + dependentResources(context))
+            .distinctBy { it.originId to it.path }
+
+    private fun dependentResources(context: IndexBuildContext): List<IndexedSource> {
+        val metadataModules =
+            (context.changedSources + context.deletedSources).mapNotNull { source ->
+                ResourceMetadata.metadataModule(source.path)?.let { source.originId to it }
+            }
+        if (metadataModules.isEmpty()) return emptyList()
+        return context.sources.filter { source ->
+            source.path.endsWith(".xml") &&
+                ResourceMetadata.isResourceXml(source.path) &&
+                (source.originId to ResourceMetadata.moduleDirectory(source.path)) in
+                    metadataModules
+        }
+    }
+
+    private fun parse(
+        indexedSource: IndexedSource,
+        source: String,
+        store: CodeIndexStore,
+        context: IndexBuildContext,
+    ) {
         val relativePath = indexedSource.path
         val sourcePositions = XmlSourcePositions(source)
-        val pathResource = resourceFromPath(relativePath)
+        val packageName = resourcePackage(context, indexedSource)
+        val pathResource = ResourceMetadata.resourceFromPath(relativePath)
         if (pathResource != null && pathResource.type != "values") {
-            putResource(store, indexedSource, pathResource.type, pathResource.name, 1, 1)
+            putResource(
+                store,
+                indexedSource,
+                pathResource.type,
+                pathResource.name,
+                1,
+                1,
+                0,
+                packageName,
+            )
         }
         val factory = secureFactory()
         try {
@@ -76,6 +112,8 @@ internal class XmlResourceProducer : IndexProducer {
                                         it.name,
                                         declarationPosition.line,
                                         declarationPosition.column,
+                                        elementStart,
+                                        packageName,
                                     )
                                 }
                         }
@@ -91,6 +129,7 @@ internal class XmlResourceProducer : IndexProducer {
                                 source.substring(rawAttribute.valueStart, rawAttribute.valueEnd),
                                 sourcePositions,
                                 rawAttribute.valueStart,
+                                packageName,
                             )
                         }
                     }
@@ -98,7 +137,7 @@ internal class XmlResourceProducer : IndexProducer {
                 }
             }
             reader.close()
-            indexTextReferences(store, indexedSource, source, sourcePositions)
+            indexTextReferences(store, indexedSource, source, sourcePositions, packageName)
         } catch (exception: XMLStreamException) {
             throw IllegalArgumentException("$relativePath: ${exception.message}", exception)
         }
@@ -110,12 +149,14 @@ internal class XmlResourceProducer : IndexProducer {
         rawValue: String,
         sourcePositions: XmlSourcePositions,
         valueOffset: Int,
+        resolvedPackageName: String?,
     ) {
         val decodedValue = decodeXml(rawValue, sourcePositions.isXml11)
         RESOURCE_REFERENCE.findAll(decodedValue.value).forEach { match ->
             val rawMatchOffset = decodedValue.rawOffsets[match.range.first]
-            val position = sourcePositions.at(valueOffset + rawMatchOffset)
-            indexMatch(store, indexedSource, match, position)
+            val absoluteOffset = valueOffset + rawMatchOffset
+            val position = sourcePositions.at(absoluteOffset)
+            indexMatch(store, indexedSource, match, position, absoluteOffset, resolvedPackageName)
         }
     }
 
@@ -125,13 +166,17 @@ internal class XmlResourceProducer : IndexProducer {
         value: String,
         sourcePositions: XmlSourcePositions,
         valueOffset: Int,
+        resolvedPackageName: String?,
     ) {
         RESOURCE_REFERENCE.findAll(value).forEach { match ->
+            val absoluteOffset = valueOffset + match.range.first
             indexMatch(
                 store,
                 indexedSource,
                 match,
-                sourcePositions.at(valueOffset + match.range.first),
+                sourcePositions.at(absoluteOffset),
+                absoluteOffset,
+                resolvedPackageName,
             )
         }
     }
@@ -141,13 +186,24 @@ internal class XmlResourceProducer : IndexProducer {
         indexedSource: IndexedSource,
         match: MatchResult,
         position: SourcePosition,
+        offset: Int,
+        resolvedPackageName: String?,
     ) {
         val createsId = match.groupValues[CREATE_MARKER_GROUP] == "+"
         val packageName = match.groupValues[RESOURCE_PACKAGE_GROUP].ifBlank { null }
         val type = match.groupValues[RESOURCE_TYPE_GROUP]
         val name = match.groupValues[RESOURCE_NAME_GROUP]
         if (createsId && packageName == null && type == "id") {
-            putResource(store, indexedSource, type, name, position.line, position.column)
+            putResource(
+                store,
+                indexedSource,
+                type,
+                name,
+                position.line,
+                position.column,
+                offset,
+                resolvedPackageName,
+            )
         } else {
             val target = resourceFqn(packageName, type, name)
             store.put(
@@ -179,6 +235,7 @@ internal class XmlResourceProducer : IndexProducer {
         indexedSource: IndexedSource,
         source: String,
         sourcePositions: XmlSourcePositions,
+        resolvedPackageName: String?,
     ) {
         var textStart = 0
         while (textStart < source.length) {
@@ -191,6 +248,7 @@ internal class XmlResourceProducer : IndexProducer {
                     source.substring(textStart, markupStart),
                     sourcePositions,
                     textStart,
+                    resolvedPackageName,
                 )
             }
             if (markupStart == source.length) return
@@ -206,6 +264,7 @@ internal class XmlResourceProducer : IndexProducer {
                     source.substring(contentStart, contentEnd),
                     sourcePositions,
                     contentStart,
+                    resolvedPackageName,
                 )
                 textStart = (contentEnd + CDATA_END.length).coerceAtMost(source.length)
             } else {
@@ -223,8 +282,33 @@ internal class XmlResourceProducer : IndexProducer {
         name: String,
         line: Int,
         column: Int,
+        offset: Int,
+        packageName: String?,
     ) {
         val fqn = resourceFqn(type, name)
+        val qualifiers = ResourceMetadata.resourceFromPath(indexedSource.path)?.qualifiers.orEmpty()
+        store.put(
+            CodeIndexKey.resourceDefinition(
+                packageName = packageName,
+                type = type,
+                name = name,
+                qualifiers = qualifiers,
+                originId = indexedSource.originId,
+                relativeFile = indexedSource.path,
+                line = line,
+            ),
+            ResourceDefinitionRecord(
+                packageName = packageName,
+                type = type,
+                name = name,
+                qualifiers = qualifiers,
+                relativeFile = indexedSource.path,
+                line = line,
+                column = column,
+                offset = offset,
+                originId = indexedSource.originId,
+            ),
+        )
         store.put(
             CodeIndexKey.resource(
                 type,
@@ -255,6 +339,33 @@ internal class XmlResourceProducer : IndexProducer {
         else "$prefix:${getAttributeLocalName(index)}"
     }
 
+    private fun resourcePackage(context: IndexBuildContext, indexedSource: IndexedSource): String? {
+        return ResourceMetadata.metadataPathsForResource(indexedSource.path).firstNotNullOfOrNull {
+            metadataPath ->
+            val indexedMetadata =
+                context.sources.firstOrNull {
+                    it.originId == indexedSource.originId && it.path == metadataPath
+                }
+            val metadata =
+                indexedMetadata?.let { runCatching { context.readSource(it) }.getOrNull() }
+                    ?: indexedSource.originRoot.resolve(metadataPath).let { path ->
+                        if (Files.isRegularFile(path)) {
+                            runCatching { Files.readString(path) }.getOrNull()
+                        } else {
+                            null
+                        }
+                    }
+                    ?: return@firstNotNullOfOrNull null
+            when {
+                metadataPath.endsWith("AndroidManifest.xml") ->
+                    MANIFEST_PACKAGE.find(metadata)?.groupValues?.get(1)
+                else ->
+                    GRADLE_NAMESPACE.find(metadata)?.groupValues?.get(1)
+                        ?: GRADLE_APPLICATION_ID.find(metadata)?.groupValues?.get(1)
+            }
+        }
+    }
+
     private fun valuesResource(element: String, itemType: String?, name: String?): ResourceName? {
         if (name.isNullOrBlank()) {
             return null
@@ -264,14 +375,10 @@ internal class XmlResourceProducer : IndexProducer {
             when (rawType) {
                 "string-array",
                 "integer-array" -> "array"
+                "declare-styleable" -> "styleable"
                 else -> rawType
             }
         return type?.takeIf { it.isNotBlank() }?.let { ResourceName(it, name) }
-    }
-
-    private fun resourceFromPath(relativePath: String): ResourceName? {
-        val match = RESOURCE_PATH.find(relativePath) ?: return null
-        return ResourceName(match.groupValues[1].substringBefore('-'), match.groupValues[2])
     }
 
     private fun secureFactory(): XMLInputFactory =
@@ -324,10 +431,11 @@ internal class XmlResourceProducer : IndexProducer {
         const val RESOURCE_PACKAGE_GROUP = 2
         const val RESOURCE_TYPE_GROUP = 3
         const val RESOURCE_NAME_GROUP = 4
-        val RESOURCE_PATH =
-            Regex("(?:^|/)(?:src/[^/]+/)?(?:res|[^/]+[_-]res)/([^/]+)/([^/]+)\\.xml$")
         val RESOURCE_REFERENCE =
             Regex("[@?](\\+)?(?:([A-Za-z0-9_.]+):)?([A-Za-z0-9_]+)/([A-Za-z0-9_.]+)")
+        val MANIFEST_PACKAGE = Regex("\\bpackage\\s*=\\s*[\"']([^\"']+)[\"']")
+        val GRADLE_NAMESPACE = Regex("\\bnamespace\\s*(?:=\\s*)?[\"']([^\"']+)[\"']")
+        val GRADLE_APPLICATION_ID = Regex("\\bapplicationId\\s*(?:=\\s*)?[\"']([^\"']+)[\"']")
     }
 }
 

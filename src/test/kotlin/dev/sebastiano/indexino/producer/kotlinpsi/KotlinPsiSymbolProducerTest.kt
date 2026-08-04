@@ -3,6 +3,7 @@ package dev.sebastiano.indexino.producer.kotlinpsi
 import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.CodeIndexRecordCodec
 import dev.sebastiano.indexino.core.record.ReferenceRecord
+import dev.sebastiano.indexino.core.record.ResourceUsageRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.producer.IndexBuildContext
@@ -152,6 +153,58 @@ class KotlinPsiSymbolProducerTest {
         assertEquals("content", container.arguments.single().resolvedName)
         assertEquals("LAMBDA", container.arguments.single().kind)
         assertEquals(')', source[container.endOffset])
+    }
+
+    @Test
+    fun `indexes Kotlin R resource usages with package identity`() {
+        val source =
+            """
+            package com.example.app
+
+            import com.example.feature.R as FeatureR
+            import com.example.feature.R.string.title
+
+            class Screen {
+                val title = R.string.title
+                val styleable = R.styleable.CustomView
+                val titleLength = R.string.title.length()
+                val subtitle = FeatureR.string.subtitle
+                val icon = com.example.assets.R.drawable.icon
+                val notResource = foo.R.state.idle
+            }
+            """
+                .trimIndent()
+        val producer = checkNotNull(ProducerRegistry.get("kotlin-psi-symbols"))
+        producer.produce(
+            IndexBuildContext.forInlineSources(
+                store = store,
+                commitHash = "resources",
+                sourceFiles = mapOf("src/main/kotlin/com/example/app/Screen.kt" to source),
+            ),
+            store,
+        )
+
+        val usages =
+            store
+                .prefixScan("resuse:")
+                .map { it.second }
+                .filterIsInstance<ResourceUsageRecord>()
+                .toList()
+        assertEquals(5, usages.size)
+        assertEquals(
+            setOf(
+                "com.example.app:string:title",
+                "com.example.app:styleable:CustomView",
+                "com.example.feature:string:subtitle",
+                "com.example.assets:drawable:icon",
+            ),
+            usages
+                .map { listOf(it.packageName.orEmpty(), it.type, it.name).joinToString(":") }
+                .toSet(),
+        )
+        assertTrue(usages.all { it.language == "kotlin" })
+        assertTrue(usages.all { it.offset > 0 })
+        assertTrue(usages.all { it.relativeFile.endsWith("Screen.kt") })
     }
 
     private lateinit var store: XodusCodeIndexStore

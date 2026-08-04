@@ -25,6 +25,7 @@ import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.CallArgumentRecord
 import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
+import dev.sebastiano.indexino.core.record.ResourceUsageRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.store.hasSymbol
@@ -32,6 +33,7 @@ import dev.sebastiano.indexino.producer.IndexBuildContext
 import dev.sebastiano.indexino.producer.IndexProducer
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.SourceRecordCleanup
+import dev.sebastiano.indexino.producer.xml.ResourceMetadata
 import java.net.URI
 import javax.tools.Diagnostic
 import javax.tools.DiagnosticCollector
@@ -133,6 +135,70 @@ internal class JavaSourceProducer : IndexProducer {
             reference(target, imported.substringAfterLast('.'), null, node, "import")
             super.visitImport(node, data)
         }
+
+        override fun visitMemberSelect(node: MemberSelectTree, data: Unit?) {
+            val parent = currentPath.parentPath?.leaf
+            if (parent !is MemberSelectTree || parent.expression != node) {
+                indexResourceUsage(node)
+            }
+            super.visitMemberSelect(node, data)
+        }
+
+        private fun indexResourceUsage(node: MemberSelectTree) {
+            if (
+                generateSequence(currentPath.parentPath) { it.parentPath }
+                    .any { it.leaf is ImportTree }
+            ) {
+                return
+            }
+            val segments = memberSelectSegments(node) ?: return
+            val rIndex =
+                segments.indices.firstOrNull { index ->
+                    index + 2 <= segments.lastIndex &&
+                        (segments[index] == "R" ||
+                            imports[segments[index]]?.substringAfterLast('.') == "R") &&
+                        segments[index + 1] in ResourceMetadata.RESOURCE_TYPES
+                } ?: return
+            val explicitPackage = segments.take(rIndex).joinToString(".").ifBlank { null }
+            val importedOwner = imports[segments[rIndex]]
+            val resourcePackage =
+                explicitPackage
+                    ?: importedOwner?.substringBeforeLast('.', "")?.takeIf(String::isNotBlank)
+                    ?: packageName.ifBlank { null }
+            val type = segments[rIndex + 1]
+            val name = segments[rIndex + 2]
+            val start = position(node)
+            store.put(
+                CodeIndexKey.resourceUsage(
+                    packageName = resourcePackage,
+                    type = type,
+                    name = name,
+                    originId = originId,
+                    relativeFile = relativePath,
+                    line = start.line,
+                    column = start.column,
+                ),
+                ResourceUsageRecord(
+                    packageName = resourcePackage,
+                    type = type,
+                    name = name,
+                    relativeFile = relativePath,
+                    line = start.line,
+                    column = start.column,
+                    offset = start.offset,
+                    language = LANGUAGE,
+                    originId = originId,
+                ),
+            )
+        }
+
+        private fun memberSelectSegments(tree: Tree): List<String>? =
+            when (tree) {
+                is IdentifierTree -> listOf(tree.name.toString())
+                is MemberSelectTree ->
+                    memberSelectSegments(tree.expression)?.plus(tree.identifier.toString())
+                else -> null
+            }
 
         override fun visitClass(node: ClassTree, data: Unit?) {
             val name = node.simpleName.toString()

@@ -12,6 +12,8 @@ internal object CodeIndexRecordCodec {
             subclass(FileHashRecord::class)
             subclass(SymbolRecord::class)
             subclass(ReferenceRecord::class)
+            subclass(ResourceDefinitionRecord::class)
+            subclass(ResourceUsageRecord::class)
             subclass(PluginFactRecord::class)
         }
     }

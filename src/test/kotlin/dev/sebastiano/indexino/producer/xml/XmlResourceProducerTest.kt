@@ -2,6 +2,7 @@ package dev.sebastiano.indexino.producer.xml
 
 import dev.sebastiano.indexino.core.record.CodeIndexRecordCodec
 import dev.sebastiano.indexino.core.record.ReferenceRecord
+import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.producer.IndexBuildContext
@@ -298,6 +299,7 @@ class XmlResourceProducerTest {
                 <string name="title">Hello</string>
                 <item type="color" name="accent">#ff0000</item>
                 <item type="color" name="accent_alias">@color/accent</item>
+                <declare-styleable name="CustomView" />
                 <string-array name="items"><item>One</item></string-array>
             </resources>
             """
@@ -334,6 +336,7 @@ class XmlResourceProducerTest {
             assertTrue(resources.any { it.fqn == "res:color:accent" })
             assertTrue(resources.any { it.fqn == "res:layout:main_screen" })
             assertTrue(resources.any { it.fqn == "res:id:title_view" })
+            assertTrue(resources.any { it.fqn == "res:styleable:CustomView" })
             assertTrue(resources.any { it.fqn == "res:array:items" })
 
             val references =
@@ -353,6 +356,237 @@ class XmlResourceProducerTest {
             )
             assertTrue(references.any { it.symbolFqn == "res:android:color:white" })
             assertTrue(references.none { it.symbolFqn == "res:color:white" })
+
+            val idDefinition =
+                store
+                    .prefixScan("resdef:")
+                    .map { it.second }
+                    .filterIsInstance<ResourceDefinitionRecord>()
+                    .single { it.type == "id" && it.name == "title_view" }
+            assertEquals(layout.indexOf("@+id/title_view"), idDefinition.offset)
+            assertEquals(3, idDefinition.line)
+            assertEquals(21, idDefinition.column)
+        }
+    }
+
+    @Test
+    fun `preserves resource packages and qualifiers from project metadata`() {
+        val sources =
+            mapOf(
+                "app/src/main/AndroidManifest.xml" to "<manifest package=\"com.example.app\" />",
+                "app/src/main/res/values/strings.xml" to
+                    "<resources><string name=\"title\">Hello</string></resources>",
+                "app/src/main/res/values-night/colors.xml" to
+                    "<resources><color name=\"accent\">#fff</color></resources>",
+                "feature/build.gradle" to "android { namespace 'com.example.feature' }",
+                "feature/src/main/res/values/strings.xml" to
+                    "<resources><string name=\"title\">Feature</string></resources>",
+            )
+
+        withStore { store ->
+            val producer = assertNotNull(ProducerRegistry.get("xml-resources"))
+            producer.produce(
+                IndexBuildContext.forInlineSources(
+                    store = store,
+                    commitHash = "resources",
+                    sourceFiles = sources,
+                )
+            )
+
+            val definitions =
+                store
+                    .prefixScan("resdef:")
+                    .map { it.second }
+                    .filterIsInstance<ResourceDefinitionRecord>()
+                    .toList()
+            assertEquals(
+                setOf(
+                    "com.example.app:string:title:",
+                    "com.example.app:color:accent:night",
+                    "com.example.feature:string:title:",
+                ),
+                definitions
+                    .map {
+                        listOf(it.packageName.orEmpty(), it.type, it.name, it.qualifiers)
+                            .joinToString(":")
+                    }
+                    .toSet(),
+            )
+        }
+    }
+
+    @Test
+    fun `reads package metadata from origin root when metadata is not indexed`() {
+        val root = createTempDirectory("indexino-resource-metadata-root-")
+        root
+            .resolve("app/build.gradle.kts")
+            .also { it.parent.createDirectories() }
+            .writeText("android { namespace = \"com.example.disk\" }")
+        root
+            .resolve("app/src/main/res/values/strings.xml")
+            .also { it.parent.createDirectories() }
+            .writeText("<resources><string name=\"title\">Hello</string></resources>")
+
+        withStore { store ->
+            val producer = assertNotNull(ProducerRegistry.get("xml-resources"))
+            producer.produce(
+                IndexBuildContext(
+                    store = store,
+                    commitHash = "resources",
+                    sourceFiles = listOf("app/src/main/res/values/strings.xml"),
+                    sources =
+                        listOf(
+                            IndexedSource("workspace", root, "app/src/main/res/values/strings.xml")
+                        ),
+                )
+            )
+
+            val definition =
+                store
+                    .prefixScan("resdef:")
+                    .map { it.second }
+                    .filterIsInstance<ResourceDefinitionRecord>()
+                    .single()
+            assertEquals("com.example.disk", definition.packageName)
+            assertTrue(definition.offset > 0)
+        }
+    }
+
+    @Test
+    fun `indexes CMP resources with source set provenance and package metadata`() {
+        val root = createTempDirectory("indexino-cmp-resource-root-")
+        root
+            .resolve("app/build.gradle.kts")
+            .also { it.parent.createDirectories() }
+            .writeText("android { namespace = \"com.example.cmp\" }")
+        root
+            .resolve("app/src/commonMain/composeResources/values-night/strings.xml")
+            .also { it.parent.createDirectories() }
+            .writeText("<resources><string name=\"title\">Hello</string></resources>")
+
+        withStore { store ->
+            val producer = assertNotNull(ProducerRegistry.get("xml-resources"))
+            producer.produce(
+                IndexBuildContext(
+                    store = store,
+                    commitHash = "resources",
+                    sourceFiles =
+                        listOf("app/src/commonMain/composeResources/values-night/strings.xml"),
+                    sources =
+                        listOf(
+                            IndexedSource(
+                                "workspace",
+                                root,
+                                "app/src/commonMain/composeResources/values-night/strings.xml",
+                            )
+                        ),
+                )
+            )
+
+            val definition =
+                store
+                    .prefixScan("resdef:")
+                    .map { it.second }
+                    .filterIsInstance<ResourceDefinitionRecord>()
+                    .single()
+            assertEquals("com.example.cmp", definition.packageName)
+            assertEquals("night", definition.qualifiers)
+            assertTrue(definition.column > 1)
+        }
+    }
+
+    @Test
+    fun `resource package metadata changes refresh dependent definitions`() {
+        val initial =
+            mapOf(
+                "app/src/main/AndroidManifest.xml" to "<manifest package=\"com.example.old\" />",
+                "app/src/main/res/values/strings.xml" to
+                    "<resources><string name=\"title\">Hello</string></resources>",
+                "feature/build.gradle" to "android { namespace 'com.example.oldfeature' }",
+                "feature/src/main/res/values/strings.xml" to
+                    "<resources><string name=\"title\">Feature</string></resources>",
+            )
+
+        withStore { store ->
+            val producer = assertNotNull(ProducerRegistry.get("xml-resources"))
+            producer.produce(
+                IndexBuildContext.forInlineSources(
+                    store = store,
+                    commitHash = "initial",
+                    sourceFiles = initial,
+                )
+            )
+
+            val updated =
+                initial +
+                    mapOf(
+                        "app/src/main/AndroidManifest.xml" to
+                            "<manifest package=\"com.example.new\" />",
+                        "feature/build.gradle" to "android { namespace 'com.example.newfeature' }",
+                    )
+            producer.produce(
+                IndexBuildContext(
+                    store = store,
+                    commitHash = "updated",
+                    sourceFiles = updated.keys.toList(),
+                    sourceContentOverrides = updated,
+                    changedSourceFiles =
+                        setOf("app/src/main/AndroidManifest.xml", "feature/build.gradle"),
+                )
+            )
+
+            val packages =
+                store
+                    .prefixScan("resdef:")
+                    .map { it.second }
+                    .filterIsInstance<ResourceDefinitionRecord>()
+                    .map { it.packageName }
+                    .toSet()
+            assertEquals(setOf("com.example.new", "com.example.newfeature"), packages)
+        }
+    }
+
+    @Test
+    fun `resource package metadata deletion clears dependent package identity`() {
+        val resources =
+            mapOf(
+                "app/build.gradle.kts" to "android { namespace = \"com.example.transient\" }",
+                "app/src/main/res/values/strings.xml" to
+                    "<resources><string name=\"title\">Hello</string></resources>",
+            )
+
+        withStore { store ->
+            val producer = assertNotNull(ProducerRegistry.get("xml-resources"))
+            producer.produce(
+                IndexBuildContext.forInlineSources(
+                    store = store,
+                    commitHash = "initial",
+                    sourceFiles = resources,
+                )
+            )
+            val remaining =
+                mapOf(
+                    "app/src/main/res/values/strings.xml" to
+                        resources.getValue("app/src/main/res/values/strings.xml")
+                )
+            producer.produce(
+                IndexBuildContext(
+                    store = store,
+                    commitHash = "deleted",
+                    sourceFiles = remaining.keys.toList(),
+                    sourceContentOverrides = remaining,
+                    deletedSourceFiles = setOf("app/build.gradle.kts"),
+                )
+            )
+
+            val packages =
+                store
+                    .prefixScan("resdef:")
+                    .map { it.second }
+                    .filterIsInstance<ResourceDefinitionRecord>()
+                    .map { it.packageName }
+                    .toSet()
+            assertEquals(setOf(null), packages)
         }
     }
 

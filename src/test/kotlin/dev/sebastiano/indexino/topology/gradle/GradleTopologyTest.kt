@@ -1,6 +1,8 @@
 package dev.sebastiano.indexino.topology.gradle
 
+import java.nio.file.Files
 import kotlin.io.path.Path
+import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -19,6 +21,32 @@ class GradleTopologyTest {
                 "ui/src/main/kotlin/Panel.kt",
                 "ui/src/main/res/layout/main.xml",
             ),
+            result.sourceFiles,
+        )
+    }
+
+    @Test
+    fun `includes CMP resources and skips test resources`() {
+        val workspace = createTempDirectory("indexino-cmp-gradle-topology-")
+        Files.writeString(
+            workspace.resolve("settings.gradle.kts"),
+            "rootProject.name = \"cmp\"\ninclude(\":app\")\n",
+        )
+        Files.createDirectories(workspace.resolve("app/src/commonMain/composeResources/values"))
+        Files.createDirectories(workspace.resolve("app/src/commonTest/composeResources/values"))
+        Files.writeString(
+            workspace.resolve("app/src/commonMain/composeResources/values/strings.xml"),
+            "<resources />",
+        )
+        Files.writeString(
+            workspace.resolve("app/src/commonTest/composeResources/values/test_strings.xml"),
+            "<resources />",
+        )
+
+        val result = GradleTopology.resolveSources(":app", workspace, includeDeps = false)
+
+        assertEquals(
+            listOf("app/src/commonMain/composeResources/values/strings.xml"),
             result.sourceFiles,
         )
     }
