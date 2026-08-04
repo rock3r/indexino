@@ -214,24 +214,26 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             if (generateSequence(expression.parent) { it.parent }.any { it is KtImportDirective }) {
                 return@forEach
             }
-            if (expression.parent is KtQualifiedExpression) return@forEach
+            val parent = expression.parent
+            if (parent is KtQualifiedExpression && parent.selectorExpression == expression) {
+                return@forEach
+            }
             val name = expression.getReferencedName()
             val imported = imports[name] ?: return@forEach
             val marker = ".R."
             if (marker !in imported) return@forEach
             val resourcePackage = imported.substringBefore(marker)
             val parts = imported.substringAfter(marker).split('.')
-            if (
-                parts.size != 2 || parts[0] !in ResourceMetadata.RESOURCE_TYPES || parts[1] != name
-            ) {
+            if (parts.size != 2 || parts[0] !in ResourceMetadata.RESOURCE_TYPES) {
                 return@forEach
             }
-            if (resolveVariableType(expression, name) != null) return@forEach
+            val resourceName = parts[1]
+            if (hasShadowedName(expression, name)) return@forEach
             store.put(
                 CodeIndexKey.resourceUsage(
                     packageName = resourcePackage,
                     type = parts[0],
-                    name = name,
+                    name = resourceName,
                     originId = originId,
                     relativeFile = relativePath,
                     line = expression.lineNumber(),
@@ -240,7 +242,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                 ResourceUsageRecord(
                     packageName = resourcePackage,
                     type = parts[0],
-                    name = name,
+                    name = resourceName,
                     relativeFile = relativePath,
                     line = expression.lineNumber(),
                     column = expression.columnNumber(),
@@ -309,6 +311,40 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             )
         }
     }
+
+    private fun hasShadowedName(useSite: KtElement, name: String): Boolean {
+        var scope = useSite.parent
+        var insideMemberFunction = false
+        while (scope != null) {
+            if (scope is KtNamedFunction && scope.parent is KtClassBody) {
+                insideMemberFunction = true
+            }
+            if (hasNameInScope(scope, useSite, name, insideMemberFunction)) return true
+            scope = scope.parent
+        }
+        return false
+    }
+
+    private fun hasNameInScope(
+        scope: PsiElement,
+        useSite: KtElement,
+        name: String,
+        insideMemberFunction: Boolean,
+    ): Boolean =
+        when (scope) {
+            is KtNamedFunction ->
+                (insideMemberFunction || scope.parent !is KtClassBody) &&
+                    scope.valueParameters.any { it.name == name }
+            is KtFunctionLiteral -> scope.valueParameters.any { it.name == name }
+            is KtCatchClause -> scope.catchParameter?.name == name
+            is KtForExpression -> scope.loopParameter?.name == name
+            is KtBlockExpression ->
+                scope.statements.filterIsInstance<KtProperty>().any {
+                    it.name == name && it.textOffset < useSite.textOffset
+                }
+            is KtClass -> scope.declarations.filterIsInstance<KtProperty>().any { it.name == name }
+            else -> false
+        }
 
     private data class ResourceAccessor(val index: Int, val compose: Boolean)
 

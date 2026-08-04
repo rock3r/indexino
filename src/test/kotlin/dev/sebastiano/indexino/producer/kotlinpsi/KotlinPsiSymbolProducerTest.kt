@@ -163,11 +163,12 @@ class KotlinPsiSymbolProducerTest {
 
             import com.example.feature.R as FeatureR
             import com.example.feature.R.string.title
+            import com.example.shared.R.string.shared_title as appSharedTitle
 
             class Screen {
                 val title = R.string.title
                 val styleable = R.styleable.CustomView
-                val staticallyImported = title
+                val shadowedTitle = title
                 val accent = R.attr.accent
                 val composeTitle = Res.string.compose_title
                 val titleLength = R.string.title.length()
@@ -175,6 +176,10 @@ class KotlinPsiSymbolProducerTest {
                 val icon = com.example.assets.R.drawable.icon
                 val notResource = foo.R.state.idle
             }
+
+            fun useStaticTitle() = title
+            fun staticTitleLength() = title.length()
+            fun useAliasedTitle() = appSharedTitle
             """
                 .trimIndent()
         val producer = checkNotNull(ProducerRegistry.get("kotlin-psi-symbols"))
@@ -198,7 +203,7 @@ class KotlinPsiSymbolProducerTest {
                 .map { it.second }
                 .filterIsInstance<ResourceUsageRecord>()
                 .toList()
-        assertEquals(8, usages.size)
+        assertEquals(10, usages.size)
         assertEquals(
             setOf(
                 "com.example.namespace:string:title",
@@ -206,6 +211,7 @@ class KotlinPsiSymbolProducerTest {
                 "com.example.namespace:string:compose_title",
                 "com.example.namespace:attr:accent",
                 "com.example.feature:string:title",
+                "com.example.shared:string:shared_title",
                 "com.example.feature:string:subtitle",
                 "com.example.assets:drawable:icon",
             ),
