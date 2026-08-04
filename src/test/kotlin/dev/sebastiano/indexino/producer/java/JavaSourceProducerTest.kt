@@ -627,7 +627,14 @@ class JavaSourceProducerTest {
                 IndexBuildContext.forInlineSources(
                     store = store,
                     commitHash = "resources",
-                    sourceFiles = mapOf("src/main/java/com/example/app/Screen.java" to source),
+                    sourceFiles =
+                        mapOf(
+                            "app/build.gradle.kts" to
+                                "android { namespace = \"com.example.namespace\" }",
+                            "app/src/main/java/com/example/app/Screen.java" to source,
+                            "app/src/main/java/com/example/app/LocalScreen.java" to
+                                "package com.example.app; class LocalScreen { int local = R.string.local_title; }",
+                        ),
                 )
             )
 
@@ -637,9 +644,10 @@ class JavaSourceProducerTest {
                     .map { it.second }
                     .filterIsInstance<ResourceUsageRecord>()
                     .toList()
-            assertEquals(4, usages.size)
+            assertEquals(5, usages.size)
             assertEquals(
                 setOf(
+                    "com.example.namespace:string:local_title",
                     "com.example.feature:string:title",
                     "com.example.feature:styleable:CustomView",
                     "com.example.assets:drawable:icon",

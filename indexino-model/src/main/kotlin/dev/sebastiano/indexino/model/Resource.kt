@@ -122,8 +122,11 @@ private constructor(
             }
             return ResourceQuery(
                 id =
-                    if (type != null && name != null) ResourceId.of(packageName, type, name)
-                    else null,
+                    if (packageName != null && type != null && name != null) {
+                        ResourceId.of(packageName, type, name)
+                    } else {
+                        null
+                    },
                 packageName = packageName,
                 type = type,
                 name = name,

@@ -64,6 +64,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                 IndexedKotlinFile(
                     source.originId,
                     source.path,
+                    ResourceMetadata.resourcePackage(context, source),
                     file,
                     collectSymbols(file).map { it.copy(originId = source.originId) },
                 )
@@ -155,7 +156,14 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             store,
         )
         indexMemberReferences(file, indexedFile.originId, indexedFile.relativePath, store, imports)
-        indexResourceUsages(file, indexedFile.originId, indexedFile.relativePath, imports, store)
+        indexResourceUsages(
+            file,
+            indexedFile.originId,
+            indexedFile.relativePath,
+            imports,
+            indexedFile.defaultResourcePackage,
+            store,
+        )
     }
 
     private fun indexResourceUsages(
@@ -163,6 +171,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         originId: String,
         relativePath: String,
         imports: Map<String, String>,
+        defaultResourcePackage: String?,
         store: CodeIndexStore,
     ) {
         file.collectDescendantsOfType<KtQualifiedExpression>().forEach { expression ->
@@ -180,6 +189,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             val packageName =
                 explicitPackage
                     ?: importedOwner?.substringBeforeLast('.', "")?.takeIf(String::isNotBlank)
+                    ?: defaultResourcePackage
                     ?: file.packageFqName.asString().ifBlank { null }
             val type = chain.segments[rIndex + 1]
             val name = chain.segments[rIndex + 2]
@@ -818,6 +828,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
     private data class IndexedKotlinFile(
         val originId: String,
         val relativePath: String,
+        val defaultResourcePackage: String?,
         val file: KtFile,
         val symbols: List<ResolvedSymbol>,
     )

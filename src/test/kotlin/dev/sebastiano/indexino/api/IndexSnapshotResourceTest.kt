@@ -39,6 +39,17 @@ class IndexSnapshotResourceTest {
                 assertEquals(listOf(10, 20), definitions.items.map { it.location.offset })
                 assertFalse(definitions.hasMore)
 
+                val crossPackage = runBlocking {
+                    snapshot.findResources(
+                        ResourceQuery.of(packageName = null, type = "string", name = "title"),
+                        QueryOptions.page(10),
+                    )
+                }
+                assertEquals(
+                    listOf("com.example.app", "com.example.app", "com.example.feature"),
+                    crossPackage.items.map { it.id.packageName },
+                )
+
                 val usages = runBlocking {
                     snapshot.findResourceUsages(
                         ResourceQuery.named(

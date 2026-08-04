@@ -60,14 +60,19 @@ internal class JavaSourceProducer : IndexProducer {
         // Seed declarations from every changed file before final call materialization. The parser
         // writes deterministic keys, so the final pass overwrites equivalent symbol/reference facts
         // while letting caller files resolve parameter names from callees later in source order.
-        javaFiles.forEach { source -> parse(source, context.readSource(source), store) }
+        javaFiles.forEach { source -> parse(source, context.readSource(source), store, context) }
         javaFiles.forEachIndexed { index, source ->
             context.reportFileProgress(index + 1, javaFiles.size, source)
-            parse(source, context.readSource(source), store)
+            parse(source, context.readSource(source), store, context)
         }
     }
 
-    private fun parse(indexedSource: IndexedSource, source: String, store: CodeIndexStore) {
+    private fun parse(
+        indexedSource: IndexedSource,
+        source: String,
+        store: CodeIndexStore,
+        context: IndexBuildContext,
+    ) {
         val relativePath = indexedSource.path
         val compiler =
             checkNotNull(ToolProvider.getSystemJavaCompiler()) { "JDK compiler is unavailable" }
@@ -85,7 +90,14 @@ internal class JavaSourceProducer : IndexProducer {
         val unit = task.parse().single()
         val error = diagnostics.diagnostics.firstOrNull { it.kind == Diagnostic.Kind.ERROR }
         check(error == null) { "$relativePath:${error?.lineNumber}: ${error?.getMessage(null)}" }
-        JavaRecordScanner(indexedSource.originId, relativePath, unit, Trees.instance(task), store)
+        JavaRecordScanner(
+                indexedSource.originId,
+                relativePath,
+                ResourceMetadata.resourcePackage(context, indexedSource),
+                unit,
+                Trees.instance(task),
+                store,
+            )
             .scan(unit, Unit)
     }
 
@@ -101,6 +113,7 @@ internal class JavaSourceProducer : IndexProducer {
     private class JavaRecordScanner(
         private val originId: String,
         private val relativePath: String,
+        private val defaultResourcePackage: String?,
         private val unit: CompilationUnitTree,
         private val trees: Trees,
         private val store: CodeIndexStore,
@@ -164,6 +177,7 @@ internal class JavaSourceProducer : IndexProducer {
             val resourcePackage =
                 explicitPackage
                     ?: importedOwner?.substringBeforeLast('.', "")?.takeIf(String::isNotBlank)
+                    ?: defaultResourcePackage
                     ?: packageName.ifBlank { null }
             val type = segments[rIndex + 1]
             val name = segments[rIndex + 2]

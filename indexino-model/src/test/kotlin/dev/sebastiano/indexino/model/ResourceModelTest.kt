@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ResourceModelTest {
@@ -24,9 +25,11 @@ class ResourceModelTest {
         val packageScoped =
             ResourceQuery.of(packageName = "com.example.app", type = null, name = null)
         val typed = ResourceQuery.of(packageName = null, type = "string", name = null)
+        val typeAndName = ResourceQuery.of(packageName = null, type = "string", name = "title")
         assertEquals(appTitle, exact.id)
         assertEquals("com.example.app", packageScoped.packageName)
         assertEquals("string", typed.type)
+        assertNull(typeAndName.id)
         assertNotEquals(exact, typed)
         assertFailsWith<IllegalArgumentException> {
             ResourceQuery.of(packageName = null, type = null, name = "title")

@@ -373,7 +373,9 @@ class XmlResourceProducerTest {
     fun `preserves resource packages and qualifiers from project metadata`() {
         val sources =
             mapOf(
-                "app/src/main/AndroidManifest.xml" to "<manifest package=\"com.example.app\" />",
+                "app/src/main/AndroidManifest.xml" to
+                    "<manifest package=\"com.example.manifest\" />",
+                "app/build.gradle.kts" to "android { namespace = \"com.example.app\" }",
                 "app/src/main/res/values/strings.xml" to
                     "<resources><string name=\"title\">Hello</string></resources>",
                 "app/src/main/res/values-night/colors.xml" to
@@ -449,6 +451,46 @@ class XmlResourceProducerTest {
                     .single()
             assertEquals("com.example.disk", definition.packageName)
             assertTrue(definition.offset > 0)
+        }
+    }
+
+    @Test
+    fun `resolves Bazel resource metadata from the owning package root`() {
+        val root = createTempDirectory("indexino-bazel-resource-root-")
+        root
+            .resolve("app/build.gradle.kts")
+            .also { it.parent.createDirectories() }
+            .writeText("android { namespace = \"com.example.bazel\" }")
+        root
+            .resolve("app/feature_res/drawable/feature_icon.xml")
+            .also { it.parent.createDirectories() }
+            .writeText("<shape />")
+
+        withStore { store ->
+            val producer = assertNotNull(ProducerRegistry.get("xml-resources"))
+            producer.produce(
+                IndexBuildContext(
+                    store = store,
+                    commitHash = "resources",
+                    sourceFiles = listOf("app/feature_res/drawable/feature_icon.xml"),
+                    sources =
+                        listOf(
+                            IndexedSource(
+                                "workspace",
+                                root,
+                                "app/feature_res/drawable/feature_icon.xml",
+                            )
+                        ),
+                )
+            )
+
+            val definition =
+                store
+                    .prefixScan("resdef:")
+                    .map { it.second }
+                    .filterIsInstance<ResourceDefinitionRecord>()
+                    .single()
+            assertEquals("com.example.bazel", definition.packageName)
         }
     }
 

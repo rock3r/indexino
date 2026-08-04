@@ -1,5 +1,7 @@
 package dev.sebastiano.indexino.producer.xml
 
+import dev.sebastiano.indexino.producer.IndexBuildContext
+import dev.sebastiano.indexino.producer.IndexedSource
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -58,23 +60,42 @@ internal object ResourceMetadata {
             relativePath.endsWith("/build.gradle.kts") ||
             relativePath.endsWith("AndroidManifest.xml")
 
-    fun moduleDirectory(relativePath: String): String =
-        when {
+    fun moduleDirectory(relativePath: String): String {
+        val resourceMatch = RESOURCE_PATH.find(relativePath)
+        if (resourceMatch != null) {
+            return relativePath.substring(0, resourceMatch.range.first).trimEnd('/')
+        }
+        return when {
             relativePath.startsWith("src/") -> ""
             "/src/" in relativePath -> relativePath.substringBefore("/src/")
             relativePath.startsWith("res/") -> ""
             "/res/" in relativePath -> relativePath.substringBefore("/res/")
             else -> relativePath.substringBeforeLast('/', "")
         }
+    }
+
+    fun resourcePackage(context: IndexBuildContext, indexedSource: IndexedSource): String? =
+        metadataPathsForResource(indexedSource.path).firstNotNullOfOrNull { metadataPath ->
+            val metadata =
+                metadataContent(context, indexedSource, metadataPath)
+                    ?: return@firstNotNullOfOrNull null
+            when {
+                metadataPath.endsWith("AndroidManifest.xml") ->
+                    MANIFEST_PACKAGE.find(metadata)?.groupValues?.get(1)
+                else ->
+                    GRADLE_NAMESPACE.find(metadata)?.groupValues?.get(1)
+                        ?: GRADLE_APPLICATION_ID.find(metadata)?.groupValues?.get(1)
+            }
+        }
 
     fun metadataPathsForResource(relativePath: String): List<String> {
         val moduleDirectory = moduleDirectory(relativePath)
         return listOf(
+            metadataPath(moduleDirectory, "build.gradle.kts"),
+            metadataPath(moduleDirectory, "build.gradle"),
             metadataPath(moduleDirectory, "src/main/AndroidManifest.xml"),
             metadataPath(moduleDirectory, "src/androidMain/AndroidManifest.xml"),
             metadataPath(moduleDirectory, "AndroidManifest.xml"),
-            metadataPath(moduleDirectory, "build.gradle.kts"),
-            metadataPath(moduleDirectory, "build.gradle"),
         )
     }
 
@@ -97,8 +118,31 @@ internal object ResourceMetadata {
             .sorted()
     }
 
+    private fun metadataContent(
+        context: IndexBuildContext,
+        indexedSource: IndexedSource,
+        metadataPath: String,
+    ): String? {
+        val indexedMetadata =
+            context.sources.firstOrNull {
+                it.originId == indexedSource.originId && it.path == metadataPath
+            }
+        return indexedMetadata?.let { runCatching { context.readSource(it) }.getOrNull() }
+            ?: indexedSource.originRoot.resolve(metadataPath).let { path ->
+                if (Files.isRegularFile(path)) {
+                    runCatching { Files.readString(path) }.getOrNull()
+                } else {
+                    null
+                }
+            }
+    }
+
     private fun metadataPath(moduleDirectory: String, relativePath: String): String =
         if (moduleDirectory.isEmpty()) relativePath else "$moduleDirectory/$relativePath"
+
+    private val MANIFEST_PACKAGE = Regex("\\bpackage\\s*=\\s*[\"']([^\"']+)[\"']")
+    private val GRADLE_NAMESPACE = Regex("\\bnamespace\\s*(?:=\\s*)?[\"']([^\"']+)[\"']")
+    private val GRADLE_APPLICATION_ID = Regex("\\bapplicationId\\s*(?:=\\s*)?[\"']([^\"']+)[\"']")
 }
 
 internal data class ResourcePath(val type: String, val name: String, val qualifiers: String)

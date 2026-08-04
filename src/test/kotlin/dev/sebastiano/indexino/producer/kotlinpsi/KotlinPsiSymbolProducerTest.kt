@@ -179,7 +179,12 @@ class KotlinPsiSymbolProducerTest {
             IndexBuildContext.forInlineSources(
                 store = store,
                 commitHash = "resources",
-                sourceFiles = mapOf("src/main/kotlin/com/example/app/Screen.kt" to source),
+                sourceFiles =
+                    mapOf(
+                        "app/build.gradle.kts" to
+                            "android { namespace = \"com.example.namespace\" }",
+                        "app/src/main/kotlin/com/example/app/Screen.kt" to source,
+                    ),
             ),
             store,
         )
@@ -193,8 +198,8 @@ class KotlinPsiSymbolProducerTest {
         assertEquals(5, usages.size)
         assertEquals(
             setOf(
-                "com.example.app:string:title",
-                "com.example.app:styleable:CustomView",
+                "com.example.namespace:string:title",
+                "com.example.namespace:styleable:CustomView",
                 "com.example.feature:string:subtitle",
                 "com.example.assets:drawable:icon",
             ),

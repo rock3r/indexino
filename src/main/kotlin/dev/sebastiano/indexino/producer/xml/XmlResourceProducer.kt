@@ -10,7 +10,6 @@ import dev.sebastiano.indexino.producer.IndexProducer
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.SourceRecordCleanup
 import java.io.StringReader
-import java.nio.file.Files
 import javax.xml.stream.XMLInputFactory
 import javax.xml.stream.XMLStreamConstants
 import javax.xml.stream.XMLStreamException
@@ -64,7 +63,7 @@ internal class XmlResourceProducer : IndexProducer {
     ) {
         val relativePath = indexedSource.path
         val sourcePositions = XmlSourcePositions(source)
-        val packageName = resourcePackage(context, indexedSource)
+        val packageName = ResourceMetadata.resourcePackage(context, indexedSource)
         val pathResource = ResourceMetadata.resourceFromPath(relativePath)
         if (pathResource != null && pathResource.type != "values") {
             putResource(
@@ -339,33 +338,6 @@ internal class XmlResourceProducer : IndexProducer {
         else "$prefix:${getAttributeLocalName(index)}"
     }
 
-    private fun resourcePackage(context: IndexBuildContext, indexedSource: IndexedSource): String? {
-        return ResourceMetadata.metadataPathsForResource(indexedSource.path).firstNotNullOfOrNull {
-            metadataPath ->
-            val indexedMetadata =
-                context.sources.firstOrNull {
-                    it.originId == indexedSource.originId && it.path == metadataPath
-                }
-            val metadata =
-                indexedMetadata?.let { runCatching { context.readSource(it) }.getOrNull() }
-                    ?: indexedSource.originRoot.resolve(metadataPath).let { path ->
-                        if (Files.isRegularFile(path)) {
-                            runCatching { Files.readString(path) }.getOrNull()
-                        } else {
-                            null
-                        }
-                    }
-                    ?: return@firstNotNullOfOrNull null
-            when {
-                metadataPath.endsWith("AndroidManifest.xml") ->
-                    MANIFEST_PACKAGE.find(metadata)?.groupValues?.get(1)
-                else ->
-                    GRADLE_NAMESPACE.find(metadata)?.groupValues?.get(1)
-                        ?: GRADLE_APPLICATION_ID.find(metadata)?.groupValues?.get(1)
-            }
-        }
-    }
-
     private fun valuesResource(element: String, itemType: String?, name: String?): ResourceName? {
         if (name.isNullOrBlank()) {
             return null
@@ -433,9 +405,6 @@ internal class XmlResourceProducer : IndexProducer {
         const val RESOURCE_NAME_GROUP = 4
         val RESOURCE_REFERENCE =
             Regex("[@?](\\+)?(?:([A-Za-z0-9_.]+):)?([A-Za-z0-9_]+)/([A-Za-z0-9_.]+)")
-        val MANIFEST_PACKAGE = Regex("\\bpackage\\s*=\\s*[\"']([^\"']+)[\"']")
-        val GRADLE_NAMESPACE = Regex("\\bnamespace\\s*(?:=\\s*)?[\"']([^\"']+)[\"']")
-        val GRADLE_APPLICATION_ID = Regex("\\bapplicationId\\s*(?:=\\s*)?[\"']([^\"']+)[\"']")
     }
 }
 
