@@ -3,6 +3,7 @@ package dev.sebastiano.indexino.producer.xml
 import dev.sebastiano.indexino.core.record.CodeIndexRecordCodec
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
+import dev.sebastiano.indexino.core.record.ResourceUsageRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.producer.IndexBuildContext
@@ -366,6 +367,27 @@ class XmlResourceProducerTest {
             assertEquals(layout.indexOf("@+id/title_view"), idDefinition.offset)
             assertEquals(3, idDefinition.line)
             assertEquals(21, idDefinition.column)
+
+            val usages =
+                store
+                    .prefixScan("resuse:")
+                    .map { it.second }
+                    .filterIsInstance<ResourceUsageRecord>()
+                    .toList()
+            assertTrue(
+                usages.any {
+                    it.packageName == null &&
+                        it.type == "string" &&
+                        it.name == "title" &&
+                        it.language == "xml" &&
+                        it.offset == layout.indexOf("@string/title")
+                }
+            )
+            assertTrue(
+                usages.any {
+                    it.packageName == "android" && it.type == "color" && it.name == "white"
+                }
+            )
         }
     }
 
@@ -451,6 +473,38 @@ class XmlResourceProducerTest {
                     .single()
             assertEquals("com.example.disk", definition.packageName)
             assertTrue(definition.offset > 0)
+        }
+    }
+
+    @Test
+    fun `manifest values that mention namespace do not outrank manifest package`() {
+        val sources =
+            mapOf(
+                "app/src/main/AndroidManifest.xml" to
+                    "<manifest package=\"com.example.manifest\">" +
+                        "<provider authorities=\"com.example.namespace\" />" +
+                        "</manifest>",
+                "app/src/main/res/values/strings.xml" to
+                    "<resources><string name=\"title\">Hello</string></resources>",
+            )
+
+        withStore { store ->
+            val producer = assertNotNull(ProducerRegistry.get("xml-resources"))
+            producer.produce(
+                IndexBuildContext.forInlineSources(
+                    store = store,
+                    commitHash = "resources",
+                    sourceFiles = sources,
+                )
+            )
+
+            val definition =
+                store
+                    .prefixScan("resdef:")
+                    .map { it.second }
+                    .filterIsInstance<ResourceDefinitionRecord>()
+                    .single()
+            assertEquals("com.example.manifest", definition.packageName)
         }
     }
 

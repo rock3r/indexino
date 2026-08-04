@@ -79,8 +79,12 @@ internal object ResourceMetadata {
             metadataPathsForResource(indexedSource.path).mapNotNull { metadataPath ->
                 metadataContent(context, indexedSource, metadataPath)?.let { metadataPath to it }
             }
-        return metadata.firstNotNullOfOrNull { (_, content) ->
-            GRADLE_NAMESPACE.find(content)?.groupValues?.get(1)
+        return metadata.firstNotNullOfOrNull { (path, content) ->
+            if (isGradleMetadata(path)) {
+                GRADLE_NAMESPACE.find(content)?.groupValues?.get(1)
+            } else {
+                null
+            }
         }
             ?: metadata.firstNotNullOfOrNull { (path, content) ->
                 if (path.endsWith("AndroidManifest.xml")) {
@@ -89,8 +93,12 @@ internal object ResourceMetadata {
                     null
                 }
             }
-            ?: metadata.firstNotNullOfOrNull { (_, content) ->
-                GRADLE_APPLICATION_ID.find(content)?.groupValues?.get(1)
+            ?: metadata.firstNotNullOfOrNull { (path, content) ->
+                if (isGradleMetadata(path)) {
+                    GRADLE_APPLICATION_ID.find(content)?.groupValues?.get(1)
+                } else {
+                    null
+                }
             }
     }
 
@@ -123,6 +131,9 @@ internal object ResourceMetadata {
             .filter { it !in existing && Files.isRegularFile(originRoot.resolve(it)) }
             .sorted()
     }
+
+    private fun isGradleMetadata(path: String): Boolean =
+        path.endsWith("build.gradle.kts") || path.endsWith("build.gradle")
 
     private fun metadataContent(
         context: IndexBuildContext,

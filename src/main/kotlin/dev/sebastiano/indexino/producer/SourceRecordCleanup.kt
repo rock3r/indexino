@@ -46,6 +46,7 @@ internal object SourceRecordCleanup {
             .plus(store.prefixScan("ref:"))
             .plus(store.prefixScan("res:"))
             .plus(store.prefixScan("resdef:"))
+            .plus(store.prefixScan("resuse:"))
             .filter { (_, record) ->
                 val originId: String
                 val relativeFile: String
@@ -59,6 +60,10 @@ internal object SourceRecordCleanup {
                         relativeFile = record.relativeFile
                     }
                     is ResourceDefinitionRecord -> {
+                        originId = record.originId
+                        relativeFile = record.relativeFile
+                    }
+                    is ResourceUsageRecord -> {
                         originId = record.originId
                         relativeFile = record.relativeFile
                     }

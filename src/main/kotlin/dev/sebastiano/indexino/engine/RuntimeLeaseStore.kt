@@ -95,7 +95,7 @@ internal class RuntimeLeaseStore(
                 processStartedAtMillis(lease.ownerPid) == lease.ownerStartedAtMillis)
 
     companion object {
-        const val PROTOCOL_MAJOR = 4
+        const val PROTOCOL_MAJOR = 5
         const val PROTOCOL_MINOR = 0
 
         private val JSON = Json {

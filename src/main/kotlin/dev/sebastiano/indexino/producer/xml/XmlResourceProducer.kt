@@ -3,6 +3,7 @@ package dev.sebastiano.indexino.producer.xml
 import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
+import dev.sebastiano.indexino.core.record.ResourceUsageRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.producer.IndexBuildContext
@@ -224,6 +225,28 @@ internal class XmlResourceProducer : IndexProducer {
                     referencedName = name,
                     qualifier = listOfNotNull(packageName, type).joinToString(":"),
                     candidateSymbolFqns = listOf(target),
+                ),
+            )
+            store.put(
+                CodeIndexKey.resourceUsage(
+                    packageName = packageName ?: resolvedPackageName,
+                    type = type,
+                    name = name,
+                    originId = indexedSource.originId,
+                    relativeFile = indexedSource.path,
+                    line = position.line,
+                    column = position.column,
+                ),
+                ResourceUsageRecord(
+                    packageName = packageName ?: resolvedPackageName,
+                    type = type,
+                    name = name,
+                    relativeFile = indexedSource.path,
+                    line = position.line,
+                    column = position.column,
+                    offset = offset,
+                    language = LANGUAGE,
+                    originId = indexedSource.originId,
                 ),
             )
         }

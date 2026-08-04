@@ -262,7 +262,7 @@ class ShrunkCliDistributionTest {
         runCommand(workspace, "git", "config", "user.email", "distribution-test@example.invalid")
         runCommand(workspace, "git", "config", "user.name", "Distribution Test")
         runCommand(workspace, "git", "add", ".")
-        runCommand(workspace, "git", "commit", "-m", "fixture")
+        runCommand(workspace, "git", "-c", "commit.gpgsign=false", "commit", "-m", "fixture")
         return workspace
     }
 

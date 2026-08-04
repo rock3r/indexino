@@ -9,6 +9,11 @@ import kotlin.test.assertIs
 
 class RuntimeLeaseStoreTest {
     @Test
+    fun `resource snapshot commands use protocol major five`() {
+        assertEquals(5, RuntimeLeaseStore.PROTOCOL_MAJOR)
+    }
+
+    @Test
     fun `lease persists the owner auto refresh mode`() {
         val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-mode-")
         try {
