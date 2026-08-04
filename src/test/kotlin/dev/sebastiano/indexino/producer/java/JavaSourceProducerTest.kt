@@ -610,9 +610,12 @@ class JavaSourceProducerTest {
             package com.example.app;
 
             import com.example.feature.R;
+            import static com.example.shared.R.string.shared_title;
 
             class Screen {
                 int title = R.string.title;
+                int staticallyImported = shared_title;
+                int staticLength = shared_title.length();
                 int[] styleable = R.styleable.CustomView;
                 int titleLength = R.string.title.length();
                 int icon = com.example.assets.R.drawable.icon;
@@ -634,6 +637,13 @@ class JavaSourceProducerTest {
                             "app/src/main/java/com/example/app/Screen.java" to source,
                             "app/src/main/java/com/example/app/LocalScreen.java" to
                                 "package com.example.app; class LocalScreen { int local = R.string.local_title; }",
+                            "app/src/main/java/com/example/app/Shadowed.java" to
+                                """
+                                package com.example.app;
+                                import static com.example.shared.R.string.shared_title;
+                                class Shadowed { int shared_title; int read() { return shared_title; } }
+                                """
+                                    .trimIndent(),
                         ),
                 )
             )
@@ -644,11 +654,12 @@ class JavaSourceProducerTest {
                     .map { it.second }
                     .filterIsInstance<ResourceUsageRecord>()
                     .toList()
-            assertEquals(5, usages.size)
+            assertEquals(7, usages.size)
             assertEquals(
                 setOf(
                     "com.example.namespace:string:local_title",
                     "com.example.feature:string:title",
+                    "com.example.shared:string:shared_title",
                     "com.example.feature:styleable:CustomView",
                     "com.example.assets:drawable:icon",
                 ),

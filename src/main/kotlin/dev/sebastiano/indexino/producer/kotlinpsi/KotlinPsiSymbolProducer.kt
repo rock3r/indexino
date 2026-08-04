@@ -194,6 +194,62 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             indexedFile.defaultResourcePackage,
             store,
         )
+        indexStaticResourceUsages(
+            file,
+            indexedFile.originId,
+            indexedFile.relativePath,
+            imports,
+            store,
+        )
+    }
+
+    private fun indexStaticResourceUsages(
+        file: KtFile,
+        originId: String,
+        relativePath: String,
+        imports: Map<String, String>,
+        store: CodeIndexStore,
+    ) {
+        file.collectDescendantsOfType<KtNameReferenceExpression>().forEach { expression ->
+            if (generateSequence(expression.parent) { it.parent }.any { it is KtImportDirective }) {
+                return@forEach
+            }
+            if (expression.parent is KtQualifiedExpression) return@forEach
+            val name = expression.getReferencedName()
+            val imported = imports[name] ?: return@forEach
+            val marker = ".R."
+            if (marker !in imported) return@forEach
+            val resourcePackage = imported.substringBefore(marker)
+            val parts = imported.substringAfter(marker).split('.')
+            if (
+                parts.size != 2 || parts[0] !in ResourceMetadata.RESOURCE_TYPES || parts[1] != name
+            ) {
+                return@forEach
+            }
+            if (resolveVariableType(expression, name) != null) return@forEach
+            store.put(
+                CodeIndexKey.resourceUsage(
+                    packageName = resourcePackage,
+                    type = parts[0],
+                    name = name,
+                    originId = originId,
+                    relativeFile = relativePath,
+                    line = expression.lineNumber(),
+                    column = expression.columnNumber(),
+                ),
+                ResourceUsageRecord(
+                    packageName = resourcePackage,
+                    type = parts[0],
+                    name = name,
+                    relativeFile = relativePath,
+                    line = expression.lineNumber(),
+                    column = expression.columnNumber(),
+                    offset = expression.textOffset,
+                    language = LANGUAGE,
+                    originId = originId,
+                ),
+            )
+        }
     }
 
     private fun indexResourceUsages(

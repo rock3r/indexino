@@ -181,6 +181,53 @@ internal class JavaSourceProducer : IndexProducer {
             super.visitMemberSelect(node, data)
         }
 
+        override fun visitIdentifier(node: IdentifierTree, data: Unit?) {
+            indexStaticResourceUsage(node)
+            super.visitIdentifier(node, data)
+        }
+
+        private fun indexStaticResourceUsage(node: IdentifierTree) {
+            val parent = currentPath.parentPath?.leaf
+            if (
+                generateSequence(currentPath.parentPath) { it.parentPath }
+                    .any { it.leaf is ImportTree } ||
+                    (parent is MemberSelectTree && parent.expression != node)
+            ) {
+                return
+            }
+            val name = node.name.toString()
+            if (variableScopes.reversed().any { scope -> name in scope }) return
+            val owner = staticImports[name] ?: return
+            val marker = ".R."
+            if (marker !in owner) return
+            val resourcePackage = owner.substringBefore(marker)
+            val type = owner.substringAfter(marker)
+            if ('.' in type || type !in ResourceMetadata.RESOURCE_TYPES) return
+            val start = position(node)
+            store.put(
+                CodeIndexKey.resourceUsage(
+                    packageName = resourcePackage,
+                    type = type,
+                    name = node.name.toString(),
+                    originId = originId,
+                    relativeFile = relativePath,
+                    line = start.line,
+                    column = start.column,
+                ),
+                ResourceUsageRecord(
+                    packageName = resourcePackage,
+                    type = type,
+                    name = node.name.toString(),
+                    relativeFile = relativePath,
+                    line = start.line,
+                    column = start.column,
+                    offset = start.offset,
+                    language = LANGUAGE,
+                    originId = originId,
+                ),
+            )
+        }
+
         private fun indexResourceUsage(node: MemberSelectTree) {
             if (
                 generateSequence(currentPath.parentPath) { it.parentPath }
