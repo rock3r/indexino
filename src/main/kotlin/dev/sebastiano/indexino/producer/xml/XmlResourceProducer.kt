@@ -432,7 +432,12 @@ internal class XmlResourceProducer : IndexProducer {
         ) {
             return
         }
-        val target = resourceFqn(null, "style", value)
+        val stylePackage =
+            value.substringBefore(':', missingDelimiterValue = "").takeIf {
+                ':' in value && it.isNotBlank()
+            }
+        val styleName = value.substringAfter(':').substringAfter('/')
+        val target = resourceFqn(stylePackage, "style", styleName)
         store.put(
             CodeIndexKey.ref(
                 target,
@@ -449,25 +454,25 @@ internal class XmlResourceProducer : IndexProducer {
                 column = column,
                 context = "resource",
                 language = LANGUAGE,
-                referencedName = value,
-                qualifier = "style",
+                referencedName = styleName,
+                qualifier = listOfNotNull(stylePackage, "style").joinToString(":"),
                 candidateSymbolFqns = listOf(target),
             ),
         )
         store.put(
             CodeIndexKey.resourceUsage(
-                packageName = resolvedPackageName,
+                packageName = stylePackage ?: resolvedPackageName,
                 type = "style",
-                name = value,
+                name = styleName,
                 originId = indexedSource.originId,
                 relativeFile = indexedSource.path,
                 line = line,
                 column = column,
             ),
             ResourceUsageRecord(
-                packageName = resolvedPackageName,
+                packageName = stylePackage ?: resolvedPackageName,
                 type = "style",
-                name = value,
+                name = styleName,
                 relativeFile = indexedSource.path,
                 line = line,
                 column = column,

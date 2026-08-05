@@ -733,6 +733,68 @@ class JavaSourceProducerTest {
         }
     }
 
+    @Test
+    fun `resource definition changes reindex wildcard R imports`() {
+        val javaSource =
+            """
+            package com.example.wild;
+            import static com.example.wild.R.color.*;
+            class Screen { int color = wildcard_accent; }
+            """
+                .trimIndent()
+        val xmlSource = "<resources><color name=\"wildcard_accent\">#fff</color></resources>"
+        val sources =
+            mapOf(
+                "app/build.gradle.kts" to "android { namespace = \"com.example.wild\" }",
+                "app/src/main/java/com/example/wild/Screen.java" to javaSource,
+                "app/src/main/res/values/colors.xml" to xmlSource,
+            )
+
+        withStore { store ->
+            val javaProducer = assertNotNull(ProducerRegistry.get("java-source"))
+            javaProducer.produce(
+                IndexBuildContext(
+                    store = store,
+                    commitHash = "initial",
+                    sourceFiles = sources.keys.toList(),
+                    sourceContentOverrides = sources,
+                    changedSourceFiles = setOf("app/src/main/java/com/example/wild/Screen.java"),
+                )
+            )
+            assertTrue(store.prefixScan("resuse:").toList().isEmpty())
+
+            assertNotNull(ProducerRegistry.get("xml-resources"))
+                .produce(
+                    IndexBuildContext(
+                        store = store,
+                        commitHash = "updated",
+                        sourceFiles = sources.keys.toList(),
+                        sourceContentOverrides = sources,
+                        changedSourceFiles = setOf("app/src/main/res/values/colors.xml"),
+                    )
+                )
+            javaProducer.produce(
+                IndexBuildContext(
+                    store = store,
+                    commitHash = "updated",
+                    sourceFiles = sources.keys.toList(),
+                    sourceContentOverrides = sources,
+                    changedSourceFiles = setOf("app/src/main/res/values/colors.xml"),
+                )
+            )
+
+            val usages =
+                store
+                    .prefixScan("resuse:")
+                    .map { it.second }
+                    .filterIsInstance<ResourceUsageRecord>()
+                    .toList()
+            assertEquals(1, usages.size)
+            assertEquals("com.example.wild", usages.single().packageName)
+            assertEquals("wildcard_accent", usages.single().name)
+        }
+    }
+
     private fun withStore(block: (XodusCodeIndexStore) -> Unit) {
         val store =
             XodusCodeIndexStore.open(createTempDirectory("java-source-producer-").resolve("index"))

@@ -84,11 +84,16 @@ internal class JavaSourceProducer : IndexProducer {
             (context.changedSources + context.deletedSources).mapNotNull { source ->
                 ResourceMetadata.metadataModule(source.path)?.let { source.originId to it }
             }
-        if (metadataModules.isEmpty()) return emptyList()
+        val resourceModules =
+            (context.changedSources + context.deletedSources)
+                .filter { ResourceMetadata.isResourceXml(it.path) }
+                .map { it.originId to ResourceMetadata.moduleDirectory(it.path) }
+        val dependencyModules = metadataModules + resourceModules
+        if (dependencyModules.isEmpty()) return emptyList()
         return context.sources.filter { source ->
             source.path.endsWith(".java") &&
                 (source.originId to ResourceMetadata.moduleDirectory(source.path)) in
-                    metadataModules
+                    dependencyModules
         }
     }
 

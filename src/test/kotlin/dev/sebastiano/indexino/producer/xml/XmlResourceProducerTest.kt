@@ -305,6 +305,8 @@ class XmlResourceProducerTest {
                     <attr name="android:label" />
                 </declare-styleable>
                 <style name="Child" parent="AppTheme" />
+                <style name="FrameworkChild" parent="android:Theme" />
+                <style name="FrameworkSlashChild" parent="android:style/Theme.Material" />
                 <string-array name="items"><item>One</item></string-array>
             </resources>
             """
@@ -335,11 +337,12 @@ class XmlResourceProducerTest {
                 )
             )
 
-            assertIndexedResourceFacts(store, layout)
+            assertIndexedSymbolsAndReferences(store)
+            assertIndexedPositionsAndUsages(store, layout)
         }
     }
 
-    private fun assertIndexedResourceFacts(store: XodusCodeIndexStore, layout: String) {
+    private fun assertIndexedSymbolsAndReferences(store: XodusCodeIndexStore) {
         val resources =
             store.prefixScan("res:").map { it.second }.filterIsInstance<SymbolRecord>().toList()
         assertTrue(resources.any { it.fqn == "res:string:title" })
@@ -364,7 +367,9 @@ class XmlResourceProducerTest {
         assertTrue(references.any { it.symbolFqn == "res:array:items" && it.context == "resource" })
         assertTrue(references.any { it.symbolFqn == "res:android:color:white" })
         assertTrue(references.none { it.symbolFqn == "res:color:white" })
+    }
 
+    private fun assertIndexedPositionsAndUsages(store: XodusCodeIndexStore, layout: String) {
         val idDefinition =
             store
                 .prefixScan("resdef:")
@@ -399,6 +404,14 @@ class XmlResourceProducerTest {
                     it.type == "style" &&
                     it.name == "AppTheme" &&
                     it.language == "xml"
+            }
+        )
+        assertTrue(
+            usages.any { it.packageName == "android" && it.type == "style" && it.name == "Theme" }
+        )
+        assertTrue(
+            usages.any {
+                it.packageName == "android" && it.type == "style" && it.name == "Theme.Material"
             }
         )
     }
