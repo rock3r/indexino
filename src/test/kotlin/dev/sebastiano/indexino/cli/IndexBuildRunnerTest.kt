@@ -342,6 +342,11 @@ class IndexBuildRunnerTest {
     fun `gradle namespace changes refresh resource package identities`() {
         val workspace = tempDir.resolve("resource-namespace")
         Files.createDirectories(workspace.resolve("app/src/main/res/values"))
+        Files.createDirectories(workspace.resolve("app/src/main/res/drawable"))
+        Files.write(
+            workspace.resolve("app/src/main/res/drawable/icon.png"),
+            byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x80.toByte()),
+        )
         Files.writeString(
             workspace.resolve("settings.gradle.kts"),
             "rootProject.name = \"resources\"\ninclude(\":app\")\n",

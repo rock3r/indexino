@@ -57,7 +57,7 @@ internal object ModuleSourceRoots {
         val sourceKind = segments[1]
         val extension = path.fileName.toString().substringAfterLast('.', "")
         return (sourceKind in CODE_SOURCE_DIRS && extension in sourceExtensions) ||
-            (sourceKind in RESOURCE_SOURCE_DIRS && extension == "xml")
+            (sourceKind in RESOURCE_SOURCE_DIRS && extension.isNotBlank())
     }
 
     private val CODE_SOURCE_DIRS = setOf("kotlin", "java")

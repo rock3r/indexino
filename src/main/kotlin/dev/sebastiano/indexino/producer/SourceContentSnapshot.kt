@@ -1,17 +1,25 @@
 package dev.sebastiano.indexino.producer
 
-import kotlin.io.path.readText
+import java.nio.file.Files
+import kotlin.text.Charsets
 
 /** Immutable source content captured once for one refresh attempt. */
 internal class SourceContentSnapshot
 private constructor(private val entries: Map<IndexedSource, Entry>) {
-    internal data class Entry(val content: String, val contentHash: String)
+    internal data class Entry(val bytes: ByteArray, val contentHash: String)
 
     fun content(source: IndexedSource): String =
         checkNotNull(entries[source]) {
                 "Source was not captured: ${source.originId}:${source.path}"
             }
-            .content
+            .bytes
+            .toString(Charsets.UTF_8)
+
+    fun contentBytes(source: IndexedSource): ByteArray =
+        checkNotNull(entries[source]) {
+                "Source was not captured: ${source.originId}:${source.path}"
+            }
+            .bytes
 
     fun contentHash(source: IndexedSource): String =
         checkNotNull(entries[source]) {
@@ -32,8 +40,8 @@ private constructor(private val entries: Map<IndexedSource, Entry>) {
         fun capture(sources: List<IndexedSource>): SourceContentSnapshot =
             SourceContentSnapshot(
                 sources.associateWith { source ->
-                    val content = source.originRoot.resolve(source.path).readText()
-                    Entry(content, FileHashProducer.contentHash(content))
+                    val bytes = Files.readAllBytes(source.originRoot.resolve(source.path))
+                    Entry(bytes = bytes, contentHash = FileHashProducer.contentHash(bytes))
                 }
             )
     }

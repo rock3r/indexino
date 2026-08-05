@@ -2,9 +2,9 @@ package dev.sebastiano.indexino.producer
 
 import dev.sebastiano.indexino.core.record.FileHashRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
+import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
-import kotlin.io.path.readText
 
 internal data class SourceChangeSet(
     val changedSources: Set<IndexedSource>,
@@ -37,7 +37,7 @@ internal object SourceChangeDetector {
                 val currentHash =
                     sourceSnapshot?.contentHash(source)
                         ?: FileHashProducer.contentHash(
-                            source.originRoot.resolve(source.path).readText()
+                            Files.readAllBytes(source.originRoot.resolve(source.path))
                         )
                 previousHashes[source.originId to source.path] != currentHash
             }

@@ -31,17 +31,25 @@ internal class XmlResourceProducer : IndexProducer {
         val xmlFiles = resourceFilesToProcess(context)
         xmlFiles.forEachIndexed { index, indexedSource ->
             context.reportFileProgress(index + 1, xmlFiles.size, indexedSource)
-            parse(indexedSource, context.readSource(indexedSource), store, context)
+            val source =
+                if (indexedSource.path.endsWith(".xml")) {
+                    context.readSource(indexedSource)
+                } else {
+                    ""
+                }
+            parse(indexedSource, source, store, context)
         }
     }
 
     private fun affectedResourceSources(context: IndexBuildContext): List<IndexedSource> =
-        ((context.changedSources + context.deletedSources).filter { it.path.endsWith(".xml") } +
-                dependentResources(context))
+        ((context.changedSources + context.deletedSources).filter {
+                ResourceMetadata.isResourceXml(it.path)
+            } + dependentResources(context))
             .distinctBy { it.originId to it.path }
 
     private fun resourceFilesToProcess(context: IndexBuildContext): List<IndexedSource> =
-        (context.changedSources.filter { it.path.endsWith(".xml") } + dependentResources(context))
+        (context.changedSources.filter { ResourceMetadata.isResourceXml(it.path) } +
+                dependentResources(context))
             .distinctBy { it.originId to it.path }
 
     private fun dependentResources(context: IndexBuildContext): List<IndexedSource> {
@@ -51,8 +59,7 @@ internal class XmlResourceProducer : IndexProducer {
             }
         if (metadataModules.isEmpty()) return emptyList()
         return context.sources.filter { source ->
-            source.path.endsWith(".xml") &&
-                ResourceMetadata.isResourceXml(source.path) &&
+            ResourceMetadata.isResourceXml(source.path) &&
                 (source.originId to ResourceMetadata.moduleDirectory(source.path)) in
                     metadataModules
         }
@@ -80,6 +87,7 @@ internal class XmlResourceProducer : IndexProducer {
                 packageName,
             )
         }
+        if (!relativePath.endsWith(".xml")) return
         val factory = secureFactory()
         try {
             val reader = factory.createXMLStreamReader(StringReader(source))

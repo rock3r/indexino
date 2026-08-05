@@ -276,14 +276,10 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             val explicitPackage = chain.segments.take(rIndex).joinToString(".").ifBlank { null }
             val importedOwner = imports[chain.segments[rIndex]]
             val packageName =
-                if (accessor.compose) {
-                    defaultResourcePackage ?: file.packageFqName.asString().ifBlank { null }
-                } else {
-                    explicitPackage
-                        ?: importedOwner?.substringBeforeLast('.', "")?.takeIf(String::isNotBlank)
-                        ?: defaultResourcePackage
-                        ?: file.packageFqName.asString().ifBlank { null }
-                }
+                explicitPackage
+                    ?: importedOwner?.substringBeforeLast('.', "")?.takeIf(String::isNotBlank)
+                    ?: defaultResourcePackage
+                    ?: file.packageFqName.asString().ifBlank { null }
             val type = chain.segments[rIndex + 1]
             val name = chain.segments[rIndex + 2]
             val selector = chain.selectors.getOrNull(rIndex + 1) ?: return@forEach
@@ -342,7 +338,12 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                 scope.statements.filterIsInstance<KtProperty>().any {
                     it.name == name && it.textOffset < useSite.textOffset
                 }
-            is KtClass -> scope.declarations.filterIsInstance<KtProperty>().any { it.name == name }
+            is KtClassOrObject ->
+                scope.declarations.filterIsInstance<KtProperty>().any { it.name == name } ||
+                    (scope as? KtClass)?.primaryConstructorParameters.orEmpty().any {
+                        it.hasValOrVar() && it.name == name
+                    }
+            is KtFile -> scope.declarations.filterIsInstance<KtProperty>().any { it.name == name }
             else -> false
         }
 

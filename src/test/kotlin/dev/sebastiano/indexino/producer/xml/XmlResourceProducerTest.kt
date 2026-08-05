@@ -479,6 +479,44 @@ class XmlResourceProducerTest {
     }
 
     @Test
+    fun `indexes non XML file resources as definitions without parsing content`() {
+        val root = createTempDirectory("indexino-file-resource-root-")
+        root
+            .resolve("app/build.gradle.kts")
+            .also { it.parent.createDirectories() }
+            .writeText("android { namespace = \"com.example.assets\" }")
+        root
+            .resolve("app/src/main/res/drawable/icon.png")
+            .also { it.parent.createDirectories() }
+            .writeText("not-a-real-png")
+
+        withStore { store ->
+            val producer = assertNotNull(ProducerRegistry.get("xml-resources"))
+            producer.produce(
+                IndexBuildContext(
+                    store = store,
+                    commitHash = "resources",
+                    sourceFiles = listOf("app/src/main/res/drawable/icon.png"),
+                    sources =
+                        listOf(
+                            IndexedSource("workspace", root, "app/src/main/res/drawable/icon.png")
+                        ),
+                )
+            )
+
+            val definition =
+                store
+                    .prefixScan("resdef:")
+                    .map { it.second }
+                    .filterIsInstance<ResourceDefinitionRecord>()
+                    .single()
+            assertEquals("com.example.assets", definition.packageName)
+            assertEquals("drawable", definition.type)
+            assertEquals("icon", definition.name)
+        }
+    }
+
+    @Test
     fun `manifest values that mention namespace do not outrank manifest package`() {
         val sources =
             mapOf(

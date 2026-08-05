@@ -171,6 +171,7 @@ class KotlinPsiSymbolProducerTest {
                 val shadowedTitle = title
                 val accent = R.attr.accent
                 val composeTitle = Res.string.compose_title
+                val assetComposeIcon = com.example.assets.Res.drawable.asset_icon
                 val titleLength = R.string.title.length()
                 val subtitle = FeatureR.string.subtitle
                 val icon = com.example.assets.R.drawable.icon
@@ -192,6 +193,16 @@ class KotlinPsiSymbolProducerTest {
                         "app/build.gradle.kts" to
                             "android { namespace = \"com.example.namespace\" }",
                         "app/src/main/kotlin/com/example/app/Screen.kt" to source,
+                        "app/src/main/kotlin/com/example/app/Shadow.kt" to
+                            """
+                            package com.example.app
+                            import com.example.feature.R.string.title
+                            val title = "shadow"
+                            fun topLevelShadowed() = title
+                            class ConstructorShadow(val title: String) { fun read() = title }
+                            object ObjectShadow { val title = "shadow"; fun read() = title }
+                            """
+                                .trimIndent(),
                     ),
             ),
             store,
@@ -203,7 +214,7 @@ class KotlinPsiSymbolProducerTest {
                 .map { it.second }
                 .filterIsInstance<ResourceUsageRecord>()
                 .toList()
-        assertEquals(10, usages.size)
+        assertEquals(11, usages.size)
         assertEquals(
             setOf(
                 "com.example.namespace:string:title",
@@ -214,6 +225,7 @@ class KotlinPsiSymbolProducerTest {
                 "com.example.shared:string:shared_title",
                 "com.example.feature:string:subtitle",
                 "com.example.assets:drawable:icon",
+                "com.example.assets:drawable:asset_icon",
             ),
             usages
                 .map { listOf(it.packageName.orEmpty(), it.type, it.name).joinToString(":") }

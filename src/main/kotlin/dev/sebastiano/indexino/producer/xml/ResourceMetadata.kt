@@ -39,7 +39,7 @@ internal object ResourceMetadata {
         Regex(
             "(?:^|/)(?:src/[^/]+/)?" +
                 "(?:res|resources|composeResources|[^/]+[_-]res|[^/]+[_-]resources)/" +
-                "([^/]+)/([^/]+)\\.xml$"
+                "([^/]+)/([^/]+)\\.[A-Za-z0-9]+$"
         )
 
     fun resourceFromPath(relativePath: String): ResourcePath? {

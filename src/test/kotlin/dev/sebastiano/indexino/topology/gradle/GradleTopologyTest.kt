@@ -48,10 +48,16 @@ class GradleTopologyTest {
             "<resources />",
         )
 
+        Files.createDirectories(workspace.resolve("app/src/main/res/drawable"))
+        Files.writeString(workspace.resolve("app/src/main/res/drawable/icon.png"), "not-a-real-png")
+
         val result = GradleTopology.resolveSources(":app", workspace, includeDeps = false)
 
         assertEquals(
-            listOf("app/src/commonMain/composeResources/values/strings.xml"),
+            listOf(
+                "app/src/commonMain/composeResources/values/strings.xml",
+                "app/src/main/res/drawable/icon.png",
+            ),
             result.sourceFiles,
         )
     }

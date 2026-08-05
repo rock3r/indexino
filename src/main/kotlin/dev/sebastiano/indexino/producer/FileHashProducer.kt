@@ -3,6 +3,7 @@ package dev.sebastiano.indexino.producer
 import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.FileHashRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
+import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
 import java.util.Locale
@@ -74,7 +75,7 @@ internal class FileHashProducer : IndexProducer {
                         onFileProcessed?.invoke(index + 1, sortedSources.size, source)
                         val hash =
                             sourceSnapshot?.contentHash(source)
-                                ?: contentHash(source.originRoot.resolve(source.path).readText())
+                                ?: contentHash(Files.readAllBytes(source.originRoot.resolve(source.path)))
                         "${source.originId}:${source.path}:$hash"
                     }
                     .joinToString("\n")
