@@ -270,7 +270,7 @@ internal class JavaSourceProducer : IndexProducer {
             name: String,
         ): Boolean {
             var found = false
-            store.forEachPrefix("resdef:") { _, record ->
+            store.forEachPrefix("resdef:$resourcePackage:$type:$name:") { _, record ->
                 if (
                     record is ResourceDefinitionRecord &&
                         record.packageName == resourcePackage &&
@@ -279,7 +279,7 @@ internal class JavaSourceProducer : IndexProducer {
                 ) {
                     found = true
                 }
-                true
+                !found
             }
             return found
         }

@@ -300,7 +300,11 @@ class XmlResourceProducerTest {
                 <string name="title">Hello</string>
                 <item type="color" name="accent">#ff0000</item>
                 <item type="color" name="accent_alias">@color/accent</item>
-                <declare-styleable name="CustomView"><attr name="accent" /></declare-styleable>
+                <declare-styleable name="CustomView">
+                    <attr name="accent" />
+                    <attr name="android:label" />
+                </declare-styleable>
+                <style name="Child" parent="AppTheme" />
                 <string-array name="items"><item>One</item></string-array>
             </resources>
             """
@@ -331,66 +335,72 @@ class XmlResourceProducerTest {
                 )
             )
 
-            val resources =
-                store.prefixScan("res:").map { it.second }.filterIsInstance<SymbolRecord>().toList()
-            assertTrue(resources.any { it.fqn == "res:string:title" })
-            assertTrue(resources.any { it.fqn == "res:color:accent" })
-            assertTrue(resources.any { it.fqn == "res:layout:main_screen" })
-            assertTrue(resources.any { it.fqn == "res:id:title_view" })
-            assertTrue(resources.any { it.fqn == "res:styleable:CustomView" })
-            assertTrue(resources.any { it.fqn == "res:attr:accent" })
-            assertTrue(resources.any { it.fqn == "res:styleable:CustomView_accent" })
-            assertTrue(resources.any { it.fqn == "res:array:items" })
-
-            val references =
-                store
-                    .prefixScan("ref:")
-                    .map { it.second }
-                    .filterIsInstance<ReferenceRecord>()
-                    .toList()
-            assertTrue(
-                references.any { it.symbolFqn == "res:string:title" && it.context == "resource" }
-            )
-            assertTrue(
-                references.any { it.symbolFqn == "res:color:accent" && it.context == "resource" }
-            )
-            assertTrue(
-                references.any { it.symbolFqn == "res:array:items" && it.context == "resource" }
-            )
-            assertTrue(references.any { it.symbolFqn == "res:android:color:white" })
-            assertTrue(references.none { it.symbolFqn == "res:color:white" })
-
-            val idDefinition =
-                store
-                    .prefixScan("resdef:")
-                    .map { it.second }
-                    .filterIsInstance<ResourceDefinitionRecord>()
-                    .single { it.type == "id" && it.name == "title_view" }
-            assertEquals(layout.indexOf("@+id/title_view"), idDefinition.offset)
-            assertEquals(3, idDefinition.line)
-            assertEquals(21, idDefinition.column)
-
-            val usages =
-                store
-                    .prefixScan("resuse:")
-                    .map { it.second }
-                    .filterIsInstance<ResourceUsageRecord>()
-                    .toList()
-            assertTrue(
-                usages.any {
-                    it.packageName == null &&
-                        it.type == "string" &&
-                        it.name == "title" &&
-                        it.language == "xml" &&
-                        it.offset == layout.indexOf("@string/title")
-                }
-            )
-            assertTrue(
-                usages.any {
-                    it.packageName == "android" && it.type == "color" && it.name == "white"
-                }
-            )
+            assertIndexedResourceFacts(store, layout)
         }
+    }
+
+    private fun assertIndexedResourceFacts(store: XodusCodeIndexStore, layout: String) {
+        val resources =
+            store.prefixScan("res:").map { it.second }.filterIsInstance<SymbolRecord>().toList()
+        assertTrue(resources.any { it.fqn == "res:string:title" })
+        assertTrue(resources.any { it.fqn == "res:color:accent" })
+        assertTrue(resources.any { it.fqn == "res:layout:main_screen" })
+        assertTrue(resources.any { it.fqn == "res:id:title_view" })
+        assertTrue(resources.any { it.fqn == "res:styleable:CustomView" })
+        assertTrue(resources.any { it.fqn == "res:attr:accent" })
+        assertTrue(resources.any { it.fqn == "res:styleable:CustomView_accent" })
+        assertTrue(resources.any { it.fqn == "res:styleable:CustomView_android_label" })
+        assertFalse(resources.any { it.fqn == "res:attr:android:label" })
+        assertTrue(resources.any { it.fqn == "res:array:items" })
+
+        val references =
+            store.prefixScan("ref:").map { it.second }.filterIsInstance<ReferenceRecord>().toList()
+        assertTrue(
+            references.any { it.symbolFqn == "res:string:title" && it.context == "resource" }
+        )
+        assertTrue(
+            references.any { it.symbolFqn == "res:color:accent" && it.context == "resource" }
+        )
+        assertTrue(references.any { it.symbolFqn == "res:array:items" && it.context == "resource" })
+        assertTrue(references.any { it.symbolFqn == "res:android:color:white" })
+        assertTrue(references.none { it.symbolFqn == "res:color:white" })
+
+        val idDefinition =
+            store
+                .prefixScan("resdef:")
+                .map { it.second }
+                .filterIsInstance<ResourceDefinitionRecord>()
+                .single { it.type == "id" && it.name == "title_view" }
+        assertEquals(layout.indexOf("@+id/title_view"), idDefinition.offset)
+        assertEquals(3, idDefinition.line)
+        assertEquals(21, idDefinition.column)
+
+        val usages =
+            store
+                .prefixScan("resuse:")
+                .map { it.second }
+                .filterIsInstance<ResourceUsageRecord>()
+                .toList()
+        assertTrue(
+            usages.any {
+                it.packageName == null &&
+                    it.type == "string" &&
+                    it.name == "title" &&
+                    it.language == "xml" &&
+                    it.offset == layout.indexOf("@string/title")
+            }
+        )
+        assertTrue(
+            usages.any { it.packageName == "android" && it.type == "color" && it.name == "white" }
+        )
+        assertTrue(
+            usages.any {
+                it.packageName == null &&
+                    it.type == "style" &&
+                    it.name == "AppTheme" &&
+                    it.language == "xml"
+            }
+        )
     }
 
     @Test

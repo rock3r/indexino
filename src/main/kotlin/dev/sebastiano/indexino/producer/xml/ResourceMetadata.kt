@@ -126,7 +126,9 @@ internal object ResourceMetadata {
     fun additionalMetadataPaths(originRoot: Path, sourcePaths: List<String>): List<String> {
         val existing = sourcePaths.toSet()
         return sourcePaths
-            .filter(::isResourceXml)
+            .filter { path ->
+                isResourceXml(path) || path.endsWith(".kt") || path.endsWith(".java")
+            }
             .flatMap(::metadataPathsForResource)
             .distinct()
             .filter { it !in existing && Files.isRegularFile(originRoot.resolve(it)) }

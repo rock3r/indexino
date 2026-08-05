@@ -199,10 +199,23 @@ internal class XmlResourceProducer : IndexProducer {
                 checkNotNull(attributeValueOffsets[qualifiedName]) {
                     "Missing raw XML attribute $qualifiedName in ${attributeValueOffsets.keys}"
                 }
+            val rawValue = source.substring(rawAttribute.valueStart, rawAttribute.valueEnd)
+            val decodedValue = decodeXml(rawValue, sourcePositions.isXml11)
+            val valuePosition = sourcePositions.at(rawAttribute.valueStart)
+            indexStyleParent(
+                store,
+                indexedSource,
+                reader.getAttributeLocalName(attributeIndex),
+                decodedValue.value,
+                valuePosition.line,
+                valuePosition.column,
+                rawAttribute.valueStart,
+                packageName,
+            )
             indexRawValue(
                 store,
                 indexedSource,
-                source.substring(rawAttribute.valueStart, rawAttribute.valueEnd),
+                rawValue,
                 sourcePositions,
                 rawAttribute.valueStart,
                 packageName,
@@ -223,21 +236,23 @@ internal class XmlResourceProducer : IndexProducer {
     ) {
         val attributeName =
             reader.getAttributeValue(null, "name")?.takeIf(String::isNotBlank) ?: return
-        putResource(
-            store,
-            indexedSource,
-            "attr",
-            attributeName,
-            line,
-            column,
-            offset,
-            packageName,
-        )
+        if (':' !in attributeName) {
+            putResource(
+                store,
+                indexedSource,
+                "attr",
+                attributeName,
+                line,
+                column,
+                offset,
+                packageName,
+            )
+        }
         putResource(
             store,
             indexedSource,
             "styleable",
-            "${declareStyleableName}_$attributeName",
+            "${declareStyleableName}_${attributeName.replace(':', '_')}",
             line,
             column,
             offset,
@@ -397,6 +412,70 @@ internal class XmlResourceProducer : IndexProducer {
                         ?: (startTagEndOffset(source, markupStart) + 1).coerceAtMost(source.length)
             }
         }
+    }
+
+    private fun indexStyleParent(
+        store: CodeIndexStore,
+        indexedSource: IndexedSource,
+        attributeName: String?,
+        value: String,
+        line: Int,
+        column: Int,
+        offset: Int,
+        resolvedPackageName: String?,
+    ) {
+        if (
+            attributeName != "parent" ||
+                value.isBlank() ||
+                value.startsWith("@") ||
+                value.startsWith("?")
+        ) {
+            return
+        }
+        val target = resourceFqn(null, "style", value)
+        store.put(
+            CodeIndexKey.ref(
+                target,
+                indexedSource.originId,
+                indexedSource.path,
+                line,
+                column,
+            ),
+            ReferenceRecord(
+                symbolFqn = target,
+                relativeFile = indexedSource.path,
+                originId = indexedSource.originId,
+                line = line,
+                column = column,
+                context = "resource",
+                language = LANGUAGE,
+                referencedName = value,
+                qualifier = "style",
+                candidateSymbolFqns = listOf(target),
+            ),
+        )
+        store.put(
+            CodeIndexKey.resourceUsage(
+                packageName = resolvedPackageName,
+                type = "style",
+                name = value,
+                originId = indexedSource.originId,
+                relativeFile = indexedSource.path,
+                line = line,
+                column = column,
+            ),
+            ResourceUsageRecord(
+                packageName = resolvedPackageName,
+                type = "style",
+                name = value,
+                relativeFile = indexedSource.path,
+                line = line,
+                column = column,
+                offset = offset,
+                language = LANGUAGE,
+                originId = indexedSource.originId,
+            ),
+        )
     }
 
     private fun putResource(

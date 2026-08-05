@@ -248,7 +248,7 @@ internal object BuildFileParser {
                                 .toSet()
                         extractIncludePatterns(body)
                             .flatMap { BuildFileGlob.expandGlob(packageDir, it) }
-                            .filter { it.endsWith(".xml") && it !in excluded }
+                            .filter { it !in excluded }
                             .forEach(::add)
                     }
                 (QUOTED_STRING.findAll(expression) + SINGLE_QUOTED_STRING.findAll(expression))
@@ -257,7 +257,6 @@ internal object BuildFileParser {
                             !BuildFileComments.isCommentedOutInBlock(expression, quoted.range.first)
                     }
                     .map { it.groupValues[1] }
-                    .filter { it.endsWith(".xml") }
                     .forEach(::add)
             }
     }
