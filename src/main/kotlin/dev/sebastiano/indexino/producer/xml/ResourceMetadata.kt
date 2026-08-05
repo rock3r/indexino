@@ -47,7 +47,7 @@ internal object ResourceMetadata {
         val directory = match.groupValues[1]
         return ResourcePath(
             type = directory.substringBefore('-'),
-            name = match.groupValues[2],
+            name = match.groupValues[2].removeSuffix(".9"),
             qualifiers = directory.substringAfter('-', ""),
         )
     }

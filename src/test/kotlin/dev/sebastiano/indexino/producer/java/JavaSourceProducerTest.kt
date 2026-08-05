@@ -611,8 +611,10 @@ class JavaSourceProducerTest {
 
             import com.example.feature.R;
             import static com.example.shared.R.string.shared_title;
+            import static com.example.wild.R.color.*;
 
             class Screen {
+                int wildcardColor = wildcard_accent;
                 int title = R.string.title;
                 int staticallyImported = shared_title;
                 int staticLength = shared_title.length();
@@ -654,12 +656,13 @@ class JavaSourceProducerTest {
                     .map { it.second }
                     .filterIsInstance<ResourceUsageRecord>()
                     .toList()
-            assertEquals(7, usages.size)
+            assertEquals(8, usages.size)
             assertEquals(
                 setOf(
                     "com.example.namespace:string:local_title",
                     "com.example.feature:string:title",
                     "com.example.shared:string:shared_title",
+                    "com.example.wild:color:wildcard_accent",
                     "com.example.feature:styleable:CustomView",
                     "com.example.assets:drawable:icon",
                 ),

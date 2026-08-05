@@ -188,27 +188,53 @@ internal class JavaSourceProducer : IndexProducer {
 
         private fun indexStaticResourceUsage(node: IdentifierTree) {
             val parent = currentPath.parentPath?.leaf
-            if (
-                generateSequence(currentPath.parentPath) { it.parentPath }
-                    .any { it.leaf is ImportTree } ||
-                    (parent is MemberSelectTree && parent.expression != node)
-            ) {
-                return
-            }
+            if (shouldSkipStaticResourceIdentifier(node, parent)) return
             val name = node.name.toString()
             if (variableScopes.reversed().any { scope -> name in scope }) return
-            val owner = staticImports[name] ?: return
+            if (isClassResourceChain(node, parent)) return
+            val explicitOwner = staticImports[name]
+            val owners =
+                if (explicitOwner != null) listOf(explicitOwner)
+                else staticWildcardImports.distinct()
+            if (owners.isEmpty()) return
+            val start = position(node)
+            owners.forEach { owner -> putStaticResourceUsage(owner, name, start) }
+        }
+
+        private fun shouldSkipStaticResourceIdentifier(
+            node: IdentifierTree,
+            parent: Tree?,
+        ): Boolean =
+            generateSequence(currentPath.parentPath) { it.parentPath }
+                .any { it.leaf is ImportTree } ||
+                (parent is MemberSelectTree && parent.expression != node) ||
+                (parent is MemberSelectTree &&
+                    parent.identifier.toString() in ResourceMetadata.RESOURCE_TYPES) ||
+                (parent as? VariableTree)?.name == node.name ||
+                (parent as? MethodTree)?.name == node.name
+
+        private fun isClassResourceChain(node: IdentifierTree, parent: Tree?): Boolean {
+            if (parent !is MemberSelectTree || parent.expression != node) return false
+            val outermost =
+                generateSequence(currentPath.parentPath) { it.parentPath }
+                    .map { it.leaf }
+                    .filterIsInstance<MemberSelectTree>()
+                    .lastOrNull()
+            val segments = outermost?.let(::memberSelectSegments)
+            return segments != null && ("R" in segments || "Res" in segments)
+        }
+
+        private fun putStaticResourceUsage(owner: String, name: String, start: SourcePosition) {
             val marker = ".R."
             if (marker !in owner) return
             val resourcePackage = owner.substringBefore(marker)
             val type = owner.substringAfter(marker)
             if ('.' in type || type !in ResourceMetadata.RESOURCE_TYPES) return
-            val start = position(node)
             store.put(
                 CodeIndexKey.resourceUsage(
                     packageName = resourcePackage,
                     type = type,
-                    name = node.name.toString(),
+                    name = name,
                     originId = originId,
                     relativeFile = relativePath,
                     line = start.line,
@@ -217,7 +243,7 @@ internal class JavaSourceProducer : IndexProducer {
                 ResourceUsageRecord(
                     packageName = resourcePackage,
                     type = type,
-                    name = node.name.toString(),
+                    name = name,
                     relativeFile = relativePath,
                     line = start.line,
                     column = start.column,

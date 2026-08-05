@@ -489,6 +489,10 @@ class XmlResourceProducerTest {
             .resolve("app/src/main/res/drawable/icon.png")
             .also { it.parent.createDirectories() }
             .writeText("not-a-real-png")
+        root
+            .resolve("app/src/main/res/drawable/button.9.png")
+            .also { it.parent.createDirectories() }
+            .writeText("not-a-real-nine-patch")
 
         withStore { store ->
             val producer = assertNotNull(ProducerRegistry.get("xml-resources"))
@@ -496,23 +500,32 @@ class XmlResourceProducerTest {
                 IndexBuildContext(
                     store = store,
                     commitHash = "resources",
-                    sourceFiles = listOf("app/src/main/res/drawable/icon.png"),
+                    sourceFiles =
+                        listOf(
+                            "app/src/main/res/drawable/icon.png",
+                            "app/src/main/res/drawable/button.9.png",
+                        ),
                     sources =
                         listOf(
-                            IndexedSource("workspace", root, "app/src/main/res/drawable/icon.png")
+                            IndexedSource("workspace", root, "app/src/main/res/drawable/icon.png"),
+                            IndexedSource(
+                                "workspace",
+                                root,
+                                "app/src/main/res/drawable/button.9.png",
+                            ),
                         ),
                 )
             )
 
-            val definition =
+            val definitions =
                 store
                     .prefixScan("resdef:")
                     .map { it.second }
                     .filterIsInstance<ResourceDefinitionRecord>()
-                    .single()
-            assertEquals("com.example.assets", definition.packageName)
-            assertEquals("drawable", definition.type)
-            assertEquals("icon", definition.name)
+                    .toList()
+            assertEquals(setOf("icon", "button"), definitions.map { it.name }.toSet())
+            assertTrue(definitions.all { it.packageName == "com.example.assets" })
+            assertTrue(definitions.all { it.type == "drawable" })
         }
     }
 
