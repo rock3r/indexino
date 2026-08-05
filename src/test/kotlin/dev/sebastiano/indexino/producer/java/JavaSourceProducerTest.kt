@@ -1,8 +1,10 @@
 package dev.sebastiano.indexino.producer.java
 
+import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.CodeIndexRecordCodec
 import dev.sebastiano.indexino.core.record.ReferenceRecord
+import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
 import dev.sebastiano.indexino.core.record.ResourceUsageRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
@@ -615,6 +617,7 @@ class JavaSourceProducerTest {
 
             class Screen {
                 int wildcardColor = wildcard_accent;
+                void call() { notAResource(); }
                 int title = R.string.title;
                 int staticallyImported = shared_title;
                 int staticLength = shared_title.length();
@@ -628,6 +631,25 @@ class JavaSourceProducerTest {
 
         withStore { store ->
             val producer = assertNotNull(ProducerRegistry.get("java-source"))
+            store.put(
+                CodeIndexKey.resourceDefinition(
+                    packageName = "com.example.wild",
+                    type = "color",
+                    name = "wildcard_accent",
+                    qualifiers = "",
+                    originId = "workspace",
+                    relativeFile = "app/src/main/res/values/colors.xml",
+                    line = 2,
+                ),
+                ResourceDefinitionRecord(
+                    packageName = "com.example.wild",
+                    type = "color",
+                    name = "wildcard_accent",
+                    qualifiers = "",
+                    relativeFile = "app/src/main/res/values/colors.xml",
+                    line = 2,
+                ),
+            )
             producer.produce(
                 IndexBuildContext.forInlineSources(
                     store = store,

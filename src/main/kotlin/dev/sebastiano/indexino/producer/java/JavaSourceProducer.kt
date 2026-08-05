@@ -25,6 +25,7 @@ import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.CallArgumentRecord
 import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
+import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
 import dev.sebastiano.indexino.core.record.ResourceUsageRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
@@ -198,7 +199,9 @@ internal class JavaSourceProducer : IndexProducer {
                 else staticWildcardImports.distinct()
             if (owners.isEmpty()) return
             val start = position(node)
-            owners.forEach { owner -> putStaticResourceUsage(owner, name, start) }
+            owners.forEach { owner ->
+                putStaticResourceUsage(owner, name, start, explicitOwner == null)
+            }
         }
 
         private fun shouldSkipStaticResourceIdentifier(
@@ -208,6 +211,7 @@ internal class JavaSourceProducer : IndexProducer {
             generateSequence(currentPath.parentPath) { it.parentPath }
                 .any { it.leaf is ImportTree } ||
                 (parent is MemberSelectTree && parent.expression != node) ||
+                (parent is MethodInvocationTree && parent.methodSelect == node) ||
                 (parent is MemberSelectTree &&
                     parent.identifier.toString() in ResourceMetadata.RESOURCE_TYPES) ||
                 (parent as? VariableTree)?.name == node.name ||
@@ -224,12 +228,18 @@ internal class JavaSourceProducer : IndexProducer {
             return segments != null && ("R" in segments || "Res" in segments)
         }
 
-        private fun putStaticResourceUsage(owner: String, name: String, start: SourcePosition) {
+        private fun putStaticResourceUsage(
+            owner: String,
+            name: String,
+            start: SourcePosition,
+            requireDefinition: Boolean,
+        ) {
             val marker = ".R."
             if (marker !in owner) return
             val resourcePackage = owner.substringBefore(marker)
             val type = owner.substringAfter(marker)
             if ('.' in type || type !in ResourceMetadata.RESOURCE_TYPES) return
+            if (requireDefinition && !hasResourceDefinition(resourcePackage, type, name)) return
             store.put(
                 CodeIndexKey.resourceUsage(
                     packageName = resourcePackage,
@@ -252,6 +262,26 @@ internal class JavaSourceProducer : IndexProducer {
                     originId = originId,
                 ),
             )
+        }
+
+        private fun hasResourceDefinition(
+            resourcePackage: String,
+            type: String,
+            name: String,
+        ): Boolean {
+            var found = false
+            store.forEachPrefix("resdef:") { _, record ->
+                if (
+                    record is ResourceDefinitionRecord &&
+                        record.packageName == resourcePackage &&
+                        record.type == type &&
+                        record.name == name
+                ) {
+                    found = true
+                }
+                true
+            }
+            return found
         }
 
         private fun indexResourceUsage(node: MemberSelectTree) {
