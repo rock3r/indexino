@@ -559,6 +559,36 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `stored extension lambda uses its extension receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class StoredExtensionLambda(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is StoredExtensionLambda) return false
+                            val matches: StoredExtensionLambda.() -> Boolean = {
+                                value == other.value
+                            }
+                            return matches(other)
+                        }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String =
+                            "StoredExtensionLambda(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `local does not shadow the class property in its own initializer`() {
         val findings =
             rule()

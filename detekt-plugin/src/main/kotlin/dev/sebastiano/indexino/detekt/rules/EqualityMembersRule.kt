@@ -11,6 +11,7 @@ import org.jetbrains.kotlin.analysis.api.resolution.singleFunctionCallOrNull
 import org.jetbrains.kotlin.analysis.api.resolution.symbol
 import org.jetbrains.kotlin.analysis.api.symbols.KaNamedFunctionSymbol
 import org.jetbrains.kotlin.analysis.api.types.symbol
+import org.jetbrains.kotlin.idea.references.mainReference
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.KtBinaryExpression
 import org.jetbrains.kotlin.psi.KtBlockExpression
@@ -325,7 +326,8 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
     ): Boolean {
         val lambda = parent as? KtLambdaExpression ?: return true
         val call =
-            PsiTreeUtil.getParentOfType(lambda, KtCallExpression::class.java, false) ?: return false
+            PsiTreeUtil.getParentOfType(lambda, KtCallExpression::class.java, false)
+                ?: return analyze(this) { symbol.receiverParameter != null }
         val calleeName = call.calleeExpression?.text
         val qualifiedCall = call.parent as? KtQualifiedExpression
         val aliasesNonReceiverRun =
@@ -430,16 +432,35 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                 expression?.isOtherProperty(equalsFunction, otherParameter, property) == true
             else ->
                 ((this as? KtDotQualifiedExpression)?.let {
-                    it.receiverExpression.isPossiblyParenthesizedName(otherParameter) &&
+                    it.receiverExpression.resolvesToEqualsParameter(
+                        equalsFunction,
+                        otherParameter,
+                    ) &&
                         !it.receiverExpression.isShadowed(otherParameter, equalsFunction) &&
                         it.selectorExpression?.isName(property) == true
                 } == true) ||
                     ((this as? KtSafeQualifiedExpression)?.let {
-                        it.receiverExpression.isPossiblyParenthesizedName(otherParameter) &&
+                        it.receiverExpression.resolvesToEqualsParameter(
+                            equalsFunction,
+                            otherParameter,
+                        ) &&
                             !it.receiverExpression.isShadowed(otherParameter, equalsFunction) &&
                             it.selectorExpression?.isName(property) == true
                     } == true)
         }
+
+    private fun KtExpression.resolvesToEqualsParameter(
+        equalsFunction: KtNamedFunction,
+        parameterName: String,
+    ): Boolean {
+        if (this is KtParenthesizedExpression) {
+            return expression?.resolvesToEqualsParameter(equalsFunction, parameterName) == true
+        }
+        if (this !is KtNameReferenceExpression) return false
+        val parameter =
+            equalsFunction.valueParameters.singleOrNull { it.name == parameterName } ?: return false
+        return analyze(this) { mainReference.resolveToSymbol() == parameter.symbol }
+    }
 
     private fun checkDirectPropertyUsage(function: KtNamedFunction, properties: Set<String>) {
         val referencedNames =
@@ -462,12 +483,6 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
 
     private fun org.jetbrains.kotlin.psi.KtExpression.isName(name: String): Boolean =
         this is KtNameReferenceExpression && getReferencedName() == name
-
-    private fun KtExpression.isPossiblyParenthesizedName(name: String): Boolean =
-        when (this) {
-            is KtParenthesizedExpression -> expression?.isPossiblyParenthesizedName(name) == true
-            else -> isName(name)
-        }
 
     private companion object {
         const val DESCRIPTION: String =
