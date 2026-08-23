@@ -76,6 +76,33 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `shadowed local names do not count as receiver properties`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class ShadowedReceiver(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is ShadowedReceiver) return false
+                            val value = other.value
+                            return value == other.value
+                        }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "ShadowedReceiver(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `name-only overloads do not satisfy required overrides`() {
         val findings =
             rule()
@@ -114,6 +141,31 @@ class EqualityMembersRuleTest {
 
                         override fun toString(): String =
                             "Complete(value=${'$'}value, count=${'$'}count)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
+    fun `aliased Any parameter satisfies equals override`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    import kotlin.Any as RootAny
+
+                    class AliasedAny(val value: String) {
+                        override fun equals(other: RootAny?): Boolean =
+                            other is AliasedAny && value == other.value
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "AliasedAny(value=${'$'}value)"
                     }
                     """
                         .trimIndent()

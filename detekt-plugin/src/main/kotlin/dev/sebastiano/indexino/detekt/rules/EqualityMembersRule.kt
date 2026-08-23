@@ -7,9 +7,11 @@ import dev.detekt.api.Finding
 import dev.detekt.api.Rule
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.KtBinaryExpression
+import org.jetbrains.kotlin.psi.KtBlockExpression
 import org.jetbrains.kotlin.psi.KtClass
 import org.jetbrains.kotlin.psi.KtDotQualifiedExpression
 import org.jetbrains.kotlin.psi.KtExpression
+import org.jetbrains.kotlin.psi.KtFunction
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
 import org.jetbrains.kotlin.psi.KtNamedFunction
 import org.jetbrains.kotlin.psi.KtProperty
@@ -90,7 +92,13 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
         if (name != functionName || !hasModifier(KtTokens.OVERRIDE_KEYWORD)) return false
         return when (functionName) {
             "equals" ->
-                valueParameters.singleOrNull()?.typeReference?.text in setOf("Any?", "kotlin.Any?")
+                valueParameters.singleOrNull()?.typeReference?.text.let { parameterType ->
+                    parameterType in setOf("Any?", "kotlin.Any?") ||
+                        containingKtFile.importDirectives.any { import ->
+                            parameterType == "${import.aliasName}?" &&
+                                import.importedFqName?.asString() == "kotlin.Any"
+                        }
+                }
             "hashCode",
             "toString" -> valueParameters.isEmpty()
             else -> false
@@ -137,10 +145,23 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
     }
 
     private fun KtExpression.isReceiverProperty(property: String): Boolean =
-        isName(property) ||
+        (isName(property) && !isShadowed(property)) ||
             (this is KtDotQualifiedExpression &&
                 receiverExpression is KtThisExpression &&
                 selectorExpression?.isName(property) == true)
+
+    private fun KtExpression.isShadowed(property: String): Boolean =
+        generateSequence(parent) { it.parent }
+            .any { ancestor ->
+                when (ancestor) {
+                    is KtBlockExpression ->
+                        ancestor.statements.filterIsInstance<KtProperty>().any {
+                            it.name == property && it.textOffset < textOffset
+                        }
+                    is KtFunction -> ancestor.valueParameters.any { it.name == property }
+                    else -> false
+                }
+            }
 
     private fun KtExpression.isOtherProperty(otherParameter: String, property: String): Boolean =
         ((this as? KtDotQualifiedExpression)?.let {
