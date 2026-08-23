@@ -23,6 +23,7 @@ import org.jetbrains.kotlin.psi.KtParenthesizedExpression
 import org.jetbrains.kotlin.psi.KtProperty
 import org.jetbrains.kotlin.psi.KtSafeQualifiedExpression
 import org.jetbrains.kotlin.psi.KtThisExpression
+import org.jetbrains.kotlin.psi.KtTypeAlias
 
 public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
     override fun visitClass(klass: KtClass) {
@@ -97,11 +98,39 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
     private fun KtNamedFunction.isRequiredOverride(functionName: String): Boolean {
         if (name != functionName || !hasModifier(KtTokens.OVERRIDE_KEYWORD)) return false
         return when (functionName) {
-            "equals" -> valueParameters.singleOrNull()?.typeReference?.text?.endsWith("?") == true
+            "equals" -> hasNullableAnyParameter()
             "hashCode",
             "toString" -> valueParameters.isEmpty()
             else -> false
         }
+    }
+
+    private fun KtNamedFunction.hasNullableAnyParameter(): Boolean {
+        val typeText = valueParameters.singleOrNull()?.typeReference?.text ?: return false
+        if (!typeText.endsWith("?")) return false
+        return containingKtFile.resolvesToAny(typeText.removeSuffix("?"), mutableSetOf())
+    }
+
+    private fun org.jetbrains.kotlin.psi.KtFile.resolvesToAny(
+        typeName: String,
+        visitedAliases: MutableSet<String>,
+    ): Boolean {
+        if (typeName == "Any" || typeName == "kotlin.Any") return true
+        if (
+            importDirectives.any {
+                it.aliasName == typeName && it.importedFqName?.asString() == "kotlin.Any"
+            }
+        ) {
+            return true
+        }
+        if (!visitedAliases.add(typeName)) return false
+        val aliasedType =
+            declarations
+                .filterIsInstance<KtTypeAlias>()
+                .firstOrNull { it.name == typeName }
+                ?.getTypeReference()
+                ?.text ?: return false
+        return resolvesToAny(aliasedType.removeSuffix("?"), visitedAliases)
     }
 
     private fun checkEquals(
@@ -209,7 +238,12 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
             PsiTreeUtil.getParentOfType(lambda, KtCallExpression::class.java, false) ?: return true
         val calleeName = call.calleeExpression?.text
         val qualifiedCall = call.parent as? KtDotQualifiedExpression
-        return calleeName == "with" ||
+        val aliasesNonReceiverRun =
+            calleeName == "with" &&
+                containingKtFile.importDirectives.any {
+                    it.aliasName == "with" && it.importedFqName?.asString() == "kotlin.run"
+                }
+        return (calleeName == "with" && !aliasesNonReceiverRun) ||
             (calleeName in setOf("run", "apply") &&
                 qualifiedCall?.selectorExpression == call &&
                 qualifiedCall.receiverExpression.text != "kotlin")
