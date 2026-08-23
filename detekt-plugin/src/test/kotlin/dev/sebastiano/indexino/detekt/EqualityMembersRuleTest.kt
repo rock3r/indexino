@@ -185,6 +185,32 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `unqualified receiver lambda property does not count as class receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class UnqualifiedNestedReceiver(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is UnqualifiedNestedReceiver &&
+                                with(other) { value == other.value }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String =
+                            "UnqualifiedNestedReceiver(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `this inside local function preserves class receiver`() {
         val findings =
             rule()
@@ -402,6 +428,32 @@ class EqualityMembersRuleTest {
                         override fun hashCode(): Int = value.hashCode()
 
                         override fun toString(): String = "TypealiasedAny(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
+    fun `chained Any typealias satisfies equals override`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    private typealias RootAny = Any
+                    private typealias ChainedAny = RootAny
+
+                    class ChainedTypealias(val value: String) {
+                        override fun equals(other: ChainedAny?): Boolean =
+                            other is ChainedTypealias && value == other.value
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "ChainedTypealias(value=${'$'}value)"
                     }
                     """
                         .trimIndent()

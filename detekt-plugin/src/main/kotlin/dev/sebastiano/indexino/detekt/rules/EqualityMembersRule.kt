@@ -23,7 +23,6 @@ import org.jetbrains.kotlin.psi.KtParenthesizedExpression
 import org.jetbrains.kotlin.psi.KtProperty
 import org.jetbrains.kotlin.psi.KtSafeQualifiedExpression
 import org.jetbrains.kotlin.psi.KtThisExpression
-import org.jetbrains.kotlin.psi.KtTypeAlias
 
 public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
     override fun visitClass(klass: KtClass) {
@@ -98,18 +97,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
     private fun KtNamedFunction.isRequiredOverride(functionName: String): Boolean {
         if (name != functionName || !hasModifier(KtTokens.OVERRIDE_KEYWORD)) return false
         return when (functionName) {
-            "equals" ->
-                valueParameters.singleOrNull()?.typeReference?.text.let { parameterType ->
-                    parameterType in setOf("Any?", "kotlin.Any?") ||
-                        containingKtFile.importDirectives.any { import ->
-                            parameterType == "${import.aliasName}?" &&
-                                import.importedFqName?.asString() == "kotlin.Any"
-                        } ||
-                        containingKtFile.declarations.filterIsInstance<KtTypeAlias>().any { alias ->
-                            parameterType == "${alias.name}?" &&
-                                alias.getTypeReference()?.text in setOf("Any", "kotlin.Any")
-                        }
-                }
+            "equals" -> valueParameters.size == 1
             "hashCode",
             "toString" -> valueParameters.isEmpty()
             else -> false
@@ -176,11 +164,19 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
             is KtParenthesizedExpression ->
                 expression?.isReceiverProperty(equalsFunction, property, receiverLabel) == true
             else ->
-                (isName(property) && !isShadowed(property)) ||
+                (isName(property) &&
+                    !isShadowed(property) &&
+                    !isInsideReceiverLambda(equalsFunction)) ||
                     (this is KtDotQualifiedExpression &&
                         receiverExpression.isCurrentReceiver(equalsFunction, receiverLabel) &&
                         selectorExpression?.isName(property) == true)
         }
+
+    private fun KtExpression.isInsideReceiverLambda(equalsFunction: KtNamedFunction): Boolean =
+        generateSequence(parent) { it.parent }
+            .filterIsInstance<KtFunction>()
+            .takeWhile { it !== equalsFunction }
+            .any { it is KtFunctionLiteral && it.hasReceiverLambdaSyntax() }
 
     private fun KtExpression.isCurrentReceiver(
         equalsFunction: KtNamedFunction,
