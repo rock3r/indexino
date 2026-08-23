@@ -594,19 +594,26 @@ class EqualityMembersRuleTest {
                     class MethodComparisons(
                         val value: String,
                         val values: IntArray,
+                        val deepValues: Array<IntArray>,
                         val label: String,
                     ) {
                         override fun equals(other: Any?): Boolean =
                             other is MethodComparisons &&
                                 value.equals(other.value) &&
                                 values.contentEquals(other.values) &&
+                                deepValues.contentDeepEquals(other.deepValues) &&
                                 java.util.Objects.equals(label, other.label)
 
                         override fun hashCode(): Int =
-                            31 * (31 * value.hashCode() + values.contentHashCode()) + label.hashCode()
+                            31 *
+                                (31 *
+                                    (31 * value.hashCode() + values.contentHashCode()) +
+                                    deepValues.contentDeepHashCode()) +
+                                label.hashCode()
 
                         override fun toString(): String =
-                            "MethodComparisons(value=${'$'}value, values=${'$'}values, label=${'$'}label)"
+                            "MethodComparisons(value=${'$'}value, values=${'$'}values, " +
+                                "deepValues=${'$'}deepValues, label=${'$'}label)"
                     }
                     """
                         .trimIndent()

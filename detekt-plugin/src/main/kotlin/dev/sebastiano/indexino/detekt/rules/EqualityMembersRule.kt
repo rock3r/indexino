@@ -208,7 +208,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
         val calleeName = calleeExpression?.text ?: return false
         val qualifiedCall = parent as? KtDotQualifiedExpression
         if (
-            calleeName in setOf("equals", "contentEquals") &&
+            calleeName in setOf("equals", "contentEquals", "contentDeepEquals") &&
                 qualifiedCall?.selectorExpression == this &&
                 valueArguments.size == 1
         ) {
