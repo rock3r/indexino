@@ -4,6 +4,7 @@ import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.IndexManifestOrigin
 import dev.sebastiano.indexino.producer.FileHashProducer
 import dev.sebastiano.indexino.producer.IndexedSource
+import dev.sebastiano.indexino.producer.SourceContentSnapshot
 import dev.sebastiano.indexino.topology.SourceOriginResolver
 import java.nio.file.Files
 import java.nio.file.Path
@@ -17,6 +18,7 @@ internal object ManifestOriginResolver {
         sources: List<IndexedSource>,
         externalOriginMetadata: Map<Path, Pair<String?, String?>>,
         includeWorkspaceWithoutSources: Boolean = false,
+        sourceSnapshot: SourceContentSnapshot? = null,
     ): List<IndexManifestOrigin> {
         val sourceOrigins =
             sources
@@ -32,8 +34,14 @@ internal object ManifestOriginResolver {
                                 originSources
                                     .sortedBy { it.path }
                                     .joinToString("\n") { source ->
-                                        val file = source.originRoot.resolve(source.path)
-                                        "${source.path}:${FileHashProducer.contentHash(file.readText())}"
+                                        val hash =
+                                            sourceSnapshot?.contentHash(source)
+                                                ?: FileHashProducer.contentHash(
+                                                    source.originRoot
+                                                        .resolve(source.path)
+                                                        .readText()
+                                                )
+                                        "${source.path}:$hash"
                                     }
                             ),
                         expectedRevision = externalOriginMetadata[originRoot.toRealPath()]?.second,

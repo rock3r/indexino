@@ -21,6 +21,7 @@ internal object SourceChangeDetector {
     fun detect(
         store: CodeIndexStore,
         sources: List<IndexedSource>,
+        sourceSnapshot: SourceContentSnapshot? = null,
         onFileProcessed: ((index: Int, total: Int, source: IndexedSource) -> Unit)? = null,
     ): SourceChangeSet {
         val previousHashes =
@@ -34,7 +35,10 @@ internal object SourceChangeDetector {
             sources.filterIndexedTo(linkedSetOf()) { index, source ->
                 onFileProcessed?.invoke(index + 1, sources.size, source)
                 val currentHash =
-                    FileHashProducer.contentHash(source.originRoot.resolve(source.path).readText())
+                    sourceSnapshot?.contentHash(source)
+                        ?: FileHashProducer.contentHash(
+                            source.originRoot.resolve(source.path).readText()
+                        )
                 previousHashes[source.originId to source.path] != currentHash
             }
         return SourceChangeSet(
@@ -56,6 +60,7 @@ internal object SourceChangeDetector {
         detect(
             store,
             sourceFiles.map { IndexedSource.workspace(workspaceRoot, it) },
+            sourceSnapshot = null,
             onFileProcessed,
         )
 }
