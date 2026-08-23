@@ -8,11 +8,15 @@ import dev.detekt.api.Rule
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.KtBinaryExpression
 import org.jetbrains.kotlin.psi.KtBlockExpression
+import org.jetbrains.kotlin.psi.KtCallExpression
 import org.jetbrains.kotlin.psi.KtClass
+import org.jetbrains.kotlin.psi.KtClassOrObject
 import org.jetbrains.kotlin.psi.KtDotQualifiedExpression
 import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.psi.KtForExpression
 import org.jetbrains.kotlin.psi.KtFunction
+import org.jetbrains.kotlin.psi.KtFunctionLiteral
+import org.jetbrains.kotlin.psi.KtLambdaExpression
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
 import org.jetbrains.kotlin.psi.KtNamedFunction
 import org.jetbrains.kotlin.psi.KtParenthesizedExpression
@@ -185,10 +189,26 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
         this is KtThisExpression &&
             ((text == "this" &&
                 generateSequence(parent) { it.parent }
+                    .filterIsInstance<KtClassOrObject>()
+                    .firstOrNull()
+                    ?.name == receiverLabel &&
+                generateSequence(parent) { it.parent }
                     .filterIsInstance<KtFunction>()
                     .takeWhile { it !== equalsFunction }
-                    .all { it is KtNamedFunction && it.receiverTypeReference == null }) ||
-                (receiverLabel != null && text == "this@$receiverLabel"))
+                    .all {
+                        (it is KtNamedFunction && it.receiverTypeReference == null) ||
+                            (it is KtFunctionLiteral && !it.hasReceiverLambdaSyntax())
+                    }) || (receiverLabel != null && text == "this@$receiverLabel"))
+
+    private fun KtFunctionLiteral.hasReceiverLambdaSyntax(): Boolean {
+        val lambda = parent as? KtLambdaExpression ?: return true
+        val call =
+            PsiTreeUtil.getParentOfType(lambda, KtCallExpression::class.java, false) ?: return true
+        val calleeName = call.calleeExpression?.text
+        val qualifiedCall = call.parent as? KtDotQualifiedExpression
+        return calleeName == "with" ||
+            (calleeName in setOf("run", "apply") && qualifiedCall?.selectorExpression == call)
+    }
 
     private fun KtExpression.isShadowed(
         property: String,

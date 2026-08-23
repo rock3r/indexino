@@ -211,6 +211,57 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `this inside non receiver lambda preserves class receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class LexicalLambda(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is LexicalLambda && run { this.value == other.value }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "LexicalLambda(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
+    fun `this inside nested object does not count as class receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class NestedObject(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is NestedObject &&
+                                object {
+                                    val value: String = other.value
+                                    fun matches(): Boolean = this.value == other.value
+                                }.matches()
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "NestedObject(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `loop locals do not count as receiver properties`() {
         val findings =
             rule()
