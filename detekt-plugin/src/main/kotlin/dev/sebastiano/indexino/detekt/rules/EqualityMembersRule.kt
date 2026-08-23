@@ -338,7 +338,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
     ): Boolean {
         val lambda = parent as? KtLambdaExpression ?: return true
         val call =
-            PsiTreeUtil.getParentOfType(lambda, KtCallExpression::class.java, false) ?: return true
+            PsiTreeUtil.getParentOfType(lambda, KtCallExpression::class.java, false) ?: return false
         val calleeName = call.calleeExpression?.text
         val qualifiedCall = call.parent as? KtQualifiedExpression
         val aliasesNonReceiverRun =
@@ -367,7 +367,11 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
                 when (ancestor) {
                     is KtBlockExpression ->
                         ancestor.statements.filterIsInstance<KtProperty>().any {
-                            it.name == property && it.textOffset < textOffset
+                            it.name == property &&
+                                it.textOffset < textOffset &&
+                                it.initializer?.let { initializer ->
+                                    PsiTreeUtil.isAncestor(initializer, this, false)
+                                } != true
                         }
                     is KtFunction ->
                         ancestor !== ignoredFunction &&

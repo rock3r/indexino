@@ -285,6 +285,58 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `stored lambda preserves the class receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class StoredLambda(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is StoredLambda) return false
+                            val matches = { value == other.value }
+                            return matches()
+                        }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "StoredLambda(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
+    fun `local does not shadow the class property in its own initializer`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class LocalInitializer(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is LocalInitializer) return false
+                            val value = value == other.value
+                            return value
+                        }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "LocalInitializer(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `receiver lambda bound to this preserves the class receiver`() {
         val findings =
             rule()
