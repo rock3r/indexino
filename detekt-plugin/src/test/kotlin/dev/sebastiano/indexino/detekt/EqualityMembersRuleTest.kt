@@ -488,6 +488,33 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `member call dispatch receiver does not count as receiver lambda target`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class MemberScope(val value: String) {
+                        private fun <T> scope(target: T, block: T.() -> Boolean): Boolean =
+                            target.block()
+
+                        override fun equals(other: Any?): Boolean =
+                            other is MemberScope && this.scope(other) { value == other.value }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "MemberScope(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `custom plain lambda preserves the class receiver`() {
         val findings =
             rule()

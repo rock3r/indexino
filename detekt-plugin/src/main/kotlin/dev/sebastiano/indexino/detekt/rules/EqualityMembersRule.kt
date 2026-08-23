@@ -350,7 +350,12 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                 val receiver = call.receiverLambdaArgument() ?: return false
                 return !receiver.isCurrentReceiver(equalsFunction, receiverClass)
             }
-            val receiver = qualifiedCall.receiverExpression
+            val receiver =
+                if (call.hasExtensionReceiver()) {
+                    qualifiedCall.receiverExpression
+                } else {
+                    call.receiverLambdaArgument() ?: qualifiedCall.receiverExpression
+                }
             return !receiver.isCurrentReceiver(equalsFunction, receiverClass)
         }
         val receiver = call.receiverLambdaArgument() ?: return false
@@ -362,6 +367,11 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
             .asSequence()
             .mapNotNull { it.getArgumentExpression() }
             .firstOrNull { it !is KtLambdaExpression }
+
+    private fun KtCallExpression.hasExtensionReceiver(): Boolean =
+        analyze(this) {
+            resolveToCall()?.singleFunctionCallOrNull()?.symbol?.receiverParameter != null
+        }
 
     private fun KtFunctionLiteral.hasExtensionReceiver(): Boolean =
         analyze(this) { symbol.receiverParameter?.owningCallableSymbol == symbol }
