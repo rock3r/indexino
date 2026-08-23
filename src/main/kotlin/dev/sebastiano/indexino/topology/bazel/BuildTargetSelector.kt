@@ -79,6 +79,8 @@ internal object BuildTargetSelector {
                         (canonicalPackage.isEmpty() || canonicalPackage == packagePath)
                 ) {
                     "\"$fileName\""
+                } else if (isIndexableFile(fileName) && canonicalPackage.isNotEmpty()) {
+                    "\"//$canonicalPackage/$fileName\""
                 } else {
                     label.value
                 }

@@ -66,12 +66,12 @@ internal object BuildFileParser {
 
         for (literal in extractLiteralSrcs(content)) {
             if (isIndexablePath(literal) && !literal.contains('*')) {
-                paths += "$packagePrefix$literal"
+                paths += workspaceRelativeLiteral(literal, packagePrefix)
             }
         }
 
         for (relative in extractResourceFiles(content, packageDir)) {
-            paths += "$packagePrefix$relative"
+            paths += workspaceRelativeLiteral(relative, packagePrefix)
         }
 
         return BuildParseResult(paths.toList(), warnings)
@@ -289,3 +289,6 @@ internal object BuildFileParser {
         return null
     }
 }
+
+private fun workspaceRelativeLiteral(path: String, packagePrefix: String): String =
+    if (path.startsWith("//")) path.removePrefix("//") else "$packagePrefix$path"

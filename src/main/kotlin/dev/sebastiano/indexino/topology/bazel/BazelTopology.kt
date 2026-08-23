@@ -182,8 +182,15 @@ internal object BazelTopology {
             onStderr("build-parse: no Kotlin sources found for $target under $packagePath")
         }
         return parseResult.paths.map { relativePath ->
-            val filePart = relativePath.removePrefix("$packagePath/")
-            "//$packagePath:$filePart"
+            if (relativePath.startsWith("$packagePath/")) {
+                val filePart = relativePath.removePrefix("$packagePath/")
+                "//$packagePath:$filePart"
+            } else {
+                val sourcePackage =
+                    relativePath.substringBeforeLast('/', missingDelimiterValue = "")
+                val filePart = relativePath.substringAfterLast('/')
+                "//$sourcePackage:$filePart"
+            }
         }
     }
 }

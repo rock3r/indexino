@@ -455,4 +455,29 @@ class BazelTopologyTest {
 
         assertEquals(listOf("//pkg:src/A.kt"), labels)
     }
+
+    @Test
+    fun `build target selection normalizes cross-package direct files`() {
+        val workspace = createTempDirectory("bazel-target-cross-package-file-")
+        val packageDir = workspace.resolve("pkg")
+        val sharedDir = workspace.resolve("shared")
+        Files.createDirectories(packageDir)
+        Files.createDirectories(sharedDir)
+        sharedDir.resolve("Foo.kt").writeText("class Foo")
+        packageDir
+            .resolve("BUILD.bazel")
+            .writeText(
+                """
+                kt_jvm_library(
+                    name = "a",
+                    srcs = ["//shared:Foo.kt"],
+                )
+                """
+                    .trimIndent()
+            )
+
+        val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
+
+        assertEquals(listOf("//shared:Foo.kt"), labels)
+    }
 }
