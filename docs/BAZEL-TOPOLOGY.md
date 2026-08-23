@@ -40,13 +40,18 @@ Prefer these over whole-repo scans.
 # Target-only source set (`TopologyRequest.includeDeps = false`)
 bazel query \
   "kind('source file', labels(srcs, //plugins/foo/ui:ui)) union \
-   kind('source file', labels(resource_files, //plugins/foo/ui:ui))" \
+   kind('source file', labels(resource_files, //plugins/foo/ui:ui)) union \
+   kind('source file', labels(actual, //plugins/foo/ui:ui))" \
   --output=label
 
-# Discover direct source aggregators; repeat both queries for returned filegroups.
+# Discover direct source aggregators and aliases; repeat both queries for returned labels.
 bazel query \
   "kind('filegroup rule', labels(srcs, //plugins/foo/ui:ui)) union \
-   kind('filegroup rule', labels(resource_files, //plugins/foo/ui:ui))" \
+   kind('filegroup rule', labels(resource_files, //plugins/foo/ui:ui)) union \
+   kind('filegroup rule', labels(actual, //plugins/foo/ui:ui)) union \
+   kind('alias rule', labels(srcs, //plugins/foo/ui:ui)) union \
+   kind('alias rule', labels(resource_files, //plugins/foo/ui:ui)) union \
+   kind('alias rule', labels(actual, //plugins/foo/ui:ui))" \
   --output=label
 
 # Dependency source closure (`TopologyRequest.includeDeps = true`)
@@ -54,9 +59,9 @@ bazel query "kind('source file', deps(//plugins/foo/ui:ui))" --output=label \
   | rg '\.(kt|java|xml)$' | rg '^//'
 ```
 
-The target-only traversal follows only `srcs` and `resource_files` edges. It recursively expands
-directly referenced `filegroup`s, but never applies `deps()` to those labels, so tools and other
-dependencies of generating rules cannot broaden the index.
+The target-only traversal follows only `srcs`, `resource_files`, and alias `actual` edges. It
+recursively expands directly referenced `filegroup`s and aliases, but never applies `deps()` to
+those labels, so tools and other dependencies of generating rules cannot broaden the index.
 
 Flags:
 

@@ -117,11 +117,16 @@ internal object BazelTopology {
 
     private fun targetSourceQuery(target: String): String =
         "kind('source file', labels(srcs, $target)) union " +
-            "kind('source file', labels(resource_files, $target))"
+            "kind('source file', labels(resource_files, $target)) union " +
+            "kind('source file', labels(actual, $target))"
 
     private fun targetFilegroupQuery(target: String): String =
         "kind('filegroup rule', labels(srcs, $target)) union " +
-            "kind('filegroup rule', labels(resource_files, $target))"
+            "kind('filegroup rule', labels(resource_files, $target)) union " +
+            "kind('filegroup rule', labels(actual, $target)) union " +
+            "kind('alias rule', labels(srcs, $target)) union " +
+            "kind('alias rule', labels(resource_files, $target)) union " +
+            "kind('alias rule', labels(actual, $target))"
 
     private fun isBazelLabel(line: String): Boolean = line.startsWith("//") || line.startsWith("@")
 

@@ -72,9 +72,14 @@ class BazelTopologyTest {
         assertEquals(
             listOf(
                 "kind('source file', labels(srcs, //plugins/foo/ui:ui)) union " +
-                    "kind('source file', labels(resource_files, //plugins/foo/ui:ui))",
+                    "kind('source file', labels(resource_files, //plugins/foo/ui:ui)) union " +
+                    "kind('source file', labels(actual, //plugins/foo/ui:ui))",
                 "kind('filegroup rule', labels(srcs, //plugins/foo/ui:ui)) union " +
-                    "kind('filegroup rule', labels(resource_files, //plugins/foo/ui:ui))",
+                    "kind('filegroup rule', labels(resource_files, //plugins/foo/ui:ui)) union " +
+                    "kind('filegroup rule', labels(actual, //plugins/foo/ui:ui)) union " +
+                    "kind('alias rule', labels(srcs, //plugins/foo/ui:ui)) union " +
+                    "kind('alias rule', labels(resource_files, //plugins/foo/ui:ui)) union " +
+                    "kind('alias rule', labels(actual, //plugins/foo/ui:ui))",
             ),
             queries,
         )
@@ -137,6 +142,38 @@ class BazelTopologyTest {
         )
         assertEquals(4, queries.size)
         assertEquals(false, queries.any { it.contains("deps(") })
+    }
+
+    @Test
+    fun `target-only query follows aliases through actual edges`() {
+        val alias = "//plugins/foo/ui:ui_sources_alias"
+
+        val result =
+            BazelTopology.queryWithFallback(
+                target = "//plugins/foo/ui:ui",
+                workspace = Path("."),
+                includeDeps = false,
+                runner =
+                    BazelProcessRunner { query, _ ->
+                        when {
+                            query.contains("alias rule") && query.contains("ui:ui)") ->
+                                BazelQueryOutcome(0, listOf(alias))
+                            query.contains("alias rule") -> BazelQueryOutcome(0, emptyList())
+                            query.contains("labels(actual, $alias)") ->
+                                BazelQueryOutcome(
+                                    0,
+                                    listOf("//plugins/foo/ui:src/main/kotlin/Panel.kt"),
+                                )
+                            else -> BazelQueryOutcome(0, emptyList())
+                        }
+                    },
+                onStderr = {},
+            )
+
+        assertEquals(
+            listOf("plugins/foo/ui/src/main/kotlin/Panel.kt"),
+            BazelQueryResultParser.parseKotlinSourcePaths(result.lines),
+        )
     }
 
     private fun successfulRunner(queries: MutableList<String>): BazelProcessRunner =
