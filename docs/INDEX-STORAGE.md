@@ -117,6 +117,13 @@ Definitions remain location-qualified so overloads and duplicate configurations 
 | New worktree, same machine | Share chunks; new workspace id + current pointer |
 | Confirmed workspace loss | Tombstone; abandon worktree staging/refs; keep shared chunks until GC |
 
+A refresh captures each discovered source once before analysis. Change detection, analyzers,
+per-file content hashes, the aggregate source hash, and origin source fingerprints all consume that
+immutable refresh snapshot. If a file changes after capture, the published generation remains
+internally consistent with the captured bytes and the next refresh detects the newer content. A
+read or refresh may instead fail and retry, but no generation may publish facts beside a hash from a
+different read of the file.
+
 ### Reclamation
 
 1. **Reference-based** — never drop packs reachable from `current`, pinned snapshots, or staging.
@@ -136,6 +143,10 @@ that workspace's `current` pointer. The manifest records the basic-fact schema c
 origin graph (origin ID, actual revision, expected revision when applicable, and origin-local state
 fingerprint), workspace revision fingerprint, and pack keys. Older single-origin entries remain
 readable through their legacy workspace-origin fields.
+
+The staging writer is populated from one immutable per-refresh source snapshot. Pack facts and the
+file-hash records inside that pack therefore always describe the same captured content, including
+when the checkout changes while analysis is running.
 
 Each client materializes a referenced immutable pack atomically into its own
 `workspaces/<workspace-id>/refs/<client-id>/<generation-id>/store/` directory before opening a

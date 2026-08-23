@@ -12,6 +12,7 @@ internal data class IndexBuildContext(
     val sourceFiles: List<String>,
     val workspaceRoot: Path = Path("."),
     val sourceContentOverrides: Map<String, String> = emptyMap(),
+    val sourceSnapshot: SourceContentSnapshot? = null,
     val sources: List<IndexedSource> = sourceFiles.map {
         IndexedSource.workspace(workspaceRoot, it)
     },
@@ -44,7 +45,12 @@ internal data class IndexBuildContext(
             }
 
     fun readSource(source: IndexedSource): String =
-        sourceContentOverrides[source.path] ?: source.originRoot.resolve(source.path).readText()
+        sourceSnapshot?.content(source)
+            ?: sourceContentOverrides[source.path]
+            ?: source.originRoot.resolve(source.path).readText()
+
+    fun sourceHash(source: IndexedSource): String =
+        sourceSnapshot?.contentHash(source) ?: FileHashProducer.contentHash(readSource(source))
 
     fun reportFileProgress(index: Int, total: Int, source: IndexedSource) {
         progress?.invoke("[$index/$total] ${source.originId}:${source.path}")

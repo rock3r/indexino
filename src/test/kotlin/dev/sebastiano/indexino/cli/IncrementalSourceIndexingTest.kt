@@ -2,8 +2,10 @@ package dev.sebastiano.indexino.cli
 
 import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
+import dev.sebastiano.indexino.core.record.FileHashRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
+import dev.sebastiano.indexino.producer.FileHashProducer
 import dev.sebastiano.indexino.topology.BuildSystem
 import dev.sebastiano.indexino.topology.TopologyRequest
 import java.nio.file.Files
@@ -20,6 +22,73 @@ class IncrementalSourceIndexingTest {
     @AfterTest
     fun tearDown() {
         tempDirs.forEach { it.toFile().deleteRecursively() }
+    }
+
+    @Test
+    fun `concurrent edit cannot publish a hash newer than the analyzed facts`() {
+        val workspace = createWorkspace()
+        val request = TopologyRequest(buildSystem = BuildSystem.GRADLE, gradleModule = ":app")
+        val changedSource = workspace.resolve("app/src/main/java/sample/Changed.java")
+        val analyzedContent = "package sample; public class Changed { int analyzed; }"
+        val concurrentContent = "package sample; public class Changed { int concurrent; }"
+        Files.writeString(changedSource, analyzedContent)
+        var edited = false
+
+        assertEquals(
+            0,
+            IndexCommand()
+                .runIndexedBuild(
+                    workspace,
+                    request,
+                    emptyList(),
+                    progress = { message ->
+                        if (!edited && message == "FileHashProducer") {
+                            Files.writeString(changedSource, concurrentContent)
+                            edited = true
+                        }
+                    },
+                ),
+        )
+
+        val commit = runGit(workspace, "rev-parse", "HEAD").trim()
+        val resolver = IndexPathResolver(workspace)
+        val firstStore =
+            XodusCodeIndexStore.open(resolver.resolveBaseStore(commit), readOnly = true)
+        try {
+            val symbols =
+                firstStore
+                    .prefixScan("sym:")
+                    .map { it.second }
+                    .filterIsInstance<SymbolRecord>()
+                    .toList()
+            val hash =
+                firstStore
+                    .prefixScan("file:")
+                    .map { it.second }
+                    .filterIsInstance<FileHashRecord>()
+                    .single { it.relativePath.endsWith("Changed.java") }
+            assertTrue(symbols.any { it.fqn == "sample.Changed#analyzed" })
+            assertFalse(symbols.any { it.fqn == "sample.Changed#concurrent" })
+            assertEquals(FileHashProducer.contentHash(analyzedContent), hash.contentHash)
+        } finally {
+            firstStore.close()
+        }
+
+        assertEquals(0, IndexCommand().runIndexedBuild(workspace, request, emptyList()))
+        val reopenedStore =
+            XodusCodeIndexStore.open(resolver.resolveBaseStore(commit), readOnly = true)
+        try {
+            val symbols =
+                reopenedStore
+                    .prefixScan("sym:")
+                    .map { it.second }
+                    .filterIsInstance<SymbolRecord>()
+                    .toList()
+            assertFalse(symbols.any { it.fqn == "sample.Changed#analyzed" })
+            assertTrue(symbols.any { it.fqn == "sample.Changed#concurrent" })
+        } finally {
+            reopenedStore.close()
+        }
     }
 
     @Test
