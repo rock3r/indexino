@@ -122,6 +122,13 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
         val typeName = typeText.removeSuffix("?")
         if (typeName == "kotlin.Any") return nullable
         if (typeName == "Any") {
+            val sameNamedAlias =
+                declarations.filterIsInstance<KtTypeAlias>().firstOrNull { it.name == "Any" }
+            if (sameNamedAlias != null) {
+                if (!visitedAliases.add(typeName)) return false
+                val aliasedType = sameNamedAlias.getTypeReference()?.text ?: return false
+                return resolvesToNullableAny(aliasedType, nullable, visitedAliases)
+            }
             val shadowsDefaultAny =
                 declarations.filterIsInstance<KtNamedDeclaration>().any { it.name == "Any" } ||
                     importDirectives.any {
@@ -318,7 +325,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
         val call =
             PsiTreeUtil.getParentOfType(lambda, KtCallExpression::class.java, false) ?: return true
         val calleeName = call.calleeExpression?.text
-        val qualifiedCall = call.parent as? KtDotQualifiedExpression
+        val qualifiedCall = call.parent as? KtQualifiedExpression
         val aliasesNonReceiverRun =
             calleeName == "with" &&
                 containingKtFile.importDirectives.any {

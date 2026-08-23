@@ -211,6 +211,31 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `safe qualified receiver lambda property does not count as class receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class SafeReceiver(val value: String?) {
+                        override fun equals(other: Any?): Boolean =
+                            other is SafeReceiver &&
+                                (other.value?.run { value == other.value } ?: false)
+
+                        override fun hashCode(): Int = value?.hashCode() ?: 0
+
+                        override fun toString(): String = "SafeReceiver(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `this inside local function preserves class receiver`() {
         val findings =
             rule()
@@ -854,6 +879,32 @@ class EqualityMembersRuleTest {
                         override fun hashCode(): Int = value.hashCode()
 
                         override fun toString(): String = "TypealiasedAny(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
+    fun `same named kotlin Any typealias satisfies equals override`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    private typealias Any = kotlin.Any
+
+                    class SameNamedAnyAlias(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is SameNamedAnyAlias && value == other.value
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String =
+                            "SameNamedAnyAlias(value=${'$'}value)"
                     }
                     """
                         .trimIndent()
