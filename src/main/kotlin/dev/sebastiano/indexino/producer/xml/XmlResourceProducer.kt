@@ -265,6 +265,12 @@ internal class XmlResourceProducer : IndexProducer {
                     column = 1
                     sourceOffset++
                 }
+                '\u0085',
+                '\u2028' -> {
+                    line++
+                    column = 1
+                    sourceOffset++
+                }
                 else -> {
                     column++
                     sourceOffset++
@@ -368,6 +374,11 @@ private fun decodeXml(rawValue: String): DecodedXml {
                 decoded.append('\n')
                 rawOffsets += rawOffset
                 rawOffset += if (rawValue.getOrNull(rawOffset + 1) == '\n') 2 else 1
+            }
+            rawValue[rawOffset] == '\u0085' || rawValue[rawOffset] == '\u2028' -> {
+                decoded.append('\n')
+                rawOffsets += rawOffset
+                rawOffset++
             }
             else -> {
                 decoded.append(rawValue[rawOffset])

@@ -201,6 +201,32 @@ class XmlResourceProducerTest {
     }
 
     @Test
+    fun `counts XML 1_1 line separators in declaration locations`() {
+        val values =
+            "<?xml version=\"1.1\"?>\u0085<resources>\u2028<string name=\"title\">Title</string></resources>"
+
+        withStore { store ->
+            assertNotNull(ProducerRegistry.get("xml-resources"))
+                .produce(
+                    IndexBuildContext.forInlineSources(
+                        store = store,
+                        commitHash = "xml-1-1-columns",
+                        sourceFiles = mapOf("src/main/res/values/strings.xml" to values),
+                    )
+                )
+
+            val title =
+                store
+                    .prefixScan("res:string:title")
+                    .map { it.second }
+                    .filterIsInstance<SymbolRecord>()
+                    .single()
+            assertEquals(3, title.line)
+            assertEquals(1, title.column)
+        }
+    }
+
+    @Test
     fun `keeps equal resource paths from separate origins distinct`() {
         val firstRoot = createTempDirectory("indexino-resource-origin-first-")
         val secondRoot = createTempDirectory("indexino-resource-origin-second-")
