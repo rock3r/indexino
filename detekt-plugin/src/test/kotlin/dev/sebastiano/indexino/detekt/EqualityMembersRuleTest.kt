@@ -377,6 +377,53 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `implicit lambda parameter shadows a property named it`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class ImplicitItShadow(val it: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is ImplicitItShadow && other.it.let { it == other.it }
+
+                        override fun hashCode(): Int = it.hashCode()
+
+                        override fun toString(): String = "ImplicitItShadow(it=${'$'}it)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("it"))
+    }
+
+    @Test
+    fun `property named it remains visible in a zero parameter lambda`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class ZeroParameterIt(val it: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is ZeroParameterIt && run { it == other.it }
+
+                        override fun hashCode(): Int = it.hashCode()
+
+                        override fun toString(): String = "ZeroParameterIt(it=${'$'}it)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `qualified let preserves the class receiver`() {
         val findings =
             rule()
@@ -971,6 +1018,43 @@ class EqualityMembersRuleTest {
         assertTrue(
             findings.any {
                 it.message.contains("ClassNamedAny is missing required functions: equals")
+            },
+            findings.joinToString { it.message },
+        )
+    }
+
+    @Test
+    fun `same package Any class overload from another file does not satisfy kotlin Any equals`() {
+        val findings =
+            rule()
+                .lintWithDependencies(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    interface ForeignAnyEquality {
+                        fun equals(other: Any?): Boolean
+                    }
+
+                    class ForeignAnyOverload(val value: String) : ForeignAnyEquality {
+                        override fun equals(other: Any?): Boolean = value == other?.value
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "ForeignAnyOverload(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent(),
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class Any(val value: String)
+                    """
+                        .trimIndent(),
+                )
+
+        assertTrue(
+            findings.any {
+                it.message.contains("ForeignAnyOverload is missing required functions: equals")
             },
             findings.joinToString { it.message },
         )

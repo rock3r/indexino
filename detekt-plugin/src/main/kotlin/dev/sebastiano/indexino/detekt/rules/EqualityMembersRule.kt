@@ -31,7 +31,6 @@ import org.jetbrains.kotlin.psi.KtProperty
 import org.jetbrains.kotlin.psi.KtQualifiedExpression
 import org.jetbrains.kotlin.psi.KtSafeQualifiedExpression
 import org.jetbrains.kotlin.psi.KtThisExpression
-import org.jetbrains.kotlin.psi.KtTypeAlias
 import org.jetbrains.kotlin.psi.KtTypeReference
 import org.jetbrains.kotlin.psi.KtWhenExpression
 
@@ -123,9 +122,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
 
     private fun KtNamedFunction.hasNullableAnyParameter(): Boolean {
         val typeReference = valueParameters.singleOrNull()?.typeReference ?: return false
-        val typeText = typeReference.typeElement?.text ?: return false
-        return containingKtFile.resolvesToNullableAny(typeText, false, mutableSetOf()) ||
-            typeReference.semanticallyResolvesToNullableAny()
+        return typeReference.semanticallyResolvesToNullableAny()
     }
 
     private fun KtTypeReference.semanticallyResolvesToNullableAny(): Boolean =
@@ -134,49 +131,6 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
             resolvedType.isMarkedNullable &&
                 resolvedType.symbol?.classId?.asFqNameString() == "kotlin.Any"
         }
-
-    private fun org.jetbrains.kotlin.psi.KtFile.resolvesToNullableAny(
-        typeText: String,
-        nullableAlias: Boolean,
-        visitedAliases: MutableSet<String>,
-    ): Boolean {
-        val nullable = nullableAlias || typeText.endsWith("?")
-        val typeName = typeText.removeSuffix("?")
-        if (typeName == "kotlin.Any") return nullable
-        if (typeName == "Any") {
-            val sameNamedAlias =
-                declarations.filterIsInstance<KtTypeAlias>().firstOrNull { it.name == "Any" }
-            if (sameNamedAlias != null) {
-                if (!visitedAliases.add(typeName)) return false
-                val aliasedType = sameNamedAlias.getTypeReference()?.text ?: return false
-                return resolvesToNullableAny(aliasedType, nullable, visitedAliases)
-            }
-            val shadowsDefaultAny =
-                declarations.filterIsInstance<KtNamedDeclaration>().any { it.name == "Any" } ||
-                    importDirectives.any {
-                        it.aliasName == "Any" ||
-                            (it.aliasName == null &&
-                                it.importedFqName?.shortName()?.asString() == "Any" &&
-                                it.importedFqName?.asString() != "kotlin.Any")
-                    }
-            return nullable && !shadowsDefaultAny
-        }
-        if (
-            importDirectives.any {
-                it.aliasName == typeName && it.importedFqName?.asString() == "kotlin.Any"
-            }
-        ) {
-            return nullable
-        }
-        if (!visitedAliases.add(typeName)) return false
-        val aliasedType =
-            declarations
-                .filterIsInstance<KtTypeAlias>()
-                .firstOrNull { it.name == typeName }
-                ?.getTypeReference()
-                ?.text ?: return false
-        return resolvesToNullableAny(aliasedType, nullable, visitedAliases)
-    }
 
     private fun checkEquals(
         function: KtNamedFunction,
@@ -417,7 +371,10 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                         }
                     is KtFunction ->
                         ancestor !== ignoredFunction &&
-                            ancestor.valueParameters.any { it.name == property }
+                            (ancestor.valueParameters.any { it.name == property } ||
+                                (ancestor is KtFunctionLiteral &&
+                                    property == "it" &&
+                                    ancestor.hasImplicitItParameter()))
                     is KtWhenExpression ->
                         ancestor.subjectVariable?.let { subject ->
                             subject.name == property &&
@@ -444,6 +401,10 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                     else -> false
                 }
             }
+
+    private fun KtFunctionLiteral.hasImplicitItParameter(): Boolean =
+        valueParameters.isEmpty() &&
+            analyze(this) { symbol.valueParameters.singleOrNull()?.name?.asString() == "it" }
 
     private fun KtExpression.isOtherProperty(
         equalsFunction: KtNamedFunction,
