@@ -41,7 +41,12 @@ internal object BuildTargetSelector {
             .flatMap { match ->
                 val valueStart = match.range.last + 1
                 val valueEnd = BuildFileSrcsParser.findSrcsValueEnd(rule, valueStart) ?: rule.length
-                LOCAL_LABEL.findAll(rule.substring(valueStart, valueEnd)).map { it.groupValues[1] }
+                val value = rule.substring(valueStart, valueEnd)
+                LOCAL_LABEL.findAll(value)
+                    .filterNot { label ->
+                        BuildFileComments.isCommentedOutInBlock(value, label.range.first)
+                    }
+                    .map { it.groupValues[1] }
             }
 
     private fun isTopLevelCode(rule: String, position: Int): Boolean {

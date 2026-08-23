@@ -264,4 +264,30 @@ class BazelTopologyTest {
 
         assertEquals(listOf("//pkg:src/A.kt"), labels)
     }
+
+    @Test
+    fun `build target selection ignores commented local source targets`() {
+        val workspace = createTempDirectory("bazel-target-commented-label-")
+        val packageDir = workspace.resolve("pkg")
+        Files.createDirectories(packageDir.resolve("src"))
+        packageDir.resolve("src/A.kt").writeText("class A")
+        packageDir
+            .resolve("BUILD.bazel")
+            .writeText(
+                """
+                kt_jvm_library(
+                    name = "a",
+                    srcs = [
+                        # ":removed_sources",
+                        "src/A.kt",
+                    ],
+                )
+                """
+                    .trimIndent()
+            )
+
+        val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
+
+        assertEquals(listOf("//pkg:src/A.kt"), labels)
+    }
 }
