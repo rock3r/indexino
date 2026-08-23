@@ -546,6 +546,33 @@ class BazelTopologyTest {
     }
 
     @Test
+    fun `build target selection follows aliases to ordinary rules`() {
+        val workspace = createTempDirectory("bazel-target-build-alias-rule-")
+        val packageDir = workspace.resolve("pkg")
+        Files.createDirectories(packageDir)
+        packageDir.resolve("Foo.kt").writeText("class Foo")
+        packageDir
+            .resolve("BUILD.bazel")
+            .writeText(
+                """
+                kt_jvm_library(
+                    name = "lib",
+                    srcs = ["Foo.kt"],
+                )
+                alias(
+                    name = "a",
+                    actual = ":lib",
+                )
+                """
+                    .trimIndent()
+            )
+
+        val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
+
+        assertEquals(listOf("//pkg:Foo.kt"), labels)
+    }
+
+    @Test
     fun `build target selection preserves direct files referenced by aliases`() {
         val workspace = createTempDirectory("bazel-target-build-file-alias-")
         val packageDir = workspace.resolve("pkg")

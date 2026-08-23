@@ -28,7 +28,10 @@ internal object BuildTargetSelector {
                     ?: error("Referenced source target ':$name' was not found in BUILD file")
             selected[name] = rule
             sourceLabels(rule, packagePath)
-                .filter { label -> rulesByName[label]?.let(::isSourceAggregator) == true }
+                .filter { label ->
+                    val referencedRule = rulesByName[label]
+                    referencedRule != null && (isAlias(rule) || isSourceAggregator(referencedRule))
+                }
                 .forEach(::addRule)
         }
         addRule(targetName)
