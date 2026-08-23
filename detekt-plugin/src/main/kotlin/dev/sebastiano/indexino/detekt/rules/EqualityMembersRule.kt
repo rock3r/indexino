@@ -50,7 +50,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
             )
         }
 
-        functions["equals"]?.let { checkEquals(it, properties, klass.name) }
+        functions["equals"]?.let { checkEquals(it, properties, klass) }
         functions["hashCode"]?.let { checkDirectPropertyUsage(it, properties) }
         functions["toString"]?.let { checkDirectPropertyUsage(it, properties) }
     }
@@ -116,7 +116,18 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
         typeName: String,
         visitedAliases: MutableSet<String>,
     ): Boolean {
-        if (typeName == "Any" || typeName == "kotlin.Any") return true
+        if (typeName == "kotlin.Any") return true
+        if (typeName == "Any") {
+            val shadowsDefaultAny =
+                declarations.filterIsInstance<KtTypeAlias>().any { it.name == "Any" } ||
+                    importDirectives.any {
+                        it.aliasName == "Any" ||
+                            (it.aliasName == null &&
+                                it.importedFqName?.shortName()?.asString() == "Any" &&
+                                it.importedFqName?.asString() != "kotlin.Any")
+                    }
+            return !shadowsDefaultAny
+        }
         if (
             importDirectives.any {
                 it.aliasName == typeName && it.importedFqName?.asString() == "kotlin.Any"
@@ -137,7 +148,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
     private fun checkEquals(
         function: KtNamedFunction,
         properties: Set<String>,
-        receiverLabel: String?,
+        receiverClass: KtClass,
     ) {
         val otherParameter = function.valueParameters.singleOrNull()?.name ?: return
         val comparedProperties =
@@ -152,7 +163,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
                             function,
                             otherParameter,
                             property,
-                            receiverLabel,
+                            receiverClass,
                         )
                     }
                 }
@@ -175,39 +186,37 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
         equalsFunction: KtNamedFunction,
         otherParameter: String,
         property: String,
-        receiverLabel: String?,
+        receiverClass: KtClass,
     ): Boolean {
         val left = left ?: return false
         val right = right ?: return false
-        return (left.isReceiverProperty(equalsFunction, property, receiverLabel) &&
+        return (left.isReceiverProperty(equalsFunction, property, receiverClass) &&
             right.isOtherProperty(equalsFunction, otherParameter, property)) ||
-            (right.isReceiverProperty(equalsFunction, property, receiverLabel) &&
+            (right.isReceiverProperty(equalsFunction, property, receiverClass) &&
                 left.isOtherProperty(equalsFunction, otherParameter, property))
     }
 
     private fun KtExpression.isReceiverProperty(
         equalsFunction: KtNamedFunction,
         property: String,
-        receiverLabel: String?,
+        receiverClass: KtClass,
     ): Boolean =
         when (this) {
             is KtParenthesizedExpression ->
-                expression?.isReceiverProperty(equalsFunction, property, receiverLabel) == true
+                expression?.isReceiverProperty(equalsFunction, property, receiverClass) == true
             else ->
                 (isName(property) &&
                     !isShadowed(property) &&
                     !isInsideNestedReceiver(equalsFunction) &&
-                    isOwnedByClass(receiverLabel)) ||
+                    isOwnedByClass(receiverClass)) ||
                     (this is KtDotQualifiedExpression &&
-                        receiverExpression.isCurrentReceiver(equalsFunction, receiverLabel) &&
+                        receiverExpression.isCurrentReceiver(equalsFunction, receiverClass) &&
                         selectorExpression?.isName(property) == true)
         }
 
-    private fun KtExpression.isOwnedByClass(receiverLabel: String?): Boolean =
-        generateSequence(parent) { it.parent }
-            .filterIsInstance<KtClassOrObject>()
-            .firstOrNull()
-            ?.name == receiverLabel
+    private fun KtExpression.isOwnedByClass(receiverClass: KtClass): Boolean =
+        generateSequence(parent) { it.parent }.filterIsInstance<KtClassOrObject>().firstOrNull() ===
+            receiverClass
 
     private fun KtExpression.isInsideNestedReceiver(equalsFunction: KtNamedFunction): Boolean =
         generateSequence(parent) { it.parent }
@@ -220,21 +229,20 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
 
     private fun KtExpression.isCurrentReceiver(
         equalsFunction: KtNamedFunction,
-        receiverLabel: String?,
+        receiverClass: KtClass,
     ): Boolean =
         this is KtThisExpression &&
             ((text == "this" &&
                 generateSequence(parent) { it.parent }
                     .filterIsInstance<KtClassOrObject>()
-                    .firstOrNull()
-                    ?.name == receiverLabel &&
+                    .firstOrNull() === receiverClass &&
                 generateSequence(parent) { it.parent }
                     .filterIsInstance<KtFunction>()
                     .takeWhile { it !== equalsFunction }
                     .all {
                         (it is KtNamedFunction && it.receiverTypeReference == null) ||
                             (it is KtFunctionLiteral && !it.hasReceiverLambdaSyntax())
-                    }) || (receiverLabel != null && text == "this@$receiverLabel"))
+                    }) || (receiverClass.name != null && text == "this@${receiverClass.name}"))
 
     private fun KtFunctionLiteral.hasReceiverLambdaSyntax(): Boolean {
         val lambda = parent as? KtLambdaExpression ?: return true

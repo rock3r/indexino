@@ -391,6 +391,39 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `bare property in same named local class does not count as outer receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class SameName(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is SameName) return false
+                            class SameName(val value: String) {
+                                fun matches(): Boolean = value == other.value
+                            }
+                            return SameName(other.value).matches()
+                        }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "SameName(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(
+            findings.any {
+                it.message == "Function equals must compare property value through other.value."
+            },
+            findings.joinToString { it.message },
+        )
+    }
+
+    @Test
     fun `loop locals do not count as receiver properties`() {
         val findings =
             rule()
@@ -488,6 +521,35 @@ class EqualityMembersRuleTest {
 
                         override fun toString(): String =
                             "NullableInterfaceOverload(length=${'$'}length)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("equals"))
+    }
+
+    @Test
+    fun `shadowed Any overload does not satisfy kotlin Any equals`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    typealias Any = String
+
+                    interface ShadowEquality {
+                        fun equals(other: Any?): Boolean
+                    }
+
+                    class ShadowedAny(val length: Int) : ShadowEquality {
+                        override fun equals(other: Any?): Boolean = length == other?.length
+
+                        override fun hashCode(): Int = length
+
+                        override fun toString(): String = "ShadowedAny(length=${'$'}length)"
                     }
                     """
                         .trimIndent()
