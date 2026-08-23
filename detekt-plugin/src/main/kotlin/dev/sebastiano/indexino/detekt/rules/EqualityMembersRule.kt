@@ -284,7 +284,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
             else ->
                 (isName(property) &&
                     !isShadowed(property) &&
-                    !isInsideNestedReceiver(equalsFunction) &&
+                    !isInsideNestedReceiver(equalsFunction, receiverClass) &&
                     isOwnedByClass(receiverClass)) ||
                     (this is KtDotQualifiedExpression &&
                         receiverExpression.isCurrentReceiver(equalsFunction, receiverClass) &&
@@ -295,12 +295,16 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
         generateSequence(parent) { it.parent }.filterIsInstance<KtClassOrObject>().firstOrNull() ===
             receiverClass
 
-    private fun KtExpression.isInsideNestedReceiver(equalsFunction: KtNamedFunction): Boolean =
+    private fun KtExpression.isInsideNestedReceiver(
+        equalsFunction: KtNamedFunction,
+        receiverClass: KtClass,
+    ): Boolean =
         generateSequence(parent) { it.parent }
             .filterIsInstance<KtFunction>()
             .takeWhile { it !== equalsFunction }
             .any {
-                (it is KtFunctionLiteral && it.hasReceiverLambdaSyntax()) ||
+                (it is KtFunctionLiteral &&
+                    it.hasForeignReceiverLambdaSyntax(equalsFunction, receiverClass)) ||
                     (it is KtNamedFunction && it.receiverTypeReference != null)
             }
 
@@ -318,7 +322,8 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
                     .takeWhile { it !== equalsFunction }
                     .all {
                         (it is KtNamedFunction && it.receiverTypeReference == null) ||
-                            (it is KtFunctionLiteral && !it.hasReceiverLambdaSyntax())
+                            (it is KtFunctionLiteral &&
+                                !it.hasForeignReceiverLambdaSyntax(equalsFunction, receiverClass))
                     }) ||
                 (receiverClass.name != null &&
                     text == "this@${receiverClass.name}" &&
@@ -327,7 +332,10 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
                         .filterIsInstance<KtLabeledExpression>()
                         .none { it.getLabelName() == receiverClass.name }))
 
-    private fun KtFunctionLiteral.hasReceiverLambdaSyntax(): Boolean {
+    private fun KtFunctionLiteral.hasForeignReceiverLambdaSyntax(
+        equalsFunction: KtNamedFunction,
+        receiverClass: KtClass,
+    ): Boolean {
         val lambda = parent as? KtLambdaExpression ?: return true
         val call =
             PsiTreeUtil.getParentOfType(lambda, KtCallExpression::class.java, false) ?: return true
@@ -340,9 +348,14 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
                 }
         if (aliasesNonReceiverRun) return false
         if (qualifiedCall?.selectorExpression == call) {
-            return qualifiedCall.receiverExpression.text != "kotlin"
+            if (calleeName in setOf("let", "also")) return false
+            val receiver = qualifiedCall.receiverExpression
+            return receiver.text != "kotlin" &&
+                !receiver.isCurrentReceiver(equalsFunction, receiverClass)
         }
-        return calleeName == "with"
+        if (calleeName != "with") return false
+        val receiver = call.valueArguments.firstOrNull()?.getArgumentExpression() ?: return true
+        return !receiver.isCurrentReceiver(equalsFunction, receiverClass)
     }
 
     private fun KtExpression.isShadowed(

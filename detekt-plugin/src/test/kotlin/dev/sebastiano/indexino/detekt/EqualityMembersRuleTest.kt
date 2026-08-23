@@ -262,6 +262,52 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `qualified let preserves the class receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class QualifiedLet(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is QualifiedLet && other.let { value == other.value }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "QualifiedLet(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
+    fun `receiver lambda bound to this preserves the class receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class WithThis(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is WithThis && with(this) { value == other.value }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "WithThis(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `lambda label matching class name does not count as class receiver`() {
         val findings =
             rule()
