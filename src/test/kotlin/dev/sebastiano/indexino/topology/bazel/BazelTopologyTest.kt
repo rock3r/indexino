@@ -71,8 +71,8 @@ class BazelTopologyTest {
 
         assertEquals(
             listOf(
-                "labels(srcs, //plugins/foo/ui:ui) union " +
-                    "labels(resource_files, //plugins/foo/ui:ui)"
+                "kind('source file', deps(labels(srcs, //plugins/foo/ui:ui))) union " +
+                    "kind('source file', deps(labels(resource_files, //plugins/foo/ui:ui)))"
             ),
             queries,
         )

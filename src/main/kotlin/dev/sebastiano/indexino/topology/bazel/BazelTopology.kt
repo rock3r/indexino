@@ -87,7 +87,8 @@ internal object BazelTopology {
     }
 
     private fun targetOnlyQuery(target: String): String =
-        "labels(srcs, $target) union labels(resource_files, $target)"
+        "kind('source file', deps(labels(srcs, $target))) union " +
+            "kind('source file', deps(labels(resource_files, $target)))"
 
     private fun resolveTopology(executor: BazelQueryExecutor): String =
         when {

@@ -39,13 +39,18 @@ Prefer these over whole-repo scans.
 ```bash
 # Target-only source set (`TopologyRequest.includeDeps = false`)
 bazel query \
-  "labels(srcs, //plugins/foo/ui:ui) union labels(resource_files, //plugins/foo/ui:ui)" \
+  "kind('source file', deps(labels(srcs, //plugins/foo/ui:ui))) union \
+   kind('source file', deps(labels(resource_files, //plugins/foo/ui:ui)))" \
   --output=label
 
 # Dependency source closure (`TopologyRequest.includeDeps = true`)
 bazel query "kind('source file', deps(//plugins/foo/ui:ui))" --output=label \
   | rg '\.(kt|java|xml)$' | rg '^//'
 ```
+
+The inner `labels` calls keep the scope on the target's direct source/resource attributes; the
+surrounding `deps` calls expand filegroups and other source aggregators named by those attributes.
+This is not the target's build dependency closure.
 
 Flags:
 
@@ -77,9 +82,9 @@ When Bazel is unavailable (default CI path uses mock query fixtures instead):
 5. Set manifest `topology` to `build-parse`
 
 When a dependency-closure query fails (for example in a partial checkout), Indexino retries with
-`labels(srcs, $target)`. When that target-only query itself fails, Indexino retries with BUILD
-parsing. Progress and BUILD-parse warnings go to stderr. Manifest `includeDeps` is `false` for
-either target-only fallback and for `build-parse` degraded mode.
+the same target-only source/resource query. When that query itself fails, Indexino retries with
+BUILD parsing. Progress and BUILD-parse warnings go to stderr. Manifest `includeDeps` is `false`
+for either target-only fallback and for `build-parse` degraded mode.
 
 ## Test fixtures
 

@@ -10,9 +10,9 @@ private constructor(
         /**
          * Bazel target scope without the dependency closure.
          *
-         * In S1 the in-process host always resolves Bazel scopes through the dependency closure, so
-         * a target-only scope is rejected with `INVALID_REQUEST`; call [includingDependencies].
-         * This host restriction lifts when Bazel topology honours the flag (see issue #26).
+         * Resolves source files referenced by the target's source and resource attributes,
+         * including files reached through filegroups. Call [includingDependencies] to expand the
+         * target's build dependency closure.
          */
         @JvmStatic
         public fun bazel(target: String): IndexScope {
