@@ -111,7 +111,8 @@ class BazelQueryFallbackTest {
             listOf(
                 "kind('source file', deps(//plugins/foo/ui:ui))",
                 "kind('source file', labels(srcs, //plugins/foo/ui:ui)) union " +
-                    "kind('source file', labels(resource_files, //plugins/foo/ui:ui))",
+                    "kind('source file', labels(resource_files, //plugins/foo/ui:ui)) union " +
+                    "kind('source file', labels(actual, //plugins/foo/ui:ui))",
             ),
             queries,
         )
