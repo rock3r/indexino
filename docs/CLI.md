@@ -90,6 +90,12 @@ otherwise Gradle when `settings.gradle(.kts)` is present; a resolved `.repo/mani
 also detected as repo topology. Pass `--bazel-target` or `--gradle-module` for the scope.
 Embedded API scopes stay explicit (`IndexScope.bazel` / `gradle`); CLI may keep auto-detect.
 
+For compatibility, Bazel CLI scopes continue to include dependency sources by default: omitting
+`--include-deps` from `index` does not shrink the source set that shipped before the embedded
+topology flag was honoured. Embedded `IndexScope.bazel(target)` is target-only, and callers opt
+into the dependency closure with `.includingDependencies()`. Gradle CLI behavior is unchanged:
+its module scope remains target-only unless `--include-deps` is present.
+
 Gradle `includeBuild` mounts are canonicalized, deduplicated, and cycle-checked. The default
 external-root policy permits included builds inside the workspace or its canonical parent tree,
 which supports sibling builds while rejecting unrelated mounts. Each resolved sibling/external build
@@ -201,7 +207,9 @@ When scope flags are omitted, `status` reports the scope and `includeDeps` store
 manifest. `fresh` is the last published state: it remains true only while that manifest matches the
 current Git revision and has no unavailable persisted origin. It does not rediscover topology or
 rehash sources; use `index` to reconcile a workspace. An explicit scope with incompatible
-`includeDeps` reports `fresh: false`. May include reclaimable-cache hints for operators.
+`includeDeps` reports `fresh: false`. An explicitly scoped Bazel status uses the same historical
+dependency-closure default as `index`; Gradle status remains target-only unless `--include-deps`
+is present. May include reclaimable-cache hints for operators.
 
 ### `script` (Alpha; requires script-host on the distribution)
 
@@ -317,7 +325,7 @@ queries and direct plugin-fact reads are intentionally not a core CLI contract.
 | `--build-system` | `auto`, `bazel`, `gradle`, `repo` |
 | `--bazel-target` | Bazel label, e.g. `//pkg:ui` |
 | `--gradle-module` | Gradle path, e.g. `:foo:ui` (bonus backend) |
-| `--include-deps` | Include dependency target/module sources |
+| `--include-deps` | Include dependency sources. Gradle is opt-in; Bazel CLI already preserves dependency closure by default. Embedded Bazel scopes remain explicit. |
 | `--progress-format` | `index` / lookup commands: `text` (default) or JSONL machine progress; `index` uses stdout and lookups use stderr |
 | `--format` | `jsonl`, `json`, `text` |
 | `--application` | Plugin ID, e.g. `dev.sebastiano.selection-context` |

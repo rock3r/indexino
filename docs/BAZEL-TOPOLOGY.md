@@ -34,21 +34,47 @@ Prefer these over whole-repo scans.
 
 ## Source Closure
 
-**Primary path** (requires `bazel` on PATH):
+**Primary path** (requires `bazel` on PATH) follows the requested scope:
 
 ```bash
-# JVM/Android targets in dependency closure
-bazel query "filter('kt_.*library', deps(//plugins/foo/ui:ui))" --output=label
+# Target-only source set (`TopologyRequest.includeDeps = false`)
+bazel query "kind('alias rule', //plugins/foo/ui:ui)" --output=label
+bazel query \
+  "kind('source file', labels(srcs, //plugins/foo/ui:ui)) union \
+   kind('source file', labels(resource_files, //plugins/foo/ui:ui))" \
+  --output=label
 
-# In-repo Kotlin, Java, and XML sources
+# Discover direct source aggregators and aliases; repeat both queries for returned labels.
+bazel query \
+  "kind('filegroup rule', labels(srcs, //plugins/foo/ui:ui)) union \
+   kind('alias rule', labels(srcs, //plugins/foo/ui:ui)) union \
+   kind('filegroup rule', labels(resource_files, //plugins/foo/ui:ui)) union \
+   kind('alias rule', labels(resource_files, //plugins/foo/ui:ui))" \
+  --output=label
+
+# Dependency source closure (`TopologyRequest.includeDeps = true`)
 bazel query "kind('source file', deps(//plugins/foo/ui:ui))" --output=label \
   | rg '\.(kt|java|xml)$' | rg '^//'
 ```
 
+Each node is classified first. Normal rules follow only `srcs` and `resource_files`; alias rules
+collect a direct source from `actual` or enqueue the `actual` rule for normal processing. The
+traversal never applies `deps()`, so tools and other dependencies of generating rules cannot
+broaden the index.
+
 Flags:
 
-- `--include-deps` — index dependency targets' sources (shared UI libs)
+- Embedded `IndexScope.bazel(target)` is target-only;
+  `.includingDependencies()` requests the dependency source closure.
+- The CLI preserves its historical effective Bazel default: `index` and an explicitly scoped
+  `status` include the dependency closure even when `--include-deps` is omitted. The flag remains
+  accepted for cross-backend command compatibility.
 - `--exclude-test-targets` — skip `testonly` targets (default: exclude)
+
+`TopologyResult.includeDeps` and the generation/compatibility manifests record the closure that
+was actually observed, not merely the requested flag. A fallback from a requested dependency
+closure to target-only sources therefore records `includeDeps = false`; freshness comparison can
+then detect that the published closure does not satisfy a dependency-inclusive scope.
 
 ## Test Target Filtering
 
@@ -60,14 +86,17 @@ unless `--include-tests`.
 When Bazel is unavailable (default CI path uses mock query fixtures instead):
 
 1. Parse `BUILD` / `BUILD.bazel` under the target package directory
-2. Recognize Kotlin/Java files in `srcs` and XML in Android `resource_files`
-3. Expand literal entries and `glob([...])` patterns into workspace-relative paths
-4. Set manifest `topology` to `build-parse`
+2. Select the requested rule by its `name`; fail rather than indexing sibling rules when absent
+3. Recursively retain local rules referenced from that rule's `srcs` or `resource_files` (such as
+   source `filegroup`s), without admitting unrelated sibling targets
+4. Recognize Kotlin/Java files in `srcs` and XML in Android `resource_files`
+5. Expand literal entries and `glob([...])` patterns into workspace-relative paths
+6. Set manifest `topology` to `build-parse`
 
-When `bazel` is available but the dependency closure is incomplete (partial checkout), the CLI
-retries with `labels(srcs, $target)` after `kind('source file', deps($target))` fails. Progress
-and BUILD-parse warnings go to stderr. Manifest `includeDeps` is `false` for that fallback and
-for `build-parse` degraded mode.
+When a dependency-closure query fails (for example in a partial checkout), Indexino retries with
+the same target-only source/resource query. When that query itself fails, Indexino retries with
+BUILD parsing. Progress and BUILD-parse warnings go to stderr. Manifest `includeDeps` is `false`
+for either target-only fallback and for `build-parse` degraded mode.
 
 ## Test fixtures
 

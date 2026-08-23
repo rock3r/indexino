@@ -21,11 +21,18 @@ internal object BuildFileParser {
     private val RESOURCE_FILES_ASSIGNMENT = Regex("""resource_files\s*=""")
     private val INDEXABLE_EXTENSIONS = setOf("kt", "java", "xml")
 
-    fun parseKotlinSources(buildFile: Path, workspaceRoot: Path): BuildParseResult {
+    fun parseKotlinSources(
+        buildFile: Path,
+        workspaceRoot: Path,
+        targetName: String? = null,
+    ): BuildParseResult {
         val packageDir = checkNotNull(buildFile.parent) { "BUILD file has no parent: $buildFile" }
         val packageRelative = workspaceRoot.relativize(packageDir).toString().replace('\\', '/')
         val packagePrefix = packageRelative.takeIf { it.isNotBlank() }?.plus('/').orEmpty()
-        val content = buildFile.readText()
+        val content =
+            targetName?.let {
+                BuildTargetSelector.select(buildFile.readText(), it, packageRelative)
+            } ?: buildFile.readText()
         val paths = linkedSetOf<String>()
         val warnings = mutableListOf<String>()
 
@@ -59,12 +66,12 @@ internal object BuildFileParser {
 
         for (literal in extractLiteralSrcs(content)) {
             if (isIndexablePath(literal) && !literal.contains('*')) {
-                paths += "$packagePrefix$literal"
+                paths += workspaceRelativeLiteral(literal, packagePrefix)
             }
         }
 
         for (relative in extractResourceFiles(content, packageDir)) {
-            paths += "$packagePrefix$relative"
+            paths += workspaceRelativeLiteral(relative, packagePrefix)
         }
 
         return BuildParseResult(paths.toList(), warnings)
@@ -282,3 +289,6 @@ internal object BuildFileParser {
         return null
     }
 }
+
+private fun workspaceRelativeLiteral(path: String, packagePrefix: String): String =
+    if (path.startsWith("//")) path.removePrefix("//") else "$packagePrefix$path"

@@ -59,6 +59,7 @@ class IndexCommandTest {
         assertEquals(commit, manifest.commit)
         assertEquals("//plugins/foo/ui:ui", manifest.scope)
         assertEquals("bazel-query", manifest.topology)
+        assertEquals(true, manifest.includeDeps)
         assertEquals(3, manifest.sourceFileCount)
         assertTrue(manifest.sourcesContentHash.startsWith("sha256:"))
         assertTrue(manifest.builtAt.isNotBlank())
@@ -85,6 +86,8 @@ class IndexCommandTest {
         val fallbackRunner = BazelProcessRunner { query, _ ->
             when {
                 query.contains("deps(") -> BazelQueryOutcome(1, listOf("ERROR: partial checkout"))
+                query.startsWith("kind('alias rule', //") -> BazelQueryOutcome(0, emptyList())
+                query.contains("filegroup rule") -> BazelQueryOutcome(0, emptyList())
                 query.contains("labels(srcs,") ->
                     BazelQueryOutcome(
                         0,

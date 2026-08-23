@@ -163,12 +163,7 @@ internal class IndexCommand : CliktCommand(name = "index") {
             BuildSystem.BAZEL -> {
                 val scope =
                     IndexScope.bazel(requireNotNull(bazelTarget) { "--bazel-target is required" })
-                if (!includeDeps) {
-                    throw UsageError(
-                        "Daemon-backed Bazel indexing requires --include-deps",
-                        "--include-deps",
-                    )
-                }
+                // Preserve the Bazel CLI's historical effective dependency-closure default.
                 scope.includingDependencies()
             }
             BuildSystem.GRADLE -> {
@@ -203,7 +198,11 @@ internal class IndexCommand : CliktCommand(name = "index") {
         runIndexedBuild(
             project = project,
             topologyRequest =
-                TopologyRequest(buildSystem = BuildSystem.BAZEL, bazelTarget = bazelTarget),
+                TopologyRequest(
+                    buildSystem = BuildSystem.BAZEL,
+                    bazelTarget = bazelTarget,
+                    includeDeps = true,
+                ),
             applications = applications,
             bazelQueryExecutor = queryExecutor,
             bazelProcessRunner = processRunner,

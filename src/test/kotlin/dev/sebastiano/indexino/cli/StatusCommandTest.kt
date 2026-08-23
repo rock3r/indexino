@@ -70,6 +70,36 @@ class StatusCommandTest {
     }
 
     @Test
+    fun `bazel status compatibility overload keeps dependency closure default`() {
+        val workspace = createGitWorkspace()
+        val mockOutput =
+            Path("src/test/resources/fixtures/bazel/mock-query-output.txt").readText().lines()
+        assertEquals(
+            CliExitCodes.SUCCESS,
+            IndexCommand()
+                .runIndexedBuild(
+                    project = workspace,
+                    bazelTarget = "//plugins/foo/ui:ui",
+                    applications = emptyList(),
+                    queryExecutor = MockBazelQueryExecutor(mockOutput),
+                ),
+        )
+
+        val output = StringBuilder()
+        val exitCode =
+            StatusCommand()
+                .runStatus(
+                    project = workspace,
+                    bazelTarget = "//plugins/foo/ui:ui",
+                    queryExecutor = MockBazelQueryExecutor(mockOutput),
+                    output = { output.appendLine(it) },
+                )
+
+        assertEquals(CliExitCodes.SUCCESS, exitCode)
+        assertTrue(output.toString().contains("\"fresh\":true"), output.toString())
+    }
+
+    @Test
     fun `status reads the published generation when no compatibility projection exists`() {
         val workspace = createGitWorkspace()
         val cacheRoot = createTempDirectory("status-generation-cache-").also(tempDirs::add)
@@ -396,6 +426,40 @@ class StatusCommandTest {
 
         assertEquals(0, exitCode)
         assertFalse(output.toString().contains("\"fresh\":true"), output.toString())
+    }
+
+    @Test
+    fun `status auto mode honors explicit Gradle scope in a hybrid workspace`() {
+        val workspace = createGradleWorkspace()
+        workspace.resolve("WORKSPACE").writeText("")
+        assertEquals(
+            0,
+            IndexCommand()
+                .runIndexedBuild(
+                    project = workspace,
+                    topologyRequest =
+                        TopologyRequest(
+                            buildSystem = BuildSystem.GRADLE,
+                            gradleModule = ":ui",
+                            includeDeps = false,
+                        ),
+                    applications = emptyList(),
+                ),
+        )
+
+        val result =
+            StatusCommand()
+                .test(
+                    "--project",
+                    workspace.toString(),
+                    "--build-system",
+                    "auto",
+                    "--gradle-module",
+                    ":ui",
+                )
+
+        assertEquals(CliExitCodes.SUCCESS, result.statusCode)
+        assertTrue(result.output.contains("\"fresh\":true"), result.output)
     }
 
     private fun createRepoWorkspace(): java.nio.file.Path {
