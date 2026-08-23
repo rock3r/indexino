@@ -180,6 +180,39 @@ class BazelTopologyTest {
         )
     }
 
+    @Test
+    fun `target-only query follows alias actual ordinary rules`() {
+        val alias = "//plugins/foo/ui:ui_alias"
+        val actual = "//plugins/foo/ui:ui"
+
+        val result =
+            BazelTopology.queryWithFallback(
+                target = alias,
+                workspace = Path("."),
+                includeDeps = false,
+                runner =
+                    BazelProcessRunner { query, _ ->
+                        when {
+                            query == "kind('alias rule', $alias)" ->
+                                BazelQueryOutcome(0, listOf(alias))
+                            query == "kind('alias rule', $actual)" ->
+                                BazelQueryOutcome(0, emptyList())
+                            query == "kind('rule', labels(actual, $alias))" ->
+                                BazelQueryOutcome(0, listOf(actual))
+                            query.contains("labels(srcs, $actual)") ->
+                                BazelQueryOutcome(0, listOf("//plugins/foo/ui:Panel.kt"))
+                            else -> BazelQueryOutcome(0, emptyList())
+                        }
+                    },
+                onStderr = {},
+            )
+
+        assertEquals(
+            listOf("plugins/foo/ui/Panel.kt"),
+            BazelQueryResultParser.parseKotlinSourcePaths(result.lines),
+        )
+    }
+
     private fun successfulRunner(queries: MutableList<String>): BazelProcessRunner =
         BazelProcessRunner { query, _ ->
             queries += query
@@ -479,5 +512,55 @@ class BazelTopologyTest {
         val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
 
         assertEquals(listOf("//shared:Foo.kt"), labels)
+    }
+
+    @Test
+    fun `build target selection ignores non-indexable direct resource labels`() {
+        val workspace = createTempDirectory("bazel-target-image-label-")
+        val packageDir = workspace.resolve("pkg")
+        Files.createDirectories(packageDir.resolve("src"))
+        packageDir.resolve("src/A.kt").writeText("class A")
+        packageDir.resolve("icon.png").writeText("png")
+        packageDir
+            .resolve("BUILD.bazel")
+            .writeText(
+                """
+                android_library(
+                    name = "a",
+                    srcs = ["src/A.kt"],
+                    resource_files = [":icon.png"],
+                )
+                """
+                    .trimIndent()
+            )
+
+        val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
+
+        assertEquals(listOf("//pkg:src/A.kt"), labels)
+    }
+
+    @Test
+    fun `build target selection accepts canonical labels in root package`() {
+        val workspace = createTempDirectory("bazel-target-root-label-")
+        workspace.resolve("Foo.kt").writeText("class Foo")
+        workspace
+            .resolve("BUILD.bazel")
+            .writeText(
+                """
+                filegroup(
+                    name = "sources",
+                    srcs = ["//:Foo.kt"],
+                )
+                kt_jvm_library(
+                    name = "a",
+                    srcs = ["//:sources"],
+                )
+                """
+                    .trimIndent()
+            )
+
+        val labels = BazelTopology.degradedSourceLabels("//:a", workspace)
+
+        assertEquals(listOf("//:Foo.kt"), labels)
     }
 }

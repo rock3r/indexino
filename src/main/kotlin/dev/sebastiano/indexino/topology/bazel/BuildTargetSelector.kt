@@ -5,7 +5,7 @@ internal object BuildTargetSelector {
     private val NAME_ASSIGNMENT = Regex("""(?<![A-Za-z0-9_])name\s*=\s*["']([^"']+)["']""")
     private val SOURCE_ATTRIBUTE = Regex("""(?<![A-Za-z0-9_])(?:srcs|resource_files)\s*=""")
     private val ACTUAL_ATTRIBUTE = Regex("""(?<![A-Za-z0-9_])actual\s*=""")
-    private val SOURCE_LABEL = Regex("""["'](?::([^"']+)|//([^:"']+):([^"']+))["']""")
+    private val SOURCE_LABEL = Regex("""["'](?::([^"']+)|//([^:"']*):([^"']+))["']""")
     private val INDEXABLE_EXTENSIONS = setOf("kt", "java", "xml")
 
     fun select(content: String, targetName: String, packagePath: String): String {
@@ -23,7 +23,7 @@ internal object BuildTargetSelector {
                 rulesByName[name]
                     ?: error("Referenced source target ':$name' was not found in BUILD file")
             selected[name] = rule
-            sourceLabels(rule, packagePath).forEach(::addRule)
+            sourceLabels(rule, packagePath).filter { it in rulesByName }.forEach(::addRule)
         }
         addRule(targetName)
         return selected.values.joinToString("\n") { rule -> normalizeFileLabels(rule, packagePath) }

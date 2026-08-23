@@ -129,7 +129,8 @@ internal object BazelTopology {
         }
 
     private fun targetFilegroupQuery(target: String, isAlias: Boolean): String {
-        val attributes = if (isAlias) listOf("actual") else listOf("srcs", "resource_files")
+        if (isAlias) return "kind('rule', labels(actual, $target))"
+        val attributes = listOf("srcs", "resource_files")
         return attributes.joinToString(" union ") { attribute ->
             "kind('filegroup rule', labels($attribute, $target)) union " +
                 "kind('alias rule', labels($attribute, $target))"

@@ -58,8 +58,9 @@ bazel query "kind('source file', deps(//plugins/foo/ui:ui))" --output=label \
 ```
 
 Each node is classified first. Normal rules follow only `srcs` and `resource_files`; alias rules
-run the equivalent source/filegroup/alias queries against `actual` instead. The traversal never
-applies `deps()`, so tools and other dependencies of generating rules cannot broaden the index.
+collect a direct source from `actual` or enqueue the `actual` rule for normal processing. The
+traversal never applies `deps()`, so tools and other dependencies of generating rules cannot
+broaden the index.
 
 Flags:
 
