@@ -34,21 +34,30 @@ Prefer these over whole-repo scans.
 
 ## Source Closure
 
-**Primary path** (requires `bazel` on PATH):
+**Primary path** (requires `bazel` on PATH) follows the requested scope:
 
 ```bash
-# JVM/Android targets in dependency closure
-bazel query "filter('kt_.*library', deps(//plugins/foo/ui:ui))" --output=label
+# Target-only source set (`TopologyRequest.includeDeps = false`)
+bazel query "labels(srcs, //plugins/foo/ui:ui)" --output=label
 
-# In-repo Kotlin, Java, and XML sources
+# Dependency source closure (`TopologyRequest.includeDeps = true`)
 bazel query "kind('source file', deps(//plugins/foo/ui:ui))" --output=label \
   | rg '\.(kt|java|xml)$' | rg '^//'
 ```
 
 Flags:
 
-- `--include-deps` — index dependency targets' sources (shared UI libs)
+- Embedded `IndexScope.bazel(target)` is target-only;
+  `.includingDependencies()` requests the dependency source closure.
+- The CLI preserves its historical effective Bazel default: `index` and an explicitly scoped
+  `status` include the dependency closure even when `--include-deps` is omitted. The flag remains
+  accepted for cross-backend command compatibility.
 - `--exclude-test-targets` — skip `testonly` targets (default: exclude)
+
+`TopologyResult.includeDeps` and the generation/compatibility manifests record the closure that
+was actually observed, not merely the requested flag. A fallback from a requested dependency
+closure to target-only sources therefore records `includeDeps = false`; freshness comparison can
+then detect that the published closure does not satisfy a dependency-inclusive scope.
 
 ## Test Target Filtering
 
@@ -64,10 +73,10 @@ When Bazel is unavailable (default CI path uses mock query fixtures instead):
 3. Expand literal entries and `glob([...])` patterns into workspace-relative paths
 4. Set manifest `topology` to `build-parse`
 
-When `bazel` is available but the dependency closure is incomplete (partial checkout), the CLI
-retries with `labels(srcs, $target)` after `kind('source file', deps($target))` fails. Progress
-and BUILD-parse warnings go to stderr. Manifest `includeDeps` is `false` for that fallback and
-for `build-parse` degraded mode.
+When a dependency-closure query fails (for example in a partial checkout), Indexino retries with
+`labels(srcs, $target)`. When that target-only query itself fails, Indexino retries with BUILD
+parsing. Progress and BUILD-parse warnings go to stderr. Manifest `includeDeps` is `false` for
+either target-only fallback and for `build-parse` degraded mode.
 
 ## Test fixtures
 

@@ -1,5 +1,8 @@
 package dev.sebastiano.indexino.topology.bazel
 
+import dev.sebastiano.indexino.topology.BuildSystem
+import dev.sebastiano.indexino.topology.TopologyRequest
+import dev.sebastiano.indexino.topology.TopologyResolver
 import kotlin.io.path.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -12,6 +15,7 @@ class BazelTopologyTest {
             BazelTopology.resolveSources(
                 target = "//plugins/foo/ui:ui",
                 workspace = workspace,
+                includeDeps = true,
                 executor =
                     MockBazelQueryExecutor(
                         listOf(
@@ -45,4 +49,50 @@ class BazelTopologyTest {
             paths.sorted(),
         )
     }
+
+    @Test
+    fun `topology request without dependencies queries target source set`() {
+        val queries = mutableListOf<String>()
+
+        val result =
+            TopologyResolver.resolve(
+                project = Path("."),
+                request =
+                    TopologyRequest(
+                        buildSystem = BuildSystem.BAZEL,
+                        bazelTarget = "//plugins/foo/ui:ui",
+                        includeDeps = false,
+                    ),
+                bazelProcessRunner = successfulRunner(queries),
+            )
+
+        assertEquals(listOf("labels(srcs, //plugins/foo/ui:ui)"), queries)
+        assertEquals(false, result.includeDeps)
+    }
+
+    @Test
+    fun `topology request with dependencies queries dependency closure`() {
+        val queries = mutableListOf<String>()
+
+        val result =
+            TopologyResolver.resolve(
+                project = Path("."),
+                request =
+                    TopologyRequest(
+                        buildSystem = BuildSystem.BAZEL,
+                        bazelTarget = "//plugins/foo/ui:ui",
+                        includeDeps = true,
+                    ),
+                bazelProcessRunner = successfulRunner(queries),
+            )
+
+        assertEquals(listOf("kind('source file', deps(//plugins/foo/ui:ui))"), queries)
+        assertEquals(true, result.includeDeps)
+    }
+
+    private fun successfulRunner(queries: MutableList<String>): BazelProcessRunner =
+        BazelProcessRunner { query, _ ->
+            queries += query
+            BazelQueryOutcome(0, listOf("//plugins/foo/ui:src/main/kotlin/Panel.kt"))
+        }
 }

@@ -11,12 +11,14 @@ internal object BazelTopology {
     fun defaultExecutor(
         onStderr: (String) -> Unit = { System.err.println(it) }
     ): BazelQueryExecutor = BazelQueryExecutor { target, workspace ->
-        queryWithFallback(target, workspace, LiveBazelProcessRunner, onStderr).lines
+        queryWithFallback(target, workspace, includeDeps = true, LiveBazelProcessRunner, onStderr)
+            .lines
     }
 
     fun resolveSources(
         target: String,
         workspace: Path,
+        includeDeps: Boolean,
         executor: BazelQueryExecutor? = null,
         processRunner: BazelProcessRunner? = null,
         onStderr: (String) -> Unit = { System.err.println(it) },
@@ -26,14 +28,14 @@ internal object BazelTopology {
             return TopologyResult(
                 sourceFiles = BazelQueryResultParser.parseKotlinSourcePaths(lines),
                 topology = resolveTopology(executor),
-                includeDeps = true,
+                includeDeps = includeDeps,
                 scope = target,
             )
         }
 
         if (processRunner != null || isBazelAvailable()) {
             val runner = processRunner ?: LiveBazelProcessRunner
-            val queryResult = queryWithFallback(target, workspace, runner, onStderr)
+            val queryResult = queryWithFallback(target, workspace, includeDeps, runner, onStderr)
             return TopologyResult(
                 sourceFiles = BazelQueryResultParser.parseKotlinSourcePaths(queryResult.lines),
                 topology = "bazel-query",
@@ -54,20 +56,30 @@ internal object BazelTopology {
     fun queryWithFallback(
         target: String,
         workspace: Path,
+        includeDeps: Boolean = true,
         runner: BazelProcessRunner = LiveBazelProcessRunner,
         onStderr: (String) -> Unit = { System.err.println(it) },
     ): BazelQueryResult {
-        val primaryQuery = "kind('source file', deps($target))"
+        val primaryQuery =
+            if (includeDeps) "kind('source file', deps($target))" else "labels(srcs, $target)"
         val primary = runner.run(primaryQuery, workspace)
         if (primary.exitCode == 0) {
-            return BazelQueryResult(primary.lines, includeDeps = true)
+            return BazelQueryResult(primary.lines, includeDeps = includeDeps)
         }
 
-        onStderr("bazel query failed ($primaryQuery); retrying with labels(srcs, $target)")
-        val fallbackQuery = "labels(srcs, $target)"
-        val fallback = runner.run(fallbackQuery, workspace)
-        check(fallback.exitCode == 0) { "bazel query failed: ${fallback.lines.joinToString("\n")}" }
-        return BazelQueryResult(fallback.lines, includeDeps = false)
+        if (includeDeps) {
+            onStderr("bazel query failed ($primaryQuery); retrying with labels(srcs, $target)")
+            val fallbackQuery = "labels(srcs, $target)"
+            val fallback = runner.run(fallbackQuery, workspace)
+            if (fallback.exitCode == 0) {
+                return BazelQueryResult(fallback.lines, includeDeps = false)
+            }
+            onStderr("bazel query failed ($fallbackQuery); retrying with build-parse")
+            return BazelQueryResult(degradedSourceLabels(target, workspace, onStderr), false)
+        }
+
+        onStderr("bazel query failed ($primaryQuery); retrying with build-parse")
+        return BazelQueryResult(degradedSourceLabels(target, workspace, onStderr), false)
     }
 
     private fun resolveTopology(executor: BazelQueryExecutor): String =

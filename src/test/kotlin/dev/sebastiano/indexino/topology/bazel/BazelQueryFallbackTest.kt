@@ -65,4 +65,60 @@ class BazelQueryFallbackTest {
         assertTrue(warnings.isEmpty())
         assertEquals(true, lines.includeDeps)
     }
+
+    @Test
+    fun `target-only query failure falls back to BUILD parsing`() {
+        val warnings = mutableListOf<String>()
+        val lines =
+            BazelTopology.queryWithFallback(
+                target = "//plugins/foo/ui:ui",
+                workspace = Path("src/test/resources/fixtures/bazel"),
+                includeDeps = false,
+                runner = BazelProcessRunner { _, _ -> BazelQueryOutcome(1, listOf("ERROR")) },
+                onStderr = warnings::add,
+            )
+
+        assertEquals(false, lines.includeDeps)
+        assertTrue(warnings.any { it.contains("build-parse") })
+        assertEquals(
+            listOf(
+                "plugins/foo/ui/src/main/kotlin/Other.kt",
+                "plugins/foo/ui/src/main/kotlin/Panel.kt",
+            ),
+            BazelQueryResultParser.parseKotlinSourcePaths(lines.lines).sorted(),
+        )
+    }
+
+    @Test
+    fun `dependency and target query failures fall back to BUILD parsing`() {
+        val queries = mutableListOf<String>()
+        val lines =
+            BazelTopology.queryWithFallback(
+                target = "//plugins/foo/ui:ui",
+                workspace = Path("src/test/resources/fixtures/bazel"),
+                includeDeps = true,
+                runner =
+                    BazelProcessRunner { query, _ ->
+                        queries += query
+                        BazelQueryOutcome(1, listOf("ERROR"))
+                    },
+                onStderr = {},
+            )
+
+        assertEquals(
+            listOf(
+                "kind('source file', deps(//plugins/foo/ui:ui))",
+                "labels(srcs, //plugins/foo/ui:ui)",
+            ),
+            queries,
+        )
+        assertEquals(false, lines.includeDeps)
+        assertEquals(
+            listOf(
+                "plugins/foo/ui/src/main/kotlin/Other.kt",
+                "plugins/foo/ui/src/main/kotlin/Panel.kt",
+            ),
+            BazelQueryResultParser.parseKotlinSourcePaths(lines.lines).sorted(),
+        )
+    }
 }

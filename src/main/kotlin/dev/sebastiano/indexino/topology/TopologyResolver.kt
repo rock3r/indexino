@@ -43,6 +43,7 @@ internal object TopologyResolver {
                 BazelTopology.resolveSources(
                     target,
                     project,
+                    request.includeDeps,
                     bazelQueryExecutor,
                     bazelProcessRunner,
                     onStderr,

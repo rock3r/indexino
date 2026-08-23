@@ -14,6 +14,7 @@ import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.topology.BuildSystem
+import dev.sebastiano.indexino.topology.BuildSystemDetector
 import dev.sebastiano.indexino.topology.TopologyRequest
 import dev.sebastiano.indexino.topology.bazel.BazelProcessRunner
 import dev.sebastiano.indexino.topology.bazel.BazelQueryExecutor
@@ -39,13 +40,7 @@ internal class StatusCommand : CliktCommand(name = "status") {
         val exitCode =
             runStatus(
                 project = requireNotNull(project).toPath().toRealPath(),
-                topologyRequest =
-                    TopologyRequest(
-                        buildSystem = parseBuildSystem(buildSystem),
-                        bazelTarget = bazelTarget,
-                        gradleModule = gradleModule,
-                        includeDeps = includeDeps,
-                    ),
+                topologyRequest = cliTopologyRequest(project.toPath()),
                 output = ::echo,
             )
         if (exitCode != CliExitCodes.SUCCESS) throw ProgramResult(exitCode)
@@ -61,7 +56,11 @@ internal class StatusCommand : CliktCommand(name = "status") {
         runStatus(
             project = project,
             topologyRequest =
-                TopologyRequest(buildSystem = BuildSystem.BAZEL, bazelTarget = bazelTarget),
+                TopologyRequest(
+                    buildSystem = BuildSystem.BAZEL,
+                    bazelTarget = bazelTarget,
+                    includeDeps = true,
+                ),
             bazelQueryExecutor = queryExecutor,
             bazelProcessRunner = processRunner,
             output = output,
@@ -164,6 +163,18 @@ internal class StatusCommand : CliktCommand(name = "status") {
             "repo" -> BuildSystem.REPO
             else -> error("Unknown --build-system: $raw")
         }
+
+    private fun cliTopologyRequest(project: Path): TopologyRequest {
+        val requested = parseBuildSystem(buildSystem)
+        val effective =
+            if (requested == BuildSystem.AUTO) BuildSystemDetector.detect(project) else requested
+        return TopologyRequest(
+            buildSystem = requested,
+            bazelTarget = bazelTarget,
+            gradleModule = gradleModule,
+            includeDeps = if (effective == BuildSystem.BAZEL) true else includeDeps,
+        )
+    }
 }
 
 @OptIn(ExperimentalSerializationApi::class)

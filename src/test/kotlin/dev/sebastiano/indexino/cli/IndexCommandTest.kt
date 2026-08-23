@@ -59,6 +59,7 @@ class IndexCommandTest {
         assertEquals(commit, manifest.commit)
         assertEquals("//plugins/foo/ui:ui", manifest.scope)
         assertEquals("bazel-query", manifest.topology)
+        assertEquals(true, manifest.includeDeps)
         assertEquals(3, manifest.sourceFileCount)
         assertTrue(manifest.sourcesContentHash.startsWith("sha256:"))
         assertTrue(manifest.builtAt.isNotBlank())

@@ -70,6 +70,36 @@ class StatusCommandTest {
     }
 
     @Test
+    fun `bazel status compatibility overload keeps dependency closure default`() {
+        val workspace = createGitWorkspace()
+        val mockOutput =
+            Path("src/test/resources/fixtures/bazel/mock-query-output.txt").readText().lines()
+        assertEquals(
+            CliExitCodes.SUCCESS,
+            IndexCommand()
+                .runIndexedBuild(
+                    project = workspace,
+                    bazelTarget = "//plugins/foo/ui:ui",
+                    applications = emptyList(),
+                    queryExecutor = MockBazelQueryExecutor(mockOutput),
+                ),
+        )
+
+        val output = StringBuilder()
+        val exitCode =
+            StatusCommand()
+                .runStatus(
+                    project = workspace,
+                    bazelTarget = "//plugins/foo/ui:ui",
+                    queryExecutor = MockBazelQueryExecutor(mockOutput),
+                    output = { output.appendLine(it) },
+                )
+
+        assertEquals(CliExitCodes.SUCCESS, exitCode)
+        assertTrue(output.toString().contains("\"fresh\":true"), output.toString())
+    }
+
+    @Test
     fun `status reads the published generation when no compatibility projection exists`() {
         val workspace = createGitWorkspace()
         val cacheRoot = createTempDirectory("status-generation-cache-").also(tempDirs::add)

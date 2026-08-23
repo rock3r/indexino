@@ -441,8 +441,8 @@ class InProcessIndexinoTest {
     }
 
     @Test
-    fun `bazel scopes without includingDependencies fail rather than silently expanding deps`() {
-        val workspace = createGitWorkspace()
+    fun `bazel scopes without includingDependencies refresh the target-only source set`() {
+        val workspace = createBazelWorkspace()
         val cacheDirectory = createTempDirectory("indexino-bazel-deps-required-cache-")
         tempDirs.add(cacheDirectory)
         val previousCacheDirectory = System.getProperty("indexino.cache.dir")
@@ -450,17 +450,13 @@ class InProcessIndexinoTest {
         try {
             val indexino = Indexino.connectBlocking(workspace)
             try {
-                val failure =
-                    assertFailsWith<IndexinoException> {
-                        runSuspend {
-                            indexino
-                                .refresh(RefreshRequest.forScope(IndexScope.bazel("//ui:ui")))
-                                .await()
-                        }
-                    }
-                assertEquals("INVALID_REQUEST", failure.failure.category.value)
-                assertEquals("bazel_dependencies_required", failure.failure.code)
-                assertTrue(failure.failure.message.contains("includingDependencies()"))
+                val result = runSuspend {
+                    indexino
+                        .refresh(RefreshRequest.forScope(IndexScope.bazel("//plugins/foo/ui:ui")))
+                        .await()
+                }
+                assertEquals(RefreshOutcome.UPDATED, result.outcome)
+                assertFalse(result.scope.includesDependencies)
             } finally {
                 indexino.close()
             }
@@ -1253,9 +1249,16 @@ class InProcessIndexinoTest {
     }
 
     private fun createGitWorkspace(): java.nio.file.Path {
+        return createGitWorkspaceFrom(Path("src/test/resources/gradle-fixtures/multi-module"))
+    }
+
+    private fun createBazelWorkspace(): java.nio.file.Path {
+        return createGitWorkspaceFrom(Path("src/test/resources/fixtures/bazel"))
+    }
+
+    private fun createGitWorkspaceFrom(fixtureRoot: java.nio.file.Path): java.nio.file.Path {
         val workspace = createTempDirectory("indexino-facade-")
         tempDirs.add(workspace)
-        val fixtureRoot = Path("src/test/resources/gradle-fixtures/multi-module")
         Files.walk(fixtureRoot).use { paths ->
             paths.forEach { path ->
                 val destination = workspace.resolve(fixtureRoot.relativize(path))
