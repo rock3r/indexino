@@ -113,6 +113,23 @@ internal class XmlResourceProducer : IndexProducer {
         }
     }
 
+    private fun indexLiteralValue(
+        store: CodeIndexStore,
+        indexedSource: IndexedSource,
+        value: String,
+        source: String,
+        valueOffset: Int,
+    ) {
+        RESOURCE_REFERENCE.findAll(value).forEach { match ->
+            indexMatch(
+                store,
+                indexedSource,
+                match,
+                sourcePosition(source, valueOffset + match.range.first),
+            )
+        }
+    }
+
     private fun indexMatch(
         store: CodeIndexStore,
         indexedSource: IndexedSource,
@@ -176,7 +193,7 @@ internal class XmlResourceProducer : IndexProducer {
                     source.indexOf(CDATA_END, contentStart).let {
                         if (it >= 0) it else source.length
                     }
-                indexRawValue(
+                indexLiteralValue(
                     store,
                     indexedSource,
                     source.substring(contentStart, contentEnd),
@@ -232,9 +249,29 @@ internal class XmlResourceProducer : IndexProducer {
     }
 
     private fun sourcePosition(source: String, offset: Int): SourcePosition {
-        val lineStart = source.lastIndexOf('\n', offset - 1)
-        val line = source.substring(0, offset).count { it == '\n' } + 1
-        return SourcePosition(line, offset - lineStart)
+        var line = 1
+        var column = 1
+        var sourceOffset = 0
+        while (sourceOffset < offset) {
+            when (source[sourceOffset]) {
+                '\r' -> {
+                    line++
+                    column = 1
+                    sourceOffset +=
+                        if (sourceOffset + 1 < offset && source[sourceOffset + 1] == '\n') 2 else 1
+                }
+                '\n' -> {
+                    line++
+                    column = 1
+                    sourceOffset++
+                }
+                else -> {
+                    column++
+                    sourceOffset++
+                }
+            }
+        }
+        return SourcePosition(line, column)
     }
 
     private fun valuesResource(element: String, itemType: String?, name: String?): ResourceName? {

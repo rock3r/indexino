@@ -92,6 +92,7 @@ class XmlResourceProducerTest {
                 <string name="cdata"><![CDATA[@string/title]]></string>
                 <string name="comment"><!-- @string/title -->@string/title</string>
                 <string name="entity-text">@string/foo&#95;bar</string>
+                <string name="literal"><![CDATA[@string/foo&#95;bar]]></string>
             </resources>
             """
                 .trimIndent()
@@ -105,6 +106,8 @@ class XmlResourceProducerTest {
                 .trimIndent()
         val crlfLayout =
             "<TextView xmlns:android=\"http://schemas.android.com/apk/res/android\" android:text=\"\r\n @string/title\" />"
+        val crLayout =
+            "<TextView xmlns:android=\"http://schemas.android.com/apk/res/android\"\r android:text=\"@string/title\" />"
 
         withStore { store ->
             assertNotNull(ProducerRegistry.get("xml-resources"))
@@ -117,6 +120,7 @@ class XmlResourceProducerTest {
                                 "src/main/res/values/strings.xml" to values,
                                 "src/main/res/layout/main.xml" to layout,
                                 "src/main/res/layout/crlf.xml" to crlfLayout,
+                                "src/main/res/layout/cr.xml" to crLayout,
                             ),
                     )
                 )
@@ -131,9 +135,11 @@ class XmlResourceProducerTest {
             assertReference(references, "res:string:title", "strings.xml", 3, 35)
             assertReference(references, "res:string:title", "strings.xml", 4, 50)
             assertReference(references, "res:string:foo_bar", "strings.xml", 5, 32)
+            assertReference(references, "res:string:foo", "strings.xml", 6, 37)
             assertReference(references, "res:string:title", "main.xml", 2, 16)
             assertReference(references, "res:string:foo_bar", "main.xml", 3, 19)
             assertReference(references, "res:string:title", "crlf.xml", 2, 2)
+            assertReference(references, "res:string:title", "cr.xml", 2, 16)
         }
     }
 
