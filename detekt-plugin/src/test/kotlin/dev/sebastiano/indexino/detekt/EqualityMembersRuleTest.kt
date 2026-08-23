@@ -560,6 +560,39 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `same file Any class overload does not satisfy kotlin Any equals`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class Any(val length: Int)
+
+                    interface ClassEquality {
+                        fun equals(other: Any?): Boolean
+                    }
+
+                    class ClassNamedAny(val length: Int) : ClassEquality {
+                        override fun equals(other: Any?): Boolean = length == other?.length
+
+                        override fun hashCode(): Int = length
+
+                        override fun toString(): String = "ClassNamedAny(length=${'$'}length)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(
+            findings.any {
+                it.message.contains("ClassNamedAny is missing required functions: equals")
+            },
+            findings.joinToString { it.message },
+        )
+    }
+
+    @Test
     fun `valid required overrides compare every property structurally`() {
         val findings =
             rule()
@@ -591,7 +624,7 @@ class EqualityMembersRuleTest {
                     """
                     package dev.sebastiano.indexino.model
 
-                    import java.util.Objects
+                    import java.util.*
 
                     class MethodComparisons(
                         val value: String,

@@ -122,7 +122,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
         if (typeName == "kotlin.Any") return nullable
         if (typeName == "Any") {
             val shadowsDefaultAny =
-                declarations.filterIsInstance<KtTypeAlias>().any { it.name == "Any" } ||
+                declarations.filterIsInstance<KtNamedDeclaration>().any { it.name == "Any" } ||
                     importDirectives.any {
                         it.aliasName == "Any" ||
                             (it.aliasName == null &&
@@ -240,7 +240,8 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
         if (text == "java.util.Objects") return true
         val objectsImport =
             containingKtFile.importDirectives.firstOrNull {
-                it.importedFqName?.asString() == "java.util.Objects"
+                it.importedFqName?.asString() == "java.util.Objects" ||
+                    (it.isAllUnder && it.importedFqName?.asString() == "java.util")
             } ?: return false
         val importedName = objectsImport.aliasName ?: "Objects"
         if (text != importedName || isShadowed(importedName)) return false
