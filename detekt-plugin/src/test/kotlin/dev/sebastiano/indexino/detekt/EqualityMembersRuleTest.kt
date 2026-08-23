@@ -584,6 +584,38 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `method based structural comparisons preserve valid equality`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class MethodComparisons(
+                        val value: String,
+                        val values: IntArray,
+                        val label: String,
+                    ) {
+                        override fun equals(other: Any?): Boolean =
+                            other is MethodComparisons &&
+                                value.equals(other.value) &&
+                                values.contentEquals(other.values) &&
+                                java.util.Objects.equals(label, other.label)
+
+                        override fun hashCode(): Int =
+                            31 * (31 * value.hashCode() + values.contentHashCode()) + label.hashCode()
+
+                        override fun toString(): String =
+                            "MethodComparisons(value=${'$'}value, values=${'$'}values, label=${'$'}label)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `parenthesized operands preserve valid structural comparison`() {
         val findings =
             rule()

@@ -153,8 +153,9 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
         receiverClass: KtClass,
     ) {
         val otherParameter = function.valueParameters.singleOrNull()?.name ?: return
-        val comparedProperties =
-            function.bodyExpression
+        val body = function.bodyExpression
+        val binaryComparedProperties =
+            body
                 ?.let { PsiTreeUtil.collectElementsOfType(it, KtBinaryExpression::class.java) }
                 ?.filter {
                     it.operationToken == KtTokens.EQEQ || it.operationToken == KtTokens.EXCLEQ
@@ -170,7 +171,21 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
                     }
                 }
                 .orEmpty()
-                .toSet()
+        val callComparedProperties =
+            body
+                ?.let { PsiTreeUtil.collectElementsOfType(it, KtCallExpression::class.java) }
+                ?.flatMap { call ->
+                    properties.filter { property ->
+                        call.comparesReceiverAndOtherProperty(
+                            function,
+                            otherParameter,
+                            property,
+                            receiverClass,
+                        )
+                    }
+                }
+                .orEmpty()
+        val comparedProperties = (binaryComparedProperties + callComparedProperties).toSet()
 
         properties.filterNot(comparedProperties::contains).forEach { property ->
             report(
@@ -182,6 +197,43 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
                 )
             )
         }
+    }
+
+    private fun KtCallExpression.comparesReceiverAndOtherProperty(
+        equalsFunction: KtNamedFunction,
+        otherParameter: String,
+        property: String,
+        receiverClass: KtClass,
+    ): Boolean {
+        val calleeName = calleeExpression?.text ?: return false
+        val qualifiedCall = parent as? KtDotQualifiedExpression
+        if (
+            calleeName in setOf("equals", "contentEquals") &&
+                qualifiedCall?.selectorExpression == this &&
+                valueArguments.size == 1
+        ) {
+            val receiver = qualifiedCall.receiverExpression
+            val argument = valueArguments.singleOrNull()?.getArgumentExpression() ?: return false
+            return (receiver.isReceiverProperty(equalsFunction, property, receiverClass) &&
+                argument.isOtherProperty(equalsFunction, otherParameter, property)) ||
+                (argument.isReceiverProperty(equalsFunction, property, receiverClass) &&
+                    receiver.isOtherProperty(equalsFunction, otherParameter, property))
+        }
+        if (
+            calleeName != "equals" ||
+                valueArguments.size != 2 ||
+                qualifiedCall?.selectorExpression != this ||
+                (qualifiedCall.receiverExpression.text != "Objects" &&
+                    !qualifiedCall.receiverExpression.text.endsWith(".Objects"))
+        ) {
+            return false
+        }
+        val first = valueArguments[0].getArgumentExpression() ?: return false
+        val second = valueArguments[1].getArgumentExpression() ?: return false
+        return (first.isReceiverProperty(equalsFunction, property, receiverClass) &&
+            second.isOtherProperty(equalsFunction, otherParameter, property)) ||
+            (second.isReceiverProperty(equalsFunction, property, receiverClass) &&
+                first.isOtherProperty(equalsFunction, otherParameter, property))
     }
 
     private fun KtBinaryExpression.comparesReceiverAndOtherProperty(
