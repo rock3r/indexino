@@ -591,6 +591,8 @@ class EqualityMembersRuleTest {
                     """
                     package dev.sebastiano.indexino.model
 
+                    import java.util.Objects
+
                     class MethodComparisons(
                         val value: String,
                         val values: IntArray,
@@ -602,7 +604,7 @@ class EqualityMembersRuleTest {
                                 value.equals(other.value) &&
                                 values.contentEquals(other.values) &&
                                 deepValues.contentDeepEquals(other.deepValues) &&
-                                java.util.Objects.equals(label, other.label)
+                                Objects.equals(label, other.label)
 
                         override fun hashCode(): Int =
                             31 *
@@ -620,6 +622,38 @@ class EqualityMembersRuleTest {
                 )
 
         assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
+    fun `lookalike Objects helper does not count as structural equality`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    object Objects {
+                        fun equals(left: String, right: String): Boolean = false
+                    }
+
+                    class LookalikeObjects(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is LookalikeObjects && Objects.equals(value, other.value)
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "LookalikeObjects(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(
+            findings.any {
+                it.message == "Function equals must compare property value through other.value."
+            },
+            findings.joinToString { it.message },
+        )
     }
 
     @Test

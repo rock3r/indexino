@@ -18,6 +18,7 @@ import org.jetbrains.kotlin.psi.KtFunction
 import org.jetbrains.kotlin.psi.KtFunctionLiteral
 import org.jetbrains.kotlin.psi.KtLambdaExpression
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
+import org.jetbrains.kotlin.psi.KtNamedDeclaration
 import org.jetbrains.kotlin.psi.KtNamedFunction
 import org.jetbrains.kotlin.psi.KtParenthesizedExpression
 import org.jetbrains.kotlin.psi.KtProperty
@@ -223,8 +224,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
             calleeName != "equals" ||
                 valueArguments.size != 2 ||
                 qualifiedCall?.selectorExpression != this ||
-                (qualifiedCall.receiverExpression.text != "Objects" &&
-                    !qualifiedCall.receiverExpression.text.endsWith(".Objects"))
+                !qualifiedCall.receiverExpression.isJavaUtilObjects()
         ) {
             return false
         }
@@ -234,6 +234,19 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
             second.isOtherProperty(equalsFunction, otherParameter, property)) ||
             (second.isReceiverProperty(equalsFunction, property, receiverClass) &&
                 first.isOtherProperty(equalsFunction, otherParameter, property))
+    }
+
+    private fun KtExpression.isJavaUtilObjects(): Boolean {
+        if (text == "java.util.Objects") return true
+        val objectsImport =
+            containingKtFile.importDirectives.firstOrNull {
+                it.importedFqName?.asString() == "java.util.Objects"
+            } ?: return false
+        val importedName = objectsImport.aliasName ?: "Objects"
+        if (text != importedName || isShadowed(importedName)) return false
+        return containingKtFile.declarations.filterIsInstance<KtNamedDeclaration>().none {
+            it.name == importedName
+        }
     }
 
     private fun KtBinaryExpression.comparesReceiverAndOtherProperty(
