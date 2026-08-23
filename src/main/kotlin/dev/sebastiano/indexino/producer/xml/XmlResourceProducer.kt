@@ -55,7 +55,6 @@ internal class XmlResourceProducer : IndexProducer {
                         elementSearchOffset = elementEnd + 1
                         val attributeValueOffsets =
                             attributeValueOffsets(source, elementStart, elementEnd)
-                        val declarationPosition = sourcePosition(source, elementStart)
                         if (pathResource?.type == "values" && depth == RESOURCE_CHILD_DEPTH) {
                             valuesResource(
                                     reader.localName,
@@ -63,6 +62,7 @@ internal class XmlResourceProducer : IndexProducer {
                                     reader.getAttributeValue(null, "name"),
                                 )
                                 ?.let {
+                                    val declarationPosition = sourcePosition(source, elementStart)
                                     putResource(
                                         store,
                                         indexedSource,
