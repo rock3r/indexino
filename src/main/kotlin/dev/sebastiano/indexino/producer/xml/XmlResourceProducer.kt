@@ -410,10 +410,16 @@ private fun skippedMarkupEnd(source: String, offset: Int): Int? =
 private fun String.endAfter(marker: String, fromOffset: Int): Int =
     indexOf(marker, fromOffset).takeIf { it >= 0 }?.plus(marker.length) ?: length
 
+@Suppress("CyclomaticComplexMethod")
 private fun declarationEndOffset(source: String, declarationStart: Int): Int {
     var quote: Char? = null
     var subsetDepth = 0
-    for (offset in declarationStart + 2 until source.length) {
+    var offset = declarationStart + 2
+    while (offset < source.length) {
+        if (quote == null && source.startsWith(COMMENT_START, offset)) {
+            offset = source.endAfter(COMMENT_END, offset + COMMENT_START.length)
+            continue
+        }
         val character = source[offset]
         when {
             quote == null && (character == '\'' || character == '\"') -> quote = character
@@ -422,6 +428,7 @@ private fun declarationEndOffset(source: String, declarationStart: Int): Int {
             quote == null && character == ']' && subsetDepth > 0 -> subsetDepth--
             quote == null && character == '>' && subsetDepth == 0 -> return offset + 1
         }
+        offset++
     }
     return source.length
 }
