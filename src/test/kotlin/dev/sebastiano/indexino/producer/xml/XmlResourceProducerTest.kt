@@ -169,6 +169,38 @@ class XmlResourceProducerTest {
     }
 
     @Test
+    fun `skips complete internal DTD subsets when locating declarations`() {
+        val values =
+            """
+            <!DOCTYPE resources [<!ENTITY unused '<fake><bar>'>]>
+            <resources>
+                <string name="title">Title</string>
+            </resources>
+            """
+                .trimIndent()
+
+        withStore { store ->
+            assertNotNull(ProducerRegistry.get("xml-resources"))
+                .produce(
+                    IndexBuildContext.forInlineSources(
+                        store = store,
+                        commitHash = "internal-dtd-columns",
+                        sourceFiles = mapOf("src/main/res/values/strings.xml" to values),
+                    )
+                )
+
+            val title =
+                store
+                    .prefixScan("res:string:title")
+                    .map { it.second }
+                    .filterIsInstance<SymbolRecord>()
+                    .single()
+            assertEquals(3, title.line)
+            assertEquals(5, title.column)
+        }
+    }
+
+    @Test
     fun `keeps equal resource paths from separate origins distinct`() {
         val firstRoot = createTempDirectory("indexino-resource-origin-first-")
         val secondRoot = createTempDirectory("indexino-resource-origin-second-")

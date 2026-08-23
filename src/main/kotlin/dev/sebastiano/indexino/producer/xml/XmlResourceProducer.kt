@@ -402,13 +402,29 @@ private fun skippedMarkupEnd(source: String, offset: Int): Int? =
         source.startsWith(CDATA_START, offset) ->
             source.endAfter(CDATA_END, offset + CDATA_START.length)
         source.startsWith("<?", offset) -> source.endAfter("?>", offset + 2)
-        source.startsWith("<!", offset) -> source.endAfter(">", offset + 2)
+        source.startsWith("<!", offset) -> declarationEndOffset(source, offset)
         source.startsWith("</", offset) -> source.endAfter(">", offset + 2)
         else -> null
     }
 
 private fun String.endAfter(marker: String, fromOffset: Int): Int =
     indexOf(marker, fromOffset).takeIf { it >= 0 }?.plus(marker.length) ?: length
+
+private fun declarationEndOffset(source: String, declarationStart: Int): Int {
+    var quote: Char? = null
+    var subsetDepth = 0
+    for (offset in declarationStart + 2 until source.length) {
+        val character = source[offset]
+        when {
+            quote == null && (character == '\'' || character == '\"') -> quote = character
+            character == quote -> quote = null
+            quote == null && character == '[' -> subsetDepth++
+            quote == null && character == ']' && subsetDepth > 0 -> subsetDepth--
+            quote == null && character == '>' && subsetDepth == 0 -> return offset + 1
+        }
+    }
+    return source.length
+}
 
 private fun attributeValueOffsets(
     source: String,
