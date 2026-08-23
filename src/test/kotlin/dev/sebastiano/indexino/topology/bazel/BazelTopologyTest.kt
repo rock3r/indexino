@@ -374,4 +374,54 @@ class BazelTopologyTest {
 
         assertEquals(listOf("//pkg:src/A.kt"), labels)
     }
+
+    @Test
+    fun `build target selection keeps direct file labels out of rule recursion`() {
+        val workspace = createTempDirectory("bazel-target-direct-label-")
+        val packageDir = workspace.resolve("pkg")
+        Files.createDirectories(packageDir)
+        packageDir.resolve("Foo.kt").writeText("class Foo")
+        packageDir
+            .resolve("BUILD.bazel")
+            .writeText(
+                """
+                kt_jvm_library(
+                    name = "a",
+                    srcs = [":Foo.kt"],
+                )
+                """
+                    .trimIndent()
+            )
+
+        val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
+
+        assertEquals(listOf("//pkg:Foo.kt"), labels)
+    }
+
+    @Test
+    fun `build target selection expands canonical same-package filegroups`() {
+        val workspace = createTempDirectory("bazel-target-canonical-label-")
+        val packageDir = workspace.resolve("pkg")
+        Files.createDirectories(packageDir.resolve("src"))
+        packageDir.resolve("src/A.kt").writeText("class A")
+        packageDir
+            .resolve("BUILD.bazel")
+            .writeText(
+                """
+                filegroup(
+                    name = "sources",
+                    srcs = ["src/A.kt"],
+                )
+                kt_jvm_library(
+                    name = "a",
+                    srcs = ["//pkg:sources"],
+                )
+                """
+                    .trimIndent()
+            )
+
+        val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
+
+        assertEquals(listOf("//pkg:src/A.kt"), labels)
+    }
 }

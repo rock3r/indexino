@@ -4,9 +4,10 @@ internal object BuildTargetSelector {
     private val RULE_CALL = Regex("""(?m)^\s*[A-Za-z_][A-Za-z0-9_.]*\s*\(""")
     private val NAME_ASSIGNMENT = Regex("""(?<![A-Za-z0-9_])name\s*=\s*["']([^"']+)["']""")
     private val SOURCE_ATTRIBUTE = Regex("""(?<![A-Za-z0-9_])(?:srcs|resource_files)\s*=""")
-    private val LOCAL_LABEL = Regex("""["']:([^"']+)["']""")
+    private val SOURCE_LABEL = Regex("""["'](?::([^"']+)|//([^:"']+):([^"']+))["']""")
+    private val INDEXABLE_EXTENSIONS = setOf("kt", "java", "xml")
 
-    fun select(content: String, targetName: String): String {
+    fun select(content: String, targetName: String, packagePath: String): String {
         val rulesByName =
             RULE_CALL.findAll(content)
                 .mapNotNull { match -> ruleAt(content, match) }
@@ -21,10 +22,10 @@ internal object BuildTargetSelector {
                 rulesByName[name]
                     ?: error("Referenced source target ':$name' was not found in BUILD file")
             selected[name] = rule
-            sourceLabels(rule).forEach(::addRule)
+            sourceLabels(rule, packagePath).forEach(::addRule)
         }
         addRule(targetName)
-        return selected.values.joinToString("\n")
+        return selected.values.joinToString("\n") { rule -> normalizeFileLabels(rule, packagePath) }
     }
 
     private fun ruleName(rule: String): String? {
@@ -35,19 +36,49 @@ internal object BuildTargetSelector {
         return assignment?.groupValues?.get(1)
     }
 
-    private fun sourceLabels(rule: String): Sequence<String> =
+    private fun sourceLabels(rule: String, packagePath: String): Sequence<String> =
         SOURCE_ATTRIBUTE.findAll(rule)
             .filter { match -> isTopLevelCode(rule, match.range.first) }
             .flatMap { match ->
                 val valueStart = match.range.last + 1
                 val valueEnd = BuildFileSrcsParser.findSrcsValueEnd(rule, valueStart) ?: rule.length
                 val value = rule.substring(valueStart, valueEnd)
-                LOCAL_LABEL.findAll(value)
+                SOURCE_LABEL.findAll(value)
                     .filterNot { label ->
                         BuildFileComments.isCommentedOutInBlock(value, label.range.first)
                     }
-                    .map { it.groupValues[1] }
+                    .mapNotNull { label -> sourceTargetName(label, packagePath) }
             }
+
+    private fun sourceTargetName(label: MatchResult, packagePath: String): String? {
+        val localName = label.groupValues[1]
+        val canonicalPackage = label.groupValues[2]
+        val canonicalName = label.groupValues[3]
+        val name = localName.ifEmpty { canonicalName.takeIf { canonicalPackage == packagePath } }
+        return name?.takeUnless(::isIndexableFile)
+    }
+
+    private fun normalizeFileLabels(rule: String, packagePath: String): String =
+        SOURCE_LABEL.replace(rule) { label ->
+            val name = sourceTargetName(label, packagePath)
+            if (name != null) {
+                label.value
+            } else {
+                val fileName = label.groupValues[1].ifEmpty { label.groupValues[3] }
+                val canonicalPackage = label.groupValues[2]
+                if (
+                    isIndexableFile(fileName) &&
+                        (canonicalPackage.isEmpty() || canonicalPackage == packagePath)
+                ) {
+                    "\"$fileName\""
+                } else {
+                    label.value
+                }
+            }
+        }
+
+    private fun isIndexableFile(name: String): Boolean =
+        name.substringAfterLast('.', missingDelimiterValue = "") in INDEXABLE_EXTENSIONS
 
     private fun isTopLevelCode(rule: String, position: Int): Boolean {
         var depth = 0

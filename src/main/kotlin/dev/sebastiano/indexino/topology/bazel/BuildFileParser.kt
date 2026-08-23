@@ -30,8 +30,9 @@ internal object BuildFileParser {
         val packageRelative = workspaceRoot.relativize(packageDir).toString().replace('\\', '/')
         val packagePrefix = packageRelative.takeIf { it.isNotBlank() }?.plus('/').orEmpty()
         val content =
-            targetName?.let { BuildTargetSelector.select(buildFile.readText(), it) }
-                ?: buildFile.readText()
+            targetName?.let {
+                BuildTargetSelector.select(buildFile.readText(), it, packageRelative)
+            } ?: buildFile.readText()
         val paths = linkedSetOf<String>()
         val warnings = mutableListOf<String>()
 
