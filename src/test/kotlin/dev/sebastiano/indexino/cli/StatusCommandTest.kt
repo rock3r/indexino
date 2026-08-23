@@ -428,6 +428,40 @@ class StatusCommandTest {
         assertFalse(output.toString().contains("\"fresh\":true"), output.toString())
     }
 
+    @Test
+    fun `status auto mode honors explicit Gradle scope in a hybrid workspace`() {
+        val workspace = createGradleWorkspace()
+        workspace.resolve("WORKSPACE").writeText("")
+        assertEquals(
+            0,
+            IndexCommand()
+                .runIndexedBuild(
+                    project = workspace,
+                    topologyRequest =
+                        TopologyRequest(
+                            buildSystem = BuildSystem.GRADLE,
+                            gradleModule = ":ui",
+                            includeDeps = false,
+                        ),
+                    applications = emptyList(),
+                ),
+        )
+
+        val result =
+            StatusCommand()
+                .test(
+                    "--project",
+                    workspace.toString(),
+                    "--build-system",
+                    "auto",
+                    "--gradle-module",
+                    ":ui",
+                )
+
+        assertEquals(CliExitCodes.SUCCESS, result.statusCode)
+        assertTrue(result.output.contains("\"fresh\":true"), result.output)
+    }
+
     private fun createRepoWorkspace(): java.nio.file.Path {
         val workspace = createTempDirectory("status-repo-")
         tempDirs.add(workspace)

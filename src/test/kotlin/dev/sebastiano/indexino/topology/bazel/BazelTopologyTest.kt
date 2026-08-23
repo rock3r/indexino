@@ -492,6 +492,33 @@ class BazelTopologyTest {
     }
 
     @Test
+    fun `build target selection expands shorthand same-package filegroups`() {
+        val workspace = createTempDirectory("bazel-target-shorthand-label-")
+        val packageDir = workspace.resolve("foo")
+        Files.createDirectories(packageDir.resolve("src"))
+        packageDir.resolve("src/A.kt").writeText("class A")
+        packageDir
+            .resolve("BUILD.bazel")
+            .writeText(
+                """
+                filegroup(
+                    name = "foo",
+                    srcs = ["src/A.kt"],
+                )
+                kt_jvm_library(
+                    name = "a",
+                    srcs = ["//foo"],
+                )
+                """
+                    .trimIndent()
+            )
+
+        val labels = BazelTopology.degradedSourceLabels("//foo:a", workspace)
+
+        assertEquals(listOf("//foo:src/A.kt"), labels)
+    }
+
+    @Test
     fun `build target selection follows actual for alias rules`() {
         val workspace = createTempDirectory("bazel-target-build-alias-")
         val packageDir = workspace.resolve("pkg")

@@ -7,7 +7,7 @@ internal object BuildTargetSelector {
     private val SOURCE_ATTRIBUTE = Regex("""(?<![A-Za-z0-9_])(?:srcs|resource_files)\s*=""")
     private val ACTUAL_ATTRIBUTE = Regex("""(?<![A-Za-z0-9_])actual\s*=""")
     private val ACTUAL_FILE = Regex("""actual\s*=\s*["']([^"']+\.(?:kt|java|xml))["']""")
-    private val SOURCE_LABEL = Regex("""["'](?::([^"']+)|//([^:"']*):([^"']+))["']""")
+    private val SOURCE_LABEL = Regex("""["'](?::([^"']+)|//([^:"']*)(?::([^"']+))?)["']""")
     private val INDEXABLE_EXTENSIONS = setOf("kt", "java", "xml")
 
     fun select(content: String, targetName: String, packagePath: String): String {
@@ -66,7 +66,11 @@ internal object BuildTargetSelector {
         val localName = label.groupValues[1]
         val canonicalPackage = label.groupValues[2]
         val canonicalName = label.groupValues[3]
-        val name = localName.ifEmpty { canonicalName.takeIf { canonicalPackage == packagePath } }
+        val name = localName.ifEmpty {
+            canonicalName
+                .ifEmpty { canonicalPackage.substringAfterLast('/') }
+                .takeIf { canonicalPackage == packagePath }
+        }
         return name?.takeUnless(::isIndexableFile)
     }
 

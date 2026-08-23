@@ -167,7 +167,12 @@ internal class StatusCommand : CliktCommand(name = "status") {
     private fun cliTopologyRequest(project: Path): TopologyRequest {
         val requested = parseBuildSystem(buildSystem)
         val effective =
-            if (requested == BuildSystem.AUTO) BuildSystemDetector.detect(project) else requested
+            when {
+                requested != BuildSystem.AUTO -> requested
+                bazelTarget != null -> BuildSystem.BAZEL
+                gradleModule != null -> BuildSystem.GRADLE
+                else -> BuildSystemDetector.detect(project)
+            }
         return TopologyRequest(
             buildSystem = requested,
             bazelTarget = bazelTarget,
