@@ -22,6 +22,7 @@ import org.jetbrains.kotlin.psi.KtNamedDeclaration
 import org.jetbrains.kotlin.psi.KtNamedFunction
 import org.jetbrains.kotlin.psi.KtParenthesizedExpression
 import org.jetbrains.kotlin.psi.KtProperty
+import org.jetbrains.kotlin.psi.KtQualifiedExpression
 import org.jetbrains.kotlin.psi.KtSafeQualifiedExpression
 import org.jetbrains.kotlin.psi.KtThisExpression
 import org.jetbrains.kotlin.psi.KtTypeAlias
@@ -207,7 +208,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
         receiverClass: KtClass,
     ): Boolean {
         val calleeName = calleeExpression?.text ?: return false
-        val qualifiedCall = parent as? KtDotQualifiedExpression
+        val qualifiedCall = parent as? KtQualifiedExpression
         if (
             calleeName in setOf("equals", "contentEquals", "contentDeepEquals") &&
                 qualifiedCall?.selectorExpression == this &&
@@ -343,7 +344,9 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
                     is KtFunction ->
                         ancestor !== ignoredFunction &&
                             ancestor.valueParameters.any { it.name == property }
-                    is KtForExpression -> ancestor.loopParameter?.name == property
+                    is KtForExpression ->
+                        ancestor.loopParameter?.name == property &&
+                            ancestor.body?.let { PsiTreeUtil.isAncestor(it, this, false) } == true
                     else -> false
                 }
             }

@@ -453,6 +453,32 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `loop variable does not shadow property inside range expression`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class LoopRange(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is LoopRange) return false
+                            for (value in listOf(value == other.value)) return value
+                            return false
+                        }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "LoopRange(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `name-only overloads do not satisfy required overrides`() {
         val findings =
             rule()
@@ -649,6 +675,30 @@ class EqualityMembersRuleTest {
                         override fun toString(): String =
                             "MethodComparisons(value=${'$'}value, values=${'$'}values, " +
                                 "deepValues=${'$'}deepValues, label=${'$'}label)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
+    fun `safe call equals preserves valid nullable property comparison`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class NullableValue(val value: String?) {
+                        override fun equals(other: Any?): Boolean =
+                            other is NullableValue &&
+                                (value?.equals(other.value) ?: (other.value == null))
+
+                        override fun hashCode(): Int = value?.hashCode() ?: 0
+
+                        override fun toString(): String = "NullableValue(value=${'$'}value)"
                     }
                     """
                         .trimIndent()
