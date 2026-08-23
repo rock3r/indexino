@@ -77,9 +77,11 @@ When Bazel is unavailable (default CI path uses mock query fixtures instead):
 
 1. Parse `BUILD` / `BUILD.bazel` under the target package directory
 2. Select the requested rule by its `name`; fail rather than indexing sibling rules when absent
-3. Recognize Kotlin/Java files in `srcs` and XML in Android `resource_files`
-4. Expand literal entries and `glob([...])` patterns into workspace-relative paths
-5. Set manifest `topology` to `build-parse`
+3. Recursively retain local rules referenced from that rule's `srcs` or `resource_files` (such as
+   source `filegroup`s), without admitting unrelated sibling targets
+4. Recognize Kotlin/Java files in `srcs` and XML in Android `resource_files`
+5. Expand literal entries and `glob([...])` patterns into workspace-relative paths
+6. Set manifest `topology` to `build-parse`
 
 When a dependency-closure query fails (for example in a partial checkout), Indexino retries with
 the same target-only source/resource query. When that query itself fails, Indexino retries with

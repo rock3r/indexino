@@ -157,4 +157,60 @@ class BazelTopologyTest {
 
         assertEquals(listOf("//pkg:src/A.kt"), labels)
     }
+
+    @Test
+    fun `build target selection expands referenced source filegroups only`() {
+        val workspace = createTempDirectory("bazel-target-filegroup-")
+        val packageDir = workspace.resolve("pkg")
+        Files.createDirectories(packageDir.resolve("src"))
+        packageDir.resolve("src/A.kt").writeText("class A")
+        packageDir.resolve("src/B.kt").writeText("class B")
+        packageDir
+            .resolve("BUILD.bazel")
+            .writeText(
+                """
+                filegroup(
+                    name = "a_sources",
+                    srcs = ["src/A.kt"],
+                )
+                kt_jvm_library(
+                    name = "a",
+                    srcs = [":a_sources"],
+                )
+                kt_jvm_library(
+                    name = "b",
+                    srcs = ["src/B.kt"],
+                )
+                """
+                    .trimIndent()
+            )
+
+        val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
+
+        assertEquals(listOf("//pkg:src/A.kt"), labels)
+    }
+
+    @Test
+    fun `build target selection matches standalone name attribute`() {
+        val workspace = createTempDirectory("bazel-target-name-")
+        val packageDir = workspace.resolve("pkg")
+        Files.createDirectories(packageDir.resolve("src"))
+        packageDir.resolve("src/A.kt").writeText("class A")
+        packageDir
+            .resolve("BUILD.bazel")
+            .writeText(
+                """
+                custom_library(
+                    module_name = "helper",
+                    name = "a",
+                    srcs = ["src/A.kt"],
+                )
+                """
+                    .trimIndent()
+            )
+
+        val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
+
+        assertEquals(listOf("//pkg:src/A.kt"), labels)
+    }
 }
