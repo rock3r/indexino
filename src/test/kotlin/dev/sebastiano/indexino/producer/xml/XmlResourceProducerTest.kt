@@ -203,7 +203,7 @@ class XmlResourceProducerTest {
     @Test
     fun `counts XML 1_1 line separators in declaration locations`() {
         val values =
-            "<?xml version=\"1.1\"?>\u0085<resources>\u2028<string name=\"title\">Title</string></resources>"
+            "<?xml version=\"1.1\"?>\u0085<resources>\u2028<string\u0085name=\"title\">Title</string></resources>"
 
         withStore { store ->
             assertNotNull(ProducerRegistry.get("xml-resources"))

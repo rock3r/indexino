@@ -55,7 +55,12 @@ internal class XmlResourceProducer : IndexProducer {
                         val elementEnd = startTagEndOffset(source, elementStart)
                         elementSearchOffset = elementEnd + 1
                         val attributeValueOffsets =
-                            attributeValueOffsets(source, elementStart, elementEnd)
+                            attributeValueOffsets(
+                                source,
+                                elementStart,
+                                elementEnd,
+                                sourcePositions.isXml11,
+                            )
                         if (pathResource?.type == "values" && depth == RESOURCE_CHILD_DEPTH) {
                             valuesResource(
                                     reader.localName,
@@ -456,25 +461,31 @@ private fun attributeValueOffsets(
     source: String,
     elementStart: Int,
     elementEnd: Int,
+    isXml11: Boolean,
 ): Map<String, RawAttribute> = buildMap {
     var offset = elementStart + 1
-    while (offset < elementEnd && !source[offset].isWhitespace()) offset++
-    var attribute = parseAttribute(source, offset, elementEnd)
+    while (offset < elementEnd && !source[offset].isXmlWhitespace(isXml11)) offset++
+    var attribute = parseAttribute(source, offset, elementEnd, isXml11)
     while (attribute != null) {
         put(attribute.qualifiedName, attribute)
-        attribute = parseAttribute(source, attribute.nextOffset, elementEnd)
+        attribute = parseAttribute(source, attribute.nextOffset, elementEnd, isXml11)
     }
 }
 
-private fun parseAttribute(source: String, fromOffset: Int, elementEnd: Int): RawAttribute? {
-    var offset = skipWhitespace(source, fromOffset, elementEnd)
+private fun parseAttribute(
+    source: String,
+    fromOffset: Int,
+    elementEnd: Int,
+    isXml11: Boolean,
+): RawAttribute? {
+    var offset = skipWhitespace(source, fromOffset, elementEnd, isXml11)
     if (offset >= elementEnd || source[offset] == '/') return null
     val nameStart = offset
-    while (offset < elementEnd && source[offset].isAttributeNameCharacter()) offset++
+    while (offset < elementEnd && source[offset].isAttributeNameCharacter(isXml11)) offset++
     val qualifiedName = source.substring(nameStart, offset)
-    offset = skipWhitespace(source, offset, elementEnd)
+    offset = skipWhitespace(source, offset, elementEnd, isXml11)
     if (source.getOrNull(offset) != '=') return null
-    offset = skipWhitespace(source, offset + 1, elementEnd)
+    offset = skipWhitespace(source, offset + 1, elementEnd, isXml11)
     val quote = source.getOrNull(offset)?.takeIf { it == '\'' || it == '\"' } ?: return null
     val valueStart = offset + 1
     val valueEnd = source.indexOf(quote, valueStart).takeIf { it in valueStart..elementEnd }
@@ -486,13 +497,22 @@ private fun parseAttribute(source: String, fromOffset: Int, elementEnd: Int): Ra
     )
 }
 
-private fun skipWhitespace(source: String, fromOffset: Int, elementEnd: Int): Int {
+private fun skipWhitespace(
+    source: String,
+    fromOffset: Int,
+    elementEnd: Int,
+    isXml11: Boolean,
+): Int {
     var offset = fromOffset
-    while (offset < elementEnd && source[offset].isWhitespace()) offset++
+    while (offset < elementEnd && source[offset].isXmlWhitespace(isXml11)) offset++
     return offset
 }
 
-private fun Char.isAttributeNameCharacter(): Boolean = !isWhitespace() && this != '=' && this != '/'
+private fun Char.isAttributeNameCharacter(isXml11: Boolean): Boolean =
+    !isXmlWhitespace(isXml11) && this != '=' && this != '/'
+
+private fun Char.isXmlWhitespace(isXml11: Boolean): Boolean =
+    isWhitespace() || (isXml11 && (this == '\u0085' || this == '\u2028'))
 
 private data class RawAttribute(
     val qualifiedName: String,
