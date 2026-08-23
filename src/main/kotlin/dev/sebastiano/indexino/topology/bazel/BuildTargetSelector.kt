@@ -100,8 +100,8 @@ internal object BuildTargetSelector {
                     val canonicalPackage = label.groupValues[2]
                     if (
                         isIndexableFile(fileName) &&
-                            ((!label.value.startsWith("\"//") && canonicalPackage.isEmpty()) ||
-                                canonicalPackage == packagePath)
+                            ((!label.value.drop(1).startsWith("//") &&
+                                canonicalPackage.isEmpty()) || canonicalPackage == packagePath)
                     ) {
                         "\"$fileName\""
                     } else if (isIndexableFile(fileName) && canonicalPackage.isEmpty()) {
@@ -173,32 +173,43 @@ internal object BuildTargetSelector {
         return depth == expectedDepth && stringDelimiter == null && !inComment
     }
 
+    @Suppress("CyclomaticComplexMethod")
     private fun ruleAt(content: String, match: MatchResult): String? {
         if (BuildFileComments.isCommentedOutInBlock(content, match.range.first)) return null
         val openParen = match.range.last
         var depth = 0
-        var inString: Char? = null
+        var stringDelimiter: String? = null
         var escaped = false
         var inComment = false
-        for (index in openParen until content.length) {
+        var index = openParen
+        while (index < content.length) {
             val char = content[index]
             when {
                 inComment -> inComment = char != '\n'
-                inString != null -> {
+                stringDelimiter != null -> {
                     when {
                         escaped -> escaped = false
-                        char == '\\' -> escaped = true
-                        char == inString -> inString = null
+                        stringDelimiter.length == 1 && char == '\\' -> escaped = true
+                        content.startsWith(stringDelimiter, index) -> {
+                            index += stringDelimiter.length - 1
+                            stringDelimiter = null
+                        }
                     }
                 }
                 char == '#' -> inComment = true
-                char == '"' || char == '\'' -> inString = char
+                char == '"' || char == '\'' -> {
+                    val triple = char.toString().repeat(3)
+                    stringDelimiter =
+                        if (content.startsWith(triple, index)) triple else char.toString()
+                    index += stringDelimiter.length - 1
+                }
                 char == '(' -> depth++
                 char == ')' -> {
                     depth--
                     if (depth == 0) return content.substring(match.range.first, index + 1)
                 }
             }
+            index++
         }
         return null
     }

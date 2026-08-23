@@ -750,7 +750,7 @@ class BazelTopologyTest {
         workspace.resolve("Foo.kt").writeText("class Foo")
         packageDir
             .resolve("BUILD.bazel")
-            .writeText("kt_jvm_library(name = \"a\", srcs = [\"//:Foo.kt\"])")
+            .writeText("kt_jvm_library(name = \"a\", srcs = ['//:Foo.kt'])")
 
         val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
 
@@ -769,6 +769,30 @@ class BazelTopologyTest {
                 """
                 filegroup(name = "sources.kt", srcs = ["Foo.kt"])
                 kt_jvm_library(name = "a", srcs = [":sources.kt"])
+                """
+                    .trimIndent()
+            )
+
+        val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
+
+        assertEquals(listOf("//pkg:Foo.kt"), labels)
+    }
+
+    @Test
+    fun `build target selection keeps rule boundaries across triple quoted strings`() {
+        val workspace = createTempDirectory("bazel-target-triple-boundary-")
+        val packageDir = workspace.resolve("pkg")
+        Files.createDirectories(packageDir)
+        packageDir.resolve("Foo.kt").writeText("class Foo")
+        packageDir
+            .resolve("BUILD.bazel")
+            .writeText(
+                """
+                kt_jvm_library(
+                    name = "a",
+                    description = '''don't stop ) here''',
+                    srcs = ["Foo.kt"],
+                )
                 """
                     .trimIndent()
             )
