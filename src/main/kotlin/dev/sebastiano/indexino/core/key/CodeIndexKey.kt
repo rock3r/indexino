@@ -63,7 +63,8 @@ internal value class CodeIndexKey(val value: String) {
             originId: String,
             relativeFile: String,
             line: Int,
-        ): CodeIndexKey = CodeIndexKey("res:$type:$name:$originId:$relativeFile:$line")
+            column: Int,
+        ): CodeIndexKey = CodeIndexKey("res:$type:$name:$originId:$relativeFile:$line:$column")
 
         fun file(relativeFile: String, contentHash: String): CodeIndexKey =
             CodeIndexKey("file:$relativeFile:$contentHash")

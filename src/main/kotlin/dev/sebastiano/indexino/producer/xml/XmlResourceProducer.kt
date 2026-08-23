@@ -46,6 +46,7 @@ internal class XmlResourceProducer : IndexProducer {
             val reader = factory.createXMLStreamReader(StringReader(source))
             var depth = 0
             var elementSearchOffset = 0
+            var textSearchOffset = 0
             while (reader.hasNext()) {
                 when (reader.next()) {
                     XMLStreamConstants.START_ELEMENT -> {
@@ -53,6 +54,7 @@ internal class XmlResourceProducer : IndexProducer {
                         val elementStart = nextStartElementOffset(source, elementSearchOffset)
                         val elementEnd = startTagEndOffset(source, elementStart)
                         elementSearchOffset = elementEnd + 1
+                        textSearchOffset = elementEnd + 1
                         val attributeValueOffsets =
                             attributeValueOffsets(source, elementStart, elementEnd)
                         val declarationPosition = sourcePosition(source, elementStart)
@@ -75,25 +77,30 @@ internal class XmlResourceProducer : IndexProducer {
                         }
                         for (attributeIndex in 0 until reader.attributeCount) {
                             val qualifiedName = reader.attributeQualifiedName(attributeIndex)
-                            val valueOffset =
+                            val rawAttribute =
                                 checkNotNull(attributeValueOffsets[qualifiedName]) {
                                     "Missing raw XML attribute $qualifiedName in ${attributeValueOffsets.keys}"
                                 }
                             indexAttribute(
                                 store,
                                 indexedSource,
-                                reader.getAttributeValue(attributeIndex),
+                                source.substring(rawAttribute.valueStart, rawAttribute.valueEnd),
                                 source,
-                                valueOffset,
+                                rawAttribute.valueStart,
                             )
                         }
                     }
                     XMLStreamConstants.END_ELEMENT -> depth--
                     XMLStreamConstants.CHARACTERS,
                     XMLStreamConstants.CDATA -> {
-                        val textOffset =
-                            (reader.location.characterOffset - reader.text.length).coerceAtLeast(0)
-                        indexAttribute(store, indexedSource, reader.text, source, textOffset)
+                        textSearchOffset =
+                            indexDecodedText(
+                                store,
+                                indexedSource,
+                                reader.text,
+                                source,
+                                textSearchOffset,
+                            )
                     }
                 }
             }
@@ -145,6 +152,24 @@ internal class XmlResourceProducer : IndexProducer {
         }
     }
 
+    private fun indexDecodedText(
+        store: CodeIndexStore,
+        indexedSource: IndexedSource,
+        value: String,
+        source: String,
+        fromOffset: Int,
+    ): Int {
+        var searchOffset = fromOffset
+        RESOURCE_REFERENCE.findAll(value).forEach { match ->
+            val rawOffset = source.indexOf(match.value, searchOffset)
+            if (rawOffset >= 0) {
+                indexAttribute(store, indexedSource, match.value, source, rawOffset)
+                searchOffset = rawOffset + match.value.length
+            }
+        }
+        return searchOffset
+    }
+
     private fun putResource(
         store: CodeIndexStore,
         indexedSource: IndexedSource,
@@ -155,7 +180,14 @@ internal class XmlResourceProducer : IndexProducer {
     ) {
         val fqn = resourceFqn(type, name)
         store.put(
-            CodeIndexKey.resource(type, name, indexedSource.originId, indexedSource.path, line),
+            CodeIndexKey.resource(
+                type,
+                name,
+                indexedSource.originId,
+                indexedSource.path,
+                line,
+                column,
+            ),
             SymbolRecord(
                 fqn = fqn,
                 relativeFile = indexedSource.path,
@@ -275,12 +307,12 @@ private fun attributeValueOffsets(
     source: String,
     elementStart: Int,
     elementEnd: Int,
-): Map<String, Int> = buildMap {
+): Map<String, RawAttribute> = buildMap {
     var offset = elementStart + 1
     while (offset < elementEnd && !source[offset].isWhitespace()) offset++
     var attribute = parseAttribute(source, offset, elementEnd)
     while (attribute != null) {
-        put(attribute.qualifiedName, attribute.valueStart)
+        put(attribute.qualifiedName, attribute)
         attribute = parseAttribute(source, attribute.nextOffset, elementEnd)
     }
 }
@@ -297,7 +329,12 @@ private fun parseAttribute(source: String, fromOffset: Int, elementEnd: Int): Ra
     val quote = source.getOrNull(offset)?.takeIf { it == '\'' || it == '\"' } ?: return null
     val valueStart = offset + 1
     val valueEnd = source.indexOf(quote, valueStart).takeIf { it in valueStart..elementEnd }
-    return RawAttribute(qualifiedName, valueStart, valueEnd?.plus(1) ?: elementEnd)
+    return RawAttribute(
+        qualifiedName,
+        valueStart,
+        valueEnd ?: elementEnd,
+        valueEnd?.plus(1) ?: elementEnd,
+    )
 }
 
 private fun skipWhitespace(source: String, fromOffset: Int, elementEnd: Int): Int {
@@ -308,7 +345,12 @@ private fun skipWhitespace(source: String, fromOffset: Int, elementEnd: Int): In
 
 private fun Char.isAttributeNameCharacter(): Boolean = !isWhitespace() && this != '=' && this != '/'
 
-private data class RawAttribute(val qualifiedName: String, val valueStart: Int, val nextOffset: Int)
+private data class RawAttribute(
+    val qualifiedName: String,
+    val valueStart: Int,
+    val valueEnd: Int,
+    val nextOffset: Int,
+)
 
 private const val COMMENT_START = "<!--"
 private const val COMMENT_END = "-->"

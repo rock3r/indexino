@@ -84,6 +84,86 @@ class XmlResourceProducerTest {
     }
 
     @Test
+    fun `preserves raw XML reference positions across text and entities`() {
+        val values =
+            """
+            <resources>
+                <string name="plain">@string/title</string>
+                <string name="cdata"><![CDATA[@string/title]]></string>
+            </resources>
+            """
+                .trimIndent()
+        val layout =
+            """
+            <TextView
+                note="&#10;@string/title" />
+            """
+                .trimIndent()
+
+        withStore { store ->
+            assertNotNull(ProducerRegistry.get("xml-resources"))
+                .produce(
+                    IndexBuildContext.forInlineSources(
+                        store = store,
+                        commitHash = "raw-reference-columns",
+                        sourceFiles =
+                            mapOf(
+                                "src/main/res/values/strings.xml" to values,
+                                "src/main/res/layout/main.xml" to layout,
+                            ),
+                    )
+                )
+
+            val references =
+                store
+                    .prefixScan("ref:res:string:title")
+                    .map { it.second }
+                    .filterIsInstance<ReferenceRecord>()
+                    .toList()
+            assertTrue(
+                references.any {
+                    it.relativeFile.endsWith("strings.xml") && it.line == 2 && it.column == 26
+                }
+            )
+            assertTrue(
+                references.any {
+                    it.relativeFile.endsWith("strings.xml") && it.line == 3 && it.column == 35
+                }
+            )
+            assertTrue(
+                references.any {
+                    it.relativeFile.endsWith("main.xml") && it.line == 2 && it.column == 16
+                }
+            )
+        }
+    }
+
+    @Test
+    fun `keeps same line duplicate XML declarations distinct`() {
+        val layout =
+            """<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"><View android:id="@+id/item"/><View android:id="@+id/item"/></LinearLayout>"""
+
+        withStore { store ->
+            assertNotNull(ProducerRegistry.get("xml-resources"))
+                .produce(
+                    IndexBuildContext.forInlineSources(
+                        store = store,
+                        commitHash = "same-line-columns",
+                        sourceFiles = mapOf("src/main/res/layout/main.xml" to layout),
+                    )
+                )
+
+            val declarations =
+                store
+                    .prefixScan("res:id:item")
+                    .map { it.second }
+                    .filterIsInstance<SymbolRecord>()
+                    .toList()
+            assertEquals(listOf(92, 122), declarations.map { it.column }.sorted())
+        }
+    }
+
+    @Test
     fun `keeps equal resource paths from separate origins distinct`() {
         val firstRoot = createTempDirectory("indexino-resource-origin-first-")
         val secondRoot = createTempDirectory("indexino-resource-origin-second-")
