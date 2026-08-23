@@ -733,6 +733,32 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `nullable Any typealias satisfies equals override`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    private typealias NullableAny = Any?
+
+                    class NullableTypealias(val value: String) {
+                        override fun equals(other: NullableAny): Boolean =
+                            other is NullableTypealias && value == other.value
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String =
+                            "NullableTypealias(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `body properties participate unless explicitly excluded`() {
         val findings =
             rule()

@@ -108,15 +108,17 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
     private fun KtNamedFunction.hasNullableAnyParameter(): Boolean {
         val typeText =
             valueParameters.singleOrNull()?.typeReference?.typeElement?.text ?: return false
-        if (!typeText.endsWith("?")) return false
-        return containingKtFile.resolvesToAny(typeText.removeSuffix("?"), mutableSetOf())
+        return containingKtFile.resolvesToNullableAny(typeText, false, mutableSetOf())
     }
 
-    private fun org.jetbrains.kotlin.psi.KtFile.resolvesToAny(
-        typeName: String,
+    private fun org.jetbrains.kotlin.psi.KtFile.resolvesToNullableAny(
+        typeText: String,
+        nullableAlias: Boolean,
         visitedAliases: MutableSet<String>,
     ): Boolean {
-        if (typeName == "kotlin.Any") return true
+        val nullable = nullableAlias || typeText.endsWith("?")
+        val typeName = typeText.removeSuffix("?")
+        if (typeName == "kotlin.Any") return nullable
         if (typeName == "Any") {
             val shadowsDefaultAny =
                 declarations.filterIsInstance<KtTypeAlias>().any { it.name == "Any" } ||
@@ -126,14 +128,14 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
                                 it.importedFqName?.shortName()?.asString() == "Any" &&
                                 it.importedFqName?.asString() != "kotlin.Any")
                     }
-            return !shadowsDefaultAny
+            return nullable && !shadowsDefaultAny
         }
         if (
             importDirectives.any {
                 it.aliasName == typeName && it.importedFqName?.asString() == "kotlin.Any"
             }
         ) {
-            return true
+            return nullable
         }
         if (!visitedAliases.add(typeName)) return false
         val aliasedType =
@@ -142,7 +144,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
                 .firstOrNull { it.name == typeName }
                 ?.getTypeReference()
                 ?.text ?: return false
-        return resolvesToAny(aliasedType.removeSuffix("?"), visitedAliases)
+        return resolvesToNullableAny(aliasedType, nullable, visitedAliases)
     }
 
     private fun checkEquals(
