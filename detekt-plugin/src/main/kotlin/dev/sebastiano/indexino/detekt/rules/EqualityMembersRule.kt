@@ -11,6 +11,7 @@ import org.jetbrains.kotlin.psi.KtBlockExpression
 import org.jetbrains.kotlin.psi.KtClass
 import org.jetbrains.kotlin.psi.KtDotQualifiedExpression
 import org.jetbrains.kotlin.psi.KtExpression
+import org.jetbrains.kotlin.psi.KtForExpression
 import org.jetbrains.kotlin.psi.KtFunction
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
 import org.jetbrains.kotlin.psi.KtNamedFunction
@@ -18,6 +19,7 @@ import org.jetbrains.kotlin.psi.KtParenthesizedExpression
 import org.jetbrains.kotlin.psi.KtProperty
 import org.jetbrains.kotlin.psi.KtSafeQualifiedExpression
 import org.jetbrains.kotlin.psi.KtThisExpression
+import org.jetbrains.kotlin.psi.KtTypeAlias
 
 public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
     override fun visitClass(klass: KtClass) {
@@ -98,6 +100,10 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
                         containingKtFile.importDirectives.any { import ->
                             parameterType == "${import.aliasName}?" &&
                                 import.importedFqName?.asString() == "kotlin.Any"
+                        } ||
+                        containingKtFile.declarations.filterIsInstance<KtTypeAlias>().any { alias ->
+                            parameterType == "${alias.name}?" &&
+                                alias.getTypeReference()?.text in setOf("Any", "kotlin.Any")
                         }
                 }
             "hashCode",
@@ -151,26 +157,37 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
     ): Boolean {
         val left = left ?: return false
         val right = right ?: return false
-        return (left.isReceiverProperty(property, receiverLabel) &&
+        return (left.isReceiverProperty(equalsFunction, property, receiverLabel) &&
             right.isOtherProperty(equalsFunction, otherParameter, property)) ||
-            (right.isReceiverProperty(property, receiverLabel) &&
+            (right.isReceiverProperty(equalsFunction, property, receiverLabel) &&
                 left.isOtherProperty(equalsFunction, otherParameter, property))
     }
 
-    private fun KtExpression.isReceiverProperty(property: String, receiverLabel: String?): Boolean =
+    private fun KtExpression.isReceiverProperty(
+        equalsFunction: KtNamedFunction,
+        property: String,
+        receiverLabel: String?,
+    ): Boolean =
         when (this) {
             is KtParenthesizedExpression ->
-                expression?.isReceiverProperty(property, receiverLabel) == true
+                expression?.isReceiverProperty(equalsFunction, property, receiverLabel) == true
             else ->
                 (isName(property) && !isShadowed(property)) ||
                     (this is KtDotQualifiedExpression &&
-                        receiverExpression.isCurrentReceiver(receiverLabel) &&
+                        receiverExpression.isCurrentReceiver(equalsFunction, receiverLabel) &&
                         selectorExpression?.isName(property) == true)
         }
 
-    private fun KtExpression.isCurrentReceiver(receiverLabel: String?): Boolean =
+    private fun KtExpression.isCurrentReceiver(
+        equalsFunction: KtNamedFunction,
+        receiverLabel: String?,
+    ): Boolean =
         this is KtThisExpression &&
-            (text == "this" || (receiverLabel != null && text == "this@$receiverLabel"))
+            ((text == "this" &&
+                generateSequence(parent) { it.parent }
+                    .filterIsInstance<KtFunction>()
+                    .firstOrNull() === equalsFunction) ||
+                (receiverLabel != null && text == "this@$receiverLabel"))
 
     private fun KtExpression.isShadowed(
         property: String,
@@ -186,6 +203,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
                     is KtFunction ->
                         ancestor !== ignoredFunction &&
                             ancestor.valueParameters.any { it.name == property }
+                    is KtForExpression -> ancestor.loopParameter?.name == property
                     else -> false
                 }
             }

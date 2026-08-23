@@ -161,6 +161,59 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `nested implicit receiver does not count as class receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class NestedReceiver(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is NestedReceiver && with(other) { this.value == other.value }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "NestedReceiver(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
+    fun `loop locals do not count as receiver properties`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class LoopShadow(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is LoopShadow) return false
+                            for (value in listOf(other.value)) {
+                                if (value == other.value) return true
+                            }
+                            return false
+                        }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "LoopShadow(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `name-only overloads do not satisfy required overrides`() {
         val findings =
             rule()
@@ -247,6 +300,31 @@ class EqualityMembersRuleTest {
                         override fun hashCode(): Int = value.hashCode()
 
                         override fun toString(): String = "AliasedAny(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
+    fun `typealiased Any parameter satisfies equals override`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    private typealias RootAny = Any
+
+                    class TypealiasedAny(val value: String) {
+                        override fun equals(other: RootAny?): Boolean =
+                            other is TypealiasedAny && value == other.value
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "TypealiasedAny(value=${'$'}value)"
                     }
                     """
                         .trimIndent()
