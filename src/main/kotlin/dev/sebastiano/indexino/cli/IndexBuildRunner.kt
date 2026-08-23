@@ -21,6 +21,7 @@ import dev.sebastiano.indexino.producer.ProducerRegistry
 import dev.sebastiano.indexino.producer.SOURCE_CHANGE_DETECTION_PHASE
 import dev.sebastiano.indexino.producer.SourceChangeDetector
 import dev.sebastiano.indexino.producer.SourceChangeSet
+import dev.sebastiano.indexino.producer.SourceContentSnapshot
 import dev.sebastiano.indexino.topology.ExternalSourceMount
 import dev.sebastiano.indexino.topology.SourceOriginResolver
 import dev.sebastiano.indexino.topology.TopologyRequest
@@ -117,13 +118,15 @@ internal class IndexBuildRunner(
             machineProgress?.failed(CliExitCodes.INVALID_ARGUMENTS, message)
             return CliExitCodes.INVALID_ARGUMENTS
         }
+        val sourceSnapshot = SourceContentSnapshot.capture(sources)
         val pluginCoordinates = pluginRegistry.selectedCoordinates(applications)
         machineProgress?.discoveryCompleted(sources.size)
         val commit = GitHeadResolver.resolve(project)
         val resolver = IndexPathResolver(project, storeRootOverride = storeRootOverride)
         val manifestPath = resolver.resolveManifest(commit)
-        val previewHash = previewHash(sources)
-        val origins = resolveOrigins(sources, externalOriginMetadata, topologyResult.topology)
+        val previewHash = previewHash(sources, sourceSnapshot)
+        val origins =
+            resolveOrigins(sources, externalOriginMetadata, topologyResult.topology, sourceSnapshot)
         val existingManifest = manifestPath.takeIf { it.exists() }?.let(ManifestIO::read)
         val vanishedOrigins =
             existingManifest
@@ -175,6 +178,7 @@ internal class IndexBuildRunner(
             includeDeps = topologyResult.includeDeps,
             sourceFiles = sourceFiles,
             sources = sources,
+            sourceSnapshot = sourceSnapshot,
             origins = origins,
             previewHash = previewHash,
             pluginRegistry = pluginRegistry,
@@ -190,18 +194,26 @@ internal class IndexBuildRunner(
         sources: List<IndexedSource>,
         externalOriginMetadata: Map<Path, Pair<String?, String?>>,
         topology: String,
+        sourceSnapshot: SourceContentSnapshot,
     ): List<IndexManifestOrigin> =
         ManifestOriginResolver.resolve(
             project,
             sources,
             externalOriginMetadata,
             includeWorkspaceWithoutSources = topology != "repo-manifest",
+            sourceSnapshot = sourceSnapshot,
         )
 
-    private fun previewHash(sources: List<IndexedSource>): String {
+    private fun previewHash(
+        sources: List<IndexedSource>,
+        sourceSnapshot: SourceContentSnapshot,
+    ): String {
         machineProgress?.phaseStarted(SOURCE_HASH_PREVIEW_PHASE, sources.size)
         val previewHash =
-            FileHashProducer.combinedIndexedSourcesHash(sources) { index, total, source ->
+            FileHashProducer.combinedIndexedSourcesHash(sources, sourceSnapshot) {
+                index,
+                total,
+                source ->
                 machineProgress?.fileProgress(
                     SOURCE_HASH_PREVIEW_PHASE,
                     index,
@@ -244,6 +256,7 @@ internal class IndexBuildRunner(
         includeDeps: Boolean,
         sourceFiles: List<String>,
         sources: List<IndexedSource>,
+        sourceSnapshot: SourceContentSnapshot,
         origins: List<IndexManifestOrigin>,
         previewHash: String,
         pluginRegistry: PluginRegistry,
@@ -253,7 +266,7 @@ internal class IndexBuildRunner(
         val store = XodusCodeIndexStore.open(resolver.resolveBaseStore(commit))
         val previousRecords = store.prefixScan("").toList()
         try {
-            val changes = detectChanges(store, sources, forceFullRebuild)
+            val changes = detectChanges(store, sources, sourceSnapshot, forceFullRebuild)
             latestChanges = changes
             val context =
                 IndexBuildContext(
@@ -263,6 +276,7 @@ internal class IndexBuildRunner(
                     sourceFiles = sourceFiles,
                     workspaceRoot = project,
                     sources = sources,
+                    sourceSnapshot = sourceSnapshot,
                     resolvedOriginIds = origins.mapTo(linkedSetOf()) { it.originId },
                     progress = progress,
                     machineProgress = machineProgress,
@@ -308,11 +322,12 @@ internal class IndexBuildRunner(
     private fun detectChanges(
         store: XodusCodeIndexStore,
         sources: List<IndexedSource>,
+        sourceSnapshot: SourceContentSnapshot,
         forceFullRebuild: Boolean,
     ): SourceChangeSet {
         machineProgress?.phaseStarted(SOURCE_CHANGE_DETECTION_PHASE, sources.size)
         val detectedChanges =
-            SourceChangeDetector.detect(store, sources) { index, total, source ->
+            SourceChangeDetector.detect(store, sources, sourceSnapshot) { index, total, source ->
                 machineProgress?.fileProgress(
                     SOURCE_CHANGE_DETECTION_PHASE,
                     index,

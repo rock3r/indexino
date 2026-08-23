@@ -159,6 +159,11 @@ The current phases are `source-hash-preview`, `source-change-detection`, then on
 `file-hash`). A producer's total is its own input subset, so a consumer should display it as a
 phase-local fraction such as `Kotlin symbols: 109 of 182`, not as a synthetic global percentage.
 
+Source content is captured once during discovery and remains immutable for that refresh attempt.
+The preview, change detector, producers, and persisted file hashes use the same captured content. An
+edit that races after capture is reconciled by the next `index` run (or may make the current run
+fail); it cannot make a generation falsely fresh by pairing older facts with a newer hash.
+
 Example:
 
 ```json

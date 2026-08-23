@@ -34,7 +34,7 @@ internal class FileHashProducer : IndexProducer {
         val files = context.changedSources
         files.forEachIndexed { index, source ->
             context.reportFileProgress(index + 1, files.size, source)
-            val hash = contentHash(context.readSource(source))
+            val hash = context.sourceHash(source)
             store.put(
                 CodeIndexKey.file("${source.originId}:${source.path}", hash),
                 FileHashRecord(
@@ -63,6 +63,7 @@ internal class FileHashProducer : IndexProducer {
 
         fun combinedIndexedSourcesHash(
             sources: List<IndexedSource>,
+            sourceSnapshot: SourceContentSnapshot? = null,
             onFileProcessed: ((index: Int, total: Int, source: IndexedSource) -> Unit)? = null,
         ): String {
             val sortedSources =
@@ -71,8 +72,10 @@ internal class FileHashProducer : IndexProducer {
                 sortedSources
                     .mapIndexed { index, source ->
                         onFileProcessed?.invoke(index + 1, sortedSources.size, source)
-                        val file = source.originRoot.resolve(source.path)
-                        "${source.originId}:${source.path}:${contentHash(file.readText())}"
+                        val hash =
+                            sourceSnapshot?.contentHash(source)
+                                ?: contentHash(source.originRoot.resolve(source.path).readText())
+                        "${source.originId}:${source.path}:$hash"
                     }
                     .joinToString("\n")
             )

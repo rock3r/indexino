@@ -277,6 +277,68 @@ class InProcessIndexinoTest {
     }
 
     @Test
+    fun `embedded refresh persists one content snapshot across a concurrent edit and reopen`() {
+        val workspace = createGitWorkspace()
+        val source = workspace.resolve("ui/src/main/kotlin/Panel.kt")
+        val analyzedContent = "package sample\nclass AnalyzedPanel"
+        val concurrentContent = "package sample\nclass ConcurrentPanel"
+        Files.writeString(source, analyzedContent)
+        val cacheDirectory = createTempDirectory("indexino-source-snapshot-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+        try {
+            val first = Indexino.connectBlocking(workspace)
+            try {
+                var edited = false
+                runSuspend {
+                    first
+                        .refresh(
+                            request,
+                            progress = { message ->
+                                if (!edited && message == "FileHashProducer") {
+                                    Files.writeString(source, concurrentContent)
+                                    edited = true
+                                }
+                            },
+                            machineProgress = null,
+                        )
+                        .await()
+                }
+                runSuspend { first.snapshot() }
+                    .use { snapshot ->
+                        assertEquals(1, symbolCount(snapshot, "AnalyzedPanel"))
+                        assertEquals(0, symbolCount(snapshot, "ConcurrentPanel"))
+                    }
+            } finally {
+                first.close()
+            }
+
+            val reopened = Indexino.connectBlocking(workspace)
+            try {
+                runSuspend { reopened.snapshot() }
+                    .use { snapshot ->
+                        assertEquals(1, symbolCount(snapshot, "AnalyzedPanel"))
+                        assertEquals(0, symbolCount(snapshot, "ConcurrentPanel"))
+                    }
+                val refresh = runSuspend { reopened.refresh(request).await() }
+                assertEquals(RefreshOutcome.UPDATED, refresh.outcome)
+                runSuspend { reopened.snapshot() }
+                    .use { snapshot ->
+                        assertEquals(0, symbolCount(snapshot, "AnalyzedPanel"))
+                        assertEquals(1, symbolCount(snapshot, "ConcurrentPanel"))
+                    }
+            } finally {
+                reopened.close()
+            }
+        } finally {
+            if (previousCacheDirectory == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheDirectory)
+        }
+    }
+
+    @Test
     fun `a second client reopens the published pack snapshot`() {
         val workspace = createGitWorkspace()
         val cacheDirectory = createTempDirectory("indexino-reopen-cache-")
@@ -1289,6 +1351,11 @@ class InProcessIndexinoTest {
         val output = process.inputStream.bufferedReader().readText()
         check(process.waitFor() == 0) { "git ${args.joinToString(" ")} failed: $output" }
     }
+
+    private fun symbolCount(snapshot: IndexSnapshot, name: String): Int =
+        runSuspend { snapshot.findSymbols(SymbolQuery.named(name), QueryOptions.page(limit = 10)) }
+            .items
+            .size
 
     private fun <T> runSuspend(block: suspend () -> T): T = runBlocking { block() }
 }
