@@ -821,6 +821,29 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `subtype receiver inherited property does not count as current receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                        package dev.sebastiano.indexino.model
+
+                        open class Parent(open val value: String) {
+                            override fun equals(other: Any?): Boolean =
+                                other is Child && with(other) { value == other.value }
+                            override fun hashCode(): Int = value.hashCode()
+                            override fun toString(): String = "Parent(value=${'$'}value)"
+                        }
+                    private class Child(override val value: String) : Parent(value)
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `lambda label matching class name does not count as class receiver`() {
         val findings =
             rule()

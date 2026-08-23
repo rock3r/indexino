@@ -317,15 +317,24 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
     private fun KtFunctionLiteral.hasReceiverType(receiverClass: KtClass): Boolean =
         analyze(this) {
             val targetClass = receiverClass.symbol as? KaClassSymbol ?: return false
-            symbol.receiverParameter?.returnType?.symbol?.classId == targetClass.classId
+            (symbol.receiverParameter?.returnType?.symbol as? KaClassSymbol)?.isSameOrSubclassOf(
+                targetClass
+            ) == true
         }
 
     private fun KtNamedFunction.hasReceiverType(receiverClass: KtClass): Boolean =
         analyze(this) {
             val targetClass = receiverClass.symbol as? KaClassSymbol ?: return false
-            (symbol as? KaNamedFunctionSymbol)?.receiverParameter?.returnType?.symbol?.classId ==
-                targetClass.classId
+            ((symbol as? KaNamedFunctionSymbol)?.receiverParameter?.returnType?.symbol
+                    as? KaClassSymbol)
+                ?.isSameOrSubclassOf(targetClass) == true
         }
+
+    private fun KaClassSymbol.isSameOrSubclassOf(targetClass: KaClassSymbol): Boolean =
+        classId == targetClass.classId ||
+            superTypes.any {
+                (it.symbol as? KaClassSymbol)?.isSameOrSubclassOf(targetClass) == true
+            }
 
     private fun KtExpression.isCurrentReceiver(
         equalsFunction: KtNamedFunction,
