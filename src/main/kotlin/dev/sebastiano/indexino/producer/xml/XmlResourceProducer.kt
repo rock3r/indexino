@@ -37,6 +37,7 @@ internal class XmlResourceProducer : IndexProducer {
 
     private fun parse(indexedSource: IndexedSource, source: String, store: CodeIndexStore) {
         val relativePath = indexedSource.path
+        val sourcePositions = XmlSourcePositions(source)
         val pathResource = resourceFromPath(relativePath)
         if (pathResource != null && pathResource.type != "values") {
             putResource(store, indexedSource, pathResource.type, pathResource.name, 1, 1)
@@ -62,7 +63,7 @@ internal class XmlResourceProducer : IndexProducer {
                                     reader.getAttributeValue(null, "name"),
                                 )
                                 ?.let {
-                                    val declarationPosition = sourcePosition(source, elementStart)
+                                    val declarationPosition = sourcePositions.at(elementStart)
                                     putResource(
                                         store,
                                         indexedSource,
@@ -83,7 +84,7 @@ internal class XmlResourceProducer : IndexProducer {
                                 store,
                                 indexedSource,
                                 source.substring(rawAttribute.valueStart, rawAttribute.valueEnd),
-                                source,
+                                sourcePositions,
                                 rawAttribute.valueStart,
                             )
                         }
@@ -92,7 +93,7 @@ internal class XmlResourceProducer : IndexProducer {
                 }
             }
             reader.close()
-            indexTextReferences(store, indexedSource, source)
+            indexTextReferences(store, indexedSource, source, sourcePositions)
         } catch (exception: XMLStreamException) {
             throw IllegalArgumentException("$relativePath: ${exception.message}", exception)
         }
@@ -102,13 +103,13 @@ internal class XmlResourceProducer : IndexProducer {
         store: CodeIndexStore,
         indexedSource: IndexedSource,
         rawValue: String,
-        source: String,
+        sourcePositions: XmlSourcePositions,
         valueOffset: Int,
     ) {
-        val decodedValue = decodeXml(rawValue)
+        val decodedValue = decodeXml(rawValue, sourcePositions.isXml11)
         RESOURCE_REFERENCE.findAll(decodedValue.value).forEach { match ->
             val rawMatchOffset = decodedValue.rawOffsets[match.range.first]
-            val position = sourcePosition(source, valueOffset + rawMatchOffset)
+            val position = sourcePositions.at(valueOffset + rawMatchOffset)
             indexMatch(store, indexedSource, match, position)
         }
     }
@@ -117,7 +118,7 @@ internal class XmlResourceProducer : IndexProducer {
         store: CodeIndexStore,
         indexedSource: IndexedSource,
         value: String,
-        source: String,
+        sourcePositions: XmlSourcePositions,
         valueOffset: Int,
     ) {
         RESOURCE_REFERENCE.findAll(value).forEach { match ->
@@ -125,7 +126,7 @@ internal class XmlResourceProducer : IndexProducer {
                 store,
                 indexedSource,
                 match,
-                sourcePosition(source, valueOffset + match.range.first),
+                sourcePositions.at(valueOffset + match.range.first),
             )
         }
     }
@@ -172,6 +173,7 @@ internal class XmlResourceProducer : IndexProducer {
         store: CodeIndexStore,
         indexedSource: IndexedSource,
         source: String,
+        sourcePositions: XmlSourcePositions,
     ) {
         var textStart = 0
         while (textStart < source.length) {
@@ -182,7 +184,7 @@ internal class XmlResourceProducer : IndexProducer {
                     store,
                     indexedSource,
                     source.substring(textStart, markupStart),
-                    source,
+                    sourcePositions,
                     textStart,
                 )
             }
@@ -197,7 +199,7 @@ internal class XmlResourceProducer : IndexProducer {
                     store,
                     indexedSource,
                     source.substring(contentStart, contentEnd),
-                    source,
+                    sourcePositions,
                     contentStart,
                 )
                 textStart = (contentEnd + CDATA_END.length).coerceAtMost(source.length)
@@ -248,38 +250,6 @@ internal class XmlResourceProducer : IndexProducer {
         else "$prefix:${getAttributeLocalName(index)}"
     }
 
-    private fun sourcePosition(source: String, offset: Int): SourcePosition {
-        var line = 1
-        var column = 1
-        var sourceOffset = 0
-        while (sourceOffset < offset) {
-            when (source[sourceOffset]) {
-                '\r' -> {
-                    line++
-                    column = 1
-                    sourceOffset +=
-                        if (sourceOffset + 1 < offset && source[sourceOffset + 1] == '\n') 2 else 1
-                }
-                '\n' -> {
-                    line++
-                    column = 1
-                    sourceOffset++
-                }
-                '\u0085',
-                '\u2028' -> {
-                    line++
-                    column = 1
-                    sourceOffset++
-                }
-                else -> {
-                    column++
-                    sourceOffset++
-                }
-            }
-        }
-        return SourcePosition(line, column)
-    }
-
     private fun valuesResource(element: String, itemType: String?, name: String?): ResourceName? {
         if (name.isNullOrBlank()) {
             return null
@@ -311,6 +281,34 @@ internal class XmlResourceProducer : IndexProducer {
         listOfNotNull("res", packageName, type, name).joinToString(":")
 
     private data class ResourceName(val type: String, val name: String)
+
+    private class XmlSourcePositions(source: String) {
+        val isXml11: Boolean = XML_11_DECLARATION.containsMatchIn(source)
+        private val lineStarts = buildList {
+            add(0)
+            var offset = 0
+            while (offset < source.length) {
+                when {
+                    source[offset] == '\r' -> {
+                        offset += if (source.getOrNull(offset + 1) == '\n') 2 else 1
+                        add(offset)
+                    }
+                    source[offset] == '\n' ||
+                        (isXml11 && (source[offset] == '\u0085' || source[offset] == '\u2028')) -> {
+                        offset++
+                        add(offset)
+                    }
+                    else -> offset++
+                }
+            }
+        }
+
+        fun at(offset: Int): SourcePosition {
+            val searchResult = lineStarts.binarySearch(offset)
+            val lineIndex = if (searchResult >= 0) searchResult else -searchResult - 2
+            return SourcePosition(lineIndex + 1, offset - lineStarts[lineIndex] + 1)
+        }
+    }
 
     private data class SourcePosition(val line: Int, val column: Int)
 
@@ -353,7 +351,7 @@ private fun startTagEndOffset(source: String, elementStart: Int): Int {
     return source.lastIndex
 }
 
-private fun decodeXml(rawValue: String): DecodedXml {
+private fun decodeXml(rawValue: String, isXml11: Boolean): DecodedXml {
     val decoded = StringBuilder(rawValue.length)
     val rawOffsets = mutableListOf<Int>()
     var rawOffset = 0
@@ -375,7 +373,7 @@ private fun decodeXml(rawValue: String): DecodedXml {
                 rawOffsets += rawOffset
                 rawOffset += if (rawValue.getOrNull(rawOffset + 1) == '\n') 2 else 1
             }
-            rawValue[rawOffset] == '\u0085' || rawValue[rawOffset] == '\u2028' -> {
+            isXml11 && (rawValue[rawOffset] == '\u0085' || rawValue[rawOffset] == '\u2028') -> {
                 decoded.append('\n')
                 rawOffsets += rawOffset
                 rawOffset++
@@ -509,3 +507,4 @@ private const val CDATA_START = "<![CDATA["
 private const val CDATA_END = "]]>"
 private val XML_PREDEFINED_ENTITIES =
     mapOf("amp" to "&", "lt" to "<", "gt" to ">", "quot" to "\"", "apos" to "'")
+private val XML_11_DECLARATION = Regex("^<\\?xml\\s+version\\s*=\\s*(['\"])1\\.1\\1")
