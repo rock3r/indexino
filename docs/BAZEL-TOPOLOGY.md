@@ -38,7 +38,9 @@ Prefer these over whole-repo scans.
 
 ```bash
 # Target-only source set (`TopologyRequest.includeDeps = false`)
-bazel query "labels(srcs, //plugins/foo/ui:ui)" --output=label
+bazel query \
+  "labels(srcs, //plugins/foo/ui:ui) union labels(resource_files, //plugins/foo/ui:ui)" \
+  --output=label
 
 # Dependency source closure (`TopologyRequest.includeDeps = true`)
 bazel query "kind('source file', deps(//plugins/foo/ui:ui))" --output=label \
@@ -69,9 +71,10 @@ unless `--include-tests`.
 When Bazel is unavailable (default CI path uses mock query fixtures instead):
 
 1. Parse `BUILD` / `BUILD.bazel` under the target package directory
-2. Recognize Kotlin/Java files in `srcs` and XML in Android `resource_files`
-3. Expand literal entries and `glob([...])` patterns into workspace-relative paths
-4. Set manifest `topology` to `build-parse`
+2. Select the requested rule by its `name`; fail rather than indexing sibling rules when absent
+3. Recognize Kotlin/Java files in `srcs` and XML in Android `resource_files`
+4. Expand literal entries and `glob([...])` patterns into workspace-relative paths
+5. Set manifest `topology` to `build-parse`
 
 When a dependency-closure query fails (for example in a partial checkout), Indexino retries with
 `labels(srcs, $target)`. When that target-only query itself fails, Indexino retries with BUILD

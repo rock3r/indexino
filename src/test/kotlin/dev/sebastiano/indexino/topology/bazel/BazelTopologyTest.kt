@@ -3,7 +3,10 @@ package dev.sebastiano.indexino.topology.bazel
 import dev.sebastiano.indexino.topology.BuildSystem
 import dev.sebastiano.indexino.topology.TopologyRequest
 import dev.sebastiano.indexino.topology.TopologyResolver
+import java.nio.file.Files
 import kotlin.io.path.Path
+import kotlin.io.path.createTempDirectory
+import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -66,7 +69,13 @@ class BazelTopologyTest {
                 bazelProcessRunner = successfulRunner(queries),
             )
 
-        assertEquals(listOf("labels(srcs, //plugins/foo/ui:ui)"), queries)
+        assertEquals(
+            listOf(
+                "labels(srcs, //plugins/foo/ui:ui) union " +
+                    "labels(resource_files, //plugins/foo/ui:ui)"
+            ),
+            queries,
+        )
         assertEquals(false, result.includeDeps)
     }
 
@@ -95,4 +104,32 @@ class BazelTopologyTest {
             queries += query
             BazelQueryOutcome(0, listOf("//plugins/foo/ui:src/main/kotlin/Panel.kt"))
         }
+
+    @Test
+    fun `build parse fallback selects only the requested target`() {
+        val workspace = createTempDirectory("bazel-target-fallback-")
+        val packageDir = workspace.resolve("pkg")
+        Files.createDirectories(packageDir.resolve("src"))
+        packageDir.resolve("src/A.kt").writeText("class A")
+        packageDir.resolve("src/B.kt").writeText("class B")
+        packageDir
+            .resolve("BUILD.bazel")
+            .writeText(
+                """
+                kt_jvm_library(
+                    name = "a",
+                    srcs = ["src/A.kt"],
+                )
+                kt_jvm_library(
+                    name = "b",
+                    srcs = ["src/B.kt"],
+                )
+                """
+                    .trimIndent()
+            )
+
+        val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
+
+        assertEquals(listOf("//pkg:src/A.kt"), labels)
+    }
 }

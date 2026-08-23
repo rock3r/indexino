@@ -61,7 +61,11 @@ internal object BazelTopology {
         onStderr: (String) -> Unit = { System.err.println(it) },
     ): BazelQueryResult {
         val primaryQuery =
-            if (includeDeps) "kind('source file', deps($target))" else "labels(srcs, $target)"
+            if (includeDeps) {
+                "kind('source file', deps($target))"
+            } else {
+                "labels(srcs, $target) union labels(resource_files, $target)"
+            }
         val primary = runner.run(primaryQuery, workspace)
         if (primary.exitCode == 0) {
             return BazelQueryResult(primary.lines, includeDeps = includeDeps)
@@ -115,7 +119,12 @@ internal object BazelTopology {
             sequenceOf("BUILD.bazel", "BUILD")
                 .map { packageDir.resolve(it) }
                 .firstOrNull { it.exists() } ?: error("No BUILD file under $packageDir")
-        val parseResult = BuildFileParser.parseKotlinSources(buildFile, workspace)
+        val targetName =
+            target.substringAfter(
+                ':',
+                missingDelimiterValue = target.removePrefix("//").substringAfterLast('/'),
+            )
+        val parseResult = BuildFileParser.parseKotlinSources(buildFile, workspace, targetName)
         parseResult.warnings.forEach(onStderr)
         if (parseResult.paths.isEmpty()) {
             onStderr("build-parse: no Kotlin sources found for $target under $packagePath")

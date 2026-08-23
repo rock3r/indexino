@@ -21,11 +21,17 @@ internal object BuildFileParser {
     private val RESOURCE_FILES_ASSIGNMENT = Regex("""resource_files\s*=""")
     private val INDEXABLE_EXTENSIONS = setOf("kt", "java", "xml")
 
-    fun parseKotlinSources(buildFile: Path, workspaceRoot: Path): BuildParseResult {
+    fun parseKotlinSources(
+        buildFile: Path,
+        workspaceRoot: Path,
+        targetName: String? = null,
+    ): BuildParseResult {
         val packageDir = checkNotNull(buildFile.parent) { "BUILD file has no parent: $buildFile" }
         val packageRelative = workspaceRoot.relativize(packageDir).toString().replace('\\', '/')
         val packagePrefix = packageRelative.takeIf { it.isNotBlank() }?.plus('/').orEmpty()
-        val content = buildFile.readText()
+        val content =
+            targetName?.let { BuildTargetSelector.select(buildFile.readText(), it) }
+                ?: buildFile.readText()
         val paths = linkedSetOf<String>()
         val warnings = mutableListOf<String>()
 
