@@ -14,6 +14,7 @@ import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.psi.KtFunction
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
 import org.jetbrains.kotlin.psi.KtNamedFunction
+import org.jetbrains.kotlin.psi.KtParenthesizedExpression
 import org.jetbrains.kotlin.psi.KtProperty
 import org.jetbrains.kotlin.psi.KtSafeQualifiedExpression
 import org.jetbrains.kotlin.psi.KtThisExpression
@@ -43,7 +44,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
             )
         }
 
-        functions["equals"]?.let { checkEquals(it, properties) }
+        functions["equals"]?.let { checkEquals(it, properties, klass.name) }
         functions["hashCode"]?.let { checkDirectPropertyUsage(it, properties) }
         functions["toString"]?.let { checkDirectPropertyUsage(it, properties) }
     }
@@ -105,7 +106,11 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
         }
     }
 
-    private fun checkEquals(function: KtNamedFunction, properties: Set<String>) {
+    private fun checkEquals(
+        function: KtNamedFunction,
+        properties: Set<String>,
+        receiverLabel: String?,
+    ) {
         val otherParameter = function.valueParameters.singleOrNull()?.name ?: return
         val comparedProperties =
             function.bodyExpression
@@ -115,7 +120,12 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
                 }
                 ?.flatMap { expression ->
                     properties.filter { property ->
-                        expression.comparesReceiverAndOtherProperty(otherParameter, property)
+                        expression.comparesReceiverAndOtherProperty(
+                            function,
+                            otherParameter,
+                            property,
+                            receiverLabel,
+                        )
                     }
                 }
                 .orEmpty()
@@ -134,23 +144,38 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
     }
 
     private fun KtBinaryExpression.comparesReceiverAndOtherProperty(
+        equalsFunction: KtNamedFunction,
         otherParameter: String,
         property: String,
+        receiverLabel: String?,
     ): Boolean {
         val left = left ?: return false
         val right = right ?: return false
-        return (left.isReceiverProperty(property) &&
-            right.isOtherProperty(otherParameter, property)) ||
-            (right.isReceiverProperty(property) && left.isOtherProperty(otherParameter, property))
+        return (left.isReceiverProperty(property, receiverLabel) &&
+            right.isOtherProperty(equalsFunction, otherParameter, property)) ||
+            (right.isReceiverProperty(property, receiverLabel) &&
+                left.isOtherProperty(equalsFunction, otherParameter, property))
     }
 
-    private fun KtExpression.isReceiverProperty(property: String): Boolean =
-        (isName(property) && !isShadowed(property)) ||
-            (this is KtDotQualifiedExpression &&
-                receiverExpression is KtThisExpression &&
-                selectorExpression?.isName(property) == true)
+    private fun KtExpression.isReceiverProperty(property: String, receiverLabel: String?): Boolean =
+        when (this) {
+            is KtParenthesizedExpression ->
+                expression?.isReceiverProperty(property, receiverLabel) == true
+            else ->
+                (isName(property) && !isShadowed(property)) ||
+                    (this is KtDotQualifiedExpression &&
+                        receiverExpression.isCurrentReceiver(receiverLabel) &&
+                        selectorExpression?.isName(property) == true)
+        }
 
-    private fun KtExpression.isShadowed(property: String): Boolean =
+    private fun KtExpression.isCurrentReceiver(receiverLabel: String?): Boolean =
+        this is KtThisExpression &&
+            (text == "this" || (receiverLabel != null && text == "this@$receiverLabel"))
+
+    private fun KtExpression.isShadowed(
+        property: String,
+        ignoredFunction: KtFunction? = null,
+    ): Boolean =
         generateSequence(parent) { it.parent }
             .any { ancestor ->
                 when (ancestor) {
@@ -158,20 +183,33 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
                         ancestor.statements.filterIsInstance<KtProperty>().any {
                             it.name == property && it.textOffset < textOffset
                         }
-                    is KtFunction -> ancestor.valueParameters.any { it.name == property }
+                    is KtFunction ->
+                        ancestor !== ignoredFunction &&
+                            ancestor.valueParameters.any { it.name == property }
                     else -> false
                 }
             }
 
-    private fun KtExpression.isOtherProperty(otherParameter: String, property: String): Boolean =
-        ((this as? KtDotQualifiedExpression)?.let {
-            it.receiverExpression.isName(otherParameter) &&
-                it.selectorExpression?.isName(property) == true
-        } == true) ||
-            ((this as? KtSafeQualifiedExpression)?.let {
-                it.receiverExpression.isName(otherParameter) &&
-                    it.selectorExpression?.isName(property) == true
-            } == true)
+    private fun KtExpression.isOtherProperty(
+        equalsFunction: KtNamedFunction,
+        otherParameter: String,
+        property: String,
+    ): Boolean =
+        when (this) {
+            is KtParenthesizedExpression ->
+                expression?.isOtherProperty(equalsFunction, otherParameter, property) == true
+            else ->
+                ((this as? KtDotQualifiedExpression)?.let {
+                    it.receiverExpression.isName(otherParameter) &&
+                        !it.receiverExpression.isShadowed(otherParameter, equalsFunction) &&
+                        it.selectorExpression?.isName(property) == true
+                } == true) ||
+                    ((this as? KtSafeQualifiedExpression)?.let {
+                        it.receiverExpression.isName(otherParameter) &&
+                            !it.receiverExpression.isShadowed(otherParameter, equalsFunction) &&
+                            it.selectorExpression?.isName(property) == true
+                    } == true)
+        }
 
     private fun checkDirectPropertyUsage(function: KtNamedFunction, properties: Set<String>) {
         val referencedNames =

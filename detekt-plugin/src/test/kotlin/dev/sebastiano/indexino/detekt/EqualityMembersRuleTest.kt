@@ -103,6 +103,64 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `labeled outer receiver does not count as class receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class Outer(val value: String) {
+                        inner class Inner(val value: String) {
+                            override fun equals(other: Any?): Boolean =
+                                other is Inner && this@Outer.value == other.value
+
+                            override fun hashCode(): Int = value.hashCode()
+
+                            override fun toString(): String = "Inner(value=${'$'}value)"
+                        }
+
+                        override fun equals(other: Any?): Boolean =
+                            other is Outer && value == other.value
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "Outer(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
+    fun `shadowed other parameter does not count as equals peer`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class ShadowedOther(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is ShadowedOther &&
+                                listOf(other).any { other -> value == other.value }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "ShadowedOther(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `name-only overloads do not satisfy required overrides`() {
         val findings =
             rule()
@@ -141,6 +199,29 @@ class EqualityMembersRuleTest {
 
                         override fun toString(): String =
                             "Complete(value=${'$'}value, count=${'$'}count)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
+    fun `parenthesized operands preserve valid structural comparison`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class Parenthesized(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is Parenthesized && (value) == (other.value)
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "Parenthesized(value=${'$'}value)"
                     }
                     """
                         .trimIndent()
