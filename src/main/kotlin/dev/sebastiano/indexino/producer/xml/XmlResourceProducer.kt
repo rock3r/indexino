@@ -45,14 +45,13 @@ internal class XmlResourceProducer : IndexProducer {
         try {
             val reader = factory.createXMLStreamReader(StringReader(source))
             var depth = 0
-            var elementSearchOffset = 0
             while (reader.hasNext()) {
                 when (reader.next()) {
                     XMLStreamConstants.START_ELEMENT -> {
                         depth++
-                        val elementStart = nextStartElementOffset(source, elementSearchOffset)
+                        val elementStart =
+                            elementStartOffset(source, reader.location.characterOffset)
                         val elementEnd = startTagEndOffset(source, elementStart)
-                        elementSearchOffset = elementEnd + 1
                         val declarationPosition = sourcePosition(source, elementStart)
                         if (pathResource?.type == "values" && depth == RESOURCE_CHILD_DEPTH) {
                             valuesResource(
@@ -77,7 +76,7 @@ internal class XmlResourceProducer : IndexProducer {
                                     source,
                                     elementStart,
                                     elementEnd + 1,
-                                    reader.getAttributeLocalName(attributeIndex),
+                                    reader.attributeQualifiedName(attributeIndex),
                                 )
                             indexAttribute(
                                 store,
@@ -173,12 +172,9 @@ internal class XmlResourceProducer : IndexProducer {
         )
     }
 
-    private fun nextStartElementOffset(source: String, fromIndex: Int): Int {
-        var offset = source.indexOf('<', fromIndex)
-        while (offset >= 0 && source.getOrNull(offset + 1) in setOf('/', '!', '?')) {
-            offset = source.indexOf('<', offset + 1)
-        }
-        return offset.coerceAtLeast(0)
+    private fun elementStartOffset(source: String, characterOffset: Int): Int {
+        val searchFrom = (characterOffset - 1).coerceIn(0, source.lastIndex)
+        return source.lastIndexOf('<', searchFrom).coerceAtLeast(0)
     }
 
     private fun startTagEndOffset(source: String, elementStart: Int): Int {
@@ -200,17 +196,23 @@ internal class XmlResourceProducer : IndexProducer {
         source: String,
         elementStart: Int,
         characterOffset: Int,
-        localName: String,
+        qualifiedName: String,
     ): SourcePosition {
         val elementEnd = characterOffset.coerceIn(elementStart, source.length)
         val startTag = source.substring(elementStart, elementEnd)
         val attribute =
-            Regex("(?:[A-Za-z_][\\w.-]*:)?${Regex.escape(localName)}\\s*=").find(startTag)
+            Regex("(?<![A-Za-z0-9_.:-])${Regex.escape(qualifiedName)}\\s*=").find(startTag)
         val quoteStart = attribute?.let {
             startTag.indexOfAny(charArrayOf('\'', '\"'), it.range.last + 1)
         }
         val valueStart = quoteStart?.takeIf { it >= 0 }?.plus(1) ?: 0
         return sourcePosition(source, elementStart + valueStart)
+    }
+
+    private fun javax.xml.stream.XMLStreamReader.attributeQualifiedName(index: Int): String {
+        val prefix = getAttributePrefix(index)
+        return if (prefix.isNullOrBlank()) getAttributeLocalName(index)
+        else "$prefix:${getAttributeLocalName(index)}"
     }
 
     private fun sourcePosition(source: String, offset: Int): SourcePosition {

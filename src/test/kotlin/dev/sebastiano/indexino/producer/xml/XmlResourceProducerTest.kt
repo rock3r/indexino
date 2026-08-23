@@ -22,6 +22,8 @@ class XmlResourceProducerTest {
         val values =
             """
             <resources>
+                <!-- <fake> -->
+                <![CDATA[<also-fake>]]>
                 <string
                     name="title">Title</string>
             </resources>
@@ -29,9 +31,12 @@ class XmlResourceProducerTest {
                 .trimIndent()
         val layout =
             """
-            <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android">
+            <LinearLayout
+                xmlns:android="http://schemas.android.com/apk/res/android"
+                xmlns:tools="http://schemas.android.com/tools">
                 <TextView
-                    android:id="@+id/title" />
+                    android:id="@+id/title"
+                    tools:id="@+id/preview_title" />
             </LinearLayout>
             """
                 .trimIndent()
@@ -58,12 +63,19 @@ class XmlResourceProducerTest {
             assertTrue(encodedSymbols.any { "\"name\":\"main\"" in it && "\"column\":1" in it })
             assertTrue(
                 encodedSymbols.any {
-                    "\"name\":\"title\"" in it && "\"line\":2" in it && "\"column\":5" in it
+                    "\"name\":\"title\"" in it && "\"line\":4" in it && "\"column\":5" in it
                 }
             )
             assertTrue(
                 encodedSymbols.any {
-                    "\"name\":\"title\"" in it && "\"line\":3" in it && "\"column\":21" in it
+                    "\"name\":\"title\"" in it && "\"line\":5" in it && "\"column\":21" in it
+                }
+            )
+            assertTrue(
+                encodedSymbols.any {
+                    "\"name\":\"preview_title\"" in it &&
+                        "\"line\":6" in it &&
+                        "\"column\":19" in it
                 }
             )
         }
