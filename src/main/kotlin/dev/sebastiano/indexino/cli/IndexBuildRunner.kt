@@ -105,7 +105,6 @@ internal class IndexBuildRunner(
                 mount.root.toRealPath() to (mount.originId to mount.expectedRevision)
             }
         val sources = resolveSources(sourceFiles, topologyResult.externalSources)
-        val sourceSnapshot = SourceContentSnapshot.capture(sources)
         latestSourceFiles = sourceFiles
         latestSources = sources
         latestTopologyRoots = (listOf(project) + topologyResult.externalMounts).distinct()
@@ -119,6 +118,7 @@ internal class IndexBuildRunner(
             machineProgress?.failed(CliExitCodes.INVALID_ARGUMENTS, message)
             return CliExitCodes.INVALID_ARGUMENTS
         }
+        val sourceSnapshot = SourceContentSnapshot.capture(sources)
         val pluginCoordinates = pluginRegistry.selectedCoordinates(applications)
         machineProgress?.discoveryCompleted(sources.size)
         val commit = GitHeadResolver.resolve(project)
