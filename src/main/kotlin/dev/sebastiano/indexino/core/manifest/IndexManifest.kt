@@ -22,6 +22,7 @@ internal data class IndexManifestOrigin(
 internal data class IndexManifest(
     val commit: String,
     val indexerVersion: String,
+    val basicFactSchemaVersion: Int = 1,
     val scope: String,
     val topology: String,
     val includeDeps: Boolean = true,

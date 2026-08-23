@@ -8,6 +8,7 @@ import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import com.github.ajalt.clikt.parameters.types.file
 import dev.sebastiano.indexino.api.InProcessCacheLayout
+import dev.sebastiano.indexino.core.BASIC_FACT_SCHEMA_VERSION
 import dev.sebastiano.indexino.core.Version
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.git.GitHeadResolver
@@ -101,7 +102,11 @@ internal class StatusCommand : CliktCommand(name = "status") {
             !explicitlySelectedScope ||
                 (requestedScope == manifest.scope &&
                     topologyRequest.includeDeps == manifest.includeDeps)
-        val fresh = available && compatibleScope && manifest.commit == commit
+        val fresh =
+            available &&
+                compatibleScope &&
+                manifest.commit == commit &&
+                manifest.basicFactSchemaVersion == BASIC_FACT_SCHEMA_VERSION
 
         output(
             Json.encodeToString(

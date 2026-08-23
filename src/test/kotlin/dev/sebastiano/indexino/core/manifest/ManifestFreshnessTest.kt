@@ -11,6 +11,7 @@ class ManifestFreshnessTest {
             IndexManifest(
                 commit = "abc",
                 indexerVersion = "0.1.0",
+                basicFactSchemaVersion = 3,
                 scope = "//ui:ui",
                 topology = "bazel-query",
                 includeDeps = true,
@@ -53,6 +54,13 @@ class ManifestFreshnessTest {
     }
 
     @Test
+    fun `stale when basic fact schema differs`() {
+        val manifest = sampleManifest().copy(basicFactSchemaVersion = 2)
+
+        assertFalse(ManifestFreshness.isFresh(manifest, sampleCriteria()))
+    }
+
+    @Test
     fun `stale when scope differs`() {
         val manifest = sampleManifest(scope = "//a:ui")
         val criteria = sampleCriteria(scope = "//b:ui")
@@ -82,6 +90,7 @@ class ManifestFreshnessTest {
         IndexManifest(
             commit = "abc",
             indexerVersion = "0.1.0",
+            basicFactSchemaVersion = 3,
             scope = scope,
             topology = "bazel-query",
             includeDeps = includeDeps,
