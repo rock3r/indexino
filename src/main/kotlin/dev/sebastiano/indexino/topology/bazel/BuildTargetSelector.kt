@@ -2,6 +2,7 @@ package dev.sebastiano.indexino.topology.bazel
 
 internal object BuildTargetSelector {
     private val RULE_CALL = Regex("""(?m)^\s*[A-Za-z_][A-Za-z0-9_.]*\s*\(""")
+    private val ALIAS_CALL = Regex("""^\s*alias\s*\(""")
     private val NAME_ASSIGNMENT = Regex("""(?<![A-Za-z0-9_])name\s*=\s*["']([^"']+)["']""")
     private val SOURCE_ATTRIBUTE = Regex("""(?<![A-Za-z0-9_])(?:srcs|resource_files)\s*=""")
     private val ACTUAL_ATTRIBUTE = Regex("""(?<![A-Za-z0-9_])actual\s*=""")
@@ -53,7 +54,7 @@ internal object BuildTargetSelector {
             }
 
     private fun sourceAttributes(rule: String): Sequence<MatchResult> =
-        if (rule.trimStart().startsWith("alias(")) {
+        if (isAlias(rule)) {
             ACTUAL_ATTRIBUTE.findAll(rule)
         } else {
             SOURCE_ATTRIBUTE.findAll(rule)
@@ -88,7 +89,7 @@ internal object BuildTargetSelector {
                     }
                 }
             }
-        return if (rule.trimStart().startsWith("alias(")) {
+        return if (isAlias(rule)) {
             ACTUAL_FILE.replace(normalized) { match ->
                 "${match.groupValues[1]}srcs = [\"${match.groupValues[2]}\"]"
             }
@@ -99,6 +100,8 @@ internal object BuildTargetSelector {
 
     private fun isIndexableFile(name: String): Boolean =
         name.substringAfterLast('.', missingDelimiterValue = "") in INDEXABLE_EXTENSIONS
+
+    private fun isAlias(rule: String): Boolean = ALIAS_CALL.containsMatchIn(rule)
 
     private fun isTopLevelCode(rule: String, position: Int): Boolean {
         var depth = 0

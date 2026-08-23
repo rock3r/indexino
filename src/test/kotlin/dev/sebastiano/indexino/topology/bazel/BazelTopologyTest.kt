@@ -213,6 +213,35 @@ class BazelTopologyTest {
         )
     }
 
+    @Test
+    fun `target-only query recognizes canonical label returned for shorthand alias`() {
+        val alias = "//plugins/foo/ui"
+        val canonicalAlias = "//plugins/foo/ui:ui"
+
+        val result =
+            BazelTopology.queryWithFallback(
+                target = alias,
+                workspace = Path("."),
+                includeDeps = false,
+                runner =
+                    BazelProcessRunner { query, _ ->
+                        when {
+                            query == "kind('alias rule', $alias)" ->
+                                BazelQueryOutcome(0, listOf(canonicalAlias))
+                            query == "kind('source file', labels(actual, $alias))" ->
+                                BazelQueryOutcome(0, listOf("//plugins/foo/ui:Panel.kt"))
+                            else -> BazelQueryOutcome(0, emptyList())
+                        }
+                    },
+                onStderr = {},
+            )
+
+        assertEquals(
+            listOf("plugins/foo/ui/Panel.kt"),
+            BazelQueryResultParser.parseKotlinSourcePaths(result.lines),
+        )
+    }
+
     private fun successfulRunner(queries: MutableList<String>): BazelProcessRunner =
         BazelProcessRunner { query, _ ->
             queries += query
@@ -510,6 +539,33 @@ class BazelTopologyTest {
         val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
 
         assertEquals(listOf("//pkg:Foo.kt"), labels)
+    }
+
+    @Test
+    fun `build target selection recognizes whitespace before alias parenthesis`() {
+        val workspace = createTempDirectory("bazel-target-build-spaced-alias-")
+        val packageDir = workspace.resolve("pkg")
+        Files.createDirectories(packageDir.resolve("src"))
+        packageDir.resolve("src/A.kt").writeText("class A")
+        packageDir
+            .resolve("BUILD.bazel")
+            .writeText(
+                """
+                filegroup(
+                    name = "sources",
+                    srcs = ["src/A.kt"],
+                )
+                alias (
+                    name = "a",
+                    actual = ":sources",
+                )
+                """
+                    .trimIndent()
+            )
+
+        val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
+
+        assertEquals(listOf("//pkg:src/A.kt"), labels)
     }
 
     @Test

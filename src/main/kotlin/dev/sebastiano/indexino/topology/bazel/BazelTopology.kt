@@ -107,7 +107,7 @@ internal object BazelTopology {
             if (!visited.add(current)) continue
             val aliasResult = runner.run(aliasClassificationQuery(current), workspace)
             if (aliasResult.exitCode != 0) return aliasResult
-            val isAlias = aliasResult.lines.any { line -> line == current }
+            val isAlias = aliasResult.lines.any(::isBazelLabel)
             val sourceResult = runner.run(targetSourceQuery(current, isAlias), workspace)
             if (sourceResult.exitCode != 0) return sourceResult
             sources += sourceResult.lines
