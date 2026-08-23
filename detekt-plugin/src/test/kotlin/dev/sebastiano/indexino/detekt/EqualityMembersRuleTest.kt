@@ -236,6 +236,59 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `custom receiver lambda property does not count as class receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    fun <T> T.check(block: T.() -> Boolean): Boolean = block()
+
+                    class CustomReceiver(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is CustomReceiver && other.check { value == other.value }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "CustomReceiver(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
+    fun `lambda label matching class name does not count as class receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class ShadowedLabel(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is ShadowedLabel &&
+                                other.run ShadowedLabel@ {
+                                    this@ShadowedLabel.value == other.value
+                                }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "ShadowedLabel(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `this inside local function preserves class receiver`() {
         val findings =
             rule()

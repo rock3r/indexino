@@ -16,6 +16,7 @@ import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.psi.KtForExpression
 import org.jetbrains.kotlin.psi.KtFunction
 import org.jetbrains.kotlin.psi.KtFunctionLiteral
+import org.jetbrains.kotlin.psi.KtLabeledExpression
 import org.jetbrains.kotlin.psi.KtLambdaExpression
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
 import org.jetbrains.kotlin.psi.KtNamedDeclaration
@@ -318,7 +319,13 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
                     .all {
                         (it is KtNamedFunction && it.receiverTypeReference == null) ||
                             (it is KtFunctionLiteral && !it.hasReceiverLambdaSyntax())
-                    }) || (receiverClass.name != null && text == "this@${receiverClass.name}"))
+                    }) ||
+                (receiverClass.name != null &&
+                    text == "this@${receiverClass.name}" &&
+                    generateSequence(parent) { it.parent }
+                        .takeWhile { it !== equalsFunction }
+                        .filterIsInstance<KtLabeledExpression>()
+                        .none { it.getLabelName() == receiverClass.name }))
 
     private fun KtFunctionLiteral.hasReceiverLambdaSyntax(): Boolean {
         val lambda = parent as? KtLambdaExpression ?: return true
@@ -331,10 +338,11 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
                 containingKtFile.importDirectives.any {
                     it.aliasName == "with" && it.importedFqName?.asString() == "kotlin.run"
                 }
-        return (calleeName == "with" && !aliasesNonReceiverRun) ||
-            (calleeName in setOf("run", "apply") &&
-                qualifiedCall?.selectorExpression == call &&
-                qualifiedCall.receiverExpression.text != "kotlin")
+        if (aliasesNonReceiverRun) return false
+        if (qualifiedCall?.selectorExpression == call) {
+            return qualifiedCall.receiverExpression.text != "kotlin"
+        }
+        return calleeName == "with"
     }
 
     private fun KtExpression.isShadowed(
