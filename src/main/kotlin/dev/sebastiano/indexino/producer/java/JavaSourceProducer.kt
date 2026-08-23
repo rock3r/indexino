@@ -571,6 +571,7 @@ internal class JavaSourceProducer : IndexProducer {
                     relativeFile = relativePath,
                     originId = originId,
                     line = position.line,
+                    column = position.column,
                     kind = kind,
                     name = name,
                     language = LANGUAGE,

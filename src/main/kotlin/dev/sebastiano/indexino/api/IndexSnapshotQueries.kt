@@ -45,6 +45,7 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
                             originId,
                             relativeFile,
                             line.toString(),
+                            column.toString(),
                             signature.orEmpty(),
                             kind,
                         )
@@ -54,7 +55,7 @@ internal class IndexSnapshotQueries(private val generation: WorkspaceGenerationI
 
     @OptIn(IndexinoInternalApi::class)
     fun SymbolRecord.toPublicSymbol(ownerId: SymbolId?): Symbol {
-        val location = sourceLocation(originId, relativeFile, line, null)
+        val location = sourceLocation(originId, relativeFile, line, column)
         return Symbol(
             id = definitionId(),
             name = name,

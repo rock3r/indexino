@@ -39,32 +39,52 @@ internal class XmlResourceProducer : IndexProducer {
         val relativePath = indexedSource.path
         val pathResource = resourceFromPath(relativePath)
         if (pathResource != null && pathResource.type != "values") {
-            putResource(store, indexedSource, pathResource.type, pathResource.name, 1)
+            putResource(store, indexedSource, pathResource.type, pathResource.name, 1, 1)
         }
         val factory = secureFactory()
         try {
             val reader = factory.createXMLStreamReader(StringReader(source))
             var depth = 0
+            var elementSearchOffset = 0
             while (reader.hasNext()) {
                 when (reader.next()) {
                     XMLStreamConstants.START_ELEMENT -> {
                         depth++
-                        val line = reader.location.lineNumber.coerceAtLeast(1)
+                        val elementStart = nextStartElementOffset(source, elementSearchOffset)
+                        val elementEnd = startTagEndOffset(source, elementStart)
+                        elementSearchOffset = elementEnd + 1
+                        val declarationPosition = sourcePosition(source, elementStart)
                         if (pathResource?.type == "values" && depth == RESOURCE_CHILD_DEPTH) {
                             valuesResource(
                                     reader.localName,
                                     reader.getAttributeValue(null, "type"),
                                     reader.getAttributeValue(null, "name"),
                                 )
-                                ?.let { putResource(store, indexedSource, it.type, it.name, line) }
+                                ?.let {
+                                    putResource(
+                                        store,
+                                        indexedSource,
+                                        it.type,
+                                        it.name,
+                                        declarationPosition.line,
+                                        declarationPosition.column,
+                                    )
+                                }
                         }
                         for (attributeIndex in 0 until reader.attributeCount) {
+                            val valuePosition =
+                                attributeValuePosition(
+                                    source,
+                                    elementStart,
+                                    elementEnd + 1,
+                                    reader.getAttributeLocalName(attributeIndex),
+                                )
                             indexAttribute(
                                 store,
                                 indexedSource,
                                 reader.getAttributeValue(attributeIndex),
-                                line,
-                                reader.location.columnNumber.coerceAtLeast(1) + attributeIndex,
+                                valuePosition.line,
+                                valuePosition.column,
                             )
                         }
                     }
@@ -99,7 +119,7 @@ internal class XmlResourceProducer : IndexProducer {
             val type = match.groupValues[RESOURCE_TYPE_GROUP]
             val name = match.groupValues[RESOURCE_NAME_GROUP]
             if (createsId && packageName == null && type == "id") {
-                putResource(store, indexedSource, type, name, line)
+                putResource(store, indexedSource, type, name, line, column + match.range.first)
             } else {
                 val target = resourceFqn(packageName, type, name)
                 store.put(
@@ -133,6 +153,7 @@ internal class XmlResourceProducer : IndexProducer {
         type: String,
         name: String,
         line: Int,
+        column: Int,
     ) {
         val fqn = resourceFqn(type, name)
         store.put(
@@ -141,6 +162,7 @@ internal class XmlResourceProducer : IndexProducer {
                 fqn = fqn,
                 relativeFile = indexedSource.path,
                 line = line,
+                column = column,
                 originId = indexedSource.originId,
                 kind = "resource",
                 name = name,
@@ -149,6 +171,52 @@ internal class XmlResourceProducer : IndexProducer {
                 aliases = listOf("@$type/$name"),
             ),
         )
+    }
+
+    private fun nextStartElementOffset(source: String, fromIndex: Int): Int {
+        var offset = source.indexOf('<', fromIndex)
+        while (offset >= 0 && source.getOrNull(offset + 1) in setOf('/', '!', '?')) {
+            offset = source.indexOf('<', offset + 1)
+        }
+        return offset.coerceAtLeast(0)
+    }
+
+    private fun startTagEndOffset(source: String, elementStart: Int): Int {
+        var quote: Char? = null
+        for (offset in elementStart + 1 until source.length) {
+            val character = source[offset]
+            if (quote == null && (character == '\'' || character == '\"')) {
+                quote = character
+            } else if (character == quote) {
+                quote = null
+            } else if (quote == null && character == '>') {
+                return offset
+            }
+        }
+        return source.lastIndex
+    }
+
+    private fun attributeValuePosition(
+        source: String,
+        elementStart: Int,
+        characterOffset: Int,
+        localName: String,
+    ): SourcePosition {
+        val elementEnd = characterOffset.coerceIn(elementStart, source.length)
+        val startTag = source.substring(elementStart, elementEnd)
+        val attribute =
+            Regex("(?:[A-Za-z_][\\w.-]*:)?${Regex.escape(localName)}\\s*=").find(startTag)
+        val quoteStart = attribute?.let {
+            startTag.indexOfAny(charArrayOf('\'', '\"'), it.range.last + 1)
+        }
+        val valueStart = quoteStart?.takeIf { it >= 0 }?.plus(1) ?: 0
+        return sourcePosition(source, elementStart + valueStart)
+    }
+
+    private fun sourcePosition(source: String, offset: Int): SourcePosition {
+        val lineStart = source.lastIndexOf('\n', offset - 1)
+        val line = source.substring(0, offset).count { it == '\n' } + 1
+        return SourcePosition(line, offset - lineStart)
     }
 
     private fun valuesResource(element: String, itemType: String?, name: String?): ResourceName? {
@@ -182,6 +250,8 @@ internal class XmlResourceProducer : IndexProducer {
         listOfNotNull("res", packageName, type, name).joinToString(":")
 
     private data class ResourceName(val type: String, val name: String)
+
+    private data class SourcePosition(val line: Int, val column: Int)
 
     private companion object {
         const val LANGUAGE = "xml"

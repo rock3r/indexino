@@ -101,6 +101,11 @@ Definitions remain location-qualified so overloads and duplicate configurations 
 `BasicFactSchemaVersion` is the core schema coordinate; plugin schemas are per-plugin integers
 (`PluginFactSchemaVersion`).
 
+Basic fact schema version 3 adds the mandatory persisted declaration column to symbol facts.
+Declaration and reference lines and columns are 1-based. Kotlin and Java symbols point to the
+declaration's syntactic start; XML value resources point to the opening `<`, ID resources to the
+`@+id/…` token, and path-derived resources to line 1, column 1.
+
 ## Query path (product)
 
 1. Connect to the workspace runtime (or in-process engine in early slices).

@@ -1155,6 +1155,7 @@ class InProcessIndexinoTest {
     ) {
         assertEquals(result.generation, snapshot.generation)
         assertEquals(result.revision, snapshot.revision)
+        assertEquals(3, snapshot.basicFactSchemaVersion.value)
 
         val sourceFile =
             SourceFile.of(
@@ -1188,6 +1189,17 @@ class InProcessIndexinoTest {
                 }
                 .items
                 .single()
+        assertEquals(1, actionButton.location.column)
+        val javaPanel =
+            runSuspend {
+                    snapshot.findSymbols(
+                        SymbolQuery.named("LegacyPanel"),
+                        QueryOptions.page(limit = 1),
+                    )
+                }
+                .items
+                .single()
+        assertEquals(1, javaPanel.location.column)
         val references = runSuspend {
             snapshot.findReferences(
                 ReferenceQuery.to(actionButton.id),

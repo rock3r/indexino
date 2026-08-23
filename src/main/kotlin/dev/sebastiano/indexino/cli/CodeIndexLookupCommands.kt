@@ -87,7 +87,12 @@ internal class FindSymbolCommand : CliktCommand(name = "find-symbol") {
                     (language == null || symbol.language == language)
             }
             .sortedWith(
-                compareBy(SymbolRecord::fqn, SymbolRecord::relativeFile, SymbolRecord::line)
+                compareBy(
+                    SymbolRecord::fqn,
+                    SymbolRecord::relativeFile,
+                    SymbolRecord::line,
+                    SymbolRecord::column,
+                )
             )
             .toList()
 }
@@ -212,7 +217,12 @@ internal class ResolveResourceCommand : CliktCommand(name = "resolve-resource") 
             .filterIsInstance<SymbolRecord>()
             .filter { it.fqn == "res:$type:$name" }
             .sortedWith(
-                compareBy(SymbolRecord::relativeFile, SymbolRecord::line, SymbolRecord::fqn)
+                compareBy(
+                    SymbolRecord::relativeFile,
+                    SymbolRecord::line,
+                    SymbolRecord::column,
+                    SymbolRecord::fqn,
+                )
             )
             .toList()
 }
@@ -222,6 +232,7 @@ private fun symbolRecord(symbol: dev.sebastiano.indexino.model.Symbol): SymbolRe
         fqn = symbol.aliases.lastOrNull() ?: symbol.id.value,
         relativeFile = symbol.location.file.path,
         line = symbol.location.line,
+        column = symbol.location.column ?: 1,
         kind = symbol.kind,
         name = symbol.name,
         language = symbol.language,

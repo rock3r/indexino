@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.producer.xml
 
+import dev.sebastiano.indexino.core.record.CodeIndexRecordCodec
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
@@ -16,6 +17,58 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class XmlResourceProducerTest {
+    @Test
+    fun `preserves one based declaration columns for XML symbols`() {
+        val values =
+            """
+            <resources>
+                <string
+                    name="title">Title</string>
+            </resources>
+            """
+                .trimIndent()
+        val layout =
+            """
+            <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android">
+                <TextView
+                    android:id="@+id/title" />
+            </LinearLayout>
+            """
+                .trimIndent()
+
+        withStore { store ->
+            checkNotNull(ProducerRegistry.get("xml-resources"))
+                .produce(
+                    IndexBuildContext.forInlineSources(
+                        store = store,
+                        commitHash = "columns",
+                        sourceFiles =
+                            mapOf(
+                                "src/main/res/values/strings.xml" to values,
+                                "src/main/res/layout/main.xml" to layout,
+                            ),
+                    )
+                )
+
+            val encodedSymbols =
+                store
+                    .prefixScan("res:")
+                    .map { CodeIndexRecordCodec.encode(it.second).decodeToString() }
+                    .toList()
+            assertTrue(encodedSymbols.any { "\"name\":\"main\"" in it && "\"column\":1" in it })
+            assertTrue(
+                encodedSymbols.any {
+                    "\"name\":\"title\"" in it && "\"line\":2" in it && "\"column\":5" in it
+                }
+            )
+            assertTrue(
+                encodedSymbols.any {
+                    "\"name\":\"title\"" in it && "\"line\":3" in it && "\"column\":21" in it
+                }
+            )
+        }
+    }
+
     @Test
     fun `keeps equal resource paths from separate origins distinct`() {
         val firstRoot = createTempDirectory("indexino-resource-origin-first-")

@@ -11,6 +11,26 @@ import kotlin.test.assertTrue
 
 class IndexSnapshotQueriesTest {
     @Test
+    fun `declaration columns distinguish same line symbol ids`() {
+        val queries = IndexSnapshotQueries(WorkspaceGenerationId.of("generation-a"))
+        val first =
+            SymbolRecord(
+                fqn = "sample.Value",
+                relativeFile = "Values.kt",
+                line = 1,
+                column = 1,
+                kind = "class",
+                name = "Value",
+            )
+        val second = first.copy(column = 20)
+
+        assertNotEquals(
+            with(queries) { first.definitionId() },
+            with(queries) { second.definitionId() },
+        )
+    }
+
+    @Test
     fun `materializes record locations with their source origin`() {
         val queries = IndexSnapshotQueries(WorkspaceGenerationId.of("generation-a"))
         val symbol =
@@ -18,6 +38,7 @@ class IndexSnapshotQueriesTest {
                 fqn = "android.Panel",
                 relativeFile = "src/main/kotlin/Panel.kt",
                 line = 1,
+                column = 9,
                 kind = "class",
                 name = "Panel",
                 originId = "git:android",
@@ -35,6 +56,7 @@ class IndexSnapshotQueriesTest {
         val publicReference = with(queries) { reference.toPublicReference(listOf(symbol)) }
 
         assertEquals(SourceOriginId.of("git:android"), publicSymbol.location.file.originId)
+        assertEquals(9, publicSymbol.location.column)
         assertEquals(SourceOriginId.of("git:android"), publicReference.location.file.originId)
     }
 
