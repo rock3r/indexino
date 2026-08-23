@@ -1,12 +1,12 @@
 package dev.sebastiano.indexino.topology.bazel
 
 internal object BuildTargetSelector {
-    private val RULE_CALL = Regex("""(?m)^\s*[A-Za-z_][A-Za-z0-9_.]*\s*\(""")
+    private val RULE_CALL = Regex("""(?m)^\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\(""")
     private val ALIAS_CALL = Regex("""^\s*alias\s*\(""")
     private val NAME_ASSIGNMENT = Regex("""(?<![A-Za-z0-9_])name\s*=\s*["']([^"']+)["']""")
     private val SOURCE_ATTRIBUTE = Regex("""(?<![A-Za-z0-9_])(?:srcs|resource_files)\s*=""")
     private val ACTUAL_ATTRIBUTE = Regex("""(?<![A-Za-z0-9_])actual\s*=""")
-    private val ACTUAL_FILE = Regex("""(?m)^(\s*)actual\s*=\s*["']([^"']+\.(?:kt|java|xml))["']""")
+    private val ACTUAL_FILE = Regex("""actual\s*=\s*["']([^"']+\.(?:kt|java|xml))["']""")
     private val SOURCE_LABEL = Regex("""["'](?::([^"']+)|//([^:"']*):([^"']+))["']""")
     private val INDEXABLE_EXTENSIONS = setOf("kt", "java", "xml")
 
@@ -25,7 +25,9 @@ internal object BuildTargetSelector {
                 rulesByName[name]
                     ?: error("Referenced source target ':$name' was not found in BUILD file")
             selected[name] = rule
-            sourceLabels(rule, packagePath).filter { it in rulesByName }.forEach(::addRule)
+            sourceLabels(rule, packagePath)
+                .filter { label -> rulesByName[label]?.let(::isSourceAggregator) == true }
+                .forEach(::addRule)
         }
         addRule(targetName)
         return selected.values.joinToString("\n") { rule -> normalizeFileLabels(rule, packagePath) }
@@ -90,9 +92,7 @@ internal object BuildTargetSelector {
                 }
             }
         return if (isAlias(rule)) {
-            ACTUAL_FILE.replace(normalized) { match ->
-                "${match.groupValues[1]}srcs = [\"${match.groupValues[2]}\"]"
-            }
+            ACTUAL_FILE.replace(normalized) { match -> "srcs = [\"${match.groupValues[1]}\"]" }
         } else {
             normalized
         }
@@ -102,6 +102,11 @@ internal object BuildTargetSelector {
         name.substringAfterLast('.', missingDelimiterValue = "") in INDEXABLE_EXTENSIONS
 
     private fun isAlias(rule: String): Boolean = ALIAS_CALL.containsMatchIn(rule)
+
+    private fun isSourceAggregator(rule: String): Boolean {
+        val callName = RULE_CALL.find(rule)?.groupValues?.get(1)?.substringAfterLast('.')
+        return callName == "filegroup" || callName == "alias"
+    }
 
     private fun isTopLevelCode(rule: String, position: Int): Boolean {
         var depth = 0

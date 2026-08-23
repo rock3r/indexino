@@ -569,6 +569,48 @@ class BazelTopologyTest {
     }
 
     @Test
+    fun `build target selection does not recurse into generated rules`() {
+        val workspace = createTempDirectory("bazel-target-build-generated-")
+        val packageDir = workspace.resolve("pkg")
+        Files.createDirectories(packageDir)
+        packageDir.resolve("Input.kt").writeText("class Input")
+        packageDir
+            .resolve("BUILD.bazel")
+            .writeText(
+                """
+                genrule(
+                    name = "generated",
+                    srcs = ["Input.kt"],
+                    outs = ["Generated.kt"],
+                    cmd = "cp ${'$'}< ${'$'}@",
+                )
+                kt_jvm_library(
+                    name = "a",
+                    srcs = [":generated"],
+                )
+                """
+                    .trimIndent()
+            )
+
+        val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
+
+        assertEquals(emptyList(), labels)
+    }
+
+    @Test
+    fun `build target selection preserves inline direct file aliases`() {
+        val workspace = createTempDirectory("bazel-target-build-inline-file-alias-")
+        val packageDir = workspace.resolve("pkg")
+        Files.createDirectories(packageDir)
+        packageDir.resolve("Foo.kt").writeText("class Foo")
+        packageDir.resolve("BUILD.bazel").writeText("alias(name = \"a\", actual = \":Foo.kt\")")
+
+        val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
+
+        assertEquals(listOf("//pkg:Foo.kt"), labels)
+    }
+
+    @Test
     fun `build target selection normalizes cross-package direct files`() {
         val workspace = createTempDirectory("bazel-target-cross-package-file-")
         val packageDir = workspace.resolve("pkg")
