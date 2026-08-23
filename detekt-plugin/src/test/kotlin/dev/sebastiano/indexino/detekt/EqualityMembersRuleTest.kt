@@ -103,6 +103,33 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `destructured local names do not count as receiver properties`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class DestructuredShadow(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is DestructuredShadow) return false
+                            val (value) = listOf(other.value)
+                            return value == other.value
+                        }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "DestructuredShadow(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `labeled outer receiver does not count as class receiver`() {
         val findings =
             rule()
@@ -259,6 +286,31 @@ class EqualityMembersRuleTest {
 
         assertEquals(1, findings.size)
         assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
+    fun `custom plain lambda preserves the class receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    fun <T> T.check(block: () -> Boolean): Boolean = block()
+
+                    class CustomPlainLambda(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is CustomPlainLambda && other.check { value == other.value }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "CustomPlainLambda(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
     }
 
     @Test

@@ -11,6 +11,7 @@ import org.jetbrains.kotlin.psi.KtBlockExpression
 import org.jetbrains.kotlin.psi.KtCallExpression
 import org.jetbrains.kotlin.psi.KtClass
 import org.jetbrains.kotlin.psi.KtClassOrObject
+import org.jetbrains.kotlin.psi.KtDestructuringDeclaration
 import org.jetbrains.kotlin.psi.KtDotQualifiedExpression
 import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.psi.KtForExpression
@@ -349,6 +350,17 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
         if (aliasesNonReceiverRun) return false
         if (qualifiedCall?.selectorExpression == call) {
             if (calleeName in setOf("let", "also")) return false
+            if (calleeName !in setOf("run", "apply")) {
+                val localLambdaType =
+                    containingKtFile.declarations
+                        .filterIsInstance<KtNamedFunction>()
+                        .firstOrNull { it.name == calleeName }
+                        ?.valueParameters
+                        ?.lastOrNull()
+                        ?.typeReference
+                        ?.text
+                if (localLambdaType != null) return ".()" in localLambdaType
+            }
             val receiver = qualifiedCall.receiverExpression
             return receiver.text != "kotlin" &&
                 !receiver.isCurrentReceiver(equalsFunction, receiverClass)
@@ -366,12 +378,22 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
             .any { ancestor ->
                 when (ancestor) {
                     is KtBlockExpression ->
-                        ancestor.statements.filterIsInstance<KtProperty>().any {
-                            it.name == property &&
-                                it.textOffset < textOffset &&
-                                it.initializer?.let { initializer ->
-                                    PsiTreeUtil.isAncestor(initializer, this, false)
-                                } != true
+                        ancestor.statements.any { statement ->
+                            when (statement) {
+                                is KtProperty ->
+                                    statement.name == property &&
+                                        statement.textOffset < textOffset &&
+                                        statement.initializer?.let { initializer ->
+                                            PsiTreeUtil.isAncestor(initializer, this, false)
+                                        } != true
+                                is KtDestructuringDeclaration ->
+                                    statement.entries.any { it.name == property } &&
+                                        statement.textOffset < textOffset &&
+                                        statement.initializer?.let { initializer ->
+                                            PsiTreeUtil.isAncestor(initializer, this, false)
+                                        } != true
+                                else -> false
+                            }
                         }
                     is KtFunction ->
                         ancestor !== ignoredFunction &&
