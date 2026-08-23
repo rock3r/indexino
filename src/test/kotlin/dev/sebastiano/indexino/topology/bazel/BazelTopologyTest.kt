@@ -71,8 +71,12 @@ class BazelTopologyTest {
 
         assertEquals(
             listOf(
-                "kind('source file', deps(labels(srcs, //plugins/foo/ui:ui))) union " +
-                    "kind('source file', deps(labels(resource_files, //plugins/foo/ui:ui)))"
+                "kind('source file', labels(srcs, //plugins/foo/ui:ui)) union " +
+                    "kind('source file', labels(resource_files, //plugins/foo/ui:ui)) union " +
+                    "kind('generated file', labels(srcs, //plugins/foo/ui:ui)) union " +
+                    "kind('generated file', labels(resource_files, //plugins/foo/ui:ui))",
+                "kind('filegroup rule', labels(srcs, //plugins/foo/ui:ui)) union " +
+                    "kind('filegroup rule', labels(resource_files, //plugins/foo/ui:ui))",
             ),
             queries,
         )
@@ -99,10 +103,55 @@ class BazelTopologyTest {
         assertEquals(true, result.includeDeps)
     }
 
+    @Test
+    fun `target-only query recursively expands filegroups without dependency closure`() {
+        val queries = mutableListOf<String>()
+        val target = "//plugins/foo/ui:ui"
+        val filegroup = "//plugins/foo/ui:ui_sources"
+
+        val result =
+            BazelTopology.queryWithFallback(
+                target = target,
+                workspace = Path("."),
+                includeDeps = false,
+                runner =
+                    BazelProcessRunner { query, _ ->
+                        queries += query
+                        when {
+                            query.contains("filegroup rule") &&
+                                query.contains("labels(srcs, $target)") ->
+                                BazelQueryOutcome(0, listOf(filegroup))
+                            query.contains("filegroup rule") -> BazelQueryOutcome(0, emptyList())
+                            query.contains(filegroup) ->
+                                BazelQueryOutcome(
+                                    0,
+                                    listOf("//plugins/foo/ui:src/main/kotlin/Panel.kt"),
+                                )
+                            else -> BazelQueryOutcome(0, emptyList())
+                        }
+                    },
+                onStderr = {},
+            )
+
+        assertEquals(
+            listOf("plugins/foo/ui/src/main/kotlin/Panel.kt"),
+            BazelQueryResultParser.parseKotlinSourcePaths(result.lines),
+        )
+        assertEquals(4, queries.size)
+        assertEquals(false, queries.any { it.contains("deps(") })
+    }
+
     private fun successfulRunner(queries: MutableList<String>): BazelProcessRunner =
         BazelProcessRunner { query, _ ->
             queries += query
-            BazelQueryOutcome(0, listOf("//plugins/foo/ui:src/main/kotlin/Panel.kt"))
+            BazelQueryOutcome(
+                0,
+                if (query.contains("filegroup rule")) {
+                    emptyList()
+                } else {
+                    listOf("//plugins/foo/ui:src/main/kotlin/Panel.kt")
+                },
+            )
         }
 
     @Test

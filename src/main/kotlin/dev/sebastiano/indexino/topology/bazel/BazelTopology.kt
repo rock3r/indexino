@@ -60,35 +60,58 @@ internal object BazelTopology {
         runner: BazelProcessRunner = LiveBazelProcessRunner,
         onStderr: (String) -> Unit = { System.err.println(it) },
     ): BazelQueryResult {
-        val primaryQuery =
-            if (includeDeps) {
-                "kind('source file', deps($target))"
-            } else {
-                targetOnlyQuery(target)
-            }
-        val primary = runner.run(primaryQuery, workspace)
-        if (primary.exitCode == 0) {
-            return BazelQueryResult(primary.lines, includeDeps = includeDeps)
-        }
-
         if (includeDeps) {
-            onStderr("bazel query failed ($primaryQuery); retrying with labels(srcs, $target)")
-            val fallbackQuery = targetOnlyQuery(target)
-            val fallback = runner.run(fallbackQuery, workspace)
+            val dependencyQuery = "kind('source file', deps($target))"
+            val primary = runner.run(dependencyQuery, workspace)
+            if (primary.exitCode == 0) return BazelQueryResult(primary.lines, includeDeps = true)
+
+            onStderr("bazel query failed ($dependencyQuery); retrying with labels(srcs, $target)")
+            val fallback = queryTargetOnly(target, workspace, runner)
             if (fallback.exitCode == 0) {
                 return BazelQueryResult(fallback.lines, includeDeps = false)
             }
-            onStderr("bazel query failed ($fallbackQuery); retrying with build-parse")
+            onStderr("bazel target-only query failed; retrying with build-parse")
             return BazelQueryResult(degradedSourceLabels(target, workspace, onStderr), false)
         }
 
-        onStderr("bazel query failed ($primaryQuery); retrying with build-parse")
+        val primary = queryTargetOnly(target, workspace, runner)
+        if (primary.exitCode == 0) return BazelQueryResult(primary.lines, includeDeps = false)
+
+        onStderr("bazel target-only query failed; retrying with build-parse")
         return BazelQueryResult(degradedSourceLabels(target, workspace, onStderr), false)
     }
 
-    private fun targetOnlyQuery(target: String): String =
-        "kind('source file', deps(labels(srcs, $target))) union " +
-            "kind('source file', deps(labels(resource_files, $target)))"
+    private fun queryTargetOnly(
+        target: String,
+        workspace: Path,
+        runner: BazelProcessRunner,
+    ): BazelQueryOutcome {
+        val pending = ArrayDeque<String>()
+        val visited = mutableSetOf<String>()
+        val sources = linkedSetOf<String>()
+        pending += target
+        while (pending.isNotEmpty()) {
+            val current = pending.removeFirst()
+            if (!visited.add(current)) continue
+            val sourceResult = runner.run(targetSourceQuery(current), workspace)
+            if (sourceResult.exitCode != 0) return sourceResult
+            sources += sourceResult.lines
+            val filegroupResult = runner.run(targetFilegroupQuery(current), workspace)
+            if (filegroupResult.exitCode != 0) return filegroupResult
+            pending += filegroupResult.lines
+        }
+        return BazelQueryOutcome(0, sources.toList())
+    }
+
+    private fun targetSourceQuery(target: String): String =
+        "kind('source file', labels(srcs, $target)) union " +
+            "kind('source file', labels(resource_files, $target)) union " +
+            "kind('generated file', labels(srcs, $target)) union " +
+            "kind('generated file', labels(resource_files, $target))"
+
+    private fun targetFilegroupQuery(target: String): String =
+        "kind('filegroup rule', labels(srcs, $target)) union " +
+            "kind('filegroup rule', labels(resource_files, $target))"
 
     private fun resolveTopology(executor: BazelQueryExecutor): String =
         when {
