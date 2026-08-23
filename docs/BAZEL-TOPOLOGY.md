@@ -40,9 +40,7 @@ Prefer these over whole-repo scans.
 # Target-only source set (`TopologyRequest.includeDeps = false`)
 bazel query \
   "kind('source file', labels(srcs, //plugins/foo/ui:ui)) union \
-   kind('source file', labels(resource_files, //plugins/foo/ui:ui)) union \
-   kind('generated file', labels(srcs, //plugins/foo/ui:ui)) union \
-   kind('generated file', labels(resource_files, //plugins/foo/ui:ui))" \
+   kind('source file', labels(resource_files, //plugins/foo/ui:ui))" \
   --output=label
 
 # Discover direct source aggregators; repeat both queries for returned filegroups.

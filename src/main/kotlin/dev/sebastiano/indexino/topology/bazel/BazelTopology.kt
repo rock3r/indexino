@@ -5,7 +5,11 @@ import java.nio.file.Path
 import kotlin.io.path.exists
 import kotlin.io.path.isDirectory
 
-internal data class BazelQueryResult(val lines: List<String>, val includeDeps: Boolean)
+internal data class BazelQueryResult(
+    val lines: List<String>,
+    val includeDeps: Boolean,
+    val topology: String = "bazel-query",
+)
 
 internal object BazelTopology {
     fun defaultExecutor(
@@ -38,7 +42,7 @@ internal object BazelTopology {
             val queryResult = queryWithFallback(target, workspace, includeDeps, runner, onStderr)
             return TopologyResult(
                 sourceFiles = BazelQueryResultParser.parseKotlinSourcePaths(queryResult.lines),
-                topology = "bazel-query",
+                topology = queryResult.topology,
                 includeDeps = queryResult.includeDeps,
                 scope = target,
             )
@@ -71,14 +75,22 @@ internal object BazelTopology {
                 return BazelQueryResult(fallback.lines, includeDeps = false)
             }
             onStderr("bazel target-only query failed; retrying with build-parse")
-            return BazelQueryResult(degradedSourceLabels(target, workspace, onStderr), false)
+            return BazelQueryResult(
+                degradedSourceLabels(target, workspace, onStderr),
+                includeDeps = false,
+                topology = "build-parse",
+            )
         }
 
         val primary = queryTargetOnly(target, workspace, runner)
         if (primary.exitCode == 0) return BazelQueryResult(primary.lines, includeDeps = false)
 
         onStderr("bazel target-only query failed; retrying with build-parse")
-        return BazelQueryResult(degradedSourceLabels(target, workspace, onStderr), false)
+        return BazelQueryResult(
+            degradedSourceLabels(target, workspace, onStderr),
+            includeDeps = false,
+            topology = "build-parse",
+        )
     }
 
     private fun queryTargetOnly(
@@ -98,20 +110,20 @@ internal object BazelTopology {
             sources += sourceResult.lines
             val filegroupResult = runner.run(targetFilegroupQuery(current), workspace)
             if (filegroupResult.exitCode != 0) return filegroupResult
-            pending += filegroupResult.lines
+            pending += filegroupResult.lines.filter(::isBazelLabel)
         }
         return BazelQueryOutcome(0, sources.toList())
     }
 
     private fun targetSourceQuery(target: String): String =
         "kind('source file', labels(srcs, $target)) union " +
-            "kind('source file', labels(resource_files, $target)) union " +
-            "kind('generated file', labels(srcs, $target)) union " +
-            "kind('generated file', labels(resource_files, $target))"
+            "kind('source file', labels(resource_files, $target))"
 
     private fun targetFilegroupQuery(target: String): String =
         "kind('filegroup rule', labels(srcs, $target)) union " +
             "kind('filegroup rule', labels(resource_files, $target))"
+
+    private fun isBazelLabel(line: String): Boolean = line.startsWith("//") || line.startsWith("@")
 
     private fun resolveTopology(executor: BazelQueryExecutor): String =
         when {

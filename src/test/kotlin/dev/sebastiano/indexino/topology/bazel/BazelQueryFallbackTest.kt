@@ -80,6 +80,7 @@ class BazelQueryFallbackTest {
             )
 
         assertEquals(false, lines.includeDeps)
+        assertEquals("build-parse", lines.topology)
         assertTrue(warnings.any { it.contains("build-parse") })
         assertEquals(
             listOf(
@@ -110,9 +111,7 @@ class BazelQueryFallbackTest {
             listOf(
                 "kind('source file', deps(//plugins/foo/ui:ui))",
                 "kind('source file', labels(srcs, //plugins/foo/ui:ui)) union " +
-                    "kind('source file', labels(resource_files, //plugins/foo/ui:ui)) union " +
-                    "kind('generated file', labels(srcs, //plugins/foo/ui:ui)) union " +
-                    "kind('generated file', labels(resource_files, //plugins/foo/ui:ui))",
+                    "kind('source file', labels(resource_files, //plugins/foo/ui:ui))",
             ),
             queries,
         )

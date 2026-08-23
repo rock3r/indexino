@@ -72,9 +72,7 @@ class BazelTopologyTest {
         assertEquals(
             listOf(
                 "kind('source file', labels(srcs, //plugins/foo/ui:ui)) union " +
-                    "kind('source file', labels(resource_files, //plugins/foo/ui:ui)) union " +
-                    "kind('generated file', labels(srcs, //plugins/foo/ui:ui)) union " +
-                    "kind('generated file', labels(resource_files, //plugins/foo/ui:ui))",
+                    "kind('source file', labels(resource_files, //plugins/foo/ui:ui))",
                 "kind('filegroup rule', labels(srcs, //plugins/foo/ui:ui)) union " +
                     "kind('filegroup rule', labels(resource_files, //plugins/foo/ui:ui))",
             ),
@@ -120,7 +118,7 @@ class BazelTopologyTest {
                         when {
                             query.contains("filegroup rule") &&
                                 query.contains("labels(srcs, $target)") ->
-                                BazelQueryOutcome(0, listOf(filegroup))
+                                BazelQueryOutcome(0, listOf("INFO: query completed", filegroup))
                             query.contains("filegroup rule") -> BazelQueryOutcome(0, emptyList())
                             query.contains(filegroup) ->
                                 BazelQueryOutcome(
