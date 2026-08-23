@@ -18,6 +18,8 @@ class BazelQueryFallbackTest {
                         when {
                             query == "kind('source file', deps(//plugins/foo/ui:ui))" ->
                                 BazelQueryOutcome(1, listOf("ERROR: partial checkout"))
+                            query.startsWith("kind('alias rule', //") ->
+                                BazelQueryOutcome(0, emptyList())
                             query.contains("filegroup rule") -> BazelQueryOutcome(0, emptyList())
                             query.contains("labels(srcs,") ->
                                 BazelQueryOutcome(
@@ -110,9 +112,7 @@ class BazelQueryFallbackTest {
         assertEquals(
             listOf(
                 "kind('source file', deps(//plugins/foo/ui:ui))",
-                "kind('source file', labels(srcs, //plugins/foo/ui:ui)) union " +
-                    "kind('source file', labels(resource_files, //plugins/foo/ui:ui)) union " +
-                    "kind('source file', labels(actual, //plugins/foo/ui:ui))",
+                "kind('alias rule', //plugins/foo/ui:ui)",
             ),
             queries,
         )

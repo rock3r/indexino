@@ -86,6 +86,8 @@ class IndexCommandTest {
         val fallbackRunner = BazelProcessRunner { query, _ ->
             when {
                 query.contains("deps(") -> BazelQueryOutcome(1, listOf("ERROR: partial checkout"))
+                query.startsWith("kind('alias rule', //") -> BazelQueryOutcome(0, emptyList())
+                query.contains("filegroup rule") -> BazelQueryOutcome(0, emptyList())
                 query.contains("labels(srcs,") ->
                     BazelQueryOutcome(
                         0,

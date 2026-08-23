@@ -105,28 +105,36 @@ internal object BazelTopology {
         while (pending.isNotEmpty()) {
             val current = pending.removeFirst()
             if (!visited.add(current)) continue
-            val sourceResult = runner.run(targetSourceQuery(current), workspace)
+            val aliasResult = runner.run(aliasClassificationQuery(current), workspace)
+            if (aliasResult.exitCode != 0) return aliasResult
+            val isAlias = aliasResult.lines.any { line -> line == current }
+            val sourceResult = runner.run(targetSourceQuery(current, isAlias), workspace)
             if (sourceResult.exitCode != 0) return sourceResult
             sources += sourceResult.lines
-            val filegroupResult = runner.run(targetFilegroupQuery(current), workspace)
+            val filegroupResult = runner.run(targetFilegroupQuery(current, isAlias), workspace)
             if (filegroupResult.exitCode != 0) return filegroupResult
             pending += filegroupResult.lines.filter(::isBazelLabel)
         }
         return BazelQueryOutcome(0, sources.toList())
     }
 
-    private fun targetSourceQuery(target: String): String =
-        "kind('source file', labels(srcs, $target)) union " +
-            "kind('source file', labels(resource_files, $target)) union " +
-            "kind('source file', labels(actual, $target))"
+    private fun aliasClassificationQuery(target: String): String = "kind('alias rule', $target)"
 
-    private fun targetFilegroupQuery(target: String): String =
-        "kind('filegroup rule', labels(srcs, $target)) union " +
-            "kind('filegroup rule', labels(resource_files, $target)) union " +
-            "kind('filegroup rule', labels(actual, $target)) union " +
-            "kind('alias rule', labels(srcs, $target)) union " +
-            "kind('alias rule', labels(resource_files, $target)) union " +
-            "kind('alias rule', labels(actual, $target))"
+    private fun targetSourceQuery(target: String, isAlias: Boolean): String =
+        if (isAlias) {
+            "kind('source file', labels(actual, $target))"
+        } else {
+            "kind('source file', labels(srcs, $target)) union " +
+                "kind('source file', labels(resource_files, $target))"
+        }
+
+    private fun targetFilegroupQuery(target: String, isAlias: Boolean): String {
+        val attributes = if (isAlias) listOf("actual") else listOf("srcs", "resource_files")
+        return attributes.joinToString(" union ") { attribute ->
+            "kind('filegroup rule', labels($attribute, $target)) union " +
+                "kind('alias rule', labels($attribute, $target))"
+        }
+    }
 
     private fun isBazelLabel(line: String): Boolean = line.startsWith("//") || line.startsWith("@")
 

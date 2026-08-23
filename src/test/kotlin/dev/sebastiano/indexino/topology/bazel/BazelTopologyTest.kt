@@ -71,15 +71,13 @@ class BazelTopologyTest {
 
         assertEquals(
             listOf(
+                "kind('alias rule', //plugins/foo/ui:ui)",
                 "kind('source file', labels(srcs, //plugins/foo/ui:ui)) union " +
-                    "kind('source file', labels(resource_files, //plugins/foo/ui:ui)) union " +
-                    "kind('source file', labels(actual, //plugins/foo/ui:ui))",
+                    "kind('source file', labels(resource_files, //plugins/foo/ui:ui))",
                 "kind('filegroup rule', labels(srcs, //plugins/foo/ui:ui)) union " +
-                    "kind('filegroup rule', labels(resource_files, //plugins/foo/ui:ui)) union " +
-                    "kind('filegroup rule', labels(actual, //plugins/foo/ui:ui)) union " +
                     "kind('alias rule', labels(srcs, //plugins/foo/ui:ui)) union " +
-                    "kind('alias rule', labels(resource_files, //plugins/foo/ui:ui)) union " +
-                    "kind('alias rule', labels(actual, //plugins/foo/ui:ui))",
+                    "kind('filegroup rule', labels(resource_files, //plugins/foo/ui:ui)) union " +
+                    "kind('alias rule', labels(resource_files, //plugins/foo/ui:ui))",
             ),
             queries,
         )
@@ -121,6 +119,8 @@ class BazelTopologyTest {
                     BazelProcessRunner { query, _ ->
                         queries += query
                         when {
+                            query.startsWith("kind('alias rule', //") ->
+                                BazelQueryOutcome(0, emptyList())
                             query.contains("filegroup rule") &&
                                 query.contains("labels(srcs, $target)") ->
                                 BazelQueryOutcome(0, listOf("INFO: query completed", filegroup))
@@ -140,7 +140,7 @@ class BazelTopologyTest {
             listOf("plugins/foo/ui/src/main/kotlin/Panel.kt"),
             BazelQueryResultParser.parseKotlinSourcePaths(result.lines),
         )
-        assertEquals(4, queries.size)
+        assertEquals(6, queries.size)
         assertEquals(false, queries.any { it.contains("deps(") })
     }
 
@@ -156,6 +156,10 @@ class BazelTopologyTest {
                 runner =
                     BazelProcessRunner { query, _ ->
                         when {
+                            query == "kind('alias rule', //plugins/foo/ui:ui)" ->
+                                BazelQueryOutcome(0, emptyList())
+                            query == "kind('alias rule', $alias)" ->
+                                BazelQueryOutcome(0, listOf(alias))
                             query.contains("alias rule") && query.contains("ui:ui)") ->
                                 BazelQueryOutcome(0, listOf(alias))
                             query.contains("alias rule") -> BazelQueryOutcome(0, emptyList())
@@ -181,7 +185,7 @@ class BazelTopologyTest {
             queries += query
             BazelQueryOutcome(
                 0,
-                if (query.contains("filegroup rule")) {
+                if (query.contains("filegroup rule") || query.startsWith("kind('alias rule', //")) {
                     emptyList()
                 } else {
                     listOf("//plugins/foo/ui:src/main/kotlin/Panel.kt")
@@ -415,6 +419,33 @@ class BazelTopologyTest {
                 kt_jvm_library(
                     name = "a",
                     srcs = ["//pkg:sources"],
+                )
+                """
+                    .trimIndent()
+            )
+
+        val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
+
+        assertEquals(listOf("//pkg:src/A.kt"), labels)
+    }
+
+    @Test
+    fun `build target selection follows actual for alias rules`() {
+        val workspace = createTempDirectory("bazel-target-build-alias-")
+        val packageDir = workspace.resolve("pkg")
+        Files.createDirectories(packageDir.resolve("src"))
+        packageDir.resolve("src/A.kt").writeText("class A")
+        packageDir
+            .resolve("BUILD.bazel")
+            .writeText(
+                """
+                filegroup(
+                    name = "sources",
+                    srcs = ["src/A.kt"],
+                )
+                alias(
+                    name = "a",
+                    actual = ":sources",
                 )
                 """
                     .trimIndent()

@@ -4,6 +4,7 @@ internal object BuildTargetSelector {
     private val RULE_CALL = Regex("""(?m)^\s*[A-Za-z_][A-Za-z0-9_.]*\s*\(""")
     private val NAME_ASSIGNMENT = Regex("""(?<![A-Za-z0-9_])name\s*=\s*["']([^"']+)["']""")
     private val SOURCE_ATTRIBUTE = Regex("""(?<![A-Za-z0-9_])(?:srcs|resource_files)\s*=""")
+    private val ACTUAL_ATTRIBUTE = Regex("""(?<![A-Za-z0-9_])actual\s*=""")
     private val SOURCE_LABEL = Regex("""["'](?::([^"']+)|//([^:"']+):([^"']+))["']""")
     private val INDEXABLE_EXTENSIONS = setOf("kt", "java", "xml")
 
@@ -37,7 +38,7 @@ internal object BuildTargetSelector {
     }
 
     private fun sourceLabels(rule: String, packagePath: String): Sequence<String> =
-        SOURCE_ATTRIBUTE.findAll(rule)
+        sourceAttributes(rule)
             .filter { match -> isTopLevelCode(rule, match.range.first) }
             .flatMap { match ->
                 val valueStart = match.range.last + 1
@@ -49,6 +50,13 @@ internal object BuildTargetSelector {
                     }
                     .mapNotNull { label -> sourceTargetName(label, packagePath) }
             }
+
+    private fun sourceAttributes(rule: String): Sequence<MatchResult> =
+        if (rule.trimStart().startsWith("alias(")) {
+            ACTUAL_ATTRIBUTE.findAll(rule)
+        } else {
+            SOURCE_ATTRIBUTE.findAll(rule)
+        }
 
     private fun sourceTargetName(label: MatchResult, packagePath: String): String? {
         val localName = label.groupValues[1]

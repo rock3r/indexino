@@ -38,20 +38,18 @@ Prefer these over whole-repo scans.
 
 ```bash
 # Target-only source set (`TopologyRequest.includeDeps = false`)
+bazel query "kind('alias rule', //plugins/foo/ui:ui)" --output=label
 bazel query \
   "kind('source file', labels(srcs, //plugins/foo/ui:ui)) union \
-   kind('source file', labels(resource_files, //plugins/foo/ui:ui)) union \
-   kind('source file', labels(actual, //plugins/foo/ui:ui))" \
+   kind('source file', labels(resource_files, //plugins/foo/ui:ui))" \
   --output=label
 
 # Discover direct source aggregators and aliases; repeat both queries for returned labels.
 bazel query \
   "kind('filegroup rule', labels(srcs, //plugins/foo/ui:ui)) union \
-   kind('filegroup rule', labels(resource_files, //plugins/foo/ui:ui)) union \
-   kind('filegroup rule', labels(actual, //plugins/foo/ui:ui)) union \
    kind('alias rule', labels(srcs, //plugins/foo/ui:ui)) union \
-   kind('alias rule', labels(resource_files, //plugins/foo/ui:ui)) union \
-   kind('alias rule', labels(actual, //plugins/foo/ui:ui))" \
+   kind('filegroup rule', labels(resource_files, //plugins/foo/ui:ui)) union \
+   kind('alias rule', labels(resource_files, //plugins/foo/ui:ui))" \
   --output=label
 
 # Dependency source closure (`TopologyRequest.includeDeps = true`)
@@ -59,9 +57,9 @@ bazel query "kind('source file', deps(//plugins/foo/ui:ui))" --output=label \
   | rg '\.(kt|java|xml)$' | rg '^//'
 ```
 
-The target-only traversal follows only `srcs`, `resource_files`, and alias `actual` edges. It
-recursively expands directly referenced `filegroup`s and aliases, but never applies `deps()` to
-those labels, so tools and other dependencies of generating rules cannot broaden the index.
+Each node is classified first. Normal rules follow only `srcs` and `resource_files`; alias rules
+run the equivalent source/filegroup/alias queries against `actual` instead. The traversal never
+applies `deps()`, so tools and other dependencies of generating rules cannot broaden the index.
 
 Flags:
 
