@@ -46,7 +46,6 @@ internal class XmlResourceProducer : IndexProducer {
             val reader = factory.createXMLStreamReader(StringReader(source))
             var depth = 0
             var elementSearchOffset = 0
-            var textSearchOffset = 0
             while (reader.hasNext()) {
                 when (reader.next()) {
                     XMLStreamConstants.START_ELEMENT -> {
@@ -54,7 +53,6 @@ internal class XmlResourceProducer : IndexProducer {
                         val elementStart = nextStartElementOffset(source, elementSearchOffset)
                         val elementEnd = startTagEndOffset(source, elementStart)
                         elementSearchOffset = elementEnd + 1
-                        textSearchOffset = elementEnd + 1
                         val attributeValueOffsets =
                             attributeValueOffsets(source, elementStart, elementEnd)
                         val declarationPosition = sourcePosition(source, elementStart)
@@ -81,10 +79,9 @@ internal class XmlResourceProducer : IndexProducer {
                                 checkNotNull(attributeValueOffsets[qualifiedName]) {
                                     "Missing raw XML attribute $qualifiedName in ${attributeValueOffsets.keys}"
                                 }
-                            indexAttribute(
+                            indexRawValue(
                                 store,
                                 indexedSource,
-                                reader.getAttributeValue(attributeIndex),
                                 source.substring(rawAttribute.valueStart, rawAttribute.valueEnd),
                                 source,
                                 rawAttribute.valueStart,
@@ -92,35 +89,25 @@ internal class XmlResourceProducer : IndexProducer {
                         }
                     }
                     XMLStreamConstants.END_ELEMENT -> depth--
-                    XMLStreamConstants.CHARACTERS,
-                    XMLStreamConstants.CDATA -> {
-                        textSearchOffset =
-                            indexDecodedText(
-                                store,
-                                indexedSource,
-                                reader.text,
-                                source,
-                                textSearchOffset,
-                            )
-                    }
                 }
             }
             reader.close()
+            indexTextReferences(store, indexedSource, source)
         } catch (exception: XMLStreamException) {
             throw IllegalArgumentException("$relativePath: ${exception.message}", exception)
         }
     }
 
-    private fun indexAttribute(
+    private fun indexRawValue(
         store: CodeIndexStore,
         indexedSource: IndexedSource,
-        value: String,
         rawValue: String,
         source: String,
         valueOffset: Int,
     ) {
-        RESOURCE_REFERENCE.findAll(value).forEach { match ->
-            val rawMatchOffset = rawOffsetForDecodedIndex(rawValue, match.range.first)
+        val decodedValue = decodeXml(rawValue)
+        RESOURCE_REFERENCE.findAll(decodedValue.value).forEach { match ->
+            val rawMatchOffset = decodedValue.rawOffsets[match.range.first]
             val position = sourcePosition(source, valueOffset + rawMatchOffset)
             indexMatch(store, indexedSource, match, position)
         }
@@ -164,22 +151,45 @@ internal class XmlResourceProducer : IndexProducer {
         }
     }
 
-    private fun indexDecodedText(
+    private fun indexTextReferences(
         store: CodeIndexStore,
         indexedSource: IndexedSource,
-        value: String,
         source: String,
-        fromOffset: Int,
-    ): Int {
-        var searchOffset = fromOffset
-        RESOURCE_REFERENCE.findAll(value).forEach { match ->
-            val rawOffset = nextTextTokenOffset(source, match.value, searchOffset)
-            if (rawOffset >= 0) {
-                indexMatch(store, indexedSource, match, sourcePosition(source, rawOffset))
-                searchOffset = rawOffset + match.value.length
+    ) {
+        var textStart = 0
+        while (textStart < source.length) {
+            val markupStart =
+                source.indexOf('<', textStart).let { if (it >= 0) it else source.length }
+            if (markupStart > textStart) {
+                indexRawValue(
+                    store,
+                    indexedSource,
+                    source.substring(textStart, markupStart),
+                    source,
+                    textStart,
+                )
+            }
+            if (markupStart == source.length) return
+            if (source.startsWith(CDATA_START, markupStart)) {
+                val contentStart = markupStart + CDATA_START.length
+                val contentEnd =
+                    source.indexOf(CDATA_END, contentStart).let {
+                        if (it >= 0) it else source.length
+                    }
+                indexRawValue(
+                    store,
+                    indexedSource,
+                    source.substring(contentStart, contentEnd),
+                    source,
+                    contentStart,
+                )
+                textStart = (contentEnd + CDATA_END.length).coerceAtMost(source.length)
+            } else {
+                textStart =
+                    skippedMarkupEnd(source, markupStart)
+                        ?: (startTagEndOffset(source, markupStart) + 1).coerceAtMost(source.length)
             }
         }
-        return searchOffset
     }
 
     private fun putResource(
@@ -300,60 +310,53 @@ private fun startTagEndOffset(source: String, elementStart: Int): Int {
     return source.lastIndex
 }
 
-private fun nextTextTokenOffset(source: String, token: String, fromOffset: Int): Int {
-    var searchOffset = fromOffset
-    while (searchOffset < source.length) {
-        val candidate = source.indexOf(token, searchOffset)
-        if (candidate < 0) return -1
-        val markup = source.indexOf('<', searchOffset)
-        if (markup < 0 || candidate < markup) return candidate
-        if (source.startsWith(CDATA_START, markup)) {
-            val contentStart = markup + CDATA_START.length
-            val contentEnd =
-                source.indexOf(CDATA_END, contentStart).let { if (it >= 0) it else source.length }
-            if (candidate in contentStart until contentEnd) return candidate
-            searchOffset = (contentEnd + CDATA_END.length).coerceAtMost(source.length)
-        } else {
-            searchOffset =
-                skippedMarkupEnd(source, markup)
-                    ?: (startTagEndOffset(source, markup) + 1).coerceAtMost(source.length)
-        }
-    }
-    return -1
-}
-
-private fun rawOffsetForDecodedIndex(rawValue: String, decodedIndex: Int): Int {
+private fun decodeXml(rawValue: String): DecodedXml {
+    val decoded = StringBuilder(rawValue.length)
+    val rawOffsets = mutableListOf<Int>()
     var rawOffset = 0
-    var decodedOffset = 0
-    while (decodedOffset < decodedIndex && rawOffset < rawValue.length) {
+    while (rawOffset < rawValue.length) {
         val entityEnd =
             rawValue
                 .takeIf { it[rawOffset] == '&' }
                 ?.indexOf(';', rawOffset + 1)
                 ?.takeIf { it >= 0 }
-        val entityLength = entityEnd?.let { xmlEntityDecodedLength(rawValue, rawOffset, it) }
-        if (entityEnd != null && entityLength != null) {
-            decodedOffset += entityLength
-            rawOffset = entityEnd + 1
-        } else {
-            decodedOffset++
-            rawOffset++
+        val entity = entityEnd?.let { decodeXmlEntity(rawValue, rawOffset, it) }
+        when {
+            entityEnd != null && entity != null -> {
+                decoded.append(entity)
+                repeat(entity.length) { rawOffsets += rawOffset }
+                rawOffset = entityEnd + 1
+            }
+            rawValue[rawOffset] == '\r' -> {
+                decoded.append('\n')
+                rawOffsets += rawOffset
+                rawOffset += if (rawValue.getOrNull(rawOffset + 1) == '\n') 2 else 1
+            }
+            else -> {
+                decoded.append(rawValue[rawOffset])
+                rawOffsets += rawOffset
+                rawOffset++
+            }
         }
     }
-    return rawOffset
+    return DecodedXml(decoded.toString(), rawOffsets.toIntArray())
 }
 
-private fun xmlEntityDecodedLength(rawValue: String, start: Int, end: Int): Int? {
+private fun decodeXmlEntity(rawValue: String, start: Int, end: Int): String? {
     val body = rawValue.substring(start + 1, end)
-    if (body in XML_PREDEFINED_ENTITIES) return 1
+    XML_PREDEFINED_ENTITIES[body]?.let {
+        return it
+    }
     val codePoint =
         when {
             body.startsWith("#x", ignoreCase = true) -> body.drop(2).toIntOrNull(16)
             body.startsWith('#') -> body.drop(1).toIntOrNull()
             else -> null
         }
-    return codePoint?.takeIf(Character::isValidCodePoint)?.let(Character::charCount)
+    return codePoint?.takeIf(Character::isValidCodePoint)?.let(Character::toChars)?.concatToString()
 }
+
+private data class DecodedXml(val value: String, val rawOffsets: IntArray)
 
 private fun skippedMarkupEnd(source: String, offset: Int): Int? =
     when {
@@ -423,4 +426,5 @@ private const val COMMENT_START = "<!--"
 private const val COMMENT_END = "-->"
 private const val CDATA_START = "<![CDATA["
 private const val CDATA_END = "]]>"
-private val XML_PREDEFINED_ENTITIES = setOf("amp", "lt", "gt", "quot", "apos")
+private val XML_PREDEFINED_ENTITIES =
+    mapOf("amp" to "&", "lt" to "<", "gt" to ">", "quot" to "\"", "apos" to "'")

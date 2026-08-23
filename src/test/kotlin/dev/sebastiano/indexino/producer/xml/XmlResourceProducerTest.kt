@@ -91,6 +91,7 @@ class XmlResourceProducerTest {
                 <string name="plain">@string/title</string>
                 <string name="cdata"><![CDATA[@string/title]]></string>
                 <string name="comment"><!-- @string/title -->@string/title</string>
+                <string name="entity-text">@string/foo&#95;bar</string>
             </resources>
             """
                 .trimIndent()
@@ -102,6 +103,8 @@ class XmlResourceProducerTest {
                 xmlns:android="http://schemas.android.com/apk/res/android" />
             """
                 .trimIndent()
+        val crlfLayout =
+            "<TextView xmlns:android=\"http://schemas.android.com/apk/res/android\" android:text=\"\r\n @string/title\" />"
 
         withStore { store ->
             assertNotNull(ProducerRegistry.get("xml-resources"))
@@ -113,6 +116,7 @@ class XmlResourceProducerTest {
                             mapOf(
                                 "src/main/res/values/strings.xml" to values,
                                 "src/main/res/layout/main.xml" to layout,
+                                "src/main/res/layout/crlf.xml" to crlfLayout,
                             ),
                     )
                 )
@@ -123,34 +127,13 @@ class XmlResourceProducerTest {
                     .map { it.second }
                     .filterIsInstance<ReferenceRecord>()
                     .toList()
-            assertTrue(
-                references.any {
-                    it.relativeFile.endsWith("strings.xml") && it.line == 2 && it.column == 26
-                }
-            )
-            assertTrue(
-                references.any {
-                    it.relativeFile.endsWith("strings.xml") && it.line == 3 && it.column == 35
-                }
-            )
-            assertTrue(
-                references.any {
-                    it.relativeFile.endsWith("strings.xml") && it.line == 4 && it.column == 50
-                }
-            )
-            assertTrue(
-                references.any {
-                    it.relativeFile.endsWith("main.xml") && it.line == 2 && it.column == 16
-                }
-            )
-            assertTrue(
-                references.any {
-                    it.symbolFqn == "res:string:foo_bar" &&
-                        it.relativeFile.endsWith("main.xml") &&
-                        it.line == 3 &&
-                        it.column == 19
-                }
-            )
+            assertReference(references, "res:string:title", "strings.xml", 2, 26)
+            assertReference(references, "res:string:title", "strings.xml", 3, 35)
+            assertReference(references, "res:string:title", "strings.xml", 4, 50)
+            assertReference(references, "res:string:foo_bar", "strings.xml", 5, 32)
+            assertReference(references, "res:string:title", "main.xml", 2, 16)
+            assertReference(references, "res:string:foo_bar", "main.xml", 3, 19)
+            assertReference(references, "res:string:title", "crlf.xml", 2, 2)
         }
     }
 
@@ -345,5 +328,22 @@ class XmlResourceProducerTest {
         } finally {
             store.close()
         }
+    }
+
+    private fun assertReference(
+        references: List<ReferenceRecord>,
+        symbolFqn: String,
+        fileSuffix: String,
+        line: Int,
+        column: Int,
+    ) {
+        assertTrue(
+            references.any {
+                it.symbolFqn == symbolFqn &&
+                    it.relativeFile.endsWith(fileSuffix) &&
+                    it.line == line &&
+                    it.column == column
+            }
+        )
     }
 }
