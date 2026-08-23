@@ -193,12 +193,10 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         property: String,
         receiverClass: KtClass,
     ): Boolean {
-        val calleeName = calleeExpression?.text ?: return false
         val structuralCallKind = structuralCallKind() ?: return false
         val qualifiedCall = parent as? KtQualifiedExpression
         if (
-            calleeName in setOf("equals", "contentEquals", "contentDeepEquals") &&
-                structuralCallKind == StructuralCallKind.RECEIVER &&
+            structuralCallKind == StructuralCallKind.RECEIVER &&
                 qualifiedCall?.selectorExpression == this &&
                 valueArguments.size == 1
         ) {
@@ -210,8 +208,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                     receiver.isOtherProperty(equalsFunction, otherParameter, property))
         }
         if (
-            calleeName != "equals" ||
-                structuralCallKind != StructuralCallKind.JAVA_OBJECTS ||
+            structuralCallKind != StructuralCallKind.JAVA_OBJECTS ||
                 valueArguments.size != 2 ||
                 qualifiedCall?.selectorExpression != this
         ) {
@@ -337,7 +334,6 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                 }
         if (aliasesNonReceiverRun) return false
         if (qualifiedCall?.selectorExpression == call) {
-            if (calleeName in setOf("let", "also")) return false
             if (calleeName == "with" && qualifiedCall.receiverExpression.text == "kotlin") {
                 val receiver =
                     call.valueArguments.firstOrNull()?.getArgumentExpression() ?: return true
@@ -399,7 +395,10 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                                 } != true
                         } == true
                     is KtForExpression ->
-                        ancestor.loopParameter?.name == property &&
+                        (ancestor.loopParameter?.name == property ||
+                            ancestor.destructuringDeclaration?.entries?.any {
+                                it.name == property
+                            } == true) &&
                             ancestor.body?.let { PsiTreeUtil.isAncestor(it, this, false) } == true
                     is KtCatchClause ->
                         ancestor.catchParameter?.name == property &&

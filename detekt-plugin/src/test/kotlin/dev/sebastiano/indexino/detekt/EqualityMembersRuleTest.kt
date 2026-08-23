@@ -533,6 +533,32 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `custom let receiver lambda does not count as class receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class CustomLet(val value: String) {
+                        fun let(block: CustomLet.() -> Boolean): Boolean = block()
+
+                        override fun equals(other: Any?): Boolean =
+                            other is CustomLet && other.let { value == other.value }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "CustomLet(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `stored lambda preserves the class receiver`() {
         val findings =
             rule()
@@ -968,6 +994,35 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `destructured loop variable does not count as receiver property`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class DestructuredLoop(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is DestructuredLoop) return false
+                            for ((value, _) in listOf(other.value to 0)) {
+                                return value == other.value
+                            }
+                            return false
+                        }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "DestructuredLoop(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `name-only overloads do not satisfy required overrides`() {
         val findings =
             rule()
@@ -1233,6 +1288,31 @@ class EqualityMembersRuleTest {
                         override fun toString(): String =
                             "MethodComparisons(value=${'$'}value, values=${'$'}values, " +
                                 "deepValues=${'$'}deepValues, label=${'$'}label)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
+    fun `aliased standard comparison preserves valid equality`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    import kotlin.collections.contentEquals as arraysEqual
+
+                    class AliasedComparison(val values: IntArray) {
+                        override fun equals(other: Any?): Boolean =
+                            other is AliasedComparison && values.arraysEqual(other.values)
+
+                        override fun hashCode(): Int = values.contentHashCode()
+
+                        override fun toString(): String = "AliasedComparison(values=${'$'}values)"
                     }
                     """
                         .trimIndent()
