@@ -64,7 +64,7 @@ internal object BazelTopology {
             if (includeDeps) {
                 "kind('source file', deps($target))"
             } else {
-                "labels(srcs, $target) union labels(resource_files, $target)"
+                targetOnlyQuery(target)
             }
         val primary = runner.run(primaryQuery, workspace)
         if (primary.exitCode == 0) {
@@ -73,7 +73,7 @@ internal object BazelTopology {
 
         if (includeDeps) {
             onStderr("bazel query failed ($primaryQuery); retrying with labels(srcs, $target)")
-            val fallbackQuery = "labels(srcs, $target)"
+            val fallbackQuery = targetOnlyQuery(target)
             val fallback = runner.run(fallbackQuery, workspace)
             if (fallback.exitCode == 0) {
                 return BazelQueryResult(fallback.lines, includeDeps = false)
@@ -85,6 +85,9 @@ internal object BazelTopology {
         onStderr("bazel query failed ($primaryQuery); retrying with build-parse")
         return BazelQueryResult(degradedSourceLabels(target, workspace, onStderr), false)
     }
+
+    private fun targetOnlyQuery(target: String): String =
+        "labels(srcs, $target) union labels(resource_files, $target)"
 
     private fun resolveTopology(executor: BazelQueryExecutor): String =
         when {

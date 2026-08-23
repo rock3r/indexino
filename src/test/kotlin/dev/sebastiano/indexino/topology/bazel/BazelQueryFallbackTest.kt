@@ -108,7 +108,8 @@ class BazelQueryFallbackTest {
         assertEquals(
             listOf(
                 "kind('source file', deps(//plugins/foo/ui:ui))",
-                "labels(srcs, //plugins/foo/ui:ui)",
+                "labels(srcs, //plugins/foo/ui:ui) union " +
+                    "labels(resource_files, //plugins/foo/ui:ui)",
             ),
             queries,
         )

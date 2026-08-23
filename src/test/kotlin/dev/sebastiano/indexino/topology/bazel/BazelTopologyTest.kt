@@ -132,4 +132,29 @@ class BazelTopologyTest {
 
         assertEquals(listOf("//pkg:src/A.kt"), labels)
     }
+
+    @Test
+    fun `build target selection ignores parentheses in strings and comments`() {
+        val workspace = createTempDirectory("bazel-target-delimiters-")
+        val packageDir = workspace.resolve("pkg")
+        Files.createDirectories(packageDir.resolve("src"))
+        packageDir.resolve("src/A.kt").writeText("class A")
+        packageDir
+            .resolve("BUILD.bazel")
+            .writeText(
+                """
+                kt_jvm_library(
+                    name = "a",
+                    tags = ["closing ) is data"],
+                    # A comment may contain another ).
+                    srcs = ["src/A.kt"],
+                )
+                """
+                    .trimIndent()
+            )
+
+        val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
+
+        assertEquals(listOf("//pkg:src/A.kt"), labels)
+    }
 }

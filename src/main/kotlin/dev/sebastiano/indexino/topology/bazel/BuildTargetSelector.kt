@@ -19,10 +19,24 @@ internal object BuildTargetSelector {
         if (BuildFileComments.isCommentedOutInBlock(content, match.range.first)) return null
         val openParen = match.range.last
         var depth = 0
+        var inString: Char? = null
+        var escaped = false
+        var inComment = false
         for (index in openParen until content.length) {
-            when (content[index]) {
-                '(' -> depth++
-                ')' -> {
+            val char = content[index]
+            when {
+                inComment -> inComment = char != '\n'
+                inString != null -> {
+                    when {
+                        escaped -> escaped = false
+                        char == '\\' -> escaped = true
+                        char == inString -> inString = null
+                    }
+                }
+                char == '#' -> inComment = true
+                char == '"' || char == '\'' -> inString = char
+                char == '(' -> depth++
+                char == ')' -> {
                     depth--
                     if (depth == 0) return content.substring(match.range.first, index + 1)
                 }
