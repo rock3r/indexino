@@ -52,6 +52,77 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `equals must compare receiver and other for each property`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class WrongOperands(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is WrongOperands && other.value == other.value
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "WrongOperands(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
+    fun `name-only overloads do not satisfy required overrides`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class OverloadsOnly(val value: String) {
+                        fun equals(other: OverloadsOnly): Boolean = value == other.value
+
+                        fun hashCode(seed: Int): Int = seed + value.hashCode()
+
+                        fun toString(prefix: String): String = prefix + value
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("equals, hashCode, toString"))
+    }
+
+    @Test
+    fun `valid required overrides compare every property structurally`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class Complete(val value: String, val count: Int) {
+                        override fun equals(other: Any?): Boolean =
+                            other is Complete && value == other.value && count == other.count
+
+                        override fun hashCode(): Int = 31 * value.hashCode() + count
+
+                        override fun toString(): String =
+                            "Complete(value=${'$'}value, count=${'$'}count)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `body properties participate unless explicitly excluded`() {
         val findings =
             rule()

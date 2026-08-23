@@ -6,12 +6,15 @@ import dev.detekt.api.Entity
 import dev.detekt.api.Finding
 import dev.detekt.api.Rule
 import org.jetbrains.kotlin.lexer.KtTokens
+import org.jetbrains.kotlin.psi.KtBinaryExpression
 import org.jetbrains.kotlin.psi.KtClass
 import org.jetbrains.kotlin.psi.KtDotQualifiedExpression
+import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
 import org.jetbrains.kotlin.psi.KtNamedFunction
 import org.jetbrains.kotlin.psi.KtProperty
 import org.jetbrains.kotlin.psi.KtSafeQualifiedExpression
+import org.jetbrains.kotlin.psi.KtThisExpression
 
 public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
     override fun visitClass(klass: KtClass) {
@@ -21,11 +24,12 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
         val properties = klass.equalityProperties()
         if (properties.isEmpty()) return
 
-        val functions =
-            klass.declarations
-                .filterIsInstance<KtNamedFunction>()
-                .associateBy(KtNamedFunction::getName)
-        val missingFunctions = REQUIRED_FUNCTIONS.filterNot(functions::containsKey)
+        val functions = REQUIRED_FUNCTIONS.associateWith { functionName ->
+            klass.declarations.filterIsInstance<KtNamedFunction>().firstOrNull {
+                it.isRequiredOverride(functionName)
+            }
+        }
+        val missingFunctions = REQUIRED_FUNCTIONS.filter { functions[it] == null }
         if (missingFunctions.isNotEmpty()) {
             report(
                 Finding(
@@ -82,34 +86,32 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
     private fun KtProperty.isStoredProperty(): Boolean =
         initializer != null || hasDelegate() || getter == null
 
+    private fun KtNamedFunction.isRequiredOverride(functionName: String): Boolean {
+        if (name != functionName || !hasModifier(KtTokens.OVERRIDE_KEYWORD)) return false
+        return when (functionName) {
+            "equals" ->
+                valueParameters.singleOrNull()?.typeReference?.text in setOf("Any?", "kotlin.Any?")
+            "hashCode",
+            "toString" -> valueParameters.isEmpty()
+            else -> false
+        }
+    }
+
     private fun checkEquals(function: KtNamedFunction, properties: Set<String>) {
         val otherParameter = function.valueParameters.singleOrNull()?.name ?: return
         val comparedProperties =
             function.bodyExpression
-                ?.let {
-                    PsiTreeUtil.collectElementsOfType(it, KtDotQualifiedExpression::class.java)
-                }
+                ?.let { PsiTreeUtil.collectElementsOfType(it, KtBinaryExpression::class.java) }
                 ?.filter {
-                    it.receiverExpression.isName(otherParameter) &&
-                        it.selectorExpression is KtNameReferenceExpression
+                    it.operationToken == KtTokens.EQEQ || it.operationToken == KtTokens.EXCLEQ
                 }
-                ?.mapNotNull {
-                    (it.selectorExpression as? KtNameReferenceExpression)?.getReferencedName()
+                ?.flatMap { expression ->
+                    properties.filter { property ->
+                        expression.comparesReceiverAndOtherProperty(otherParameter, property)
+                    }
                 }
                 .orEmpty()
-                .toSet() +
-                function.bodyExpression
-                    ?.let {
-                        PsiTreeUtil.collectElementsOfType(it, KtSafeQualifiedExpression::class.java)
-                    }
-                    ?.filter {
-                        it.receiverExpression.isName(otherParameter) &&
-                            it.selectorExpression is KtNameReferenceExpression
-                    }
-                    ?.mapNotNull {
-                        (it.selectorExpression as? KtNameReferenceExpression)?.getReferencedName()
-                    }
-                    .orEmpty()
+                .toSet()
 
         properties.filterNot(comparedProperties::contains).forEach { property ->
             report(
@@ -122,6 +124,33 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
             )
         }
     }
+
+    private fun KtBinaryExpression.comparesReceiverAndOtherProperty(
+        otherParameter: String,
+        property: String,
+    ): Boolean {
+        val left = left ?: return false
+        val right = right ?: return false
+        return (left.isReceiverProperty(property) &&
+            right.isOtherProperty(otherParameter, property)) ||
+            (right.isReceiverProperty(property) && left.isOtherProperty(otherParameter, property))
+    }
+
+    private fun KtExpression.isReceiverProperty(property: String): Boolean =
+        isName(property) ||
+            (this is KtDotQualifiedExpression &&
+                receiverExpression is KtThisExpression &&
+                selectorExpression?.isName(property) == true)
+
+    private fun KtExpression.isOtherProperty(otherParameter: String, property: String): Boolean =
+        ((this as? KtDotQualifiedExpression)?.let {
+            it.receiverExpression.isName(otherParameter) &&
+                it.selectorExpression?.isName(property) == true
+        } == true) ||
+            ((this as? KtSafeQualifiedExpression)?.let {
+                it.receiverExpression.isName(otherParameter) &&
+                    it.selectorExpression?.isName(property) == true
+            } == true)
 
     private fun checkDirectPropertyUsage(function: KtNamedFunction, properties: Set<String>) {
         val referencedNames =

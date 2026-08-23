@@ -1997,7 +1997,7 @@ host.abi.major == plugin.targetAbi.major</code></pre>
           resolution). Land with the module split as <code>:detekt-plugin</code>.
         </p>
         <ul>
-          <li><strong>EqualityMembersRule</strong> — require <code>equals</code>/<code>hashCode</code>/<code>toString</code>; structural check looks for <code>&lt;otherParam&gt;.property</code> (not any name reference). Properties annotated <code>@ExcludeFromEquality</code> (in <code>indexino-model</code>) are skipped. Port structural-check improvement upstream to Jewel if practical.</li>
+          <li><strong>EqualityMembersRule</strong> — require the actual <code>equals(Any?)</code>/<code>hashCode()</code>/<code>toString()</code> overrides, not same-name overloads; each equality property must appear in one comparison pairing the receiver property with <code>&lt;otherParam&gt;.property</code>. Properties annotated <code>@ExcludeFromEquality</code> (in <code>indexino-model</code>) are skipped. Port structural-check improvement upstream to Jewel if practical.</li>
           <li><strong>NoDataClassesInPublicApi</strong> — ~15 lines.</li>
           <li><strong>MissingApiStatusAnnotationRule</strong> — retarget to <code>@ExperimentalIndexinoApi</code> / <code>@IndexinoInternalApi</code>.</li>
           <li>Body-declared public stored properties in equality (before S2 freezes the fact model); honour <code>@ExcludeFromEquality</code>.</li>
