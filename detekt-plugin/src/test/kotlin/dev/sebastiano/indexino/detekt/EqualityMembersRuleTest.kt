@@ -383,6 +383,34 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `named with arguments use the mapped receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class NamedWith(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is NamedWith &&
+                                with(
+                                    block = { value == other.value },
+                                    receiver = other,
+                                )
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "NamedWith(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `unqualified receiver lambda property does not count as class receiver`() {
         val findings =
             rule()

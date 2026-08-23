@@ -347,17 +347,21 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         val qualifiedCall = call.parent as? KtQualifiedExpression
         if (qualifiedCall?.selectorExpression == call) {
             if (qualifiedCall.receiverExpression.text == "kotlin") {
-                val receiver =
-                    call.valueArguments.firstOrNull()?.getArgumentExpression() ?: return true
+                val receiver = call.receiverLambdaArgument() ?: return false
                 return !receiver.isCurrentReceiver(equalsFunction, receiverClass)
             }
             val receiver = qualifiedCall.receiverExpression
             return !receiver.isCurrentReceiver(equalsFunction, receiverClass)
         }
-        val receiver = call.valueArguments.firstOrNull()?.getArgumentExpression() ?: return false
-        if (receiver is KtLambdaExpression) return false
+        val receiver = call.receiverLambdaArgument() ?: return false
         return !receiver.isCurrentReceiver(equalsFunction, receiverClass)
     }
+
+    private fun KtCallExpression.receiverLambdaArgument(): KtExpression? =
+        valueArguments
+            .asSequence()
+            .mapNotNull { it.getArgumentExpression() }
+            .firstOrNull { it !is KtLambdaExpression }
 
     private fun KtFunctionLiteral.hasExtensionReceiver(): Boolean =
         analyze(this) { symbol.receiverParameter?.owningCallableSymbol == symbol }
