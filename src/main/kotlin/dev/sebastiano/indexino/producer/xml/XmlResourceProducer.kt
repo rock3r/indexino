@@ -45,13 +45,16 @@ internal class XmlResourceProducer : IndexProducer {
         try {
             val reader = factory.createXMLStreamReader(StringReader(source))
             var depth = 0
+            var elementSearchOffset = 0
             while (reader.hasNext()) {
                 when (reader.next()) {
                     XMLStreamConstants.START_ELEMENT -> {
                         depth++
-                        val elementStart =
-                            elementStartOffset(source, reader.location.characterOffset)
+                        val elementStart = nextStartElementOffset(source, elementSearchOffset)
                         val elementEnd = startTagEndOffset(source, elementStart)
+                        elementSearchOffset = elementEnd + 1
+                        val attributeValueOffsets =
+                            attributeValueOffsets(source, elementStart, elementEnd)
                         val declarationPosition = sourcePosition(source, elementStart)
                         if (pathResource?.type == "values" && depth == RESOURCE_CHILD_DEPTH) {
                             valuesResource(
@@ -71,32 +74,27 @@ internal class XmlResourceProducer : IndexProducer {
                                 }
                         }
                         for (attributeIndex in 0 until reader.attributeCount) {
-                            val valuePosition =
-                                attributeValuePosition(
-                                    source,
-                                    elementStart,
-                                    elementEnd + 1,
-                                    reader.attributeQualifiedName(attributeIndex),
-                                )
+                            val qualifiedName = reader.attributeQualifiedName(attributeIndex)
+                            val valueOffset =
+                                checkNotNull(attributeValueOffsets[qualifiedName]) {
+                                    "Missing raw XML attribute $qualifiedName in ${attributeValueOffsets.keys}"
+                                }
                             indexAttribute(
                                 store,
                                 indexedSource,
                                 reader.getAttributeValue(attributeIndex),
-                                valuePosition.line,
-                                valuePosition.column,
+                                source,
+                                valueOffset,
                             )
                         }
                     }
                     XMLStreamConstants.END_ELEMENT -> depth--
                     XMLStreamConstants.CHARACTERS,
-                    XMLStreamConstants.CDATA ->
-                        indexAttribute(
-                            store,
-                            indexedSource,
-                            reader.text,
-                            reader.location.lineNumber.coerceAtLeast(1),
-                            reader.location.columnNumber.coerceAtLeast(1),
-                        )
+                    XMLStreamConstants.CDATA -> {
+                        val textOffset =
+                            (reader.location.characterOffset - reader.text.length).coerceAtLeast(0)
+                        indexAttribute(store, indexedSource, reader.text, source, textOffset)
+                    }
                 }
             }
             reader.close()
@@ -109,16 +107,17 @@ internal class XmlResourceProducer : IndexProducer {
         store: CodeIndexStore,
         indexedSource: IndexedSource,
         value: String,
-        line: Int,
-        column: Int,
+        source: String,
+        valueOffset: Int,
     ) {
         RESOURCE_REFERENCE.findAll(value).forEach { match ->
+            val position = sourcePosition(source, valueOffset + match.range.first)
             val createsId = match.groupValues[CREATE_MARKER_GROUP] == "+"
             val packageName = match.groupValues[RESOURCE_PACKAGE_GROUP].ifBlank { null }
             val type = match.groupValues[RESOURCE_TYPE_GROUP]
             val name = match.groupValues[RESOURCE_NAME_GROUP]
             if (createsId && packageName == null && type == "id") {
-                putResource(store, indexedSource, type, name, line, column + match.range.first)
+                putResource(store, indexedSource, type, name, position.line, position.column)
             } else {
                 val target = resourceFqn(packageName, type, name)
                 store.put(
@@ -126,15 +125,15 @@ internal class XmlResourceProducer : IndexProducer {
                         target,
                         indexedSource.originId,
                         indexedSource.path,
-                        line,
-                        column,
+                        position.line,
+                        position.column,
                     ),
                     ReferenceRecord(
                         symbolFqn = target,
                         relativeFile = indexedSource.path,
                         originId = indexedSource.originId,
-                        line = line,
-                        column = column,
+                        line = position.line,
+                        column = position.column,
                         context = "resource",
                         language = LANGUAGE,
                         referencedName = name,
@@ -172,11 +171,6 @@ internal class XmlResourceProducer : IndexProducer {
         )
     }
 
-    private fun elementStartOffset(source: String, characterOffset: Int): Int {
-        val searchFrom = (characterOffset - 1).coerceIn(0, source.lastIndex)
-        return source.lastIndexOf('<', searchFrom).coerceAtLeast(0)
-    }
-
     private fun startTagEndOffset(source: String, elementStart: Int): Int {
         var quote: Char? = null
         for (offset in elementStart + 1 until source.length) {
@@ -190,23 +184,6 @@ internal class XmlResourceProducer : IndexProducer {
             }
         }
         return source.lastIndex
-    }
-
-    private fun attributeValuePosition(
-        source: String,
-        elementStart: Int,
-        characterOffset: Int,
-        qualifiedName: String,
-    ): SourcePosition {
-        val elementEnd = characterOffset.coerceIn(elementStart, source.length)
-        val startTag = source.substring(elementStart, elementEnd)
-        val attribute =
-            Regex("(?<![A-Za-z0-9_.:-])${Regex.escape(qualifiedName)}\\s*=").find(startTag)
-        val quoteStart = attribute?.let {
-            startTag.indexOfAny(charArrayOf('\'', '\"'), it.range.last + 1)
-        }
-        val valueStart = quoteStart?.takeIf { it >= 0 }?.plus(1) ?: 0
-        return sourcePosition(source, elementStart + valueStart)
     }
 
     private fun javax.xml.stream.XMLStreamReader.attributeQualifiedName(index: Int): String {
@@ -268,3 +245,72 @@ internal class XmlResourceProducer : IndexProducer {
             Regex("[@?](\\+)?(?:([A-Za-z0-9_.]+):)?([A-Za-z0-9_]+)/([A-Za-z0-9_.]+)")
     }
 }
+
+private fun nextStartElementOffset(source: String, fromOffset: Int): Int {
+    var candidate = source.indexOf('<', fromOffset)
+    var skippedEnd = candidate.takeIf { it >= 0 }?.let { skippedMarkupEnd(source, it) }
+    while (candidate >= 0 && skippedEnd != null) {
+        candidate = source.indexOf('<', skippedEnd)
+        skippedEnd = candidate.takeIf { it >= 0 }?.let { skippedMarkupEnd(source, it) }
+    }
+    return candidate.coerceAtLeast(0)
+}
+
+private fun skippedMarkupEnd(source: String, offset: Int): Int? =
+    when {
+        source.startsWith(COMMENT_START, offset) ->
+            source.endAfter(COMMENT_END, offset + COMMENT_START.length)
+        source.startsWith(CDATA_START, offset) ->
+            source.endAfter(CDATA_END, offset + CDATA_START.length)
+        source.startsWith("<?", offset) -> source.endAfter("?>", offset + 2)
+        source.startsWith("<!", offset) -> source.endAfter(">", offset + 2)
+        source.startsWith("</", offset) -> source.endAfter(">", offset + 2)
+        else -> null
+    }
+
+private fun String.endAfter(marker: String, fromOffset: Int): Int =
+    indexOf(marker, fromOffset).takeIf { it >= 0 }?.plus(marker.length) ?: length
+
+private fun attributeValueOffsets(
+    source: String,
+    elementStart: Int,
+    elementEnd: Int,
+): Map<String, Int> = buildMap {
+    var offset = elementStart + 1
+    while (offset < elementEnd && !source[offset].isWhitespace()) offset++
+    var attribute = parseAttribute(source, offset, elementEnd)
+    while (attribute != null) {
+        put(attribute.qualifiedName, attribute.valueStart)
+        attribute = parseAttribute(source, attribute.nextOffset, elementEnd)
+    }
+}
+
+private fun parseAttribute(source: String, fromOffset: Int, elementEnd: Int): RawAttribute? {
+    var offset = skipWhitespace(source, fromOffset, elementEnd)
+    if (offset >= elementEnd || source[offset] == '/') return null
+    val nameStart = offset
+    while (offset < elementEnd && source[offset].isAttributeNameCharacter()) offset++
+    val qualifiedName = source.substring(nameStart, offset)
+    offset = skipWhitespace(source, offset, elementEnd)
+    if (source.getOrNull(offset) != '=') return null
+    offset = skipWhitespace(source, offset + 1, elementEnd)
+    val quote = source.getOrNull(offset)?.takeIf { it == '\'' || it == '\"' } ?: return null
+    val valueStart = offset + 1
+    val valueEnd = source.indexOf(quote, valueStart).takeIf { it in valueStart..elementEnd }
+    return RawAttribute(qualifiedName, valueStart, valueEnd?.plus(1) ?: elementEnd)
+}
+
+private fun skipWhitespace(source: String, fromOffset: Int, elementEnd: Int): Int {
+    var offset = fromOffset
+    while (offset < elementEnd && source[offset].isWhitespace()) offset++
+    return offset
+}
+
+private fun Char.isAttributeNameCharacter(): Boolean = !isWhitespace() && this != '=' && this != '/'
+
+private data class RawAttribute(val qualifiedName: String, val valueStart: Int, val nextOffset: Int)
+
+private const val COMMENT_START = "<!--"
+private const val COMMENT_END = "-->"
+private const val CDATA_START = "<![CDATA["
+private const val CDATA_END = "]]>"

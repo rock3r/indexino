@@ -35,8 +35,10 @@ class XmlResourceProducerTest {
                 xmlns:android="http://schemas.android.com/apk/res/android"
                 xmlns:tools="http://schemas.android.com/tools">
                 <TextView
+                    note=" android:id='decoy' "
                     android:id="@+id/title"
-                    tools:id="@+id/preview_title" />
+                    tools:id="
+                        @+id/preview_title" />
             </LinearLayout>
             """
                 .trimIndent()
@@ -68,14 +70,14 @@ class XmlResourceProducerTest {
             )
             assertTrue(
                 encodedSymbols.any {
-                    "\"name\":\"title\"" in it && "\"line\":5" in it && "\"column\":21" in it
+                    "\"name\":\"title\"" in it && "\"line\":6" in it && "\"column\":21" in it
                 }
             )
             assertTrue(
                 encodedSymbols.any {
                     "\"name\":\"preview_title\"" in it &&
-                        "\"line\":6" in it &&
-                        "\"column\":19" in it
+                        "\"line\":8" in it &&
+                        "\"column\":13" in it
                 }
             )
         }
