@@ -290,12 +290,12 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
                 expression?.isOtherProperty(equalsFunction, otherParameter, property) == true
             else ->
                 ((this as? KtDotQualifiedExpression)?.let {
-                    it.receiverExpression.isName(otherParameter) &&
+                    it.receiverExpression.isPossiblyParenthesizedName(otherParameter) &&
                         !it.receiverExpression.isShadowed(otherParameter, equalsFunction) &&
                         it.selectorExpression?.isName(property) == true
                 } == true) ||
                     ((this as? KtSafeQualifiedExpression)?.let {
-                        it.receiverExpression.isName(otherParameter) &&
+                        it.receiverExpression.isPossiblyParenthesizedName(otherParameter) &&
                             !it.receiverExpression.isShadowed(otherParameter, equalsFunction) &&
                             it.selectorExpression?.isName(property) == true
                     } == true)
@@ -322,6 +322,12 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
 
     private fun org.jetbrains.kotlin.psi.KtExpression.isName(name: String): Boolean =
         this is KtNameReferenceExpression && getReferencedName() == name
+
+    private fun KtExpression.isPossiblyParenthesizedName(name: String): Boolean =
+        when (this) {
+            is KtParenthesizedExpression -> expression?.isPossiblyParenthesizedName(name) == true
+            else -> isName(name)
+        }
 
     private companion object {
         const val DESCRIPTION: String =

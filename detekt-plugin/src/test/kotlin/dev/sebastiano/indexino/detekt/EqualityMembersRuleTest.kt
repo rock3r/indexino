@@ -607,6 +607,30 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `parenthesized other receiver preserves valid structural comparison`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class ParenthesizedOther(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is ParenthesizedOther && value == (other).value
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String =
+                            "ParenthesizedOther(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `aliased Any parameter satisfies equals override`() {
         val findings =
             rule()
