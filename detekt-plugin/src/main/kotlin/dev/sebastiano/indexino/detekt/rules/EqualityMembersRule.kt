@@ -307,9 +307,25 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
             .takeWhile { it !== equalsFunction }
             .any {
                 (it is KtFunctionLiteral &&
+                    it.hasReceiverType(receiverClass) &&
                     it.hasForeignReceiverLambdaSyntax(equalsFunction, receiverClass)) ||
-                    (it is KtNamedFunction && it.receiverTypeReference != null)
+                    (it is KtNamedFunction &&
+                        it.receiverTypeReference != null &&
+                        it.hasReceiverType(receiverClass))
             }
+
+    private fun KtFunctionLiteral.hasReceiverType(receiverClass: KtClass): Boolean =
+        analyze(this) {
+            val targetClass = receiverClass.symbol as? KaClassSymbol ?: return false
+            symbol.receiverParameter?.returnType?.symbol?.classId == targetClass.classId
+        }
+
+    private fun KtNamedFunction.hasReceiverType(receiverClass: KtClass): Boolean =
+        analyze(this) {
+            val targetClass = receiverClass.symbol as? KaClassSymbol ?: return false
+            (symbol as? KaNamedFunctionSymbol)?.receiverParameter?.returnType?.symbol?.classId ==
+                targetClass.classId
+        }
 
     private fun KtExpression.isCurrentReceiver(
         equalsFunction: KtNamedFunction,

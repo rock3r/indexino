@@ -437,7 +437,7 @@ class EqualityMembersRuleTest {
     }
 
     @Test
-    fun `safe qualified receiver lambda property does not count as class receiver`() {
+    fun `safe qualified foreign receiver preserves outer class receiver`() {
         val findings =
             rule()
                 .lint(
@@ -457,8 +457,7 @@ class EqualityMembersRuleTest {
                         .trimIndent()
                 )
 
-        assertEquals(1, findings.size)
-        assertTrue(findings.single().message.contains("value"))
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
     }
 
     @Test
@@ -790,6 +789,29 @@ class EqualityMembersRuleTest {
                         override fun hashCode(): Int = value.hashCode()
 
                         override fun toString(): String = "WithThis(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
+    fun `foreign receiver without matching property preserves outer class receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class OuterReceiver(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is OuterReceiver && with(Unit) { value == other.value }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "OuterReceiver(value=${'$'}value)"
                     }
                     """
                         .trimIndent()
