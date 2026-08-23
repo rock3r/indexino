@@ -172,7 +172,7 @@ class XmlResourceProducerTest {
     fun `skips complete internal DTD subsets when locating declarations`() {
         val values =
             """
-            <!DOCTYPE resources [<!-- [ --><!ENTITY unused '<fake><bar>'>]>
+            <!DOCTYPE resources [<!-- [ --><?pi [?><!ENTITY unused '<fake><bar>'>]>
             <resources>
                 <string name="title">Title</string>
             </resources>

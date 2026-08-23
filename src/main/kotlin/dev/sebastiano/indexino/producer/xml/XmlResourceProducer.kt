@@ -416,8 +416,10 @@ private fun declarationEndOffset(source: String, declarationStart: Int): Int {
     var subsetDepth = 0
     var offset = declarationStart + 2
     while (offset < source.length) {
-        if (quote == null && source.startsWith(COMMENT_START, offset)) {
-            offset = source.endAfter(COMMENT_END, offset + COMMENT_START.length)
+        val opaqueRegionEnd =
+            if (quote == null) declarationOpaqueRegionEnd(source, offset) else null
+        if (opaqueRegionEnd != null) {
+            offset = opaqueRegionEnd
             continue
         }
         val character = source[offset]
@@ -432,6 +434,14 @@ private fun declarationEndOffset(source: String, declarationStart: Int): Int {
     }
     return source.length
 }
+
+private fun declarationOpaqueRegionEnd(source: String, offset: Int): Int? =
+    when {
+        source.startsWith(COMMENT_START, offset) ->
+            source.endAfter(COMMENT_END, offset + COMMENT_START.length)
+        source.startsWith("<?", offset) -> source.endAfter("?>", offset + 2)
+        else -> null
+    }
 
 private fun attributeValueOffsets(
     source: String,
