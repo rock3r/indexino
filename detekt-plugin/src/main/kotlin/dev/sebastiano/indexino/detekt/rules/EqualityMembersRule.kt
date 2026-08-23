@@ -28,6 +28,7 @@ import org.jetbrains.kotlin.psi.KtQualifiedExpression
 import org.jetbrains.kotlin.psi.KtSafeQualifiedExpression
 import org.jetbrains.kotlin.psi.KtThisExpression
 import org.jetbrains.kotlin.psi.KtTypeAlias
+import org.jetbrains.kotlin.psi.KtWhenExpression
 
 public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
     override fun visitClass(klass: KtClass) {
@@ -398,9 +399,25 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
                     is KtFunction ->
                         ancestor !== ignoredFunction &&
                             ancestor.valueParameters.any { it.name == property }
+                    is KtWhenExpression ->
+                        ancestor.subjectVariable?.let { subject ->
+                            subject.name == property &&
+                                subject.initializer?.let { initializer ->
+                                    PsiTreeUtil.isAncestor(initializer, this, false)
+                                } != true
+                        } == true
                     is KtForExpression ->
                         ancestor.loopParameter?.name == property &&
                             ancestor.body?.let { PsiTreeUtil.isAncestor(it, this, false) } == true
+                    is KtClassOrObject ->
+                        ignoredFunction != null &&
+                            PsiTreeUtil.isAncestor(ignoredFunction, ancestor, false) &&
+                            (ancestor.declarations.filterIsInstance<KtProperty>().any {
+                                it.name == property
+                            } ||
+                                (ancestor as? KtClass)?.primaryConstructorParameters?.any {
+                                    it.hasValOrVar() && it.name == property
+                                } == true)
                     else -> false
                 }
             }

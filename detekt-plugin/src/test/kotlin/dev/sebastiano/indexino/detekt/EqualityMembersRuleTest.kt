@@ -130,6 +130,34 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `when subject local does not count as receiver property`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class WhenSubjectShadow(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is WhenSubjectShadow) return false
+                            return when (val value = other.value) {
+                                else -> value == other.value
+                            }
+                        }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "WhenSubjectShadow(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `labeled outer receiver does not count as class receiver`() {
         val findings =
             rule()
@@ -638,6 +666,41 @@ class EqualityMembersRuleTest {
                         override fun hashCode(): Int = value.hashCode()
 
                         override fun toString(): String = "SameName(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(
+            findings.any {
+                it.message == "Function equals must compare property value through other.value."
+            },
+            findings.joinToString { it.message },
+        )
+    }
+
+    @Test
+    fun `nested receiver member does not count as equals peer`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class NestedPeerShadow(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is NestedPeerShadow) return false
+                            return object {
+                                val other = this@NestedPeerShadow
+
+                                fun matches(): Boolean =
+                                    this@NestedPeerShadow.value == other.value
+                            }.matches()
+                        }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "NestedPeerShadow(value=${'$'}value)"
                     }
                     """
                         .trimIndent()
