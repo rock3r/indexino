@@ -1207,6 +1207,38 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `unrelated equals overload does not count as structural equality`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class AlwaysEqual {
+                        fun equals(other: AlwaysEqual): Boolean = true
+                    }
+
+                    class CustomEquals(val value: AlwaysEqual) {
+                        override fun equals(other: Any?): Boolean =
+                            other is CustomEquals && value.equals(other.value)
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "CustomEquals(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(
+            findings.any {
+                it.message == "Function equals must compare property value through other.value."
+            },
+            findings.joinToString { it.message },
+        )
+    }
+
+    @Test
     fun `class member shadowing imported Objects does not count as structural equality`() {
         val findings =
             rule()
@@ -1225,6 +1257,50 @@ class EqualityMembersRuleTest {
                         override fun hashCode(): Int = value.hashCode()
 
                         override fun toString(): String = "MemberObjects(value=${'$'}value)"
+
+                        private object Helper {
+                            fun equals(first: Any?, second: Any?): Boolean = true
+                        }
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(
+            findings.any {
+                it.message == "Function equals must compare property value through other.value."
+            },
+            findings.joinToString { it.message },
+        )
+    }
+
+    @Test
+    fun `value chain named java util Objects does not count as JDK Objects`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class QualifiedObjectsShadow(val value: String) {
+                        private val java = JavaNamespace
+
+                        override fun equals(other: Any?): Boolean =
+                            other is QualifiedObjectsShadow &&
+                                java.util.Objects.equals(value, other.value)
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String =
+                            "QualifiedObjectsShadow(value=${'$'}value)"
+
+                        private object JavaNamespace {
+                            val util = UtilNamespace
+                        }
+
+                        private object UtilNamespace {
+                            val Objects = Helper
+                        }
 
                         private object Helper {
                             fun equals(first: Any?, second: Any?): Boolean = true

@@ -7,6 +7,9 @@ import dev.detekt.api.Finding
 import dev.detekt.api.RequiresAnalysisApi
 import dev.detekt.api.Rule
 import org.jetbrains.kotlin.analysis.api.analyze
+import org.jetbrains.kotlin.analysis.api.resolution.singleFunctionCallOrNull
+import org.jetbrains.kotlin.analysis.api.resolution.symbol
+import org.jetbrains.kotlin.analysis.api.symbols.KaNamedFunctionSymbol
 import org.jetbrains.kotlin.analysis.api.types.symbol
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.KtBinaryExpression
@@ -24,7 +27,6 @@ import org.jetbrains.kotlin.psi.KtFunctionLiteral
 import org.jetbrains.kotlin.psi.KtLabeledExpression
 import org.jetbrains.kotlin.psi.KtLambdaExpression
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
-import org.jetbrains.kotlin.psi.KtNamedDeclaration
 import org.jetbrains.kotlin.psi.KtNamedFunction
 import org.jetbrains.kotlin.psi.KtParenthesizedExpression
 import org.jetbrains.kotlin.psi.KtProperty
@@ -191,9 +193,11 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         receiverClass: KtClass,
     ): Boolean {
         val calleeName = calleeExpression?.text ?: return false
+        val structuralCallKind = structuralCallKind() ?: return false
         val qualifiedCall = parent as? KtQualifiedExpression
         if (
             calleeName in setOf("equals", "contentEquals", "contentDeepEquals") &&
+                structuralCallKind == StructuralCallKind.RECEIVER &&
                 qualifiedCall?.selectorExpression == this &&
                 valueArguments.size == 1
         ) {
@@ -206,9 +210,9 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         }
         if (
             calleeName != "equals" ||
+                structuralCallKind != StructuralCallKind.JAVA_OBJECTS ||
                 valueArguments.size != 2 ||
-                qualifiedCall?.selectorExpression != this ||
-                !qualifiedCall.receiverExpression.isJavaUtilObjects()
+                qualifiedCall?.selectorExpression != this
         ) {
             return false
         }
@@ -220,29 +224,23 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                 first.isOtherProperty(equalsFunction, otherParameter, property))
     }
 
-    private fun KtExpression.isJavaUtilObjects(): Boolean {
-        if (text == "java.util.Objects") return true
-        val objectsImport =
-            containingKtFile.importDirectives.firstOrNull {
-                it.importedFqName?.asString() == "java.util.Objects" ||
-                    (it.isAllUnder && it.importedFqName?.asString() == "java.util")
-            } ?: return false
-        val importedName = objectsImport.aliasName ?: "Objects"
-        if (text != importedName || isShadowed(importedName)) return false
-        val shadowsImportAtFileLevel =
-            containingKtFile.declarations.filterIsInstance<KtNamedDeclaration>().any {
-                it.name == importedName
+    private fun KtCallExpression.structuralCallKind(): StructuralCallKind? =
+        analyze(this) {
+            val symbol =
+                resolveToCall()?.singleFunctionCallOrNull()?.symbol as? KaNamedFunctionSymbol
+                    ?: return null
+            val callableNames =
+                (symbol.allOverriddenSymbols + symbol)
+                    .mapNotNull { it.callableId?.asSingleFqName()?.asString() }
+                    .toSet()
+            when {
+                JAVA_OBJECTS_EQUALS in callableNames -> StructuralCallKind.JAVA_OBJECTS
+                KOTLIN_ANY_EQUALS in callableNames ||
+                    callableNames.any { it in RECEIVER_COMPARISON_CALLABLES } ->
+                    StructuralCallKind.RECEIVER
+                else -> null
             }
-        val shadowsImportInEnclosingClass =
-            generateSequence(parent) { it.parent }
-                .filterIsInstance<KtClassOrObject>()
-                .any { enclosingClass ->
-                    enclosingClass.declarations.filterIsInstance<KtNamedDeclaration>().any {
-                        it.name == importedName
-                    }
-                }
-        return !shadowsImportAtFileLevel && !shadowsImportInEnclosingClass
-    }
+        }
 
     private fun KtBinaryExpression.comparesReceiverAndOtherProperty(
         equalsFunction: KtNamedFunction,
@@ -483,5 +481,14 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                 "dev.sebastiano.indexino.api",
                 "dev.sebastiano.indexino.plugin.api",
             )
+        const val JAVA_OBJECTS_EQUALS: String = "java.util.Objects.equals"
+        const val KOTLIN_ANY_EQUALS: String = "kotlin.Any.equals"
+        val RECEIVER_COMPARISON_CALLABLES: Set<String> =
+            setOf("kotlin.collections.contentEquals", "kotlin.collections.contentDeepEquals")
+    }
+
+    private enum class StructuralCallKind {
+        RECEIVER,
+        JAVA_OBJECTS,
     }
 }
