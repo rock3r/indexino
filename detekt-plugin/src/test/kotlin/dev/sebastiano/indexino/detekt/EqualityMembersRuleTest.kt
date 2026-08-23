@@ -76,6 +76,35 @@ class EqualityMembersRuleTest {
                         .trimIndent()
                 )
 
+        assertTrue(
+            findings.any {
+                it.message == "Function equals must compare property value through other.value."
+            },
+            findings.joinToString { it.message },
+        )
+    }
+
+    @Test
+    fun `extension property on peer does not count as class property`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    val Any?.value: String get() = ""
+
+                    class ExtensionPeer(val value: String) {
+                        override fun equals(other: Any?): Boolean = value == other.value
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "ExtensionPeer(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
         assertEquals(1, findings.size)
         assertTrue(findings.single().message.contains("value"))
     }
@@ -533,6 +562,31 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `custom plain run preserves the class receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class CustomRun(val value: String) {
+                        fun run(block: () -> Boolean): Boolean = block()
+
+                        override fun equals(other: Any?): Boolean =
+                            other is CustomRun && other.run { value == other.value }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "CustomRun(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `custom let receiver lambda does not count as class receiver`() {
         val findings =
             rule()
@@ -890,6 +944,66 @@ class EqualityMembersRuleTest {
                         override fun hashCode(): Int = value.hashCode()
 
                         override fun toString(): String = "SameName(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(
+            findings.any {
+                it.message == "Function equals must compare property value through other.value."
+            },
+            findings.joinToString { it.message },
+        )
+    }
+
+    @Test
+    fun `object expression without a property preserves the outer class property`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class ObjectWrapper(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is ObjectWrapper &&
+                                object {
+                                    fun matches(): Boolean = value == other.value
+                                }.matches()
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "ObjectWrapper(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
+    fun `same named local class this label does not count as outer receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class LabeledSameName(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is LabeledSameName) return false
+                            class LabeledSameName(val value: String) {
+                                fun matches(): Boolean =
+                                    this@LabeledSameName.value == other.value
+                            }
+                            return LabeledSameName(other.value).matches()
+                        }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "LabeledSameName(value=${'$'}value)"
                     }
                     """
                         .trimIndent()

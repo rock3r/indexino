@@ -9,7 +9,10 @@ import dev.detekt.api.Rule
 import org.jetbrains.kotlin.analysis.api.analyze
 import org.jetbrains.kotlin.analysis.api.resolution.singleFunctionCallOrNull
 import org.jetbrains.kotlin.analysis.api.resolution.symbol
+import org.jetbrains.kotlin.analysis.api.symbols.KaClassSymbol
 import org.jetbrains.kotlin.analysis.api.symbols.KaNamedFunctionSymbol
+import org.jetbrains.kotlin.analysis.api.symbols.KaPropertySymbol
+import org.jetbrains.kotlin.analysis.api.symbols.KaReceiverParameterSymbol
 import org.jetbrains.kotlin.analysis.api.types.symbol
 import org.jetbrains.kotlin.idea.references.mainReference
 import org.jetbrains.kotlin.lexer.KtTokens
@@ -203,9 +206,19 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
             val receiver = qualifiedCall.receiverExpression
             val argument = valueArguments.singleOrNull()?.getArgumentExpression() ?: return false
             return (receiver.isReceiverProperty(equalsFunction, property, receiverClass) &&
-                argument.isOtherProperty(equalsFunction, otherParameter, property)) ||
+                argument.isOtherProperty(
+                    equalsFunction,
+                    otherParameter,
+                    property,
+                    receiverClass,
+                )) ||
                 (argument.isReceiverProperty(equalsFunction, property, receiverClass) &&
-                    receiver.isOtherProperty(equalsFunction, otherParameter, property))
+                    receiver.isOtherProperty(
+                        equalsFunction,
+                        otherParameter,
+                        property,
+                        receiverClass,
+                    ))
         }
         if (
             structuralCallKind != StructuralCallKind.JAVA_OBJECTS ||
@@ -217,9 +230,9 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         val first = valueArguments[0].getArgumentExpression() ?: return false
         val second = valueArguments[1].getArgumentExpression() ?: return false
         return (first.isReceiverProperty(equalsFunction, property, receiverClass) &&
-            second.isOtherProperty(equalsFunction, otherParameter, property)) ||
+            second.isOtherProperty(equalsFunction, otherParameter, property, receiverClass)) ||
             (second.isReceiverProperty(equalsFunction, property, receiverClass) &&
-                first.isOtherProperty(equalsFunction, otherParameter, property))
+                first.isOtherProperty(equalsFunction, otherParameter, property, receiverClass))
     }
 
     private fun KtCallExpression.structuralCallKind(): StructuralCallKind? =
@@ -249,9 +262,9 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         val left = left ?: return false
         val right = right ?: return false
         return (left.isReceiverProperty(equalsFunction, property, receiverClass) &&
-            right.isOtherProperty(equalsFunction, otherParameter, property)) ||
+            right.isOtherProperty(equalsFunction, otherParameter, property, receiverClass)) ||
             (right.isReceiverProperty(equalsFunction, property, receiverClass) &&
-                left.isOtherProperty(equalsFunction, otherParameter, property))
+                left.isOtherProperty(equalsFunction, otherParameter, property, receiverClass))
     }
 
     private fun KtExpression.isReceiverProperty(
@@ -263,18 +276,27 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
             is KtParenthesizedExpression ->
                 expression?.isReceiverProperty(equalsFunction, property, receiverClass) == true
             else ->
-                (isName(property) &&
-                    !isShadowed(property) &&
-                    !isInsideNestedReceiver(equalsFunction, receiverClass) &&
-                    isOwnedByClass(receiverClass)) ||
+                (resolvesToPropertyOf(receiverClass, property) &&
+                    !isInsideNestedReceiver(equalsFunction, receiverClass)) ||
                     (this is KtDotQualifiedExpression &&
                         receiverExpression.isCurrentReceiver(equalsFunction, receiverClass) &&
-                        selectorExpression?.isName(property) == true)
+                        selectorExpression?.resolvesToPropertyOf(receiverClass, property) == true)
         }
 
-    private fun KtExpression.isOwnedByClass(receiverClass: KtClass): Boolean =
-        generateSequence(parent) { it.parent }.filterIsInstance<KtClassOrObject>().firstOrNull() ===
-            receiverClass
+    private fun KtExpression.resolvesToPropertyOf(
+        receiverClass: KtClass,
+        property: String,
+    ): Boolean {
+        if (this !is KtNameReferenceExpression) return false
+        return analyze(this) {
+            val resolvedProperty =
+                mainReference.resolveToSymbol() as? KaPropertySymbol ?: return false
+            val targetClass = receiverClass.symbol as? KaClassSymbol ?: return false
+            resolvedProperty.name.asString() == property &&
+                (resolvedProperty.containingSymbol as? KaClassSymbol)?.classId ==
+                    targetClass.classId
+        }
+    }
 
     private fun KtExpression.isInsideNestedReceiver(
         equalsFunction: KtNamedFunction,
@@ -296,25 +318,22 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         if (this is KtParenthesizedExpression) {
             return expression?.isCurrentReceiver(equalsFunction, receiverClass) == true
         }
-        return this is KtThisExpression &&
-            ((text == "this" &&
-                generateSequence(parent) { it.parent }
-                    .filterIsInstance<KtClassOrObject>()
-                    .firstOrNull() === receiverClass &&
-                generateSequence(parent) { it.parent }
-                    .filterIsInstance<KtFunction>()
-                    .takeWhile { it !== equalsFunction }
-                    .all {
-                        (it is KtNamedFunction && it.receiverTypeReference == null) ||
-                            (it is KtFunctionLiteral &&
-                                !it.hasForeignReceiverLambdaSyntax(equalsFunction, receiverClass))
-                    }) ||
-                (receiverClass.name != null &&
-                    text == "this@${receiverClass.name}" &&
-                    generateSequence(parent) { it.parent }
-                        .takeWhile { it !== equalsFunction }
-                        .filterIsInstance<KtLabeledExpression>()
-                        .none { it.getLabelName() == receiverClass.name }))
+        if (this !is KtThisExpression) return false
+        return analyze(this) {
+            val targetClass = receiverClass.symbol as? KaClassSymbol ?: return false
+            when (val resolvedReceiver = instanceReference.mainReference.resolveToSymbol()) {
+                is KaReceiverParameterSymbol ->
+                    resolvedReceiver.returnType.symbol?.classId == targetClass.classId &&
+                        ((text == "this@${receiverClass.name}" &&
+                            generateSequence(parent) { it.parent }
+                                .takeWhile { it !== equalsFunction }
+                                .filterIsInstance<KtLabeledExpression>()
+                                .none { it.getLabelName() == receiverClass.name }) ||
+                            !isInsideNestedReceiver(equalsFunction, receiverClass))
+                is KaClassSymbol -> resolvedReceiver.classId == targetClass.classId
+                else -> false
+            }
+        }
     }
 
     private fun KtFunctionLiteral.hasForeignReceiverLambdaSyntax(
@@ -322,6 +341,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         receiverClass: KtClass,
     ): Boolean {
         val lambda = parent as? KtLambdaExpression ?: return true
+        if (analyze(this) { symbol.receiverParameter == null }) return false
         val call =
             PsiTreeUtil.getParentOfType(lambda, KtCallExpression::class.java, false)
                 ?: return analyze(this) { symbol.receiverParameter != null }
@@ -425,10 +445,16 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         equalsFunction: KtNamedFunction,
         otherParameter: String,
         property: String,
+        receiverClass: KtClass,
     ): Boolean =
         when (this) {
             is KtParenthesizedExpression ->
-                expression?.isOtherProperty(equalsFunction, otherParameter, property) == true
+                expression?.isOtherProperty(
+                    equalsFunction,
+                    otherParameter,
+                    property,
+                    receiverClass,
+                ) == true
             else ->
                 ((this as? KtDotQualifiedExpression)?.let {
                     it.receiverExpression.resolvesToEqualsParameter(
@@ -436,7 +462,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                         otherParameter,
                     ) &&
                         !it.receiverExpression.isShadowed(otherParameter, equalsFunction) &&
-                        it.selectorExpression?.isName(property) == true
+                        it.selectorExpression?.resolvesToPropertyOf(receiverClass, property) == true
                 } == true) ||
                     ((this as? KtSafeQualifiedExpression)?.let {
                         it.receiverExpression.resolvesToEqualsParameter(
@@ -444,7 +470,8 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                             otherParameter,
                         ) &&
                             !it.receiverExpression.isShadowed(otherParameter, equalsFunction) &&
-                            it.selectorExpression?.isName(property) == true
+                            it.selectorExpression?.resolvesToPropertyOf(receiverClass, property) ==
+                                true
                     } == true)
         }
 
