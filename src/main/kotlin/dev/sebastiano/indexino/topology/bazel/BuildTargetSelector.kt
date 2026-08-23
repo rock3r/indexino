@@ -8,11 +8,13 @@ internal object BuildTargetSelector {
     private val ACTUAL_ATTRIBUTE = Regex("""(?<![A-Za-z0-9_])actual\s*=""")
     private val ACTUAL_FILE = Regex("""actual\s*=\s*["']([^"']+\.(?:kt|java|xml))["']""")
     private val SOURCE_LABEL = Regex("""["'](?::([^"']+)|//([^:"']*)(?::([^"']+))?)["']""")
+    private val TRIPLE_QUOTED_STRING = Regex("(?s)'''.*?'''|\"\"\".*?\"\"\"")
     private val INDEXABLE_EXTENSIONS = setOf("kt", "java", "xml")
 
     fun select(content: String, targetName: String, packagePath: String): String {
         val rulesByName =
             RULE_CALL.findAll(content)
+                .filter { match -> isCodeAt(content, match.range.first, expectedDepth = 0) }
                 .mapNotNull { match -> ruleAt(content, match) }
                 .mapNotNull { rule -> ruleName(rule)?.let { name -> name to rule } }
                 .toMap()
@@ -30,20 +32,22 @@ internal object BuildTargetSelector {
                 .forEach(::addRule)
         }
         addRule(targetName)
-        return selected.values.joinToString("\n") { rule -> normalizeFileLabels(rule, packagePath) }
+        return selected.values.joinToString("\n") { rule ->
+            normalizeFileLabels(TRIPLE_QUOTED_STRING.replace(rule, "\"\""), packagePath)
+        }
     }
 
     private fun ruleName(rule: String): String? {
         val assignment =
             NAME_ASSIGNMENT.findAll(rule).firstOrNull { match ->
-                isTopLevelCode(rule, match.range.first)
+                isCodeAt(rule, match.range.first, expectedDepth = 1)
             }
         return assignment?.groupValues?.get(1)
     }
 
     private fun sourceLabels(rule: String, packagePath: String): Sequence<String> =
         sourceAttributes(rule)
-            .filter { match -> isTopLevelCode(rule, match.range.first) }
+            .filter { match -> isCodeAt(rule, match.range.first, expectedDepth = 1) }
             .flatMap { match ->
                 val valueStart = match.range.last + 1
                 val valueEnd = BuildFileSrcsParser.findSrcsValueEnd(rule, valueStart) ?: rule.length
@@ -96,7 +100,15 @@ internal object BuildTargetSelector {
                 }
             }
         return if (isAlias(rule)) {
-            ACTUAL_FILE.replace(normalized) { match -> "srcs = [\"${match.groupValues[1]}\"]" }
+            val actual =
+                ACTUAL_FILE.findAll(normalized).firstOrNull { match ->
+                    isCodeAt(normalized, match.range.first, expectedDepth = 1)
+                }
+            if (actual == null) {
+                normalized
+            } else {
+                normalized.replaceRange(actual.range, "srcs = [\"${actual.groupValues[1]}\"]")
+            }
         } else {
             normalized
         }
@@ -112,28 +124,39 @@ internal object BuildTargetSelector {
         return callName == "filegroup" || callName == "alias"
     }
 
-    private fun isTopLevelCode(rule: String, position: Int): Boolean {
+    @Suppress("CyclomaticComplexMethod")
+    private fun isCodeAt(text: String, position: Int, expectedDepth: Int): Boolean {
         var depth = 0
-        var inString: Char? = null
+        var stringDelimiter: String? = null
         var escaped = false
         var inComment = false
-        for (index in 0 until position) {
-            val char = rule[index]
+        var index = 0
+        while (index < position) {
+            val char = text[index]
             when {
                 inComment -> inComment = char != '\n'
-                inString != null ->
+                stringDelimiter != null ->
                     when {
                         escaped -> escaped = false
-                        char == '\\' -> escaped = true
-                        char == inString -> inString = null
+                        stringDelimiter.length == 1 && char == '\\' -> escaped = true
+                        text.startsWith(stringDelimiter, index) -> {
+                            index += stringDelimiter.length - 1
+                            stringDelimiter = null
+                        }
                     }
                 char == '#' -> inComment = true
-                char == '"' || char == '\'' -> inString = char
+                char == '"' || char == '\'' -> {
+                    val triple = char.toString().repeat(3)
+                    stringDelimiter =
+                        if (text.startsWith(triple, index)) triple else char.toString()
+                    index += stringDelimiter.length - 1
+                }
                 char == '(' -> depth++
                 char == ')' -> depth--
             }
+            index++
         }
-        return depth == 1 && inString == null && !inComment
+        return depth == expectedDepth && stringDelimiter == null && !inComment
     }
 
     private fun ruleAt(content: String, match: MatchResult): String? {

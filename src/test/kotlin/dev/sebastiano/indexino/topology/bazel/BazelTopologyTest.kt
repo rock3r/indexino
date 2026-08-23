@@ -638,6 +638,59 @@ class BazelTopologyTest {
     }
 
     @Test
+    fun `build target selection ignores commented direct file alias actuals`() {
+        val workspace = createTempDirectory("bazel-target-build-commented-file-alias-")
+        val packageDir = workspace.resolve("pkg")
+        Files.createDirectories(packageDir)
+        packageDir.resolve("Foo.kt").writeText("class Foo")
+        packageDir
+            .resolve("BUILD.bazel")
+            .writeText(
+                """
+                alias(
+                    name = "a",
+                    # actual = ":Old.kt",
+                    actual = ":Foo.kt",
+                )
+                """
+                    .trimIndent()
+            )
+
+        val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
+
+        assertEquals(listOf("//pkg:Foo.kt"), labels)
+    }
+
+    @Test
+    fun `build target selection ignores rule calls inside multiline strings`() {
+        val workspace = createTempDirectory("bazel-target-build-string-rule-")
+        val packageDir = workspace.resolve("pkg")
+        Files.createDirectories(packageDir)
+        packageDir.resolve("Foo.kt").writeText("class Foo")
+        packageDir
+            .resolve("BUILD.bazel")
+            .writeText(
+                """
+                kt_jvm_library(
+                    name = "a",
+                    srcs = ["Foo.kt"],
+                    description = '''
+                kt_jvm_library(
+                    name = "a",
+                    srcs = ["Wrong.kt"],
+                )
+                    ''',
+                )
+                """
+                    .trimIndent()
+            )
+
+        val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
+
+        assertEquals(listOf("//pkg:Foo.kt"), labels)
+    }
+
+    @Test
     fun `build target selection normalizes cross-package direct files`() {
         val workspace = createTempDirectory("bazel-target-cross-package-file-")
         val packageDir = workspace.resolve("pkg")
