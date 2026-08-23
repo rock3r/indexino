@@ -251,6 +251,34 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `destructured lambda parameter does not count as receiver property`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class LambdaDestructuring(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is LambdaDestructuring &&
+                                Pair(other.value, 0).let { (value, _) ->
+                                    value == other.value
+                                }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String =
+                            "LambdaDestructuring(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `nested implicit receiver does not count as class receiver`() {
         val findings =
             rule()
@@ -396,6 +424,39 @@ class EqualityMembersRuleTest {
                     }
                     """
                         .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
+    fun `imported plain lambda helper preserves the class receiver`() {
+        val findings =
+            rule()
+                .lintWithDependencies(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    import dev.sebastiano.indexino.helpers.check
+
+                    class ImportedPlainLambda(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is ImportedPlainLambda &&
+                                other.check { value == other.value }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String =
+                            "ImportedPlainLambda(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent(),
+                    """
+                    package dev.sebastiano.indexino.helpers
+
+                    fun <T> T.check(block: () -> Boolean): Boolean = block()
+                    """
+                        .trimIndent(),
                 )
 
         assertTrue(findings.isEmpty(), findings.joinToString { it.message })
@@ -1333,6 +1394,29 @@ class EqualityMembersRuleTest {
                         override fun hashCode(): Int = value.hashCode()
 
                         override fun toString(): String = "Parenthesized(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
+    fun `parenthesized this receiver preserves valid structural comparison`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class ParenthesizedThis(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is ParenthesizedThis && (this).value == other.value
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "ParenthesizedThis(value=${'$'}value)"
                     }
                     """
                         .trimIndent()

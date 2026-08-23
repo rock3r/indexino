@@ -294,8 +294,11 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
     private fun KtExpression.isCurrentReceiver(
         equalsFunction: KtNamedFunction,
         receiverClass: KtClass,
-    ): Boolean =
-        this is KtThisExpression &&
+    ): Boolean {
+        if (this is KtParenthesizedExpression) {
+            return expression?.isCurrentReceiver(equalsFunction, receiverClass) == true
+        }
+        return this is KtThisExpression &&
             ((text == "this" &&
                 generateSequence(parent) { it.parent }
                     .filterIsInstance<KtClassOrObject>()
@@ -314,6 +317,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                         .takeWhile { it !== equalsFunction }
                         .filterIsInstance<KtLabeledExpression>()
                         .none { it.getLabelName() == receiverClass.name }))
+    }
 
     private fun KtFunctionLiteral.hasForeignReceiverLambdaSyntax(
         equalsFunction: KtNamedFunction,
@@ -338,15 +342,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                 return !receiver.isCurrentReceiver(equalsFunction, receiverClass)
             }
             if (calleeName !in setOf("run", "apply")) {
-                val localLambdaType =
-                    containingKtFile.declarations
-                        .filterIsInstance<KtNamedFunction>()
-                        .firstOrNull { it.name == calleeName }
-                        ?.valueParameters
-                        ?.lastOrNull()
-                        ?.typeReference
-                        ?.text
-                if (localLambdaType != null) return ".()" in localLambdaType
+                return analyze(this) { symbol.receiverParameter != null }
             }
             val receiver = qualifiedCall.receiverExpression
             return receiver.text != "kotlin" &&
@@ -384,7 +380,12 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                         }
                     is KtFunction ->
                         ancestor !== ignoredFunction &&
-                            (ancestor.valueParameters.any { it.name == property } ||
+                            (ancestor.valueParameters.any { parameter ->
+                                parameter.name == property ||
+                                    parameter.destructuringDeclaration?.entries?.any {
+                                        it.name == property
+                                    } == true
+                            } ||
                                 (ancestor is KtFunctionLiteral &&
                                     property == "it" &&
                                     ancestor.hasImplicitItParameter()))
