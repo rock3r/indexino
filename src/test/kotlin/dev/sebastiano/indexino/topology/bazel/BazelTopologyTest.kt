@@ -743,6 +743,42 @@ class BazelTopologyTest {
     }
 
     @Test
+    fun `build target selection preserves canonical root direct files`() {
+        val workspace = createTempDirectory("bazel-target-root-file-")
+        val packageDir = workspace.resolve("pkg")
+        Files.createDirectories(packageDir)
+        workspace.resolve("Foo.kt").writeText("class Foo")
+        packageDir
+            .resolve("BUILD.bazel")
+            .writeText("kt_jvm_library(name = \"a\", srcs = [\"//:Foo.kt\"])")
+
+        val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
+
+        assertEquals(listOf("//:Foo.kt"), labels)
+    }
+
+    @Test
+    fun `build target selection prefers declared file-like aggregators over files`() {
+        val workspace = createTempDirectory("bazel-target-file-like-filegroup-")
+        val packageDir = workspace.resolve("pkg")
+        Files.createDirectories(packageDir)
+        packageDir.resolve("Foo.kt").writeText("class Foo")
+        packageDir
+            .resolve("BUILD.bazel")
+            .writeText(
+                """
+                filegroup(name = "sources.kt", srcs = ["Foo.kt"])
+                kt_jvm_library(name = "a", srcs = [":sources.kt"])
+                """
+                    .trimIndent()
+            )
+
+        val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
+
+        assertEquals(listOf("//pkg:Foo.kt"), labels)
+    }
+
+    @Test
     fun `build target selection ignores non-indexable direct resource labels`() {
         val workspace = createTempDirectory("bazel-target-image-label-")
         val packageDir = workspace.resolve("pkg")

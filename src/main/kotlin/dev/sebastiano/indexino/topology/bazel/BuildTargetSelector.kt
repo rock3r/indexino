@@ -36,7 +36,11 @@ internal object BuildTargetSelector {
         }
         addRule(targetName)
         return selected.values.joinToString("\n") { rule ->
-            normalizeFileLabels(TRIPLE_QUOTED_STRING.replace(rule, "\"\""), packagePath)
+            normalizeFileLabels(
+                TRIPLE_QUOTED_STRING.replace(rule, "\"\""),
+                packagePath,
+                rulesByName.keys,
+            )
         }
     }
 
@@ -78,23 +82,30 @@ internal object BuildTargetSelector {
                 .ifEmpty { canonicalPackage.substringAfterLast('/') }
                 .takeIf { canonicalPackage == packagePath }
         }
-        return name?.takeUnless(::isIndexableFile)
+        return name
     }
 
-    private fun normalizeFileLabels(rule: String, packagePath: String): String {
+    private fun normalizeFileLabels(
+        rule: String,
+        packagePath: String,
+        declaredRuleNames: Set<String>,
+    ): String {
         val normalized =
             SOURCE_LABEL.replace(rule) { label ->
                 val name = sourceTargetName(label, packagePath)
-                if (name != null) {
-                    label.value
+                if (name in declaredRuleNames) {
+                    "\"\""
                 } else {
                     val fileName = label.groupValues[1].ifEmpty { label.groupValues[3] }
                     val canonicalPackage = label.groupValues[2]
                     if (
                         isIndexableFile(fileName) &&
-                            (canonicalPackage.isEmpty() || canonicalPackage == packagePath)
+                            ((!label.value.startsWith("\"//") && canonicalPackage.isEmpty()) ||
+                                canonicalPackage == packagePath)
                     ) {
                         "\"$fileName\""
+                    } else if (isIndexableFile(fileName) && canonicalPackage.isEmpty()) {
+                        "\"//$fileName\""
                     } else if (isIndexableFile(fileName) && canonicalPackage.isNotEmpty()) {
                         "\"//$canonicalPackage/$fileName\""
                     } else {
