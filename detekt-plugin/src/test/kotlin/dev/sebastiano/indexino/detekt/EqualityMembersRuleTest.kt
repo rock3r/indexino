@@ -275,6 +275,31 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `package qualified with uses its argument as lambda receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class QualifiedWith(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is QualifiedWith &&
+                                kotlin.with(other) { value == other.value }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "QualifiedWith(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `unqualified receiver lambda property does not count as class receiver`() {
         val findings =
             rule()
@@ -1168,6 +1193,42 @@ class EqualityMembersRuleTest {
                         override fun hashCode(): Int = value.hashCode()
 
                         override fun toString(): String = "LookalikeObjects(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(
+            findings.any {
+                it.message == "Function equals must compare property value through other.value."
+            },
+            findings.joinToString { it.message },
+        )
+    }
+
+    @Test
+    fun `class member shadowing imported Objects does not count as structural equality`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    import java.util.Objects
+
+                    class MemberObjects(val value: String) {
+                        private val Objects = Helper
+
+                        override fun equals(other: Any?): Boolean =
+                            other is MemberObjects && Objects.equals(value, other.value)
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "MemberObjects(value=${'$'}value)"
+
+                        private object Helper {
+                            fun equals(first: Any?, second: Any?): Boolean = true
+                        }
                     }
                     """
                         .trimIndent()

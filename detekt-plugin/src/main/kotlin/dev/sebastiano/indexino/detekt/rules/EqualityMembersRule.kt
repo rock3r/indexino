@@ -229,9 +229,19 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
             } ?: return false
         val importedName = objectsImport.aliasName ?: "Objects"
         if (text != importedName || isShadowed(importedName)) return false
-        return containingKtFile.declarations.filterIsInstance<KtNamedDeclaration>().none {
-            it.name == importedName
-        }
+        val shadowsImportAtFileLevel =
+            containingKtFile.declarations.filterIsInstance<KtNamedDeclaration>().any {
+                it.name == importedName
+            }
+        val shadowsImportInEnclosingClass =
+            generateSequence(parent) { it.parent }
+                .filterIsInstance<KtClassOrObject>()
+                .any { enclosingClass ->
+                    enclosingClass.declarations.filterIsInstance<KtNamedDeclaration>().any {
+                        it.name == importedName
+                    }
+                }
+        return !shadowsImportAtFileLevel && !shadowsImportInEnclosingClass
     }
 
     private fun KtBinaryExpression.comparesReceiverAndOtherProperty(
@@ -324,6 +334,11 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         if (aliasesNonReceiverRun) return false
         if (qualifiedCall?.selectorExpression == call) {
             if (calleeName in setOf("let", "also")) return false
+            if (calleeName == "with" && qualifiedCall.receiverExpression.text == "kotlin") {
+                val receiver =
+                    call.valueArguments.firstOrNull()?.getArgumentExpression() ?: return true
+                return !receiver.isCurrentReceiver(equalsFunction, receiverClass)
+            }
             if (calleeName !in setOf("run", "apply")) {
                 val localLambdaType =
                     containingKtFile.declarations
