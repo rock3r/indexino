@@ -4,7 +4,7 @@ internal object BuildTargetSelector {
     private val RULE_CALL = Regex("""(?m)^\s*[A-Za-z_][A-Za-z0-9_.]*\s*\(""")
     private val NAME_ASSIGNMENT = Regex("""(?<![A-Za-z0-9_])name\s*=\s*["']([^"']+)["']""")
     private val SOURCE_ATTRIBUTE = Regex("""(?<![A-Za-z0-9_])(?:srcs|resource_files)\s*=""")
-    private val LOCAL_LABEL = Regex("""["']:([A-Za-z0-9_.+\-]+)["']""")
+    private val LOCAL_LABEL = Regex("""["']:([^"']+)["']""")
 
     fun select(content: String, targetName: String): String {
         val rulesByName =
@@ -30,19 +30,43 @@ internal object BuildTargetSelector {
     private fun ruleName(rule: String): String? {
         val assignment =
             NAME_ASSIGNMENT.findAll(rule).firstOrNull { match ->
-                !BuildFileComments.isCommentedOutInBlock(rule, match.range.first)
+                isTopLevelCode(rule, match.range.first)
             }
         return assignment?.groupValues?.get(1)
     }
 
     private fun sourceLabels(rule: String): Sequence<String> =
         SOURCE_ATTRIBUTE.findAll(rule)
-            .filterNot { match -> BuildFileComments.isCommentedOutInBlock(rule, match.range.first) }
+            .filter { match -> isTopLevelCode(rule, match.range.first) }
             .flatMap { match ->
                 val valueStart = match.range.last + 1
                 val valueEnd = BuildFileSrcsParser.findSrcsValueEnd(rule, valueStart) ?: rule.length
                 LOCAL_LABEL.findAll(rule.substring(valueStart, valueEnd)).map { it.groupValues[1] }
             }
+
+    private fun isTopLevelCode(rule: String, position: Int): Boolean {
+        var depth = 0
+        var inString: Char? = null
+        var escaped = false
+        var inComment = false
+        for (index in 0 until position) {
+            val char = rule[index]
+            when {
+                inComment -> inComment = char != '\n'
+                inString != null ->
+                    when {
+                        escaped -> escaped = false
+                        char == '\\' -> escaped = true
+                        char == inString -> inString = null
+                    }
+                char == '#' -> inComment = true
+                char == '"' || char == '\'' -> inString = char
+                char == '(' -> depth++
+                char == ')' -> depth--
+            }
+        }
+        return depth == 1 && inString == null && !inComment
+    }
 
     private fun ruleAt(content: String, match: MatchResult): String? {
         if (BuildFileComments.isCommentedOutInBlock(content, match.range.first)) return null

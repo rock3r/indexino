@@ -213,4 +213,55 @@ class BazelTopologyTest {
 
         assertEquals(listOf("//pkg:src/A.kt"), labels)
     }
+
+    @Test
+    fun `build target selection expands path-like local source targets`() {
+        val workspace = createTempDirectory("bazel-target-path-label-")
+        val packageDir = workspace.resolve("pkg")
+        Files.createDirectories(packageDir.resolve("src"))
+        packageDir.resolve("src/A.kt").writeText("class A")
+        packageDir
+            .resolve("BUILD.bazel")
+            .writeText(
+                """
+                filegroup(
+                    name = "src/common",
+                    srcs = ["src/A.kt"],
+                )
+                kt_jvm_library(
+                    name = "a",
+                    srcs = [":src/common"],
+                )
+                """
+                    .trimIndent()
+            )
+
+        val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
+
+        assertEquals(listOf("//pkg:src/A.kt"), labels)
+    }
+
+    @Test
+    fun `build target selection ignores name text inside strings`() {
+        val workspace = createTempDirectory("bazel-target-name-string-")
+        val packageDir = workspace.resolve("pkg")
+        Files.createDirectories(packageDir.resolve("src"))
+        packageDir.resolve("src/A.kt").writeText("class A")
+        packageDir
+            .resolve("BUILD.bazel")
+            .writeText(
+                """
+                custom_library(
+                    description = "name = 'helper'",
+                    name = "a",
+                    srcs = ["src/A.kt"],
+                )
+                """
+                    .trimIndent()
+            )
+
+        val labels = BazelTopology.degradedSourceLabels("//pkg:a", workspace)
+
+        assertEquals(listOf("//pkg:src/A.kt"), labels)
+    }
 }
