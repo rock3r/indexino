@@ -5,6 +5,7 @@ internal object BuildTargetSelector {
     private val NAME_ASSIGNMENT = Regex("""(?<![A-Za-z0-9_])name\s*=\s*["']([^"']+)["']""")
     private val SOURCE_ATTRIBUTE = Regex("""(?<![A-Za-z0-9_])(?:srcs|resource_files)\s*=""")
     private val ACTUAL_ATTRIBUTE = Regex("""(?<![A-Za-z0-9_])actual\s*=""")
+    private val ACTUAL_FILE = Regex("""(?m)^(\s*)actual\s*=\s*["']([^"']+\.(?:kt|java|xml))["']""")
     private val SOURCE_LABEL = Regex("""["'](?::([^"']+)|//([^:"']*):([^"']+))["']""")
     private val INDEXABLE_EXTENSIONS = setOf("kt", "java", "xml")
 
@@ -66,26 +67,35 @@ internal object BuildTargetSelector {
         return name?.takeUnless(::isIndexableFile)
     }
 
-    private fun normalizeFileLabels(rule: String, packagePath: String): String =
-        SOURCE_LABEL.replace(rule) { label ->
-            val name = sourceTargetName(label, packagePath)
-            if (name != null) {
-                label.value
-            } else {
-                val fileName = label.groupValues[1].ifEmpty { label.groupValues[3] }
-                val canonicalPackage = label.groupValues[2]
-                if (
-                    isIndexableFile(fileName) &&
-                        (canonicalPackage.isEmpty() || canonicalPackage == packagePath)
-                ) {
-                    "\"$fileName\""
-                } else if (isIndexableFile(fileName) && canonicalPackage.isNotEmpty()) {
-                    "\"//$canonicalPackage/$fileName\""
-                } else {
+    private fun normalizeFileLabels(rule: String, packagePath: String): String {
+        val normalized =
+            SOURCE_LABEL.replace(rule) { label ->
+                val name = sourceTargetName(label, packagePath)
+                if (name != null) {
                     label.value
+                } else {
+                    val fileName = label.groupValues[1].ifEmpty { label.groupValues[3] }
+                    val canonicalPackage = label.groupValues[2]
+                    if (
+                        isIndexableFile(fileName) &&
+                            (canonicalPackage.isEmpty() || canonicalPackage == packagePath)
+                    ) {
+                        "\"$fileName\""
+                    } else if (isIndexableFile(fileName) && canonicalPackage.isNotEmpty()) {
+                        "\"//$canonicalPackage/$fileName\""
+                    } else {
+                        label.value
+                    }
                 }
             }
+        return if (rule.trimStart().startsWith("alias(")) {
+            ACTUAL_FILE.replace(normalized) { match ->
+                "${match.groupValues[1]}srcs = [\"${match.groupValues[2]}\"]"
+            }
+        } else {
+            normalized
         }
+    }
 
     private fun isIndexableFile(name: String): Boolean =
         name.substringAfterLast('.', missingDelimiterValue = "") in INDEXABLE_EXTENSIONS
