@@ -260,6 +260,29 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `this inside package qualified run preserves class receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class PackageRun(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is PackageRun && kotlin.run { this.value == other.value }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "PackageRun(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `this inside nested object does not count as class receiver`() {
         val findings =
             rule()
@@ -278,6 +301,34 @@ class EqualityMembersRuleTest {
                         override fun hashCode(): Int = value.hashCode()
 
                         override fun toString(): String = "NestedObject(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
+    fun `bare property inside nested object does not count as class receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class BareNestedObject(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is BareNestedObject &&
+                                object {
+                                    val value: String = other.value
+                                    fun matches(): Boolean = value == other.value
+                                }.matches()
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "BareNestedObject(value=${'$'}value)"
                     }
                     """
                         .trimIndent()
@@ -337,6 +388,33 @@ class EqualityMembersRuleTest {
 
         assertEquals(1, findings.size)
         assertTrue(findings.single().message.contains("equals, hashCode, toString"))
+    }
+
+    @Test
+    fun `non nullable equals overload override does not satisfy Any equals`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    interface StringEquality {
+                        fun equals(other: String): Boolean
+                    }
+
+                    class InterfaceOverload(val length: Int) : StringEquality {
+                        override fun equals(other: String): Boolean = length == other.length
+
+                        override fun hashCode(): Int = length
+
+                        override fun toString(): String = "InterfaceOverload(length=${'$'}length)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("equals"))
     }
 
     @Test

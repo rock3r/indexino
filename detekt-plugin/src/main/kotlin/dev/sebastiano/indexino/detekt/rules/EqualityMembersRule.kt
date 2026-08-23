@@ -97,7 +97,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
     private fun KtNamedFunction.isRequiredOverride(functionName: String): Boolean {
         if (name != functionName || !hasModifier(KtTokens.OVERRIDE_KEYWORD)) return false
         return when (functionName) {
-            "equals" -> valueParameters.size == 1
+            "equals" -> valueParameters.singleOrNull()?.typeReference?.text?.endsWith("?") == true
             "hashCode",
             "toString" -> valueParameters.isEmpty()
             else -> false
@@ -166,11 +166,18 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
             else ->
                 (isName(property) &&
                     !isShadowed(property) &&
-                    !isInsideReceiverLambda(equalsFunction)) ||
+                    !isInsideReceiverLambda(equalsFunction) &&
+                    isOwnedByClass(receiverLabel)) ||
                     (this is KtDotQualifiedExpression &&
                         receiverExpression.isCurrentReceiver(equalsFunction, receiverLabel) &&
                         selectorExpression?.isName(property) == true)
         }
+
+    private fun KtExpression.isOwnedByClass(receiverLabel: String?): Boolean =
+        generateSequence(parent) { it.parent }
+            .filterIsInstance<KtClassOrObject>()
+            .firstOrNull()
+            ?.name == receiverLabel
 
     private fun KtExpression.isInsideReceiverLambda(equalsFunction: KtNamedFunction): Boolean =
         generateSequence(parent) { it.parent }
@@ -203,7 +210,9 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
         val calleeName = call.calleeExpression?.text
         val qualifiedCall = call.parent as? KtDotQualifiedExpression
         return calleeName == "with" ||
-            (calleeName in setOf("run", "apply") && qualifiedCall?.selectorExpression == call)
+            (calleeName in setOf("run", "apply") &&
+                qualifiedCall?.selectorExpression == call &&
+                qualifiedCall.receiverExpression.text != "kotlin")
     }
 
     private fun KtExpression.isShadowed(
