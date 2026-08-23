@@ -295,7 +295,7 @@ internal class XmlResourceProducer : IndexProducer {
             while (offset < source.length) {
                 when {
                     source[offset] == '\r' -> {
-                        offset += if (source.getOrNull(offset + 1) == '\n') 2 else 1
+                        offset += xmlCarriageReturnLength(source, offset, isXml11)
                         add(offset)
                     }
                     source[offset] == '\n' ||
@@ -376,7 +376,7 @@ private fun decodeXml(rawValue: String, isXml11: Boolean): DecodedXml {
             rawValue[rawOffset] == '\r' -> {
                 decoded.append('\n')
                 rawOffsets += rawOffset
-                rawOffset += if (rawValue.getOrNull(rawOffset + 1) == '\n') 2 else 1
+                rawOffset += xmlCarriageReturnLength(rawValue, rawOffset, isXml11)
             }
             isXml11 && (rawValue[rawOffset] == '\u0085' || rawValue[rawOffset] == '\u2028') -> {
                 decoded.append('\n')
@@ -408,6 +408,15 @@ private fun decodeXmlEntity(rawValue: String, start: Int, end: Int): String? {
 }
 
 private data class DecodedXml(val value: String, val rawOffsets: IntArray)
+
+private fun xmlCarriageReturnLength(value: String, offset: Int, isXml11: Boolean): Int =
+    if (
+        value.getOrNull(offset + 1) == '\n' || (isXml11 && value.getOrNull(offset + 1) == '\u0085')
+    ) {
+        2
+    } else {
+        1
+    }
 
 private fun skippedMarkupEnd(source: String, offset: Int): Int? =
     when {
