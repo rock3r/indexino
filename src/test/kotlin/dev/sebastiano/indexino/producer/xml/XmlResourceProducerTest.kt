@@ -90,13 +90,16 @@ class XmlResourceProducerTest {
             <resources>
                 <string name="plain">@string/title</string>
                 <string name="cdata"><![CDATA[@string/title]]></string>
+                <string name="comment"><!-- @string/title -->@string/title</string>
             </resources>
             """
                 .trimIndent()
         val layout =
             """
             <TextView
-                note="&#10;@string/title" />
+                note="&#10;@string/title"
+                android:text="@string/foo&#95;bar"
+                xmlns:android="http://schemas.android.com/apk/res/android" />
             """
                 .trimIndent()
 
@@ -116,7 +119,7 @@ class XmlResourceProducerTest {
 
             val references =
                 store
-                    .prefixScan("ref:res:string:title")
+                    .prefixScan("ref:res:string:")
                     .map { it.second }
                     .filterIsInstance<ReferenceRecord>()
                     .toList()
@@ -132,7 +135,20 @@ class XmlResourceProducerTest {
             )
             assertTrue(
                 references.any {
+                    it.relativeFile.endsWith("strings.xml") && it.line == 4 && it.column == 50
+                }
+            )
+            assertTrue(
+                references.any {
                     it.relativeFile.endsWith("main.xml") && it.line == 2 && it.column == 16
+                }
+            )
+            assertTrue(
+                references.any {
+                    it.symbolFqn == "res:string:foo_bar" &&
+                        it.relativeFile.endsWith("main.xml") &&
+                        it.line == 3 &&
+                        it.column == 19
                 }
             )
         }

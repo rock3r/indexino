@@ -84,6 +84,7 @@ internal class XmlResourceProducer : IndexProducer {
                             indexAttribute(
                                 store,
                                 indexedSource,
+                                reader.getAttributeValue(attributeIndex),
                                 source.substring(rawAttribute.valueStart, rawAttribute.valueEnd),
                                 source,
                                 rawAttribute.valueStart,
@@ -114,41 +115,52 @@ internal class XmlResourceProducer : IndexProducer {
         store: CodeIndexStore,
         indexedSource: IndexedSource,
         value: String,
+        rawValue: String,
         source: String,
         valueOffset: Int,
     ) {
         RESOURCE_REFERENCE.findAll(value).forEach { match ->
-            val position = sourcePosition(source, valueOffset + match.range.first)
-            val createsId = match.groupValues[CREATE_MARKER_GROUP] == "+"
-            val packageName = match.groupValues[RESOURCE_PACKAGE_GROUP].ifBlank { null }
-            val type = match.groupValues[RESOURCE_TYPE_GROUP]
-            val name = match.groupValues[RESOURCE_NAME_GROUP]
-            if (createsId && packageName == null && type == "id") {
-                putResource(store, indexedSource, type, name, position.line, position.column)
-            } else {
-                val target = resourceFqn(packageName, type, name)
-                store.put(
-                    CodeIndexKey.ref(
-                        target,
-                        indexedSource.originId,
-                        indexedSource.path,
-                        position.line,
-                        position.column,
-                    ),
-                    ReferenceRecord(
-                        symbolFqn = target,
-                        relativeFile = indexedSource.path,
-                        originId = indexedSource.originId,
-                        line = position.line,
-                        column = position.column,
-                        context = "resource",
-                        language = LANGUAGE,
-                        referencedName = name,
-                        qualifier = listOfNotNull(packageName, type).joinToString(":"),
-                        candidateSymbolFqns = listOf(target),
-                    ),
-                )
-            }
+            val rawMatchOffset = rawOffsetForDecodedIndex(rawValue, match.range.first)
+            val position = sourcePosition(source, valueOffset + rawMatchOffset)
+            indexMatch(store, indexedSource, match, position)
+        }
+    }
+
+    private fun indexMatch(
+        store: CodeIndexStore,
+        indexedSource: IndexedSource,
+        match: MatchResult,
+        position: SourcePosition,
+    ) {
+        val createsId = match.groupValues[CREATE_MARKER_GROUP] == "+"
+        val packageName = match.groupValues[RESOURCE_PACKAGE_GROUP].ifBlank { null }
+        val type = match.groupValues[RESOURCE_TYPE_GROUP]
+        val name = match.groupValues[RESOURCE_NAME_GROUP]
+        if (createsId && packageName == null && type == "id") {
+            putResource(store, indexedSource, type, name, position.line, position.column)
+        } else {
+            val target = resourceFqn(packageName, type, name)
+            store.put(
+                CodeIndexKey.ref(
+                    target,
+                    indexedSource.originId,
+                    indexedSource.path,
+                    position.line,
+                    position.column,
+                ),
+                ReferenceRecord(
+                    symbolFqn = target,
+                    relativeFile = indexedSource.path,
+                    originId = indexedSource.originId,
+                    line = position.line,
+                    column = position.column,
+                    context = "resource",
+                    language = LANGUAGE,
+                    referencedName = name,
+                    qualifier = listOfNotNull(packageName, type).joinToString(":"),
+                    candidateSymbolFqns = listOf(target),
+                ),
+            )
         }
     }
 
@@ -161,9 +173,9 @@ internal class XmlResourceProducer : IndexProducer {
     ): Int {
         var searchOffset = fromOffset
         RESOURCE_REFERENCE.findAll(value).forEach { match ->
-            val rawOffset = source.indexOf(match.value, searchOffset)
+            val rawOffset = nextTextTokenOffset(source, match.value, searchOffset)
             if (rawOffset >= 0) {
-                indexAttribute(store, indexedSource, match.value, source, rawOffset)
+                indexMatch(store, indexedSource, match, sourcePosition(source, rawOffset))
                 searchOffset = rawOffset + match.value.length
             }
         }
@@ -201,21 +213,6 @@ internal class XmlResourceProducer : IndexProducer {
                 aliases = listOf("@$type/$name"),
             ),
         )
-    }
-
-    private fun startTagEndOffset(source: String, elementStart: Int): Int {
-        var quote: Char? = null
-        for (offset in elementStart + 1 until source.length) {
-            val character = source[offset]
-            if (quote == null && (character == '\'' || character == '\"')) {
-                quote = character
-            } else if (character == quote) {
-                quote = null
-            } else if (quote == null && character == '>') {
-                return offset
-            }
-        }
-        return source.lastIndex
     }
 
     private fun javax.xml.stream.XMLStreamReader.attributeQualifiedName(index: Int): String {
@@ -288,6 +285,76 @@ private fun nextStartElementOffset(source: String, fromOffset: Int): Int {
     return candidate.coerceAtLeast(0)
 }
 
+private fun startTagEndOffset(source: String, elementStart: Int): Int {
+    var quote: Char? = null
+    for (offset in elementStart + 1 until source.length) {
+        val character = source[offset]
+        if (quote == null && (character == '\'' || character == '\"')) {
+            quote = character
+        } else if (character == quote) {
+            quote = null
+        } else if (quote == null && character == '>') {
+            return offset
+        }
+    }
+    return source.lastIndex
+}
+
+private fun nextTextTokenOffset(source: String, token: String, fromOffset: Int): Int {
+    var searchOffset = fromOffset
+    while (searchOffset < source.length) {
+        val candidate = source.indexOf(token, searchOffset)
+        if (candidate < 0) return -1
+        val markup = source.indexOf('<', searchOffset)
+        if (markup < 0 || candidate < markup) return candidate
+        if (source.startsWith(CDATA_START, markup)) {
+            val contentStart = markup + CDATA_START.length
+            val contentEnd =
+                source.indexOf(CDATA_END, contentStart).let { if (it >= 0) it else source.length }
+            if (candidate in contentStart until contentEnd) return candidate
+            searchOffset = (contentEnd + CDATA_END.length).coerceAtMost(source.length)
+        } else {
+            searchOffset =
+                skippedMarkupEnd(source, markup)
+                    ?: (startTagEndOffset(source, markup) + 1).coerceAtMost(source.length)
+        }
+    }
+    return -1
+}
+
+private fun rawOffsetForDecodedIndex(rawValue: String, decodedIndex: Int): Int {
+    var rawOffset = 0
+    var decodedOffset = 0
+    while (decodedOffset < decodedIndex && rawOffset < rawValue.length) {
+        val entityEnd =
+            rawValue
+                .takeIf { it[rawOffset] == '&' }
+                ?.indexOf(';', rawOffset + 1)
+                ?.takeIf { it >= 0 }
+        val entityLength = entityEnd?.let { xmlEntityDecodedLength(rawValue, rawOffset, it) }
+        if (entityEnd != null && entityLength != null) {
+            decodedOffset += entityLength
+            rawOffset = entityEnd + 1
+        } else {
+            decodedOffset++
+            rawOffset++
+        }
+    }
+    return rawOffset
+}
+
+private fun xmlEntityDecodedLength(rawValue: String, start: Int, end: Int): Int? {
+    val body = rawValue.substring(start + 1, end)
+    if (body in XML_PREDEFINED_ENTITIES) return 1
+    val codePoint =
+        when {
+            body.startsWith("#x", ignoreCase = true) -> body.drop(2).toIntOrNull(16)
+            body.startsWith('#') -> body.drop(1).toIntOrNull()
+            else -> null
+        }
+    return codePoint?.takeIf(Character::isValidCodePoint)?.let(Character::charCount)
+}
+
 private fun skippedMarkupEnd(source: String, offset: Int): Int? =
     when {
         source.startsWith(COMMENT_START, offset) ->
@@ -356,3 +423,4 @@ private const val COMMENT_START = "<!--"
 private const val COMMENT_END = "-->"
 private const val CDATA_START = "<![CDATA["
 private const val CDATA_END = "]]>"
+private val XML_PREDEFINED_ENTITIES = setOf("amp", "lt", "gt", "quot", "apos")
