@@ -106,7 +106,8 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
     }
 
     private fun KtNamedFunction.hasNullableAnyParameter(): Boolean {
-        val typeText = valueParameters.singleOrNull()?.typeReference?.text ?: return false
+        val typeText =
+            valueParameters.singleOrNull()?.typeReference?.typeElement?.text ?: return false
         if (!typeText.endsWith("?")) return false
         return containingKtFile.resolvesToAny(typeText.removeSuffix("?"), mutableSetOf())
     }

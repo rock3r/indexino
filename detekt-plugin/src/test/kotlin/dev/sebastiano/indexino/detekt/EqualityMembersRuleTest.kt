@@ -543,6 +543,32 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `annotated Any parameter satisfies equals override`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    @Target(AnnotationTarget.TYPE)
+                    annotation class Marker
+
+                    class AnnotatedAny(val value: String) {
+                        override fun equals(other: @Marker Any?): Boolean =
+                            other is AnnotatedAny && value == other.value
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "AnnotatedAny(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `typealiased Any parameter satisfies equals override`() {
         val findings =
             rule()
