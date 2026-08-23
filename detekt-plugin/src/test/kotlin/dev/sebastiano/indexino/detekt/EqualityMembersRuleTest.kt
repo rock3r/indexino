@@ -3,13 +3,18 @@ package dev.sebastiano.indexino.detekt
 import dev.detekt.api.Config
 import dev.detekt.api.Rule
 import dev.detekt.test.TestConfig
-import dev.detekt.test.lint
+import dev.detekt.test.lintWithContext
+import dev.detekt.test.utils.KotlinEnvironmentContainer
+import dev.detekt.test.utils.createEnvironment
+import dev.sebastiano.indexino.detekt.rules.EqualityMembersRule
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class EqualityMembersRuleTest {
+    private val environment: KotlinEnvironmentContainer = createEnvironment()
+
     @Test
     fun `public model classes require equality members`() {
         val findings =
@@ -93,6 +98,36 @@ class EqualityMembersRuleTest {
                         override fun hashCode(): Int = value.hashCode()
 
                         override fun toString(): String = "ShadowedReceiver(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
+    fun `catch parameters do not count as receiver properties`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class CatchShadow(val value: Throwable) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is CatchShadow) return false
+                            return try {
+                                false
+                            } catch (value: Throwable) {
+                                value == other.value
+                            }
+                        }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "CatchShadow(value=${'$'}value)"
                     }
                     """
                         .trimIndent()
@@ -793,6 +828,38 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `member extension overrides do not satisfy equality members`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    interface ExtensionEquality {
+                        fun String.equals(other: Any?): Boolean
+                        fun String.hashCode(): Int
+                        fun String.toString(): String
+                    }
+
+                    class MemberExtensions(val value: String) : ExtensionEquality {
+                        override fun String.equals(other: Any?): Boolean =
+                            other is MemberExtensions &&
+                                this@MemberExtensions.value == other.value
+
+                        override fun String.hashCode(): Int = this@MemberExtensions.value.hashCode()
+
+                        override fun String.toString(): String =
+                            "MemberExtensions(value=${'$'}{this@MemberExtensions.value})"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("equals, hashCode, toString"))
+    }
+
+    @Test
     fun `non nullable equals overload override does not satisfy Any equals`() {
         val findings =
             rule()
@@ -1232,6 +1299,38 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `imported nullable Any typealias satisfies equals override`() {
+        val findings =
+            rule()
+                .lintWithDependencies(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    import dev.sebastiano.indexino.aliases.NullableAny
+
+                    class ImportedTypealias(val value: String) {
+                        override fun equals(other: NullableAny): Boolean =
+                            other is ImportedTypealias && value == other.value
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String =
+                            "ImportedTypealias(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent(),
+                    """
+                    package dev.sebastiano.indexino.aliases
+
+                    typealias NullableAny = Any?
+                    """
+                        .trimIndent(),
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `body properties participate unless explicitly excluded`() {
         val findings =
             rule()
@@ -1306,4 +1405,10 @@ class EqualityMembersRuleTest {
             )
         return type.getConstructor(Config::class.java).newInstance(TestConfig()) as Rule
     }
+
+    private fun Rule.lint(content: String) =
+        (this as EqualityMembersRule).lintWithContext(environment, content)
+
+    private fun Rule.lintWithDependencies(content: String, vararg dependencies: String) =
+        (this as EqualityMembersRule).lintWithContext(environment, content, *dependencies)
 }

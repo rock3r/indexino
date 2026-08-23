@@ -4,11 +4,15 @@ import com.intellij.psi.util.PsiTreeUtil
 import dev.detekt.api.Config
 import dev.detekt.api.Entity
 import dev.detekt.api.Finding
+import dev.detekt.api.RequiresAnalysisApi
 import dev.detekt.api.Rule
+import org.jetbrains.kotlin.analysis.api.analyze
+import org.jetbrains.kotlin.analysis.api.types.symbol
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.KtBinaryExpression
 import org.jetbrains.kotlin.psi.KtBlockExpression
 import org.jetbrains.kotlin.psi.KtCallExpression
+import org.jetbrains.kotlin.psi.KtCatchClause
 import org.jetbrains.kotlin.psi.KtClass
 import org.jetbrains.kotlin.psi.KtClassOrObject
 import org.jetbrains.kotlin.psi.KtDestructuringDeclaration
@@ -28,9 +32,10 @@ import org.jetbrains.kotlin.psi.KtQualifiedExpression
 import org.jetbrains.kotlin.psi.KtSafeQualifiedExpression
 import org.jetbrains.kotlin.psi.KtThisExpression
 import org.jetbrains.kotlin.psi.KtTypeAlias
+import org.jetbrains.kotlin.psi.KtTypeReference
 import org.jetbrains.kotlin.psi.KtWhenExpression
 
-public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
+public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), RequiresAnalysisApi {
     override fun visitClass(klass: KtClass) {
         super.visitClass(klass)
         if (!klass.isPublicApiValueType()) return
@@ -101,7 +106,13 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
         initializer != null || hasDelegate() || getter == null
 
     private fun KtNamedFunction.isRequiredOverride(functionName: String): Boolean {
-        if (name != functionName || !hasModifier(KtTokens.OVERRIDE_KEYWORD)) return false
+        if (
+            name != functionName ||
+                !hasModifier(KtTokens.OVERRIDE_KEYWORD) ||
+                receiverTypeReference != null
+        ) {
+            return false
+        }
         return when (functionName) {
             "equals" -> hasNullableAnyParameter()
             "hashCode",
@@ -111,10 +122,18 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
     }
 
     private fun KtNamedFunction.hasNullableAnyParameter(): Boolean {
-        val typeText =
-            valueParameters.singleOrNull()?.typeReference?.typeElement?.text ?: return false
-        return containingKtFile.resolvesToNullableAny(typeText, false, mutableSetOf())
+        val typeReference = valueParameters.singleOrNull()?.typeReference ?: return false
+        val typeText = typeReference.typeElement?.text ?: return false
+        return containingKtFile.resolvesToNullableAny(typeText, false, mutableSetOf()) ||
+            typeReference.semanticallyResolvesToNullableAny()
     }
+
+    private fun KtTypeReference.semanticallyResolvesToNullableAny(): Boolean =
+        analyze(this) {
+            val resolvedType = this@semanticallyResolvesToNullableAny.type
+            resolvedType.isMarkedNullable &&
+                resolvedType.symbol?.classId?.asFqNameString() == "kotlin.Any"
+        }
 
     private fun org.jetbrains.kotlin.psi.KtFile.resolvesToNullableAny(
         typeText: String,
@@ -409,6 +428,10 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
                     is KtForExpression ->
                         ancestor.loopParameter?.name == property &&
                             ancestor.body?.let { PsiTreeUtil.isAncestor(it, this, false) } == true
+                    is KtCatchClause ->
+                        ancestor.catchParameter?.name == property &&
+                            ancestor.catchBody?.let { PsiTreeUtil.isAncestor(it, this, false) } ==
+                                true
                     is KtClassOrObject ->
                         ignoredFunction != null &&
                             PsiTreeUtil.isAncestor(ignoredFunction, ancestor, false) &&
