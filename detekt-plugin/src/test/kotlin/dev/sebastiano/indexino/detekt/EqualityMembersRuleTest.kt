@@ -237,6 +237,33 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `bare member inside local extension function does not count as class receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class LocalExtension(val length: Int) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is LocalExtension) return false
+                            fun String.matches(): Boolean = length == other.length
+                            return "x".matches()
+                        }
+
+                        override fun hashCode(): Int = length
+
+                        override fun toString(): String = "LocalExtension(length=${'$'}length)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("length"))
+    }
+
+    @Test
     fun `this inside non receiver lambda preserves class receiver`() {
         val findings =
             rule()

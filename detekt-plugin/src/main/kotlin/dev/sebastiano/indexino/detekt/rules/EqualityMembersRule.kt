@@ -196,7 +196,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
             else ->
                 (isName(property) &&
                     !isShadowed(property) &&
-                    !isInsideReceiverLambda(equalsFunction) &&
+                    !isInsideNestedReceiver(equalsFunction) &&
                     isOwnedByClass(receiverLabel)) ||
                     (this is KtDotQualifiedExpression &&
                         receiverExpression.isCurrentReceiver(equalsFunction, receiverLabel) &&
@@ -209,11 +209,14 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
             .firstOrNull()
             ?.name == receiverLabel
 
-    private fun KtExpression.isInsideReceiverLambda(equalsFunction: KtNamedFunction): Boolean =
+    private fun KtExpression.isInsideNestedReceiver(equalsFunction: KtNamedFunction): Boolean =
         generateSequence(parent) { it.parent }
             .filterIsInstance<KtFunction>()
             .takeWhile { it !== equalsFunction }
-            .any { it is KtFunctionLiteral && it.hasReceiverLambdaSyntax() }
+            .any {
+                (it is KtFunctionLiteral && it.hasReceiverLambdaSyntax()) ||
+                    (it is KtNamedFunction && it.receiverTypeReference != null)
+            }
 
     private fun KtExpression.isCurrentReceiver(
         equalsFunction: KtNamedFunction,
