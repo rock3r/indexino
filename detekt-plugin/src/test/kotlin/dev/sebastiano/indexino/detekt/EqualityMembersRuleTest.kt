@@ -357,6 +357,32 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `aliased unqualified with uses its argument as lambda receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    import kotlin.with as scoped
+
+                    class AliasedWith(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is AliasedWith && scoped(other) { value == other.value }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "AliasedWith(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `unqualified receiver lambda property does not count as class receiver`() {
         val findings =
             rule()

@@ -341,35 +341,26 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         receiverClass: KtClass,
     ): Boolean {
         val lambda = parent as? KtLambdaExpression ?: return true
-        if (analyze(this) { symbol.receiverParameter == null }) return false
+        if (!hasExtensionReceiver()) return false
         val call =
-            PsiTreeUtil.getParentOfType(lambda, KtCallExpression::class.java, false)
-                ?: return analyze(this) { symbol.receiverParameter != null }
-        val calleeName = call.calleeExpression?.text
+            PsiTreeUtil.getParentOfType(lambda, KtCallExpression::class.java, false) ?: return true
         val qualifiedCall = call.parent as? KtQualifiedExpression
-        val aliasesNonReceiverRun =
-            calleeName == "with" &&
-                containingKtFile.importDirectives.any {
-                    it.aliasName == "with" && it.importedFqName?.asString() == "kotlin.run"
-                }
-        if (aliasesNonReceiverRun) return false
         if (qualifiedCall?.selectorExpression == call) {
-            if (calleeName == "with" && qualifiedCall.receiverExpression.text == "kotlin") {
+            if (qualifiedCall.receiverExpression.text == "kotlin") {
                 val receiver =
                     call.valueArguments.firstOrNull()?.getArgumentExpression() ?: return true
                 return !receiver.isCurrentReceiver(equalsFunction, receiverClass)
             }
-            if (calleeName !in setOf("run", "apply")) {
-                return analyze(this) { symbol.receiverParameter != null }
-            }
             val receiver = qualifiedCall.receiverExpression
-            return receiver.text != "kotlin" &&
-                !receiver.isCurrentReceiver(equalsFunction, receiverClass)
+            return !receiver.isCurrentReceiver(equalsFunction, receiverClass)
         }
-        if (calleeName != "with") return false
-        val receiver = call.valueArguments.firstOrNull()?.getArgumentExpression() ?: return true
+        val receiver = call.valueArguments.firstOrNull()?.getArgumentExpression() ?: return false
+        if (receiver is KtLambdaExpression) return false
         return !receiver.isCurrentReceiver(equalsFunction, receiverClass)
     }
+
+    private fun KtFunctionLiteral.hasExtensionReceiver(): Boolean =
+        analyze(this) { symbol.receiverParameter?.owningCallableSymbol == symbol }
 
     private fun KtExpression.isShadowed(
         property: String,
