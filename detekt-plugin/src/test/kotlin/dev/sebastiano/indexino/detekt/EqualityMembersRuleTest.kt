@@ -185,6 +185,32 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `this inside local function preserves class receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class LocalFunction(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is LocalFunction) return false
+                            fun hasSameValue(): Boolean = this.value == other.value
+                            return hasSameValue()
+                        }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "LocalFunction(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `loop locals do not count as receiver properties`() {
         val findings =
             rule()

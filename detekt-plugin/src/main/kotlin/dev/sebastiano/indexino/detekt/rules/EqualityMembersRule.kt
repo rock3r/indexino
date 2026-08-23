@@ -186,7 +186,8 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION) {
             ((text == "this" &&
                 generateSequence(parent) { it.parent }
                     .filterIsInstance<KtFunction>()
-                    .firstOrNull() === equalsFunction) ||
+                    .takeWhile { it !== equalsFunction }
+                    .all { it is KtNamedFunction && it.receiverTypeReference == null }) ||
                 (receiverLabel != null && text == "this@$receiverLabel"))
 
     private fun KtExpression.isShadowed(
