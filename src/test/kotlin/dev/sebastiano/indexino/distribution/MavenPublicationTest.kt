@@ -145,6 +145,34 @@ class MavenPublicationTest {
     }
 
     @Test
+    fun `publication embeds generated host range and compiled plugin target ABI`() {
+        val repository = requiredProperty("indexino.publicationRepository").let(::File)
+        val groupId = requiredProperty("indexino.publicationGroup")
+        val version = requiredProperty("indexino.publicationVersion")
+
+        val hostJar = publishedMainJar(repository, groupId, "indexino", version)
+        JarFile(hostJar).use { jar ->
+            assertEquals(
+                "1.0.0",
+                jar.manifest.mainAttributes.getValue("Indexino-Plugin-ABI-Version"),
+            )
+            assertEquals(
+                "1.0.0..1.0.0",
+                jar.manifest.mainAttributes.getValue("Indexino-Plugin-ABI-Supported"),
+            )
+            assertNotNull(jar.getEntry("META-INF/indexino/host-plugin-abi.properties"))
+        }
+
+        val pluginJar = publishedMainJar(repository, groupId, "indexino-selection-context", version)
+        JarFile(pluginJar).use { jar ->
+            assertEquals(
+                "1.0.0",
+                jar.manifest.mainAttributes.getValue("Indexino-Plugin-ABI-Target"),
+            )
+        }
+    }
+
+    @Test
     fun `tag release cannot publish Central without every sibling POM dependency`() {
         val releaseWorkflow = File(".github/workflows/release.yml").readText()
         val modelBuild = File("indexino-model/build.gradle.kts").readText()
@@ -263,6 +291,24 @@ class MavenPublicationTest {
                 "Release workflow must publish the complete sibling coordinate set",
             )
         }
+    }
+
+    private fun publishedMainJar(
+        repository: File,
+        groupId: String,
+        artifactId: String,
+        version: String,
+    ): File {
+        val directory =
+            repository.resolve(groupId.replace('.', '/')).resolve("$artifactId/$version")
+        return assertNotNull(
+            directory.listFiles()?.singleOrNull { file ->
+                file.extension == "jar" &&
+                    !file.name.endsWith("-sources.jar") &&
+                    !file.name.endsWith("-javadoc.jar")
+            },
+            "Expected one main $artifactId JAR in $directory",
+        )
     }
 
     private fun requiredProperty(name: String): String =

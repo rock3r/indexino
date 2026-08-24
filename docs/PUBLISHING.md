@@ -16,6 +16,13 @@ Metalava signature dumps under `api/<artifact>/`, detekt declaration rules, and 
 fixtures enforce that boundary. See [API-STABILITY.md](API-STABILITY.md) and
 [PUBLIC-API-DESIGN.html](PUBLIC-API-DESIGN.html).
 
+The plugin API is governed separately by `api/indexino-plugin-api/abi-version.txt`, the ordered
+`abi-lineage.txt` ledger, and immutable versioned dumps under `api/indexino-plugin-api/history/`.
+`verifyPluginAbiLineage` uses Metalava to
+classify the new surface, rejects SemVer/ABI declarations that disagree with that comparison, and
+generates the host's supported interval. A release must never edit an old dump or substitute a
+handwritten optimistic range.
+
 The CLI remains executable from the Shadow and R8 artifacts. Presence of implementation bytecode
 in the thin JAR does not make packages outside the future public packages a supported API.
 
@@ -62,6 +69,11 @@ The task publishes to an isolated repository under `build/test-maven-repository/
   both artifacts and publication metadata
 - the POM contains Central-required name, description, URL, license, SCM, developer, and
   dependency metadata
+- `indexino-plugin-api` contains generated current/range metadata, the host advertises the same
+  generated ABI and supported range from its host-owned
+  `META-INF/indexino/host-plugin-abi.properties` resource (distinct from the plugin API metadata),
+  and every compiled reference plugin declares
+  `Indexino-Plugin-ABI-Target`
 
 `./gradlew publishToMavenLocal` is also available for testing a consumer build against the local
 Maven repository.
@@ -69,7 +81,8 @@ Maven repository.
 ## Tag-driven release flow
 
 `.github/workflows/release.yml` runs for tags shaped like `v<semver>`. It strips the leading `v`,
-runs the full check, thin publication verifier, R8 verifier, and generated bundled-dependency
+runs the full check (including `verifyPluginAbiLineage`), thin publication verifier, R8 verifier,
+and generated bundled-dependency
 inventory with that release version, signs every Maven publication artifact with the in-memory PGP
 key, and uploads to the Sonatype Central Portal.
 

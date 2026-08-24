@@ -10,7 +10,69 @@ import dev.sebastiano.indexino.plugin.api.IndexinoPluginProvider
 import dev.sebastiano.indexino.plugin.api.IndexinoPluginRegistrar
 import dev.sebastiano.indexino.plugin.api.PluginDescriptor
 import dev.sebastiano.indexino.plugin.api.PostProcessorV1
+import java.net.URL
+import java.net.URLClassLoader
+import java.nio.file.Path
+import java.util.Collections
+import java.util.Enumeration
 import java.util.ServiceLoader
+import java.util.jar.JarFile
+
+internal class IsolatedPluginClassLoader(pluginJar: Path, parent: ClassLoader) :
+    URLClassLoader(arrayOf(pluginJar.toUri().toURL()), parent) {
+    override fun getResource(name: String): URL? =
+        if (PARENT_FIRST_RESOURCE_PREFIXES.any(name::startsWith)) {
+            parent.getResource(name) ?: findResource(name)
+        } else {
+            findResource(name) ?: parent.getResource(name)
+        }
+
+    override fun getResources(name: String): Enumeration<URL> {
+        val local = findResources(name).toList()
+        val inherited = parent.getResources(name).toList()
+        val ordered =
+            if (PARENT_FIRST_RESOURCE_PREFIXES.any(name::startsWith)) {
+                inherited + local
+            } else {
+                local + inherited
+            }
+        return Collections.enumeration(ordered.distinct())
+    }
+
+    override fun loadClass(name: String, resolve: Boolean): Class<*> =
+        synchronized(getClassLoadingLock(name)) {
+            val loaded = findLoadedClass(name)
+            val type =
+                loaded
+                    ?: if (PARENT_FIRST_PREFIXES.any(name::startsWith)) {
+                        super.loadClass(name, false)
+                    } else {
+                        try {
+                            findClass(name)
+                        } catch (_: ClassNotFoundException) {
+                            super.loadClass(name, false)
+                        }
+                    }
+            if (resolve) resolveClass(type)
+            type
+        }
+
+    private companion object {
+        val PARENT_FIRST_PREFIXES =
+            listOf(
+                "java.",
+                "javax.",
+                "jdk.",
+                "sun.",
+                "kotlin.",
+                "dev.sebastiano.indexino.model.",
+                "dev.sebastiano.indexino.plugin.api.",
+            )
+        val PARENT_FIRST_RESOURCE_PREFIXES = PARENT_FIRST_PREFIXES.map { prefix ->
+            prefix.replace('.', '/')
+        }
+    }
+}
 
 internal class PluginRegistry
 internal constructor(
@@ -44,12 +106,22 @@ internal constructor(
             BasicFactSchemaVersion.of(BASIC_FACT_SCHEMA_VERSION)
 
         @OptIn(IndexinoInternalApi::class)
-        internal fun load(classLoader: ClassLoader): PluginRegistry {
-            val registrations =
-                ServiceLoader.load(IndexinoPluginProvider::class.java, classLoader).map { provider
-                    ->
-                    IndexinoPluginRegistrar().also(provider::install)
-                }
+        internal fun load(classLoader: ClassLoader): PluginRegistry =
+            registryOf(registrationsFrom(classLoader))
+
+        @OptIn(IndexinoInternalApi::class)
+        private fun registrationsFrom(
+            classLoader: ClassLoader,
+            accept: (Class<out IndexinoPluginProvider>) -> Boolean = { true },
+        ): List<IndexinoPluginRegistrar> =
+            ServiceLoader.load(IndexinoPluginProvider::class.java, classLoader)
+                .stream()
+                .filter { provider -> accept(provider.type()) }
+                .map { provider -> IndexinoPluginRegistrar().also(provider.get()::install) }
+                .toList()
+
+        @OptIn(IndexinoInternalApi::class)
+        private fun registryOf(registrations: List<IndexinoPluginRegistrar>): PluginRegistry {
             val descriptors = registrations.map { it.descriptor() }
             require(descriptors.map { it.id }.distinct().size == descriptors.size) {
                 "Plugin IDs must be unique"
@@ -81,5 +153,46 @@ internal constructor(
                     },
             )
         }
+
+        internal fun load(pluginJars: List<Path>, parent: ClassLoader): PluginRegistry =
+            load(pluginJars, parent, PluginAbiSupport.load(parent))
+
+        @OptIn(IndexinoInternalApi::class)
+        internal fun load(
+            pluginJars: List<Path>,
+            parent: ClassLoader,
+            abiSupport: PluginAbiSupport,
+            classLoaderFactory: (Path, ClassLoader) -> ClassLoader = { pluginJar, loaderParent ->
+                IsolatedPluginClassLoader(pluginJar, loaderParent)
+            },
+        ): PluginRegistry {
+            pluginJars.forEach { pluginJar ->
+                val target =
+                    JarFile(pluginJar.toFile()).use { jar ->
+                        jar.manifest?.mainAttributes?.getValue(PLUGIN_ABI_TARGET_ATTRIBUTE)
+                    }
+                        ?: throw PluginAbiCompatibilityException(
+                            pluginId = pluginJar.fileName.toString(),
+                            hostAbi = abiSupport.current.toString(),
+                            targetAbi = "<missing>",
+                            supportedRange = "[${abiSupport.minimum}, ${abiSupport.current}]",
+                            remediation =
+                                "Rebuild the plugin with Indexino-Plugin-ABI-Target generated " +
+                                    "from its indexino-plugin-api dependency.",
+                        )
+                abiSupport.requireCompatible(pluginJar.fileName.toString(), target)
+            }
+            val pluginClassLoaders = pluginJars.map { classLoaderFactory(it, parent) }
+            val registrations =
+                registrationsFrom(parent) +
+                    pluginClassLoaders.flatMap { pluginClassLoader ->
+                        registrationsFrom(pluginClassLoader) { provider ->
+                            provider.classLoader === pluginClassLoader
+                        }
+                    }
+            return registryOf(registrations)
+        }
+
+        private const val PLUGIN_ABI_TARGET_ATTRIBUTE = "Indexino-Plugin-ABI-Target"
     }
 }

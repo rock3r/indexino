@@ -20,6 +20,10 @@ types remain outside the compatibility boundary.
   never to silence CI.
 - KGP `abiValidation` / `api/indexino.api` are **not** used. See
   [PUBLIC-API-DESIGN.html](PUBLIC-API-DESIGN.html).
+- The plugin API additionally keeps immutable SemVer-named dumps under
+  `api/indexino-plugin-api/history/`, records the ordered required versions in `abi-lineage.txt`,
+  and declares its current ABI in `abi-version.txt`. The host
+  support range is generated from this lineage; it is never handwritten.
 
 Kotlin `internal` declarations still compile to JVM implementation bytecode because the CLI is a
 single module. Their presence in the JAR does not make them supported API, and consumers must not
@@ -84,3 +88,20 @@ public inline implementation details unless their compatibility cost has been re
    cross-version linkage at release only.
 
 KGP `abiValidation` and japicmp are **not** part of the target stack.
+
+## Plugin ABI lineage
+
+Plugin ABI starts at `1.0.0` even while the Indexino product remains on a `0.y` release line. Each
+reviewed plugin ABI publishes an immutable Metalava dump named `<major>.<minor>.<patch>.txt`.
+Publication compares the new source surface with the previous dump using Metalava, verifies that
+the declared ABI evolution matches the result, and checks the current source against every older
+dump advertised in the same-major host range.
+
+- An unchanged surface may advance only the ABI patch.
+- An additive compatible surface requires an ABI minor increment.
+- A breaking surface requires the next ABI major at `x.0.0`.
+- A missing current or required historical dump fails publication.
+
+The generated metadata records the current ABI and the first compatible dump in its major lineage.
+The loader uses only that generated fact. See [PLUGIN-AUTHORING.md](PLUGIN-AUTHORING.md) for the
+compiled-plugin manifest contract.
