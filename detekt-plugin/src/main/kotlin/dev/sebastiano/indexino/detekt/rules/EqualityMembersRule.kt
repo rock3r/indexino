@@ -7,12 +7,15 @@ import dev.detekt.api.Finding
 import dev.detekt.api.RequiresAnalysisApi
 import dev.detekt.api.Rule
 import org.jetbrains.kotlin.analysis.api.analyze
+import org.jetbrains.kotlin.analysis.api.resolution.KaImplicitReceiverValue
 import org.jetbrains.kotlin.analysis.api.resolution.singleFunctionCallOrNull
+import org.jetbrains.kotlin.analysis.api.resolution.singleVariableAccessCall
 import org.jetbrains.kotlin.analysis.api.resolution.symbol
 import org.jetbrains.kotlin.analysis.api.symbols.KaClassSymbol
 import org.jetbrains.kotlin.analysis.api.symbols.KaNamedFunctionSymbol
 import org.jetbrains.kotlin.analysis.api.symbols.KaPropertySymbol
 import org.jetbrains.kotlin.analysis.api.symbols.KaReceiverParameterSymbol
+import org.jetbrains.kotlin.analysis.api.types.KaFunctionType
 import org.jetbrains.kotlin.analysis.api.types.KaType
 import org.jetbrains.kotlin.analysis.api.types.KaTypeParameterType
 import org.jetbrains.kotlin.analysis.api.types.symbol
@@ -278,8 +281,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
             is KtParenthesizedExpression ->
                 expression?.isReceiverProperty(equalsFunction, property, receiverClass) == true
             else ->
-                (resolvesToPropertyOf(receiverClass, property) &&
-                    !isInsideNestedReceiver(equalsFunction, receiverClass)) ||
+                resolvesToPropertyOfCurrentReceiver(equalsFunction, receiverClass, property) ||
                     (this is KtDotQualifiedExpression &&
                         receiverExpression.isCurrentReceiver(equalsFunction, receiverClass) &&
                         selectorExpression?.resolvesToPropertyOf(receiverClass, property) == true)
@@ -297,6 +299,40 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
             resolvedProperty.name.asString() == property &&
                 (resolvedProperty.containingSymbol as? KaClassSymbol)?.classId ==
                     targetClass.classId
+        }
+    }
+
+    private fun KtExpression.resolvesToPropertyOfCurrentReceiver(
+        equalsFunction: KtNamedFunction,
+        receiverClass: KtClass,
+        property: String,
+    ): Boolean {
+        if (this !is KtNameReferenceExpression) return false
+        return analyze(this) {
+            val resolvedProperty =
+                mainReference.resolveToSymbol() as? KaPropertySymbol ?: return false
+            val targetClass = receiverClass.symbol as? KaClassSymbol ?: return false
+            if (
+                resolvedProperty.name.asString() != property ||
+                    (resolvedProperty.containingSymbol as? KaClassSymbol)?.classId !=
+                        targetClass.classId
+            ) {
+                return false
+            }
+            val dispatchReceiver =
+                resolveToCall()
+                    ?.singleVariableAccessCall()
+                    ?.partiallyAppliedSymbol
+                    ?.dispatchReceiver as? KaImplicitReceiverValue
+            when (val receiverSymbol = dispatchReceiver?.symbol) {
+                is KaClassSymbol -> receiverSymbol.classId == targetClass.classId
+                is KaReceiverParameterSymbol ->
+                    !this@resolvesToPropertyOfCurrentReceiver.isInsideNestedReceiver(
+                        equalsFunction,
+                        receiverClass,
+                    )
+                else -> false
+            }
         }
     }
 
@@ -398,16 +434,16 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         }
         val receiverArguments = call.receiverLambdaArguments()
         if (receiverArguments.size > 1) return true
-        val receiver =
-            receiverArguments.singleOrNull() ?: return call.targetsSourceDeclaredFunction()
+        val receiver = receiverArguments.singleOrNull() ?: return call.hasReceiverLambdaParameter()
         return !receiver.isCurrentReceiver(equalsFunction, receiverClass)
     }
 
-    private fun KtCallExpression.targetsSourceDeclaredFunction(): Boolean {
-        val callableName = calleeExpression?.text ?: return false
-        return PsiTreeUtil.collectElementsOfType(containingKtFile, KtNamedFunction::class.java)
-            .any { it.name == callableName }
-    }
+    private fun KtCallExpression.hasReceiverLambdaParameter(): Boolean =
+        analyze(this) {
+            val function = resolveToCall()?.singleFunctionCallOrNull()?.symbol ?: return false
+            if (function.callableId?.packageName?.asString() == "kotlin") return false
+            function.valueParameters.any { (it.returnType as? KaFunctionType)?.hasReceiver == true }
+        }
 
     private fun KtLambdaExpression.isStoredReceiverBoundToCurrent(
         equalsFunction: KtNamedFunction,

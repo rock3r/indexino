@@ -950,6 +950,65 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `nested subclass inherited property does not count as outer receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    open class NestedSubclass(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is NestedSubclass) return false
+                            return object : NestedSubclass(other.value) {
+                                fun matches(): Boolean = value == other.value
+                            }.matches()
+                        }
+                        override fun hashCode(): Int = value.hashCode()
+                        override fun toString(): String = "NestedSubclass(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
+    fun `imported targetless receiver lambda does not count as current receiver`() {
+        val findings =
+            rule()
+                .lintWithDependencies(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    import dev.sebastiano.indexino.helpers.scope
+
+                    class ImportedTarget(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is ImportedTarget && scope { value == other.value }
+                        override fun hashCode(): Int = value.hashCode()
+                        override fun toString(): String = "ImportedTarget(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent(),
+                    """
+                    package dev.sebastiano.indexino.helpers
+
+                    import dev.sebastiano.indexino.model.ImportedTarget
+
+                    lateinit var target: ImportedTarget
+                    fun scope(block: ImportedTarget.() -> Boolean): Boolean = target.block()
+                    """
+                        .trimIndent(),
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `lambda label matching class name does not count as class receiver`() {
         val findings =
             rule()
