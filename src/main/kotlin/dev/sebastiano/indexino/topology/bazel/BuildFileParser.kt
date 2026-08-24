@@ -71,7 +71,6 @@ internal object BuildFileParser {
         }
 
         for (relative in extractResourceFiles(content, packageDir)) {
-            if (isBazelLabel(relative)) continue
             paths += workspaceRelativeLiteral(relative, packagePrefix)
         }
 
@@ -258,18 +257,13 @@ internal object BuildFileParser {
                             !BuildFileComments.isCommentedOutInBlock(expression, quoted.range.first)
                     }
                     .map { it.groupValues[1] }
+                    .filterNot(::isBazelLabel)
                     .forEach(::add)
             }
     }
 
     private fun isIndexablePath(path: String): Boolean =
         path.substringAfterLast('.', "") in INDEXABLE_EXTENSIONS
-
-    private fun isBazelLabel(path: String): Boolean =
-        path.startsWith(":") ||
-            path.startsWith("@") ||
-            path.startsWith("//") && ':' in path ||
-            ':' in path
 
     private fun extractBalancedBracketBody(content: String, openBracketIndex: Int): String? {
         val endIndex = findBalancedBracketEnd(content, openBracketIndex) ?: return null
@@ -298,3 +292,6 @@ internal object BuildFileParser {
 
 private fun workspaceRelativeLiteral(path: String, packagePrefix: String): String =
     if (path.startsWith("//")) path.removePrefix("//") else "$packagePrefix$path"
+
+private fun isBazelLabel(path: String): Boolean =
+    path.startsWith(":") || path.startsWith("@") || ':' in path
