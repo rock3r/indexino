@@ -54,6 +54,98 @@ class NoDataClassesInPublicApiRuleTest {
         assertTrue(implementationFindings.isEmpty())
     }
 
+    @Test
+    fun `local data classes are allowed at multiple depths`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    fun buildModel() {
+                        data class LocalModel(val value: String)
+
+                        run {
+                            data class NestedLocalModel(val value: String)
+                        }
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty())
+    }
+
+    @Test
+    fun `data classes behind private or internal declaration boundaries are allowed`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    private class PrivateOuter {
+                        data class PrivateNested(val value: String)
+
+                        class Middle {
+                            data class DeepPrivateNested(val value: String)
+                        }
+                    }
+
+                    internal object InternalOuter {
+                        data class InternalNested(val value: String)
+
+                        class Middle {
+                            data class DeepInternalNested(val value: String)
+                        }
+                    }
+
+                    public class PublicOuter {
+                        private data class PrivateBoundary(val value: String)
+
+                        internal class InternalBoundary {
+                            data class HiddenByInternalBoundary(val value: String)
+                        }
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty())
+    }
+
+    @Test
+    fun `effectively public data classes are rejected at every depth`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    data class TopLevel(val value: String)
+
+                    public class PublicOuter {
+                        data class ImplicitlyPublicNested(val value: String)
+                        public data class ExplicitlyPublicNested(val value: String)
+                        protected data class ProtectedNested(val value: String)
+
+                        public class PublicMiddle {
+                            data class DeepPublicNested(val value: String)
+                        }
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(5, findings.size)
+        val messages = findings.map { it.message }
+        assertTrue(messages.any { it.contains("TopLevel") })
+        assertTrue(messages.any { it.contains("ImplicitlyPublicNested") })
+        assertTrue(messages.any { it.contains("ExplicitlyPublicNested") })
+        assertTrue(messages.any { it.contains("ProtectedNested") })
+        assertTrue(messages.any { it.contains("DeepPublicNested") })
+    }
+
     private fun rule(): Rule {
         val type =
             assertNotNull(

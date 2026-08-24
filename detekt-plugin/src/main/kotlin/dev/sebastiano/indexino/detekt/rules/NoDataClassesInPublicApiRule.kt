@@ -6,6 +6,8 @@ import dev.detekt.api.Finding
 import dev.detekt.api.Rule
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.KtClass
+import org.jetbrains.kotlin.psi.KtDeclaration
+import org.jetbrains.kotlin.psi.KtPsiUtil
 
 public class NoDataClassesInPublicApiRule(config: Config) : Rule(config, DESCRIPTION) {
     override fun visitClass(klass: KtClass) {
@@ -23,10 +25,18 @@ public class NoDataClassesInPublicApiRule(config: Config) : Rule(config, DESCRIP
 
     private fun KtClass.isPublicApiDeclaration(): Boolean {
         val packageName = containingKtFile.packageFqName.asString()
-        return TARGET_PACKAGES.any { packageName == it || packageName.startsWith("$it.") } &&
-            !hasModifier(KtTokens.PRIVATE_KEYWORD) &&
-            !hasModifier(KtTokens.INTERNAL_KEYWORD)
+        if (TARGET_PACKAGES.none { packageName == it || packageName.startsWith("$it.") })
+            return false
+        if (KtPsiUtil.isLocal(this)) return false
+
+        if (hasNonPublicVisibility()) return false
+        return generateSequence(parent) { it.parent }
+            .filterIsInstance<KtDeclaration>()
+            .none { it.hasNonPublicVisibility() }
     }
+
+    private fun KtDeclaration.hasNonPublicVisibility(): Boolean =
+        hasModifier(KtTokens.PRIVATE_KEYWORD) || hasModifier(KtTokens.INTERNAL_KEYWORD)
 
     private companion object {
         const val DESCRIPTION: String = "Forbids data classes in Indexino public API packages."
