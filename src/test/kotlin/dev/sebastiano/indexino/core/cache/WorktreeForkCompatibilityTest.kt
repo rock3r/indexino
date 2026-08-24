@@ -131,6 +131,113 @@ class WorktreeForkCompatibilityTest {
         assertEquals(1, forkBase.overlayChainDepth)
     }
 
+    @Test
+    fun `findCompatibleBase rejects stale basic fact schema versions`() {
+        val cacheRoot = createTempDirectory("indexino-fork-schema-cache-").also(tempDirs::add)
+        val (mainWorkspace, forkWorkspace) = createLinkedWorktrees()
+        val gitCommonDir = checkNotNull(GitWorktreeLayout.commonDir(mainWorkspace))
+        val mainId = dev.sebastiano.indexino.api.InProcessCacheLayout.workspaceId(mainWorkspace)
+        val staleSchemaVersion = BASIC_FACT_SCHEMA_VERSION - 1
+        val compatibility =
+            IndexManifest(
+                commit = "abc123",
+                indexerVersion = Version.NAME,
+                basicFactSchemaVersion = staleSchemaVersion,
+                scope = ":ui",
+                topology = "gradle",
+                includeDeps = true,
+                sourceFileCount = 4,
+                sourcesContentHash = "hash",
+                builtAt = "2026-01-01T00:00:00Z",
+            )
+        WorkspaceRegistryStore(cacheRoot).upsert(mainId, mainWorkspace, gitCommonDir)
+        WorkspaceGenerationManifestStore(cacheRoot, mainId)
+            .publish(
+                WorkspaceGenerationManifest(
+                    basicFactSchemaVersion = staleSchemaVersion,
+                    generation = "gen-stale-schema",
+                    workspaceRevisionFingerprint = "revision",
+                    originId = "workspace",
+                    revision = "abc123",
+                    stateFingerprint = "hash",
+                    packKeys = listOf("ab".repeat(32)),
+                    compatibilityManifest = compatibility,
+                    representation = WorktreeOverlayPolicy.REPRESENTATION_MATERIALIZED,
+                )
+            )
+
+        val criteria =
+            ManifestFreshness.criteriaFrom(
+                commit = compatibility.commit,
+                scope = compatibility.scope,
+                includeDeps = compatibility.includeDeps,
+                sourcesContentHash = compatibility.sourcesContentHash,
+                applications = compatibility.applications,
+            )
+
+        assertNull(
+            WorktreeForkCompatibility.findCompatibleBase(
+                project = forkWorkspace,
+                cacheRoot = cacheRoot,
+                criteria = criteria,
+            )
+        )
+    }
+
+    @Test
+    fun `findCompatibleBase rejects bases with different plugin coordinates`() {
+        val cacheRoot = createTempDirectory("indexino-fork-plugin-cache-").also(tempDirs::add)
+        val (mainWorkspace, forkWorkspace) = createLinkedWorktrees()
+        val gitCommonDir = checkNotNull(GitWorktreeLayout.commonDir(mainWorkspace))
+        val mainId = dev.sebastiano.indexino.api.InProcessCacheLayout.workspaceId(mainWorkspace)
+        val compatibility =
+            IndexManifest(
+                commit = "abc123",
+                indexerVersion = Version.NAME,
+                basicFactSchemaVersion = BASIC_FACT_SCHEMA_VERSION,
+                scope = ":ui",
+                topology = "gradle",
+                includeDeps = true,
+                sourceFileCount = 4,
+                sourcesContentHash = "hash",
+                builtAt = "2026-01-01T00:00:00Z",
+                pluginCoordinates = mapOf("dev.sebastiano.selection-context" to "0.0.0-test"),
+            )
+        WorkspaceRegistryStore(cacheRoot).upsert(mainId, mainWorkspace, gitCommonDir)
+        WorkspaceGenerationManifestStore(cacheRoot, mainId)
+            .publish(
+                WorkspaceGenerationManifest(
+                    basicFactSchemaVersion = BASIC_FACT_SCHEMA_VERSION,
+                    generation = "gen-plugin-mismatch",
+                    workspaceRevisionFingerprint = "revision",
+                    originId = "workspace",
+                    revision = "abc123",
+                    stateFingerprint = "hash",
+                    packKeys = listOf("ab".repeat(32)),
+                    compatibilityManifest = compatibility,
+                    representation = WorktreeOverlayPolicy.REPRESENTATION_MATERIALIZED,
+                )
+            )
+
+        val criteria =
+            ManifestFreshness.criteriaFrom(
+                commit = compatibility.commit,
+                scope = compatibility.scope,
+                includeDeps = compatibility.includeDeps,
+                sourcesContentHash = compatibility.sourcesContentHash,
+                applications = listOf("dev.sebastiano.selection-context"),
+                pluginCoordinates = mapOf("dev.sebastiano.selection-context" to "different-version"),
+            )
+
+        assertNull(
+            WorktreeForkCompatibility.findCompatibleBase(
+                project = forkWorkspace,
+                cacheRoot = cacheRoot,
+                criteria = criteria,
+            )
+        )
+    }
+
     private fun createLinkedWorktrees(): Pair<java.nio.file.Path, java.nio.file.Path> {
         val mainWorkspace = createGitWorkspace()
         val forkWorkspace = createTempDirectory("indexino-worktree-fork-").also(tempDirs::add)
