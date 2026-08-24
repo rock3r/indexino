@@ -36,10 +36,32 @@ link to them from Java, reflection, or other JVM languages.
 | `indexino-model` | `dev.sebastiano.indexino.model` | Shared IDs, locations, query pages, findings |
 | `indexino` | `dev.sebastiano.indexino.api` | Client facade, refresh, snapshots |
 | `indexino-plugin-api` | `dev.sebastiano.indexino.plugin.api` | Versioned SPI (depends on model, not on `indexino`) |
-| `indexino-script-host` | `dev.sebastiano.indexino.script` | Optional Alpha script DSL |
+| `indexino-script-host` | `dev.sebastiano.indexino.script` | Optional Alpha/Beta-source script DSL |
 
 Host-constructed SPI types use public constructors annotated `@IndexinoInternalApi`
 (`@RequiresOptIn` at error level), not cross-module `internal` constructors.
+
+## Script host compatibility (separate from plugin ABI)
+
+`indexino-script-host` is an **optional** JVM-only surface. Its compatibility promise is **Beta /
+source-level** for checked-in `.indexino.kts` scripts and the public DSL types in
+`dev.sebastiano.indexino.script`. That promise is deliberately separate from the compiled-plugin ABI
+lineage tracked for `indexino-plugin-api` (issue #39):
+
+- Scripts are recompiled from source against the host/API version and the **locked allowed
+  dependency set**. Cached compiled scripts are keyed by script content digest, host/API version,
+  Kotlin version, and that dependency digest; stale or incompatible entries recompile and are not
+  pinned into the index or daemon.
+- There is **no** binary compatibility guarantee for previously compiled script bytecode across
+  Indexino releases.
+- Import/dependency policy stays explicit: default imports cover `script.*` and `model.*`; engine,
+  CLI, producer, topology, and PSI packages are rejected before compilation. Do not broaden that
+  set silently.
+Time limits and cancellation are cooperative (interrupt flag and optional cancel token). Scripts
+that ignore interruption may leave an evaluation worker running; after that happens the host
+refuses new runs until the abandoned worker finishes, and the snapshot is closed so index
+resources are not kept pinned. Native and R8-shrunk distributions do not host `.indexino.kts`
+(see [DISTRIBUTIONS.md](DISTRIBUTIONS.md)).
 
 ## Adding the first API
 

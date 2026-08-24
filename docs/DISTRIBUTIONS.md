@@ -50,6 +50,22 @@ need to be the current working directory.
 Use `indexino.exe` in PowerShell or Command Prompt. All paths accepted by the JAR CLI are accepted by
 the installed executable.
 
+## Script host and dynamic plugins (explicit non-goals for native)
+
+Native ZIPs and the R8-shrunk CLI JAR are closed-world distributions. They **do not** embed a
+dynamic Kotlin script compiler host:
+
+| Capability | Fat / thin JVM | R8 shrunk JAR | Native ZIP |
+|---|---|---|---|
+| Basic index/query CLI | Yes | Yes | Yes |
+| Bundled compiled plugins | Yes | Only if bundled before shrinking | Only statically bundled |
+| `indexino script` / `.indexino.kts` | Yes (with script-host) | No — fails fast | No — fails fast |
+| Arbitrary external plugin JARs | Yes (explicit path) | No | No |
+
+Use a JVM thin/fat distribution or depend on `indexino-script-host` from an embedded process when
+you need disposable scripts. Do not expect silent fallback or partial script execution inside native
+images; the CLI rejects the command with a clear classpath/host diagnostic instead.
+
 ## External tools
 
 The runtime and Java dependencies are bundled. Tools used to discover the target repository are not:

@@ -1678,8 +1678,11 @@ host.abi.major == plugin.targetAbi.major</code></pre>
           <a href="https://kotlinlang.org/docs/custom-script-deps-tutorial.html">BasicJvmScriptingHost pattern</a>.
           The script receives an <code>IndexinoScriptContext</code> with one immutable snapshot, query helpers,
           ephemeral joins, reporting, cancellation, and bounded managed parallelism. It cannot persist facts.
-          Compilation is cached by script content plus Indexino, script DSL, Kotlin, JDK, and locked dependency
-          versions. The loaded script path or digest is always explicit.
+          Compilation is cached by script content plus Indexino script-host API version, Kotlin
+          version, and the locked allowed dependency digest. Stale or incompatible entries recompile;
+          failures never write into the index/daemon store. The loaded script path or digest is always
+          explicit. Script compatibility remains Beta/source-level and is separate from compiled-plugin
+          ABI lineage.
         </p>
         <div class="decision">
           <strong>Script APIs are non-suspend.</strong>
@@ -2882,8 +2885,10 @@ host.abi.major == plugin.targetAbi.major</code></pre>
 
 <span class="kw">for</span> (outer <span class="kw">in</span> outerCalls.items) {
     <span class="kw">val</span> content = outer.arguments.firstOrNull { argument -&gt;
+        <span class="cm">// Dogfood: trailing lambdas often land as LAMBDA with a null resolvedName.</span>
         argument.resolvedName == <span class="st">"content"</span> ||
-            argument.kind == ArgumentKind.TRAILING_LAMBDA
+            argument.kind == ArgumentKind.TRAILING_LAMBDA ||
+            argument.kind == ArgumentKind.LAMBDA
     } ?: <span class="kw">continue</span>
 
     <span class="kw">val</span> containsB = content.nestedCallIds

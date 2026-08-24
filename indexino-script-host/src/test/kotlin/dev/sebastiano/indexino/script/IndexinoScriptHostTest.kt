@@ -75,10 +75,11 @@ class IndexinoScriptHostTest {
             useInProcessHostConnection()
 
             val failure =
-                assertFailsWith<IllegalStateException> {
+                assertFailsWith<IndexinoScriptException> {
                     IndexinoScriptHost.create().run(ScriptRequest.forFile(workspace, script))
                 }
 
+            assertEquals(IndexinoScriptException.Kind.RUNTIME, failure.kind)
             assertEquals("parallel failure", failure.message)
         } finally {
             if (previousCacheRoot == null) System.clearProperty("indexino.cache.dir")
@@ -133,10 +134,11 @@ class IndexinoScriptHostTest {
             useInProcessHostConnection()
 
             val failure =
-                assertFailsWith<IllegalStateException> {
+                assertFailsWith<IndexinoScriptException> {
                     IndexinoScriptHost.create().run(ScriptRequest.forFile(workspace, script))
                 }
 
+            assertEquals(IndexinoScriptException.Kind.RUNTIME, failure.kind)
             assertEquals("script failure", failure.message)
         } finally {
             if (previousCacheRoot == null) System.clearProperty("indexino.cache.dir")

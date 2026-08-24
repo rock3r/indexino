@@ -31,8 +31,36 @@ internal class ScriptCommand : CliktCommand(name = "script") {
         } catch (missing: NoClassDefFoundError) {
             fail("The script command requires all indexino-script-host dependencies", missing)
         } catch (failure: InvocationTargetException) {
-            fail("The script command failed", failure.targetException)
+            failScript(failure.targetException ?: failure)
         }
+    }
+
+    private fun failScript(failure: Throwable): Nothing {
+        val scriptException = unwrapScriptException(failure)
+        if (scriptException != null) {
+            val message =
+                scriptException.javaClass.getMethod("getMessage").invoke(scriptException) as? String
+            echo(message ?: scriptException.javaClass.name, err = true)
+            diagnostics(scriptException).forEach { diagnostic -> echo(diagnostic, err = true) }
+            throw ProgramResult(CliExitCodes.ANALYSIS_ERROR)
+        }
+        fail("The script command failed", failure)
+    }
+
+    private fun unwrapScriptException(failure: Throwable): Any? {
+        var current: Throwable? = failure
+        while (current != null) {
+            if (current.javaClass.name == SCRIPT_EXCEPTION_CLASS) return current
+            current = current.cause
+        }
+        return null
+    }
+
+    private fun diagnostics(scriptException: Any): List<String> {
+        @Suppress("UNCHECKED_CAST")
+        return (scriptException.javaClass.getMethod("getDiagnostics").invoke(scriptException)
+                as? List<String>)
+            .orEmpty()
     }
 
     private fun requireScriptSuffix(script: Path) {
@@ -68,5 +96,7 @@ internal class ScriptCommand : CliktCommand(name = "script") {
         private const val SCRIPT_SUFFIX = ".indexino.kts"
         private const val SCRIPT_HOST_CLASS = "dev.sebastiano.indexino.script.IndexinoScriptHost"
         private const val SCRIPT_REQUEST_CLASS = "dev.sebastiano.indexino.script.ScriptRequest"
+        private const val SCRIPT_EXCEPTION_CLASS =
+            "dev.sebastiano.indexino.script.IndexinoScriptException"
     }
 }
