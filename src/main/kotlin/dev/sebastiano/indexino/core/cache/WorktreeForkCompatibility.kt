@@ -85,9 +85,13 @@ internal object GitWorktreeLayout {
     fun commonDir(project: Path): String? {
         if (!Files.exists(project.resolve(".git"))) return null
         val process =
-            ProcessBuilder("git", "-C", project.toString(), "rev-parse", "--git-common-dir")
-                .redirectErrorStream(true)
-                .start()
+            try {
+                ProcessBuilder("git", "-C", project.toString(), "rev-parse", "--git-common-dir")
+                    .redirectErrorStream(true)
+                    .start()
+            } catch (_: java.io.IOException) {
+                return null
+            }
         val output = process.inputStream.bufferedReader().readText().trim()
         if (process.waitFor() != 0 || output.isBlank()) return null
         val resolved =
