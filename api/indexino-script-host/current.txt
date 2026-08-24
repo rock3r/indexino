@@ -14,6 +14,46 @@ package dev.sebastiano.indexino.script {
     property public dev.sebastiano.indexino.api.IndexSnapshot snapshot;
   }
 
+  @dev.sebastiano.indexino.model.ExperimentalIndexinoApi public final class IndexinoScriptException extends java.lang.RuntimeException {
+    method public static dev.sebastiano.indexino.script.IndexinoScriptException cancelled(String message);
+    method public static dev.sebastiano.indexino.script.IndexinoScriptException compilation(String message, java.util.List<java.lang.String> diagnostics);
+    method @InaccessibleFromKotlin public java.util.List<java.lang.String> getDiagnostics();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.script.IndexinoScriptException.Kind getKind();
+    method public static dev.sebastiano.indexino.script.IndexinoScriptException invalidRequest(String message);
+    method public static dev.sebastiano.indexino.script.IndexinoScriptException runtime(String message, Throwable? cause);
+    method public static dev.sebastiano.indexino.script.IndexinoScriptException timeout(String message);
+    property public java.util.List<java.lang.String> diagnostics;
+    property public dev.sebastiano.indexino.script.IndexinoScriptException.Kind kind;
+    field public static final dev.sebastiano.indexino.script.IndexinoScriptException.Companion Companion;
+  }
+
+  public static final class IndexinoScriptException.Companion {
+    method public dev.sebastiano.indexino.script.IndexinoScriptException cancelled(String message);
+    method public dev.sebastiano.indexino.script.IndexinoScriptException compilation(String message, java.util.List<java.lang.String> diagnostics);
+    method public dev.sebastiano.indexino.script.IndexinoScriptException invalidRequest(String message);
+    method public dev.sebastiano.indexino.script.IndexinoScriptException runtime(String message, Throwable? cause);
+    method public dev.sebastiano.indexino.script.IndexinoScriptException timeout(String message);
+  }
+
+  public static final class IndexinoScriptException.Kind {
+    method @InaccessibleFromKotlin public String getValue();
+    property public String value;
+    field public static final dev.sebastiano.indexino.script.IndexinoScriptException.Kind CANCELLED;
+    field public static final dev.sebastiano.indexino.script.IndexinoScriptException.Kind COMPILATION;
+    field public static final dev.sebastiano.indexino.script.IndexinoScriptException.Kind.Companion Companion;
+    field public static final dev.sebastiano.indexino.script.IndexinoScriptException.Kind INVALID_REQUEST;
+    field public static final dev.sebastiano.indexino.script.IndexinoScriptException.Kind RUNTIME;
+    field public static final dev.sebastiano.indexino.script.IndexinoScriptException.Kind TIMEOUT;
+  }
+
+  public static final class IndexinoScriptException.Kind.Companion {
+    property public dev.sebastiano.indexino.script.IndexinoScriptException.Kind CANCELLED;
+    property public dev.sebastiano.indexino.script.IndexinoScriptException.Kind COMPILATION;
+    property public dev.sebastiano.indexino.script.IndexinoScriptException.Kind INVALID_REQUEST;
+    property public dev.sebastiano.indexino.script.IndexinoScriptException.Kind RUNTIME;
+    property public dev.sebastiano.indexino.script.IndexinoScriptException.Kind TIMEOUT;
+  }
+
   @dev.sebastiano.indexino.model.ExperimentalIndexinoApi public final class IndexinoScriptHost {
     method public static dev.sebastiano.indexino.script.IndexinoScriptHost create();
     method public dev.sebastiano.indexino.script.ScriptReport run(dev.sebastiano.indexino.script.ScriptRequest request);
@@ -68,12 +108,18 @@ package dev.sebastiano.indexino.script {
 
   @dev.sebastiano.indexino.model.ExperimentalIndexinoApi public final class ScriptRequest {
     method public static dev.sebastiano.indexino.script.ScriptRequest forFile(java.nio.file.Path workspace, java.nio.file.Path script);
+    method @InaccessibleFromKotlin public java.util.concurrent.atomic.AtomicBoolean? getCancellation();
     method @InaccessibleFromKotlin public dev.sebastiano.indexino.api.FreshnessPolicy getFreshness();
     method @InaccessibleFromKotlin public java.nio.file.Path getScript();
+    method @InaccessibleFromKotlin public java.time.Duration getTimeout();
     method @InaccessibleFromKotlin public java.nio.file.Path getWorkspace();
+    method public dev.sebastiano.indexino.script.ScriptRequest withCancellation(java.util.concurrent.atomic.AtomicBoolean cancellation);
     method public dev.sebastiano.indexino.script.ScriptRequest withFreshness(dev.sebastiano.indexino.api.FreshnessPolicy freshness);
+    method public dev.sebastiano.indexino.script.ScriptRequest withTimeout(java.time.Duration timeout);
+    property public java.util.concurrent.atomic.AtomicBoolean? cancellation;
     property public dev.sebastiano.indexino.api.FreshnessPolicy freshness;
     property public java.nio.file.Path script;
+    property public java.time.Duration timeout;
     property public java.nio.file.Path workspace;
     field public static final dev.sebastiano.indexino.script.ScriptRequest.Companion Companion;
   }

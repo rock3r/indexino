@@ -70,10 +70,21 @@ public constructor(public val snapshot: IndexSnapshot) {
         }
     }
 
-    internal fun findings(): List<ScriptFinding> = collectedFindings.toList()
+    internal fun findings(): List<ScriptFinding> =
+        collectedFindings.sortedWith(FINDING_ORDER).toList()
 
     private companion object {
         private const val MAX_PARALLELISM = 8
+
+        private val FINDING_ORDER =
+            compareBy<ScriptFinding>(
+                    { it.range?.start?.file?.displayPath.orEmpty() },
+                    { it.range?.start?.offset ?: -1 },
+                    { it.message },
+                )
+                .thenBy {
+                    it.properties.entries.joinToString { entry -> "${entry.key}=${entry.value}" }
+                }
     }
 }
 
