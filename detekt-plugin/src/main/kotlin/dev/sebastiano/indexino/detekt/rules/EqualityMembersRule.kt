@@ -381,9 +381,15 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         val comparison = operand.parent as? KtBinaryExpression ?: return false
         return (comparison.operationToken == KtTokens.EQEQ ||
             comparison.operationToken == KtTokens.EXCLEQ) &&
-            ((comparison.left == operand && comparison.right?.text == "0") ||
-                (comparison.right == operand && comparison.left?.text == "0"))
+            ((comparison.left == operand && comparison.right?.isZeroConstant() == true) ||
+                (comparison.right == operand && comparison.left?.isZeroConstant() == true))
     }
+
+    private fun KtExpression.isZeroConstant(): Boolean =
+        when (this) {
+            is KtParenthesizedExpression -> expression?.isZeroConstant() == true
+            else -> text == "0"
+        }
 
     private fun KtNamedFunction.isInvokedOnCurrent(
         equalsFunction: KtNamedFunction,
@@ -398,10 +404,36 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         return invocations.isNotEmpty() &&
             invocations.all { invocation ->
                 val qualified = invocation.parent as? KtQualifiedExpression
-                qualified?.selectorExpression == invocation &&
+                if (qualified?.selectorExpression == invocation) {
                     qualified.receiverExpression.isCurrentReceiver(equalsFunction, receiverClass)
+                } else {
+                    invocation.hasCurrentImplicitExtensionReceiver(equalsFunction, receiverClass)
+                }
             }
     }
+
+    private fun KtCallExpression.hasCurrentImplicitExtensionReceiver(
+        equalsFunction: KtNamedFunction,
+        receiverClass: KtClass,
+    ): Boolean =
+        analyze(this) {
+            val targetClass = receiverClass.symbol as? KaClassSymbol ?: return false
+            val receiver =
+                resolveToCall()
+                    ?.singleFunctionCallOrNull()
+                    ?.partiallyAppliedSymbol
+                    ?.extensionReceiver as? KaImplicitReceiverValue ?: return false
+            when (val receiverSymbol = receiver.symbol) {
+                is KaClassSymbol -> receiverSymbol.classId == targetClass.classId
+                is KaReceiverParameterSymbol ->
+                    receiverSymbol.returnType.canSupplyPropertiesOf(targetClass) &&
+                        !this@hasCurrentImplicitExtensionReceiver.isInsideNestedReceiver(
+                            equalsFunction,
+                            receiverClass,
+                        )
+                else -> false
+            }
+        }
 
     private fun KtFunctionLiteral.hasReceiverType(receiverClass: KtClass): Boolean =
         analyze(this) {
