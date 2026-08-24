@@ -295,7 +295,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                 expression?.isReceiverProperty(equalsFunction, property, receiverClass) == true
             else ->
                 resolvesToPropertyOfCurrentReceiver(equalsFunction, receiverClass, property) ||
-                    (this is KtDotQualifiedExpression &&
+                    (this is KtQualifiedExpression &&
                         receiverExpression.isCurrentReceiver(equalsFunction, receiverClass) &&
                         selectorExpression?.resolvesToPropertyOf(receiverClass, property) == true)
         }
@@ -367,13 +367,22 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
             }
 
     private fun KtCallExpression.isComparedWithZeroForEquality(): Boolean {
-        return generateSequence(parent) { it.parent }
-            .filterIsInstance<KtBinaryExpression>()
-            .any { comparison ->
-                (comparison.operationToken == KtTokens.EQEQ ||
-                    comparison.operationToken == KtTokens.EXCLEQ) &&
-                    (comparison.left?.text == "0" || comparison.right?.text == "0")
-            }
+        var operand: KtExpression = this
+        while (true) {
+            operand =
+                when (val container = operand.parent) {
+                    is KtQualifiedExpression ->
+                        if (container.selectorExpression == operand) container else break
+                    is KtParenthesizedExpression ->
+                        if (container.expression == operand) container else break
+                    else -> break
+                }
+        }
+        val comparison = operand.parent as? KtBinaryExpression ?: return false
+        return (comparison.operationToken == KtTokens.EQEQ ||
+            comparison.operationToken == KtTokens.EXCLEQ) &&
+            ((comparison.left == operand && comparison.right?.text == "0") ||
+                (comparison.right == operand && comparison.left?.text == "0"))
     }
 
     private fun KtNamedFunction.isInvokedOnCurrent(

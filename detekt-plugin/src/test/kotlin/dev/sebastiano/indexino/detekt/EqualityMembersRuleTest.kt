@@ -1252,6 +1252,50 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `adjusted floating compare result is not structural equality`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class AdjustedCompare(val value: Double) {
+                        override fun equals(other: Any?): Boolean =
+                            other is AdjustedCompare &&
+                                (java.lang.Double.compare(value, other.value) + 1) == 0
+                        override fun hashCode(): Int = value.hashCode()
+                        override fun toString(): String = "AdjustedCompare(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
+    fun `safe qualified this preserves current receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class SafeThis(val value: String?) {
+                        override fun equals(other: Any?): Boolean =
+                            other is SafeThis && this?.value == other.value
+                        override fun hashCode(): Int = value?.hashCode() ?: 0
+                        override fun toString(): String = "SafeThis(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `lambda label matching class name does not count as class receiver`() {
         val findings =
             rule()
