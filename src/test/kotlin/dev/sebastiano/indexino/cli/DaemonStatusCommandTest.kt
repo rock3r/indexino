@@ -67,7 +67,6 @@ class DaemonStatusCommandTest {
                 RuntimePaths.tombstonePath(cacheRoot, workspaceId),
                 workspace,
             )
-            workspace.toFile().deleteRecursively()
 
             val output = StringBuilder()
             val exitCode =

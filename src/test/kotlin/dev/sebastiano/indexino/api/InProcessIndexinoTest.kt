@@ -600,7 +600,7 @@ class InProcessIndexinoTest {
         val cacheDirectory = createTempDirectory("indexino-snapshot-open-cache-")
         tempDirs.add(cacheDirectory)
         val previousCacheDirectory = System.getProperty("indexino.cache.dir")
-        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        System.setProperty("indexino.cache.dir", cacheDirectory.toRealPath().toString())
         try {
             val indexino = Indexino.connectBlocking(workspace)
             try {
@@ -608,9 +608,13 @@ class InProcessIndexinoTest {
                     indexino.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui"))).await()
                 }
                 val storeDirs =
-                    Files.walk(cacheDirectory).use { paths ->
+                    Files.walk(cacheDirectory.toRealPath()).use { paths ->
                         paths
-                            .filter { Files.isDirectory(it) && it.fileName.toString() == "store" }
+                            .filter {
+                                Files.isDirectory(it) &&
+                                    (it.fileName.toString() == "store" ||
+                                        it.fileName.toString() == "materialized")
+                            }
                             .toList()
                     }
                 assertTrue(storeDirs.isNotEmpty())

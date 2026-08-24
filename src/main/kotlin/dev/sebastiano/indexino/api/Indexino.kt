@@ -7,15 +7,19 @@ import dev.sebastiano.indexino.cli.IndexBuildExecution
 import dev.sebastiano.indexino.cli.IndexBuildRunner
 import dev.sebastiano.indexino.core.BASIC_FACT_SCHEMA_VERSION
 import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
+import dev.sebastiano.indexino.core.cache.GitWorktreeLayout
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifest
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationOrigin
+import dev.sebastiano.indexino.core.cache.WorkspaceRegistryStore
+import dev.sebastiano.indexino.core.cache.WorktreeForkBase
+import dev.sebastiano.indexino.core.cache.WorktreeOverlayPolicy
+import dev.sebastiano.indexino.core.cache.WorktreeOverlayStoreOpener
 import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.IndexManifest
 import dev.sebastiano.indexino.core.manifest.workspaceRevisionFingerprint
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.core.store.CodeIndexStore
-import dev.sebastiano.indexino.core.store.IndexStoreOpener
 import dev.sebastiano.indexino.engine.InFlightRefresh
 import dev.sebastiano.indexino.engine.IndexingCoordinator
 import dev.sebastiano.indexino.engine.PluginRegistry
@@ -305,6 +309,9 @@ private constructor(
                     request.scope,
                     applications,
                     manifest,
+                    execution.forkBase,
+                    execution.overlayDeltaPath,
+                    execution.tombstonePrefixes,
                 )
                 onRefreshSucceededForRuntime?.invoke(
                     request,
@@ -366,15 +373,28 @@ private constructor(
         scope: IndexScope,
         applications: List<String>,
         manifest: IndexManifest,
+        forkBase: WorktreeForkBase? = null,
+        overlayDeltaPath: Path? = null,
+        tombstonePrefixes: List<String> = emptyList(),
     ) {
         val publishedStore =
-            publishGenerationStore(commit, generation, revision, scope, applications, manifest)
+            publishGenerationStore(
+                commit,
+                generation,
+                revision,
+                scope,
+                applications,
+                manifest,
+                forkBase,
+                overlayDeltaPath,
+                tombstonePrefixes,
+            )
         afterPublishGenerationStoreForTests?.invoke()
         synchronized(generationLock) {
             if (closed.get()) {
                 // Publication is workspace-owned, but this closed client no longer owns a ref.
                 if (publishedStore.created) {
-                    publishedStore.path.parent.toFile().deleteRecursively()
+                    deleteClientGenerationRef(publishedStore.path)
                 }
                 return
             }
@@ -445,7 +465,7 @@ private constructor(
             }
         val openedStore =
             try {
-                IndexStoreOpener.openForQuery(generation.storePath)
+                openPublishedStore(generation.generation)
             } catch (thrown: IndexinoException) {
                 releaseGeneration(generation.generation)
                 throw thrown
@@ -632,15 +652,16 @@ private constructor(
         scope: IndexScope,
         applications: List<String>,
         compatibilityManifest: IndexManifest,
+        forkBase: WorktreeForkBase? = null,
+        overlayDeltaPath: Path? = null,
+        tombstonePrefixes: List<String> = emptyList(),
     ): PublishedStore {
-        val destination =
-            InProcessCacheLayout.generationStore(workspace, clientId, generation.value)
-        val alreadyMaterialized = Files.isDirectory(destination)
-        val source =
-            IndexPathResolver(workspace, storeRootOverride = storeRoot).resolveBaseStore(commit)
         val cacheRoot = InProcessCacheLayout.cacheRoot()
-        val packKey =
-            ContentAddressedPackCache(cacheRoot).installDirectory(source, BASIC_FACT_SCHEMA_VERSION)
+        val workspaceId = InProcessCacheLayout.workspaceId(workspace)
+        val clientStorePath =
+            InProcessCacheLayout.generationStore(workspace, clientId, generation.value)
+        WorkspaceRegistryStore(cacheRoot)
+            .upsert(workspaceId, workspace, GitWorktreeLayout.commonDir(workspace))
         val emptyOriginFingerprint = FileHashProducer.contentHash("")
         val legacyOrigin =
             revision.origins.firstOrNull {
@@ -648,35 +669,185 @@ private constructor(
             }
                 ?: revision.origins.firstOrNull { it.stateFingerprint != emptyOriginFingerprint }
                 ?: revision.origins.first()
-        WorkspaceGenerationManifestStore(cacheRoot, InProcessCacheLayout.workspaceId(workspace))
+        if (forkBase != null) {
+            return publishOverlayGenerationStore(
+                cacheRoot = cacheRoot,
+                workspaceId = workspaceId,
+                clientStorePath = clientStorePath,
+                generation = generation,
+                revision = revision,
+                scope = scope,
+                applications = applications,
+                compatibilityManifest = compatibilityManifest,
+                legacyOrigin = legacyOrigin,
+                forkBase = forkBase,
+                overlayDeltaPath = overlayDeltaPath,
+                tombstonePrefixes = tombstonePrefixes,
+            )
+        }
+
+        return publishMaterializedGenerationStore(
+            cacheRoot = cacheRoot,
+            workspaceId = workspaceId,
+            clientStorePath = clientStorePath,
+            commit = commit,
+            generation = generation,
+            revision = revision,
+            scope = scope,
+            applications = applications,
+            compatibilityManifest = compatibilityManifest,
+            legacyOrigin = legacyOrigin,
+        )
+    }
+
+    private fun publishOverlayGenerationStore(
+        cacheRoot: Path,
+        workspaceId: String,
+        clientStorePath: Path,
+        generation: WorkspaceGenerationId,
+        revision: WorkspaceRevision,
+        scope: IndexScope,
+        applications: List<String>,
+        compatibilityManifest: IndexManifest,
+        legacyOrigin: SourceOriginRevision,
+        forkBase: WorktreeForkBase,
+        overlayDeltaPath: Path?,
+        tombstonePrefixes: List<String>,
+    ): PublishedStore {
+        val overlayPackKeys =
+            overlayDeltaPath
+                ?.let { deltaPath ->
+                    listOf(
+                        ContentAddressedPackCache(cacheRoot)
+                            .installDirectory(deltaPath, BASIC_FACT_SCHEMA_VERSION)
+                    )
+                }
+                .orEmpty()
+        WorkspaceGenerationManifestStore(cacheRoot, workspaceId)
             .publish(
-                WorkspaceGenerationManifest(
-                    basicFactSchemaVersion = BASIC_FACT_SCHEMA_VERSION,
+                workspaceGenerationManifest(
                     generation = generation.value,
-                    workspaceRevisionFingerprint = revision.fingerprint,
-                    originId = legacyOrigin.originId.value,
-                    revision = legacyOrigin.revision,
-                    stateFingerprint = legacyOrigin.stateFingerprint,
-                    origins =
-                        revision.origins.map { origin ->
-                            WorkspaceGenerationOrigin(
-                                originId = origin.originId.value,
-                                revision = origin.revision,
-                                stateFingerprint = origin.stateFingerprint,
-                                expectedRevision = origin.expectedRevision,
-                            )
-                        },
-                    packKeys = listOf(packKey),
-                    scopeBuildSystem = scope.buildSystem.value,
-                    scopeValue = scope.value,
-                    includesDependencies = scope.includesDependencies,
+                    revision = revision,
+                    scope = scope,
                     applications = applications,
                     compatibilityManifest = compatibilityManifest,
+                    legacyOrigin = legacyOrigin,
+                    packKeys = emptyList(),
+                    representation = WorktreeOverlayPolicy.REPRESENTATION_OVERLAY,
+                    baseWorkspaceId = forkBase.baseWorkspaceId,
+                    baseGeneration = forkBase.baseGeneration,
+                    overlayPackKeys = overlayPackKeys,
+                    tombstonePrefixes = tombstonePrefixes,
+                    overlayChainDepth = forkBase.overlayChainDepth,
                 )
             )
+        if (overlayPackKeys.isNotEmpty()) {
+            WorktreeOverlayStoreOpener.materializeOverlayDelta(
+                cacheRoot,
+                workspace,
+                clientId,
+                WorkspaceGenerationManifestStore(cacheRoot, workspaceId).current()
+                    ?: error("Missing published overlay manifest"),
+            )
+        }
+        Files.createDirectories(clientStorePath.parent)
+        return PublishedStore(path = clientStorePath, created = overlayPackKeys.isNotEmpty())
+    }
+
+    private fun publishMaterializedGenerationStore(
+        cacheRoot: Path,
+        workspaceId: String,
+        clientStorePath: Path,
+        commit: String,
+        generation: WorkspaceGenerationId,
+        revision: WorkspaceRevision,
+        scope: IndexScope,
+        applications: List<String>,
+        compatibilityManifest: IndexManifest,
+        legacyOrigin: SourceOriginRevision,
+    ): PublishedStore {
+        val source =
+            IndexPathResolver(workspace, storeRootOverride = storeRoot).resolveBaseStore(commit)
+        val packKey =
+            ContentAddressedPackCache(cacheRoot).installDirectory(source, BASIC_FACT_SCHEMA_VERSION)
+        WorkspaceGenerationManifestStore(cacheRoot, workspaceId)
+            .publish(
+                workspaceGenerationManifest(
+                    generation = generation.value,
+                    revision = revision,
+                    scope = scope,
+                    applications = applications,
+                    compatibilityManifest = compatibilityManifest,
+                    legacyOrigin = legacyOrigin,
+                    packKeys = listOf(packKey),
+                    representation = WorktreeOverlayPolicy.REPRESENTATION_MATERIALIZED,
+                )
+            )
+        val sharedDestination =
+            InProcessCacheLayout.sharedGenerationStore(workspace, generation.value)
         val packs = ContentAddressedPackCache(cacheRoot)
-        packs.materializeDirectory(packKey, destination)
-        return PublishedStore(path = destination, created = !alreadyMaterialized)
+        if (!Files.isDirectory(sharedDestination)) {
+            packs.materializeDirectory(packKey, sharedDestination)
+        }
+        val createdClientCopy = !Files.isDirectory(clientStorePath)
+        if (createdClientCopy) {
+            packs.materializeDirectory(packKey, clientStorePath)
+        }
+        return PublishedStore(path = clientStorePath, created = createdClientCopy)
+    }
+
+    private fun workspaceGenerationManifest(
+        generation: String,
+        revision: WorkspaceRevision,
+        scope: IndexScope,
+        applications: List<String>,
+        compatibilityManifest: IndexManifest,
+        legacyOrigin: SourceOriginRevision,
+        packKeys: List<String>,
+        representation: String,
+        baseWorkspaceId: String? = null,
+        baseGeneration: String? = null,
+        overlayPackKeys: List<String> = emptyList(),
+        tombstonePrefixes: List<String> = emptyList(),
+        overlayChainDepth: Int = 0,
+    ): WorkspaceGenerationManifest =
+        WorkspaceGenerationManifest(
+            basicFactSchemaVersion = BASIC_FACT_SCHEMA_VERSION,
+            generation = generation,
+            workspaceRevisionFingerprint = revision.fingerprint,
+            originId = legacyOrigin.originId.value,
+            revision = legacyOrigin.revision,
+            stateFingerprint = legacyOrigin.stateFingerprint,
+            origins =
+                revision.origins.map { origin ->
+                    WorkspaceGenerationOrigin(
+                        originId = origin.originId.value,
+                        revision = origin.revision,
+                        stateFingerprint = origin.stateFingerprint,
+                        expectedRevision = origin.expectedRevision,
+                    )
+                },
+            packKeys = packKeys,
+            scopeBuildSystem = scope.buildSystem.value,
+            scopeValue = scope.value,
+            includesDependencies = scope.includesDependencies,
+            applications = applications,
+            compatibilityManifest = compatibilityManifest,
+            representation = representation,
+            baseWorkspaceId = baseWorkspaceId,
+            baseGeneration = baseGeneration,
+            overlayPackKeys = overlayPackKeys,
+            tombstonePrefixes = tombstonePrefixes,
+            overlayChainDepth = overlayChainDepth,
+        )
+
+    private fun openPublishedStore(generation: WorkspaceGenerationId): CodeIndexStore {
+        val cacheRoot = InProcessCacheLayout.cacheRoot()
+        val manifest =
+            WorkspaceGenerationManifestStore(cacheRoot, InProcessCacheLayout.workspaceId(workspace))
+                .readGeneration(generation.value)
+                ?: error("Missing generation manifest ${generation.value}")
+        return WorktreeOverlayStoreOpener.openForQuery(cacheRoot, workspace, clientId, manifest)
     }
 
     @OptIn(IndexinoInternalApi::class)
@@ -701,10 +872,40 @@ private constructor(
                 .current() ?: return null
         if (manifest.basicFactSchemaVersion != BASIC_FACT_SCHEMA_VERSION) return null
         val generation = WorkspaceGenerationId.of(manifest.generation)
-        val storePath = InProcessCacheLayout.generationStore(workspace, clientId, generation.value)
-        if (!Files.isDirectory(storePath)) {
+        val storePath =
+            if (manifest.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) {
+                InProcessCacheLayout.overlayDeltaStore(workspace, clientId, generation.value)
+            } else {
+                InProcessCacheLayout.generationStore(workspace, clientId, generation.value)
+            }
+        if (
+            manifest.representation != WorktreeOverlayPolicy.REPRESENTATION_OVERLAY &&
+                !Files.isDirectory(storePath)
+        ) {
             ContentAddressedPackCache(cacheRoot)
                 .materializeDirectory(manifest.packKeys.single(), storePath)
+            if (
+                !Files.isDirectory(
+                    InProcessCacheLayout.sharedGenerationStore(workspace, generation.value)
+                )
+            ) {
+                ContentAddressedPackCache(cacheRoot)
+                    .materializeDirectory(
+                        manifest.packKeys.single(),
+                        InProcessCacheLayout.sharedGenerationStore(workspace, generation.value),
+                    )
+            }
+        } else if (
+            manifest.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY &&
+                manifest.overlayPackKeys.isNotEmpty() &&
+                !Files.isDirectory(storePath)
+        ) {
+            WorktreeOverlayStoreOpener.materializeOverlayDelta(
+                cacheRoot,
+                workspace,
+                clientId,
+                manifest,
+            )
         }
         val revision =
             WorkspaceRevision(
@@ -756,11 +957,14 @@ private constructor(
             generation != current && snapshotPins.getOrDefault(generation, 0) == 0
         }
         reclaimable.forEach { (generation, path) ->
-            if (path.parent.toFile().deleteRecursively()) {
+            if (deleteClientGenerationRef(path)) {
                 generationStores.remove(generation)
             }
         }
     }
+
+    private fun deleteClientGenerationRef(path: Path): Boolean =
+        path.parent.toFile().deleteRecursively()
 
     private fun buildFailure(execution: IndexBuildExecution, message: String): IndexinoException =
         failure(

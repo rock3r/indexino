@@ -4,12 +4,16 @@ import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.core.BASIC_FACT_SCHEMA_VERSION
 import dev.sebastiano.indexino.core.Version
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
+import dev.sebastiano.indexino.core.cache.WorktreeForkBase
+import dev.sebastiano.indexino.core.cache.WorktreeForkCompatibility
+import dev.sebastiano.indexino.core.cache.WorktreeOverlayStoreOpener
 import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.IndexManifest
 import dev.sebastiano.indexino.core.manifest.IndexManifestOrigin
 import dev.sebastiano.indexino.core.manifest.ManifestFreshness
 import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
+import dev.sebastiano.indexino.core.store.WorktreeOverlayIndexStore
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.engine.PluginAnalyzerRunner
 import dev.sebastiano.indexino.engine.PluginRegistry
@@ -50,6 +54,9 @@ internal class IndexBuildRunner(
     private var latestSources: List<IndexedSource> = emptyList()
     private var latestTopologyRoots: List<Path> = emptyList()
     private var reusedFreshIndex: Boolean = false
+    private var latestForkBase: WorktreeForkBase? = null
+    private var latestOverlayDeltaPath: Path? = null
+    private var latestTombstonePrefixes: List<String> = emptyList()
 
     fun runDetailed(): IndexBuildExecution {
         val exitCode = run()
@@ -62,6 +69,9 @@ internal class IndexBuildRunner(
                 latestSources,
                 latestTopologyRoots,
                 reusedFreshIndex,
+                latestForkBase,
+                latestOverlayDeltaPath,
+                latestTombstonePrefixes,
             )
         }
         return IndexBuildExecution(
@@ -73,10 +83,13 @@ internal class IndexBuildRunner(
             sources = latestSources,
             topologyRoots = latestTopologyRoots,
             reusedFreshIndex = reusedFreshIndex,
+            forkBase = latestForkBase,
+            overlayDeltaPath = latestOverlayDeltaPath,
+            tombstonePrefixes = latestTombstonePrefixes,
         )
     }
 
-    @Suppress("LongMethod")
+    @Suppress("LongMethod", "CyclomaticComplexMethod")
     fun run(): Int {
         latestChanges = null
         latestManifest = null
@@ -84,6 +97,9 @@ internal class IndexBuildRunner(
         latestSources = emptyList()
         latestTopologyRoots = emptyList()
         reusedFreshIndex = false
+        latestForkBase = null
+        latestOverlayDeltaPath = null
+        latestTombstonePrefixes = emptyList()
         val topologyResult =
             TopologyResolver.resolve(
                 project = project,
@@ -171,6 +187,29 @@ internal class IndexBuildRunner(
             return CliExitCodes.SUCCESS
         }
 
+        val forkBase =
+            if (existingManifest == null) {
+                WorktreeForkCompatibility.findCompatibleBase(
+                    project = project,
+                    cacheRoot = InProcessCacheLayout.cacheRoot(),
+                    criteria = criteria,
+                )
+            } else {
+                null
+            }
+        if (forkBase != null && forkBase.unchanged) {
+            ManifestIO.write(manifestPath, forkBase.baseManifest)
+            latestManifest = forkBase.baseManifest
+            latestForkBase = forkBase
+            reusedFreshIndex = true
+            progress("worktree fork reuses compatible base generation — skip rebuild")
+            machineProgress?.completed("fresh")
+            return CliExitCodes.SUCCESS
+        }
+        if (forkBase != null) {
+            latestForkBase = forkBase
+        }
+
         buildStore(
             resolver = resolver,
             commit = commit,
@@ -186,9 +225,11 @@ internal class IndexBuildRunner(
             pluginRegistry = pluginRegistry,
             pluginCoordinates = pluginCoordinates,
             forceFullRebuild =
-                existingManifest == null ||
-                    existingManifest.indexerVersion != Version.NAME ||
-                    existingManifest.basicFactSchemaVersion != BASIC_FACT_SCHEMA_VERSION,
+                (existingManifest == null && forkBase == null) ||
+                    (existingManifest != null &&
+                        (existingManifest.indexerVersion != Version.NAME ||
+                            existingManifest.basicFactSchemaVersion != BASIC_FACT_SCHEMA_VERSION)),
+            forkBase = forkBase,
         )
         machineProgress?.completed("indexed")
         return CliExitCodes.SUCCESS
@@ -271,8 +312,35 @@ internal class IndexBuildRunner(
         pluginRegistry: PluginRegistry,
         pluginCoordinates: Map<String, String>,
         forceFullRebuild: Boolean,
+        forkBase: WorktreeForkBase? = null,
     ) {
-        val store = XodusCodeIndexStore.open(resolver.resolveBaseStore(commit))
+        val overlayDeltaPath = forkBase?.let {
+            InProcessCacheLayout.overlayBuildDelta(project, commit)
+        }
+        if (overlayDeltaPath != null) {
+            overlayDeltaPath.parent.toFile().deleteRecursively()
+        }
+        val store =
+            if (forkBase != null) {
+                val baseStorePath =
+                    WorktreeOverlayStoreOpener.materializedGenerationStore(
+                        cacheRoot = InProcessCacheLayout.cacheRoot(),
+                        workspace = forkBase.baseWorkspacePath,
+                        manifest =
+                            WorkspaceGenerationManifestStore(
+                                    InProcessCacheLayout.cacheRoot(),
+                                    forkBase.baseWorkspaceId,
+                                )
+                                .readGeneration(forkBase.baseGeneration)
+                                ?: error("Missing base generation ${forkBase.baseGeneration}"),
+                    )
+                val baseStore = XodusCodeIndexStore.open(baseStorePath, readOnly = true)
+                val deltaStore =
+                    XodusCodeIndexStore.open(checkNotNull(overlayDeltaPath), readOnly = false)
+                WorktreeOverlayIndexStore(baseStore, deltaStore, emptyList())
+            } else {
+                XodusCodeIndexStore.open(resolver.resolveBaseStore(commit))
+            }
         val previousRecords = store.prefixScan("").toList()
         try {
             val changes = detectChanges(store, sources, sourceSnapshot, forceFullRebuild)
@@ -320,6 +388,16 @@ internal class IndexBuildRunner(
                 )
             ManifestIO.write(resolver.resolveManifest(commit), manifest)
             latestManifest = manifest
+            if (overlayDeltaPath != null) {
+                latestOverlayDeltaPath = overlayDeltaPath
+                latestTombstonePrefixes =
+                    (changes.deletedSources + changes.changedSources)
+                        .map { source ->
+                            val relative = source.path.replace('\\', '/')
+                            WorktreeOverlayIndexStore.tombstonePrefixForRelativeFile(relative)
+                        }
+                        .distinct()
+            }
         } catch (@Suppress("TooGenericExceptionCaught") failure: Throwable) {
             store.prefixScan("").forEach { (key, _) -> store.delete(key) }
             previousRecords.forEach { (key, record) -> store.put(key, record) }
@@ -330,7 +408,7 @@ internal class IndexBuildRunner(
     }
 
     private fun detectChanges(
-        store: XodusCodeIndexStore,
+        store: dev.sebastiano.indexino.core.store.CodeIndexStore,
         sources: List<IndexedSource>,
         sourceSnapshot: SourceContentSnapshot,
         forceFullRebuild: Boolean,
@@ -377,4 +455,7 @@ internal data class IndexBuildExecution(
     val sources: List<IndexedSource>,
     val topologyRoots: List<Path>,
     val reusedFreshIndex: Boolean,
+    val forkBase: WorktreeForkBase? = null,
+    val overlayDeltaPath: Path? = null,
+    val tombstonePrefixes: List<String> = emptyList(),
 )
