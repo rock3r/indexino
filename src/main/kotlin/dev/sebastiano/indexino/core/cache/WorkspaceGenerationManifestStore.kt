@@ -34,6 +34,12 @@ internal data class WorkspaceGenerationManifest(
     val origins: List<WorkspaceGenerationOrigin> =
         listOf(WorkspaceGenerationOrigin(originId, revision, stateFingerprint)),
     val compatibilityManifest: IndexManifest? = null,
+    val representation: String = WorktreeOverlayPolicy.REPRESENTATION_MATERIALIZED,
+    val baseWorkspaceId: String? = null,
+    val baseGeneration: String? = null,
+    val overlayPackKeys: List<String> = emptyList(),
+    val tombstonePrefixes: List<String> = emptyList(),
+    val overlayChainDepth: Int = 0,
 )
 
 /** Publishes immutable workspace generation manifests through a short current pointer. */
@@ -70,6 +76,16 @@ internal class WorkspaceGenerationManifestStore(cacheRoot: Path, workspaceId: St
         val stagingPointer = currentPointer.resolveSibling("current.tmp-${UUID.randomUUID()}")
         Files.writeString(stagingPointer, manifest.generation)
         moveAtomically(stagingPointer, currentPointer)
+    }
+
+    fun readGeneration(generation: String): WorkspaceGenerationManifest? {
+        val manifestPath =
+            workspaceRoot.resolve("generations").resolve(generation).resolve("manifest.json")
+        if (!Files.isRegularFile(manifestPath)) return null
+        return json.decodeFromString(
+            WorkspaceGenerationManifest.serializer(),
+            Files.readString(manifestPath),
+        )
     }
 
     fun current(): WorkspaceGenerationManifest? {

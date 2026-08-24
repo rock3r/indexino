@@ -16,6 +16,22 @@ internal object InProcessCacheLayout {
             .resolve(generation)
             .resolve("store")
 
+    fun sharedGenerationStore(workspace: Path, generation: String): Path =
+        workspaceRoot(workspace).resolve("generations").resolve(generation).resolve("materialized")
+
+    fun overlayDeltaStore(workspace: Path, clientId: String, generation: String): Path =
+        workspaceRoot(workspace)
+            .resolve("refs")
+            .resolve(clientId)
+            .resolve(generation)
+            .resolve("overlay-delta")
+
+    fun overlayMetadataPath(workspace: Path, generation: String): Path =
+        workspaceRoot(workspace).resolve("generations").resolve(generation).resolve("overlay.json")
+
+    fun overlayBuildDelta(workspace: Path, commit: String): Path =
+        writerRoot(workspace).resolve("overlay-build").resolve(commit).resolve("delta")
+
     fun workspaceRoot(workspace: Path): Path =
         cacheRoot().resolve("workspaces").resolve(workspaceId(workspace))
 
@@ -23,7 +39,10 @@ internal object InProcessCacheLayout {
         val explicit =
             System.getProperty(TEST_CACHE_PROPERTY)?.takeIf(String::isNotBlank)
                 ?: System.getenv("INDEXINO_CACHE_DIR")?.takeIf(String::isNotBlank)
-        if (explicit != null) return Path.of(explicit)
+        if (explicit != null) {
+            return runCatching { Path.of(explicit).toRealPath() }
+                .getOrElse { Path.of(explicit).toAbsolutePath().normalize() }
+        }
 
         val xdg = System.getenv("XDG_CACHE_HOME")?.takeIf(String::isNotBlank)
         if (xdg != null) return Path.of(xdg).resolve("indexino")
@@ -38,8 +57,11 @@ internal object InProcessCacheLayout {
 
     fun workspaceId(workspace: Path): String {
         // Indexino canonicalizes the workspace once at connection entry. Repeating toRealPath()
-        // here would create a second unwrapped I/O failure window during construction.
-        val digest = MessageDigest.getInstance("SHA-256").digest(workspace.toString().toByteArray())
+        // here keeps sibling worktrees and CLI/cache callers aligned on one workspace id.
+        val canonical =
+            runCatching { workspace.toRealPath().toString() }
+                .getOrElse { workspace.toAbsolutePath().normalize().toString() }
+        val digest = MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray())
         return HexFormat.of().formatHex(digest).take(WORKSPACE_ID_HEX_LENGTH)
     }
 

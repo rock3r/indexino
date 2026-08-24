@@ -6,7 +6,10 @@ import com.github.ajalt.clikt.core.subcommands
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import dev.sebastiano.indexino.api.InProcessCacheLayout
+import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifest
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
+import dev.sebastiano.indexino.core.cache.WorkspaceRegistryStore
+import dev.sebastiano.indexino.core.cache.WorktreeOverlayPolicy
 import dev.sebastiano.indexino.engine.RuntimeLeaseStore
 import dev.sebastiano.indexino.engine.RuntimePaths
 import java.nio.file.Files
@@ -83,6 +86,7 @@ internal object CacheMaintenance {
             return CliExitCodes.ANALYSIS_ERROR
         }
         deleteTree(cacheRoot.resolve("workspaces").resolve(workspaceId))
+        WorkspaceRegistryStore(cacheRoot).remove(workspaceId)
         Files.deleteIfExists(RuntimePaths.tombstonePath(cacheRoot, workspaceId))
         return CliExitCodes.SUCCESS
     }
@@ -100,13 +104,30 @@ internal object CacheMaintenance {
             return roots
                 .filter(Files::isDirectory)
                 .flatMap { root ->
-                    WorkspaceGenerationManifestStore(cacheRoot, root.fileName.toString())
-                        .current()
-                        ?.packKeys
-                        ?.stream() ?: java.util.stream.Stream.empty()
+                    val manifest =
+                        WorkspaceGenerationManifestStore(cacheRoot, root.fileName.toString())
+                            .current()
+                    manifest?.referencedPackKeys(cacheRoot)?.stream()
+                        ?: java.util.stream.Stream.empty()
                 }
                 .collect(java.util.stream.Collectors.toSet())
         }
+    }
+
+    private fun WorkspaceGenerationManifest.referencedPackKeys(cacheRoot: Path): Set<String> {
+        val keys = packKeys.toMutableSet()
+        keys.addAll(overlayPackKeys)
+        if (
+            representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY &&
+                baseWorkspaceId != null &&
+                baseGeneration != null
+        ) {
+            val base =
+                WorkspaceGenerationManifestStore(cacheRoot, baseWorkspaceId)
+                    .readGeneration(baseGeneration)
+            if (base != null) keys.addAll(base.referencedPackKeys(cacheRoot))
+        }
+        return keys
     }
 
     private const val CONTENT_KEY_LENGTH = 64

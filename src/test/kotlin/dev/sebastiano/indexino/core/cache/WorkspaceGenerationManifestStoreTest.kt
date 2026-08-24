@@ -15,6 +15,35 @@ class WorkspaceGenerationManifestStoreTest {
     }
 
     @Test
+    fun `generation manifest round trips compatibility metadata`() {
+        val root = createTempDirectory("indexino-generation-compat-").also(tempDirs::add)
+        val store = WorkspaceGenerationManifestStore(root, "workspace-id")
+        val compatibility =
+            dev.sebastiano.indexino.core.manifest.IndexManifest(
+                commit = "commit",
+                indexerVersion = "indexino-test",
+                scope = ":ui",
+                topology = "gradle",
+                sourceFileCount = 2,
+                sourcesContentHash = "hash",
+                builtAt = "2026-01-01T00:00:00Z",
+            )
+        store.publish(
+            WorkspaceGenerationManifest(
+                generation = "generation-1",
+                workspaceRevisionFingerprint = "revision",
+                originId = "workspace",
+                revision = "commit",
+                stateFingerprint = "hash",
+                packKeys = listOf("ab".repeat(32)),
+                compatibilityManifest = compatibility,
+            )
+        )
+
+        assertEquals(compatibility, store.current()?.compatibilityManifest)
+    }
+
+    @Test
     fun `publishes a generation manifest through an atomic current pointer`() {
         val root = createTempDirectory("indexino-generation-").also(tempDirs::add)
         val store = WorkspaceGenerationManifestStore(root, "workspace-id")
