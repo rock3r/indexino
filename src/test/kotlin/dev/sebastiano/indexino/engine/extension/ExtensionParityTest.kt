@@ -25,6 +25,7 @@ class ExtensionParityTest {
     @AfterTest
     fun tearDown() {
         DynamicPluginCatalog.clearForTests()
+        ExtensionHostRegistry.clearForTests()
         System.clearProperty("indexino.closedWorld")
         tempDirs.forEach { it.toFile().deleteRecursively() }
     }

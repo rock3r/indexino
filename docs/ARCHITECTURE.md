@@ -169,9 +169,11 @@ would invalidate AOT. Construo is configured to consume this exact normalized ou
 
 Each native target uses checked-in JBR and Roast digests. Construo verifies those archives before
 extraction, runs `jlink`, `jdeps`, and `javap` from the matching target JBRSDK 25, and emits one
-target-specific archive. The shipped jlink image intentionally omits `runtime/bin/java` while
-retaining process helpers such as `jspawnhelper`; the application still launches external Git and
-topology tools when a command needs them.
+target-specific archive. Construo verifies those archives before
+extraction, runs `jlink`, `jdeps`, and `javap` from the matching target JBRSDK 25, and emits one
+target-specific archive. The shipped jlink image omits the standalone `java` launcher from the
+default Roast runtime layout, but native ZIPs restore `runtime/bin/java` (or `java.exe`) from the
+target JDK so the extension worker sidecar can spawn without an external JVM install.
 
 Roast embeds HotSpot in the launcher process. The packaged launcher sets an Indexino-specific VM
 property; only that marked Windows entry point installs a Win32 `SetConsoleCtrlHandler` callback

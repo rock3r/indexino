@@ -14,11 +14,13 @@ import dev.sebastiano.indexino.api.IndexScope
 import dev.sebastiano.indexino.api.Indexino
 import dev.sebastiano.indexino.api.IndexinoConfiguration
 import dev.sebastiano.indexino.api.RefreshRequest
+import dev.sebastiano.indexino.api.RuntimeAttachMode
 import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
+import dev.sebastiano.indexino.engine.extension.DistributionCapabilities
 import dev.sebastiano.indexino.model.PluginId
 import dev.sebastiano.indexino.producer.IndexBuildProgressReporter
 import dev.sebastiano.indexino.producer.JsonlIndexBuildProgressReporter
@@ -60,6 +62,15 @@ internal class IndexCommand : CliktCommand(name = "index") {
         val scope = daemonScope(project.toPath())
         CliTrustedPlugins.registerFromCli(plugins)
         CliTrustedPlugins.install()
+        val runtimeAttach =
+            if (
+                CliTrustedPlugins.registeredPluginIds().isNotEmpty() &&
+                    !DistributionCapabilities.requiresOutOfProcessExtensions()
+            ) {
+                RuntimeAttachMode.IN_PROCESS
+            } else {
+                RuntimeAttachMode.PREFER_DAEMON
+            }
         if (jsonlProgress) JsonlIndexBuildProgressReporter { echo(it) }.discoveryStarted()
         runBlocking {
             Indexino.connectBlockingForCli(
@@ -67,6 +78,7 @@ internal class IndexCommand : CliktCommand(name = "index") {
                         .withAutoRefresh(
                             if (noAutoRefresh) AutoRefreshMode.DISABLED else AutoRefreshMode.ENABLED
                         )
+                        .withRuntimeAttach(runtimeAttach)
                 )
                 .use { indexino ->
                     val request =

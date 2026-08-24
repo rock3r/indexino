@@ -17,7 +17,7 @@ import dev.sebastiano.indexino.engine.RuntimeProtocolException
 import dev.sebastiano.indexino.engine.RuntimeSnapshotClient
 import dev.sebastiano.indexino.engine.extension.DistributionCapabilities
 import dev.sebastiano.indexino.engine.extension.DynamicPluginCatalog
-import dev.sebastiano.indexino.engine.extension.ExtensionHost
+import dev.sebastiano.indexino.engine.extension.ExtensionHostRegistry
 import dev.sebastiano.indexino.model.BasicFactQueries
 import dev.sebastiano.indexino.model.BasicFactSchemaVersion
 import dev.sebastiano.indexino.model.CallQuery
@@ -309,7 +309,7 @@ private constructor(
             if (registration != null) {
                 validateCheckQueryOptions(options)
                 return mapUnexpectedFailuresSuspend {
-                    ExtensionHost.create(
+                    ExtensionHostRegistry.hostFor(
                             cacheRoot = InProcessCacheLayout.cacheRoot(),
                             workspaceId = "ext00000000000001",
                             parent = IndexSnapshot::class.java.classLoader,

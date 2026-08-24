@@ -91,7 +91,7 @@ class NativeDistributionTest {
             )
             assertFalse(launcherConfiguration.contains("AOTMode"))
             assertFalse(launcherConfiguration.contains("-Xlog:aot"))
-            assertFalse(entries.containsKey(runtimeJavaEntry(target)))
+            assertTrue(entries.containsKey(runtimeJavaEntry(target)))
             assertPackagedAotCache(zip, entries, aotCache, target)
 
             val release =

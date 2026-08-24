@@ -313,6 +313,7 @@ val shrunkCliJar by
     tasks.registering(ShadowJar::class) {
         description = "Build the R8-shrunk native-distribution CLI JAR"
         configureCliArchive("shrunk")
+        manifest { attributes["Indexino-Closed-World"] = "true" }
         // Shadow 9.6 extracts dependency rules but its merger deduplicates repeated rule lines,
         // including the closing braces shared by multiline blocks.
         // Keep the runtime-sensitive rules in vetted one-line form until the merger accepts the
@@ -478,6 +479,10 @@ construo {
                 "runtime/lib/server/classes.jsa",
                 aotTraining.flatMap(AotTrainingTask::getAotCache),
             )
+            packageFiles.put(
+                "runtime/bin/java",
+                aotTraining.flatMap(AotTrainingTask::getTargetJdkRoot).map { it.file("bin/java") },
+            )
         }
         create<Target.MacOs>("macArm64") {
             architecture.set(Target.Architecture.AARCH64)
@@ -504,6 +509,10 @@ construo {
                 "runtime/lib/server/classes.jsa",
                 aotTraining.flatMap(AotTrainingTask::getAotCache),
             )
+            packageFiles.put(
+                "runtime/bin/java",
+                aotTraining.flatMap(AotTrainingTask::getTargetJdkRoot).map { it.file("bin/java") },
+            )
         }
         create<Target.Windows>("windowsX64") {
             architecture.set(Target.Architecture.X86_64)
@@ -528,6 +537,12 @@ construo {
             packageFiles.put(
                 "runtime/bin/server/classes.jsa",
                 aotTraining.flatMap(AotTrainingTask::getAotCache),
+            )
+            packageFiles.put(
+                "runtime/bin/java.exe",
+                aotTraining.flatMap(AotTrainingTask::getTargetJdkRoot).map {
+                    it.file("bin/java.exe")
+                },
             )
         }
     }

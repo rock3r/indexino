@@ -10,6 +10,7 @@ internal object ExtensionProtocolConstants {
     const val SESSION_SUFFIX_LENGTH: Int = 8
     const val THREAD_JOIN_TIMEOUT_MILLIS: Long = 5_000L
     const val PROCESS_DESTROY_TIMEOUT_SECONDS: Long = 5L
+    const val NANOS_PER_MILLIS: Long = 1_000_000L
 }
 
 internal class ExtensionProtocolException(message: String, cause: Throwable? = null) :

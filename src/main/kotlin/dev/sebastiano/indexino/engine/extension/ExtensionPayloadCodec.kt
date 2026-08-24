@@ -109,8 +109,8 @@ internal object ExtensionPayloadCodec {
         output.writeUTF(location.file.path)
         output.writeUTF(location.file.displayPath)
         output.writeInt(location.line)
-        output.writeInt(location.column ?: 0)
-        output.writeInt(location.offset ?: 0)
+        output.writeInt(location.column ?: ABSENT_COORDINATE)
+        output.writeInt(location.offset ?: ABSENT_COORDINATE)
     }
 
     private fun readLocation(input: DataInputStream): dev.sebastiano.indexino.model.SourceLocation {
@@ -120,11 +120,11 @@ internal object ExtensionPayloadCodec {
                 input.readUTF(),
                 input.readUTF(),
             )
-        return dev.sebastiano.indexino.model.SourceLocation.of(
-            file,
-            input.readInt(),
-            input.readInt(),
-            input.readInt(),
-        )
+        val line = input.readInt()
+        val column = input.readInt().takeIf { it >= 1 }
+        val offset = input.readInt().takeIf { it >= 0 }
+        return dev.sebastiano.indexino.model.SourceLocation.of(file, line, column, offset)
     }
+
+    private const val ABSENT_COORDINATE = -1
 }

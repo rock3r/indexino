@@ -49,7 +49,21 @@ internal object ExtensionJvmLauncher {
             ?: System.getProperty("indexino.extension.java")
             ?: System.getenv("INDEXINO_EXTENSION_JAVA")
             ?: packagedRuntimeJava()
-            ?: Path.of(System.getProperty("java.home"), "bin", "java").toString()
+            ?: fallbackJavaExecutable()
+
+    private fun fallbackJavaExecutable(): String {
+        if (DistributionCapabilities.requiresOutOfProcessExtensions()) {
+            throw dev.sebastiano.indexino.api.indexinoFailure(
+                category = dev.sebastiano.indexino.model.IndexFailureCategory.INVALID_REQUEST,
+                code = "extension_java_missing",
+                message =
+                    "Extension worker JVM is unavailable; set INDEXINO_EXTENSION_JAVA to a Java " +
+                        "launcher or use a native install that packages runtime/bin/java",
+                retryable = false,
+            )
+        }
+        return Path.of(System.getProperty("java.home"), "bin", "java").toString()
+    }
 
     private fun resolveWorkerClasspath(): String =
         workerClasspath
@@ -87,7 +101,9 @@ internal object ExtensionJvmLauncher {
 
 internal object ExtensionProcessSupport {
     fun destroyProcessTree(process: Process) {
-        process.destroyForcibly()
+        val root = process.toHandle()
+        root.descendants().forEach { descendant -> descendant.destroyForcibly() }
+        root.destroyForcibly()
         if (
             !process.waitFor(
                 ExtensionProtocolConstants.PROCESS_DESTROY_TIMEOUT_SECONDS,

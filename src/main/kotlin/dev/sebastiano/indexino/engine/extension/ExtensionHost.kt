@@ -42,6 +42,10 @@ private constructor(
         deadline: Duration =
             Duration.ofMillis(ExtensionProtocolConstants.DEFAULT_CHECK_DEADLINE_MILLIS),
     ): QueryPage<Finding> {
+        val deadlineAtNanos = System.nanoTime() + deadline.toNanos()
+        fun remainingMillis(): Long =
+            ((deadlineAtNanos - System.nanoTime()) / ExtensionProtocolConstants.NANOS_PER_MILLIS)
+                .coerceAtLeast(0L)
         if (shutdown.get()) {
             throw indexinoFailure(
                 category = IndexFailureCategory.CLOSED,
@@ -50,7 +54,7 @@ private constructor(
                 retryable = false,
             )
         }
-        if (!activeWorkers.tryAcquire(deadline.toMillis(), TimeUnit.MILLISECONDS)) {
+        if (!activeWorkers.tryAcquire(remainingMillis(), TimeUnit.MILLISECONDS)) {
             throw indexinoFailure(
                 category = IndexFailureCategory.STORAGE_BUSY,
                 code = "extension_capacity",
@@ -98,10 +102,11 @@ private constructor(
                     checkId = request.checkId,
                 )
             val completed =
-                server.awaitCompletion(deadline.toMillis()) { findings ->
+                server.awaitCompletion(remainingMillis()) { findings ->
                     ExtensionFindingValidator.validate(request, findings)
                 }
-            val findings = finalizeWorker(process, completed, deadline, cancelled)
+            val findings =
+                finalizeWorker(process, completed, Duration.ofMillis(remainingMillis()), cancelled)
             return paginateFindings(findings, options)
         } finally {
             cancelled.set(true)
