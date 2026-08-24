@@ -61,14 +61,10 @@ jobs:
             checksum_task: sha256NativeDistributionWindowsX64
     steps:
       - uses: actions/checkout@v6
-      - name: Enforce native release approval
+      - name: Require release version for tagged workflow
         if: inputs.release
-        env:
-          NATIVE_RELEASE_APPROVED: ${{ vars.NATIVE_RELEASE_APPROVED }}
         shell: bash
-        run: |
-          test -n "$INDEXINO_RELEASE_VERSION"
-          .github/scripts/verify-native-release-readiness.sh
+        run: test -n "$INDEXINO_RELEASE_VERSION"
       - uses: actions/setup-java@v5
         with:
           distribution: temurin

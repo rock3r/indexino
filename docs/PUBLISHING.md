@@ -86,28 +86,21 @@ and generated bundled-dependency
 inventory with that release version, signs every Maven publication artifact with the in-memory PGP
 key, and uploads to the Sonatype Central Portal.
 
-The project does not currently enable Gradle dependency locking. The release provenance records that
-state explicitly, binds the dependency-declaration files, and includes a generated inventory with
-the resolved coordinate, filename, and SHA-256 of every JVM dependency bundled into the native JAR.
+The project does not currently enable Gradle dependency locking. The release workflow generates a
+`bundled-dependencies.txt` inventory with the resolved coordinate, filename, and SHA-256 of every
+JVM dependency bundled into the native JAR and attaches it to the GitHub release draft.
 
 The build uses `automaticRelease = false`, matching Spectre's cautious release flow. A successful
 workflow leaves the validated deployment waiting for manual promotion in the Central Portal.
 
-Native release drafting is a separately gated continuation of the tag workflow. It remains skipped
-unless `release/native-redistribution-manifest.json` has `approvalStatus` set to `APPROVED` by a
-reviewed change and the repository variable `NATIVE_RELEASE_APPROVED` is exactly `true`. While that
-gate is pending, the tag workflow still publishes the Maven train and creates a **draft**
-GitHub release with `release/RELEASE_NOTES-<version>.md` and the generated
-`bundled-dependencies.txt` inventory. Publish that draft only after Central promotion and external
-resolution checks succeed. Native ZIP drafting stays disabled.
+Every release tag runs the full check suite, uploads the Maven train, builds the Tier 1 native CLI
+ZIPs, and creates a **draft** GitHub release with `release/RELEASE_NOTES-<version>.md`, the three
+native archives, their SHA-256 sidecars, and `bundled-dependencies.txt`. Publish that draft only
+after Central promotion and external resolution checks succeed.
 
-Once both native gates are present, the tag workflow calls the reusable Tier 1 matrix with the
-release version. The macOS job signs all Mach-O payloads, creates the immutable final ZIP, submits
-those exact bytes for notarization, exercises online Gatekeeper, and reruns the complete native
-verifier against the signed archive before replacing its checksum. Only after Maven verification and
-every native job pass does the workflow create a draft GitHub release that replaces the Maven-only
-assets with signed native ZIPs, checksums, and aggregate provenance. It never auto-publishes that
-draft.
+The macOS job signs all Mach-O payloads, creates the immutable final ZIP, submits those exact bytes
+for notarization, exercises online Gatekeeper, and reruns the complete native verifier against the
+signed archive before replacing its checksum. The workflow never auto-publishes the GitHub draft.
 
 Required repository secrets:
 
@@ -124,6 +117,22 @@ Required repository secrets:
 | `APPLE_APP_SPECIFIC_PASSWORD` | App-specific notarization password |
 | `APPLE_TEAM_ID` | Apple Developer team identifier |
 
+Configure the macOS secrets once per repository. Indexino reuses the same Developer ID
+certificate material as other `dev.sebastiano` projects; notarization uses the app-specific
+password flow (`notarytool --apple-id`) rather than Spectre's App Store Connect API key flow.
+
+From a machine with `op`, `gh`, `jq`, and `openssl` authenticated:
+
+```bash
+.github/scripts/setup-macos-release-secrets.sh rock3r/indexino
+```
+
+The script reads:
+
+- **Compose Pi Apple signing cert** — app-specific password (`credential`) and attached
+  `.cer`/`.key` → base64 `.p12`
+- **Apple ID** — account email (`username` → `APPLE_ID`) and `team ID` → `APPLE_TEAM_ID`
+
 Before the first release, confirm that the Central Portal account can publish under the verified
 `dev.sebastiano` namespace. Then push an already-reviewed release commit and its version tag:
 
@@ -133,9 +142,6 @@ git push origin v0.2.0
 ```
 
 After the workflow succeeds, inspect the deployment in the Central Portal and promote it manually.
-When native redistribution is still pending counsel approval, the GitHub release is created as a
-draft documenting the Maven-only scope and attaching the bundled-dependency inventory. Promote the
-Central deployment, verify public coordinates from a clean consumer, then publish the draft
-(`gh release edit <tag> --draft=false`). If native release approval was enabled later, independently
-inspect the draft GitHub release, signed aggregate provenance, checksums, legal manifest, and all
-three verification logs before publishing that draft manually.
+Verify public Maven coordinates from a clean consumer, then publish the GitHub draft
+(`gh release edit <tag> --draft=false`). Before publishing, inspect the draft release assets,
+checksum sidecars, bundled-dependency inventory, and the native verification logs from CI.

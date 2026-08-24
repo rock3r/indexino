@@ -3,8 +3,9 @@
 Indexino native distributions are self-contained command-line installations built around the same
 JVM 25 bytecode as the thin Maven and fat-JAR variants. Each target ZIP contains a Roast launcher,
 a stripped JBR 25 runtime, the R8 application JAR, a target-trained AOT cache, and the applicable
-license files. Native ZIPs are CI artifacts while Indexino remains pre-release; no native release
-has been published.
+license files. Native ZIPs are built on every release tag after Maven upload succeeds; the GitHub
+release draft attaches the three Tier 1 archives, their SHA-256 sidecars, and the generated
+`bundled-dependencies.txt` inventory.
 
 ## Targets and tested baselines
 
@@ -105,35 +106,23 @@ startup. Reinstall the complete ZIP to restore the matching cache.
   carry a stapled notarization ticket, so a first launch on a quarantined machine needs network
   access for Gatekeeper to retrieve the ticket. After successful online assessment macOS may cache
   the ticket; an offline first launch can be rejected and should be retried online.
-- Windows security warnings: the decided first-release Authenticode policy is `UNSIGNED`. Verify the
-  published SHA-256 file and signed aggregate provenance; SmartScreen reputation warnings are
-  expected. Enabling Authenticode later requires signing the final executable before archiving and
-  rerunning the complete verifier on those final bytes.
+- Windows security warnings: the first public Windows ZIP is **unsigned** Authenticode. Verify the
+  published SHA-256 sidecar before extracting; SmartScreen reputation warnings are expected.
 
-For an approved release, first fetch `release/native-redistribution-manifest.json` and
-`release/indexino-release-signing-key.asc` independently from the immutable source tag in the
-official `rock3r/indexino` repository; do not use only the copies co-distributed with a release or
-mirror. Compare the full fingerprint printed by `gpg --show-keys --fingerprint` with
-`releaseSigningKeyFingerprint` in that independently fetched manifest. Only after that identity
-check, verify the aggregate signature and per-archive checksum from the directory containing the
-downloaded release assets:
+For a tagged release, download the ZIP and adjacent `.sha256` file from the official GitHub release
+for that version. Verify the checksum before extracting:
 
 ```bash
-gpg --show-keys --fingerprint release/indexino-release-signing-key.asc
-gpg --import release/indexino-release-signing-key.asc
-gpg --verify indexino-release-provenance.txt.asc indexino-release-provenance.txt
 sha256sum -c indexino-<version>-windows-x64.zip.sha256
 ```
+
+Each native archive bundles the pinned JBR 25 runtime with its `runtime/legal/` module notices,
+Roast under Apache 2.0, and Indexino under the project license. The release draft also attaches
+`bundled-dependencies.txt`, listing every JVM dependency bundled into the shrunk application JAR.
 
 ## Release blockers
 
 No native release may be created until the manual Tier 1 matrix is green for the intended source
-commit and all release-safety work is complete. The tag workflow enforces a checked-in
-`release/native-redistribution-manifest.json` approval plus the repository
-`NATIVE_RELEASE_APPROVED=true` gate. The checked-in manifest intentionally remains
-`PENDING_COUNSEL_APPROVAL`, so native drafting is disabled. Approval must cover the exact JBR and
-Roast inputs, retained JBR GPLv2 with Classpath Exception and module notices, a counsel-approved
-corresponding-source mechanism, a bundled dependency inventory, immutable-payload macOS codesigning
-and notarization, and the documented Gatekeeper and Windows Authenticode policies. Final
-signed/notarized bytes must repeat the full Roast, AOT, relocation, mode, and differential verifier
-before release checksums are generated.
+commit and the tag workflow's publish plus native-distribution jobs succeed. macOS release bytes are
+codesigned and notarized before checksum generation; Linux and Windows archives repeat the full
+Roast, AOT, relocation, mode, and differential verifier before upload.

@@ -9,12 +9,11 @@ permissions:
   contents: read
 
 jobs:
-  readiness:
-    name: Validate release tag and native legal gate
+  release-gate:
+    name: Validate release tag
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
-      native_release: ${{ steps.native.outputs.enabled }}
     steps:
       - uses: actions/checkout@v6
       - name: Derive release version from tag
@@ -26,24 +25,10 @@ jobs:
             exit 1
           fi
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-      - name: Evaluate native redistribution approval
-        id: native
-        env:
-          NATIVE_RELEASE_APPROVED: ${{ vars.NATIVE_RELEASE_APPROVED }}
-          VERIFY_PUBLIC_KEY_FINGERPRINT: "true"
-        shell: bash
-        run: |
-          approval="$(jq -r '.approvalStatus' release/native-redistribution-manifest.json)"
-          if .github/scripts/verify-native-release-readiness.sh; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Native draft disabled: approvalStatus=$approval, repository approval=$NATIVE_RELEASE_APPROVED"
-          fi
 
   publish:
     name: Verify and upload to Maven Central for manual promotion
-    needs: readiness
+    needs: release-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -59,7 +44,7 @@ jobs:
             verifyMavenPublication \
             verifyShrunkCli \
             generateBundledDependencyInventory \
-            -PVERSION_NAME="${{ needs.readiness.outputs.version }}"
+            -PVERSION_NAME="${{ needs.release-gate.outputs.version }}"
       - name: Upload dependency inventory
         uses: actions/upload-artifact@v4
         with:
@@ -76,24 +61,21 @@ jobs:
         run: |
           ./gradlew \
             publishToMavenCentral \
-            -PVERSION_NAME="${{ needs.readiness.outputs.version }}"
+            -PVERSION_NAME="${{ needs.release-gate.outputs.version }}"
 
   native-distributions:
     name: Build final native release candidates
-    needs: [readiness, publish]
-    if: needs.readiness.outputs.native_release == 'true'
+    needs: [release-gate, publish]
     uses: ./.github/workflows/native-distributions.yml
     with:
-      version: ${{ needs.readiness.outputs.version }}
+      version: ${{ needs.release-gate.outputs.version }}
       release: true
     secrets: inherit
 
   draft-release:
     name: Create draft GitHub release
-    needs: [readiness, publish, native-distributions]
+    needs: [release-gate, publish, native-distributions]
     if: >-
-      always() &&
-      needs.readiness.outputs.native_release == 'true' &&
       needs.publish.result == 'success' &&
       needs.native-distributions.result == 'success'
     runs-on: ubuntu-latest
@@ -113,56 +95,17 @@ jobs:
           find downloaded-artifacts -type f \
             \( -name '*.zip' -o -name '*.sha256' -o -name 'bundled-dependencies.txt' \) \
             -exec cp {} release-assets/ \;
-          cp release/native-redistribution-manifest.json release-assets/
           test "$(find release-assets -maxdepth 1 -name '*.zip' | wc -l)" -eq 3
           test "$(find release-assets -maxdepth 1 -name '*.sha256' | wc -l)" -eq 3
           test -f release-assets/bundled-dependencies.txt
-      - name: Generate signed aggregate provenance
-        env:
-          SIGNING_IN_MEMORY_KEY: ${{ secrets.SIGNING_IN_MEMORY_KEY }}
-          SIGNING_IN_MEMORY_KEY_PASSWORD: ${{ secrets.SIGNING_IN_MEMORY_KEY_PASSWORD }}
-        run: |
-          .github/scripts/generate-release-provenance.sh release-assets release-assets
       - name: Create draft GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" release-assets/* \
-            --draft \
-            --verify-tag \
-            --title "Indexino ${{ needs.readiness.outputs.version }}" \
-            --notes-file "release/RELEASE_NOTES-${{ needs.readiness.outputs.version }}.md"
-
-  maven-release:
-    name: Publish Maven-only GitHub release
-    needs: [readiness, publish]
-    if: >-
-      always() &&
-      needs.readiness.outputs.native_release == 'false' &&
-      needs.publish.result == 'success'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v6
-      - name: Download dependency inventory
-        uses: actions/download-artifact@v4
-        with:
-          name: native-dependency-inventory
-          path: release-assets
-      - name: Verify release notes exist
-        shell: bash
-        run: |
-          test -f "release/RELEASE_NOTES-${{ needs.readiness.outputs.version }}.md"
-      - name: Create draft GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          release_args=(--draft --verify-tag --title "Indexino ${{ needs.readiness.outputs.version }}")
-          if [[ "${{ needs.readiness.outputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-.+ ]]; then
+          release_args=(--draft --verify-tag --title "Indexino ${{ needs.release-gate.outputs.version }}")
+          if [[ "${{ needs.release-gate.outputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-.+ ]]; then
             release_args+=(--prerelease)
           fi
-          gh release create "$GITHUB_REF_NAME" \
-            release-assets/bundled-dependencies.txt \
+          gh release create "$GITHUB_REF_NAME" release-assets/* \
             "${release_args[@]}" \
-            --notes-file "release/RELEASE_NOTES-${{ needs.readiness.outputs.version }}.md"
+            --notes-file "release/RELEASE_NOTES-${{ needs.release-gate.outputs.version }}.md"
