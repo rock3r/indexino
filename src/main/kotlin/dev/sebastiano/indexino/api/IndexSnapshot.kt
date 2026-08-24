@@ -9,6 +9,8 @@ import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
 import dev.sebastiano.indexino.core.record.ResourceUsageRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
+import dev.sebastiano.indexino.core.sourcelink.LinkIndexService
+import dev.sebastiano.indexino.core.sourcelink.SourceLinkRegistryStore
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.engine.PluginRegistry
 import dev.sebastiano.indexino.engine.RuntimeProtocolException
@@ -21,6 +23,9 @@ import dev.sebastiano.indexino.model.CheckRequest
 import dev.sebastiano.indexino.model.Finding
 import dev.sebastiano.indexino.model.IndexFailureCategory
 import dev.sebastiano.indexino.model.IndexinoInternalApi
+import dev.sebastiano.indexino.model.LinkGenerationId
+import dev.sebastiano.indexino.model.LinkedSourceQuery
+import dev.sebastiano.indexino.model.LinkedSourceResult
 import dev.sebastiano.indexino.model.NameMatchMode
 import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.QueryPage
@@ -31,6 +36,7 @@ import dev.sebastiano.indexino.model.ResourceId
 import dev.sebastiano.indexino.model.ResourceQuery
 import dev.sebastiano.indexino.model.ResourceUsage
 import dev.sebastiano.indexino.model.SourceFile
+import dev.sebastiano.indexino.model.SourceLinkQueries
 import dev.sebastiano.indexino.model.SourceLocation
 import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.Symbol
@@ -39,6 +45,7 @@ import dev.sebastiano.indexino.model.SymbolQuery
 import dev.sebastiano.indexino.model.WorkspaceGenerationId
 import dev.sebastiano.indexino.model.WorkspaceRevision
 import dev.sebastiano.indexino.plugin.api.CheckContextV1
+import java.nio.file.Path
 import java.util.PriorityQueue
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -56,7 +63,9 @@ private constructor(
     private val pluginRegistry: PluginRegistry?,
     private val remoteClient: RuntimeSnapshotClient? = null,
     private val remoteLeaseId: String? = null,
-) : BasicFactQueries, AutoCloseable {
+    private val consumerWorkspace: Path? = null,
+    override val linkGeneration: LinkGenerationId? = null,
+) : BasicFactQueries, SourceLinkQueries, AutoCloseable {
     private val closed = AtomicBoolean()
     private val queries = IndexSnapshotQueries(generation)
     private val checkResults = ConcurrentHashMap<CheckRequest, CompletableDeferred<List<Finding>>>()
@@ -335,6 +344,41 @@ private constructor(
                 totalCount = findings.size,
             )
         }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    override suspend fun findLinkedSources(
+        query: LinkedSourceQuery,
+        options: QueryOptions,
+    ): QueryPage<LinkedSourceResult> {
+        ensureOpen()
+        val workspace =
+            consumerWorkspace
+                ?: return QueryPage(
+                    items = emptyList(),
+                    offset = options.offset,
+                    limit = options.limit,
+                    hasMore = false,
+                    nextCursor = null,
+                    totalCount = 0,
+                )
+        val registrySnapshot =
+            SourceLinkRegistryStore(
+                    InProcessCacheLayout.cacheRoot()
+                        .resolve("workspaces")
+                        .resolve(InProcessCacheLayout.workspaceId(workspace))
+                )
+                .readCurrent()
+                ?: return QueryPage(
+                    items = emptyList(),
+                    offset = options.offset,
+                    limit = options.limit,
+                    hasMore = false,
+                    nextCursor = null,
+                    totalCount = 0,
+                )
+        return LinkIndexService(InProcessCacheLayout.cacheRoot(), workspace)
+            .findLinkedSources(registrySnapshot, query, options)
     }
 
     override fun close() {
@@ -818,6 +862,8 @@ private constructor(
             generation: WorkspaceGenerationId,
             freshnessAtAcquisition: SnapshotFreshness = SnapshotFreshness.UNKNOWN,
             onClose: () -> Unit = {},
+            consumerWorkspace: Path? = null,
+            linkGeneration: LinkGenerationId? = null,
         ): IndexSnapshot =
             IndexSnapshot(
                 store = store,
@@ -826,6 +872,8 @@ private constructor(
                 freshnessAtAcquisition = freshnessAtAcquisition,
                 onClose = onClose,
                 pluginRegistry = PluginRegistry.load(IndexSnapshot::class.java.classLoader),
+                consumerWorkspace = consumerWorkspace,
+                linkGeneration = linkGeneration,
             )
     }
 }
