@@ -104,24 +104,23 @@ internal object ScriptDependencyPolicy {
     }
 
     private fun stripLineComment(line: String): String {
-        val inString = StringBuilder()
-        var i = 0
+        val commentIndex = findUnquotedLineComment(line) ?: return line
+        return line.substring(0, commentIndex)
+    }
+
+    private fun findUnquotedLineComment(line: String): Int? {
         var quoted = false
-        while (i < line.length) {
-            val ch = line[i]
-            if (ch == '"' && (i == 0 || line[i - 1] != '\\')) {
-                quoted = !quoted
-                inString.append(ch)
-                i++
-                continue
+        var index = 0
+        while (index < line.length) {
+            val ch = line[index]
+            when {
+                ch == '"' && (index == 0 || line[index - 1] != '\\') -> quoted = !quoted
+                !quoted && ch == '/' && index + 1 < line.length && line[index + 1] == '/' ->
+                    return index
             }
-            if (!quoted && ch == '/' && i + 1 < line.length && line[i + 1] == '/') {
-                break
-            }
-            inString.append(ch)
-            i++
+            index++
         }
-        return inString.toString()
+        return null
     }
 
     private fun codeSourceFile(type: Class<*>): File? {

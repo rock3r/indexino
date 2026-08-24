@@ -53,6 +53,7 @@ public class IndexinoScriptHost private constructor() {
         private const val SCRIPT_SUFFIX = ".indexino.kts"
         private const val CACHE_CAPACITY = 32
         private const val ABANDON_GRACE_MILLIS = 250L
+        private const val ABANDON_POLL_MILLIS = 10L
 
         @Volatile
         internal var connectForTests: (Path) -> Indexino = { workspace ->
@@ -197,7 +198,7 @@ public class IndexinoScriptHost private constructor() {
         future.cancel(true)
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(ABANDON_GRACE_MILLIS)
         while (evaluationActive.get() && System.nanoTime() < deadline) {
-            Thread.sleep(10L)
+            Thread.sleep(ABANDON_POLL_MILLIS)
         }
         val abandoned = evaluationActive.get()
         if (abandoned && worker != null) {
