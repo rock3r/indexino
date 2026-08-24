@@ -115,28 +115,21 @@ class NativeReleaseReadinessContractTest {
         assertContains(distributions, "Bazel")
         assertContains(distributions, "Gradle")
         assertContains(distributions, "AOT")
-        assertContains(distributions, "redistribution")
+        assertContains(distributions, "runtime/legal")
         assertContains(distributions, "notar")
         assertContains(distributions, "Authenticode")
-        assertContains(distributions, "No native release")
+        assertContains(distributions, "bundled-dependencies.txt")
     }
 
     @Test
-    fun `tag workflow gates native draft assets behind Maven and redistribution readiness`() {
+    fun `tag workflow publishes Maven train and native CLI drafts on every release tag`() {
         val workflow = projectFile(".github/workflows/release.yml").readText()
-        val manifest = projectFile("release/native-redistribution-manifest.json").readText()
-        val readinessScript =
-            projectFile(".github/scripts/verify-native-release-readiness.sh").readText()
 
         assertContains(workflow, "uses: ./.github/workflows/native-distributions.yml")
         assertContains(workflow, "release: true")
-        assertContains(workflow, "needs: [readiness, publish, native-distributions]")
-        assertContains(workflow, "generate-release-provenance.sh")
+        assertContains(workflow, "needs: [release-gate, publish, native-distributions]")
         assertContains(workflow, "gh release create")
         assertContains(workflow, "--draft")
-        assertContains(workflow, "maven-release:")
-        assertContains(workflow, "Publish Maven-only GitHub release")
-        assertContains(workflow, "native_release == 'false'")
         assertContains(workflow, "--prerelease")
         assertContains(workflow, "RELEASE_NOTES-")
         assertContains(workflow, "Upload complete Maven Central release train")
@@ -144,22 +137,36 @@ class NativeReleaseReadinessContractTest {
         assertContains(workflow, "MAVEN_CENTRAL_USERNAME")
         assertContains(workflow, "SIGNING_IN_MEMORY_KEY")
         assertContains(workflow, "generateBundledDependencyInventory")
-        assertContains(workflow, "approvalStatus")
-        assertContains(workflow, "verify-native-release-readiness.sh")
-        assertContains(manifest, "PENDING_COUNSEL_APPROVAL")
-        assertContains(manifest, "25.0.3b508.16")
-        assertContains(manifest, "nativeInputPinsSha256")
-        assertContains(manifest, "releaseSigningKeyFingerprint")
-        assertContains(manifest, "releaseSigningPublicKeySha256")
-        assertContains(readinessScript, "current_pins_sha")
-        assertContains(readinessScript, "nativeInputPinsSha256")
-        assertContains(readinessScript, "--show-keys")
-        assertContains(manifest, "UNSIGNED")
         assertContains(projectFile("third-party/roast/LICENSE").readText(), "Apache License")
         assertContains(projectFile("build.gradle.kts").readText(), "licenses/roast-LICENSE")
+        assertContains(projectFile("build.gradle.kts").readText(), "licenses/indexino-LICENSE")
+        assertFalse(
+            workflow.contains("verify-native-release-readiness.sh"),
+            "Release must not depend on counsel approval script",
+        )
+        assertFalse(
+            workflow.contains("maven-release:"),
+            "Release must not split Maven-only GitHub assets from native ZIPs",
+        )
+        assertFalse(
+            workflow.contains("native_release"),
+            "Release must not gate native ZIP drafting behind repository variables",
+        )
+        assertFalse(
+            File(projectDirectory, ".github/scripts/verify-native-release-readiness.sh").isFile,
+            "Counsel approval script must be removed",
+        )
+        assertFalse(
+            File(projectDirectory, "release/native-redistribution-manifest.json").isFile,
+            "Counsel approval manifest must be removed",
+        )
         assertTrue(
             projectFile("release/RELEASE_NOTES-0.2.0.md").isFile,
             "First release notes must be checked in",
+        )
+        assertTrue(
+            projectFile(".github/scripts/setup-macos-release-secrets.sh").isFile,
+            "macOS secret bootstrap script must be checked in",
         )
     }
 
@@ -169,17 +176,15 @@ class NativeReleaseReadinessContractTest {
         val build = projectFile("build.gradle.kts").readText()
         val signingScript =
             projectFile(".github/scripts/sign-notarize-macos-distribution.sh").readText()
-        val provenanceScript =
-            projectFile(".github/scripts/generate-release-provenance.sh").readText()
 
         assertContains(workflow, "workflow_call:")
-        assertContains(workflow, "Enforce native release approval")
         assertContains(workflow, "test -n \"\$INDEXINO_RELEASE_VERSION\"")
         assertFalse(
             workflow.substringBefore("workflow_call:").contains("release:"),
             "Manual dispatch must not expose release signing",
         )
         assertContains(workflow, "MACOS_CERTIFICATE_P12")
+        assertContains(workflow, "APPLE_APP_SPECIFIC_PASSWORD")
         assertContains(workflow, "sign-notarize-macos-distribution.sh")
         assertContains(workflow, "INDEXINO_NATIVE_MACOS_ARM64_VERIFICATION_ARCHIVE")
         assertContains(workflow, "verifyNativeDistributionMacArm64")
@@ -193,12 +198,10 @@ class NativeReleaseReadinessContractTest {
         assertContains(signingScript, "notarytool submit")
         assertContains(signingScript, "spctl")
         assertContains(signingScript, "stapler validate")
-        assertContains(provenanceScript, "GITHUB_SHA")
-        assertContains(provenanceScript, "GITHUB_RUN_ID")
-        assertContains(provenanceScript, "gpg")
-        assertContains(provenanceScript, "release/indexino-release-signing-key.asc")
-        assertContains(provenanceScript, "releaseSigningKeyFingerprint")
-        assertContains(provenanceScript, "PUBLIC_KEY_FINGERPRINT")
+        assertFalse(
+            File(projectDirectory, ".github/scripts/generate-release-provenance.sh").isFile,
+            "Aggregate provenance script must be removed",
+        )
     }
 
     private fun projectFile(path: String): File {

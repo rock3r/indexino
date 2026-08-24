@@ -4,10 +4,9 @@ First public **0.y** release of the Indexino platform on Maven Central.
 
 ## Published scope
 
-This release publishes the aligned Maven train only. Native CLI ZIP redistribution remains
-**withheld** while `release/native-redistribution-manifest.json` has
-`approvalStatus: PENDING_COUNSEL_APPROVAL`. CI artifacts and local native verifiers remain available
-for development; they are not part of this public release.
+This release publishes the aligned Maven train to Central and attaches Tier 1 native CLI ZIPs to the
+GitHub release draft. Each archive bundles the pinned JBR 25 runtime with its `runtime/legal/`
+notices, Roast (Apache 2.0), Indexino (UEL), and `bundled-dependencies.txt`.
 
 ### Maven coordinates
 
@@ -71,7 +70,6 @@ daemon protocol, auto-refresh + large-repository gate, multi-origin topology ada
 
 - **S10 follow-on** — broader Android/CMP resource indexing coverage beyond the shipped query APIs
 - **S11** — Compose decoration plugin
-- Native CLI ZIP publication pending counsel approval of redistribution terms
 - Post-v1 worktree overlay optimizations (#44)
 
 ## Reporting incompatibilities
