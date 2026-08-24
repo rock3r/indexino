@@ -121,7 +121,7 @@ Configure the macOS secrets once per repository. Indexino reuses the same Develo
 certificate material as other `dev.sebastiano` projects; notarization uses the app-specific
 password flow (`notarytool --apple-id`) rather than Spectre's App Store Connect API key flow.
 
-From a machine with `op` and `gh` authenticated:
+From a machine with `op`, `gh`, `jq`, and `openssl` authenticated:
 
 ```bash
 .github/scripts/setup-macos-release-secrets.sh rock3r/indexino
@@ -131,9 +131,7 @@ The script reads:
 
 - **Compose Pi Apple signing cert** — app-specific password (`credential`) and attached
   `.cer`/`.key` → base64 `.p12`
-- **Apple ID** — account email (`username` → `APPLE_ID`)
-
-Team ID is parsed from the Compose Pi item's `team ID` field (parenthesized 10-character id).
+- **Apple ID** — account email (`username` → `APPLE_ID`) and `team ID` → `APPLE_TEAM_ID`
 
 Before the first release, confirm that the Central Portal account can publish under the verified
 `dev.sebastiano` namespace. Then push an already-reviewed release commit and its version tag:

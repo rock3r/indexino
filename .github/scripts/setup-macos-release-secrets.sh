@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # Populate Indexino GitHub Actions secrets for macOS codesign + notarization.
 #
-# Source item (1Password): "Compose Pi Apple signing cert"
-#   - username            → APPLE_ID
-#   - credential          → APPLE_APP_SPECIFIC_PASSWORD
-#   - team ID             → APPLE_TEAM_ID
-#   - developerID_application.cer + developer_id_application.key → MACOS_CERTIFICATE_P12
+# Source items (1Password):
+#   - "Compose Pi Apple signing cert" — credential (app-specific password) and attached
+#     developerID_application.cer + developer_id_application.key → MACOS_CERTIFICATE_P12
+#   - "Apple ID" — username (email) → APPLE_ID; team ID → APPLE_TEAM_ID
 #
 # Spectre uses App Store Connect API keys for notarytool; Indexino follows the same
 # Developer ID certificate pattern but authenticates notarization with the app-specific
@@ -32,6 +31,7 @@ fail() {
 command -v op >/dev/null 2>&1 || fail "1Password CLI 'op' is required"
 command -v gh >/dev/null 2>&1 || fail "GitHub CLI 'gh' is required"
 command -v openssl >/dev/null 2>&1 || fail "openssl is required"
+command -v jq >/dev/null 2>&1 || fail "jq is required"
 
 readonly WORK_DIRECTORY="$(mktemp -d)"
 cleanup() {
@@ -48,8 +48,8 @@ APPLE_TEAM_ID="$(op item get "$APPLE_ID_ITEM" --vault "$VAULT" --fields label="t
 [[ -n "$APPLE_APP_SPECIFIC_PASSWORD" ]] || fail "missing credential on 1Password item"
 [[ -n "$APPLE_TEAM_ID" ]] || fail "missing team ID on 1Password item"
 
-ITEM_JSON="$(op item get "$ITEM" --vault "$VAULT" --format json)"
-ITEM_ID="$(printf '%s' "$ITEM_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")"
+ITEM_ID="$(op item get "$ITEM" --vault "$VAULT" --format json | jq -r '.id')"
+[[ -n "$ITEM_ID" && "$ITEM_ID" != null ]] || fail "could not resolve 1Password item id"
 
 op read \
   --out-file "$WORK_DIRECTORY/developerID_application.cer" \
