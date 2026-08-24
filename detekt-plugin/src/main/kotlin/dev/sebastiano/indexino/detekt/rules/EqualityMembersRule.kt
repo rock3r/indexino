@@ -324,7 +324,8 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
             val resolvedProperty =
                 mainReference.resolveToSymbol() as? KaPropertySymbol ?: return false
             val targetClass = receiverClass.symbol as? KaClassSymbol ?: return false
-            resolvedProperty.name.asString() == property &&
+            resolvedProperty.receiverParameter == null &&
+                resolvedProperty.name.asString() == property &&
                 (resolvedProperty.containingSymbol as? KaClassSymbol)?.classId ==
                     targetClass.classId
         }
@@ -341,7 +342,8 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                 mainReference.resolveToSymbol() as? KaPropertySymbol ?: return false
             val targetClass = receiverClass.symbol as? KaClassSymbol ?: return false
             if (
-                resolvedProperty.name.asString() != property ||
+                resolvedProperty.receiverParameter != null ||
+                    resolvedProperty.name.asString() != property ||
                     (resolvedProperty.containingSymbol as? KaClassSymbol)?.classId !=
                         targetClass.classId
             ) {

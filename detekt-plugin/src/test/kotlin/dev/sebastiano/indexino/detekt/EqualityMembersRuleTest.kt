@@ -1431,6 +1431,30 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `same named member extension property is not the stored equality property`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class ExtensionProperty(val value: String) {
+                        private val Unit.value: String get() = ""
+
+                        override fun equals(other: Any?): Boolean =
+                            other is ExtensionProperty && with(Unit) { value == other.value }
+                        override fun hashCode(): Int = value.hashCode()
+                        override fun toString(): String = "ExtensionProperty(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `lambda label matching class name does not count as class receiver`() {
         val findings =
             rule()
