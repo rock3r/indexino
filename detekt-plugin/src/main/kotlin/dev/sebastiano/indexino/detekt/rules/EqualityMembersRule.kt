@@ -258,7 +258,8 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                     .mapNotNull { it.callableId?.asSingleFqName()?.asString() }
                     .toSet()
             when {
-                JAVA_OBJECTS_EQUALS in callableNames -> StructuralCallKind.JAVA_OBJECTS
+                callableNames.any { it in JAVA_OBJECTS_COMPARISONS } ->
+                    StructuralCallKind.JAVA_OBJECTS
                 KOTLIN_ANY_EQUALS in callableNames ||
                     callableNames.any { it in RECEIVER_COMPARISON_CALLABLES } ->
                     StructuralCallKind.RECEIVER
@@ -464,9 +465,14 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
             }
         return invocations.isNotEmpty() &&
             invocations.all { invocation ->
-                val arguments = invocation.receiverLambdaArguments()
-                arguments.size == 1 &&
-                    arguments.single().isCurrentReceiver(equalsFunction, receiverClass)
+                val qualifiedInvocation = invocation.parent as? KtQualifiedExpression
+                val receiver =
+                    if (qualifiedInvocation?.selectorExpression == invocation) {
+                        qualifiedInvocation.receiverExpression
+                    } else {
+                        invocation.receiverLambdaArguments().singleOrNull()
+                    }
+                receiver?.isCurrentReceiver(equalsFunction, receiverClass) == true
             }
     }
 
@@ -637,7 +643,8 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                 "dev.sebastiano.indexino.api",
                 "dev.sebastiano.indexino.plugin.api",
             )
-        const val JAVA_OBJECTS_EQUALS: String = "java.util.Objects.equals"
+        val JAVA_OBJECTS_COMPARISONS: Set<String> =
+            setOf("java.util.Objects.equals", "java.util.Objects.deepEquals")
         const val KOTLIN_ANY_EQUALS: String = "kotlin.Any.equals"
         val RECEIVER_COMPARISON_CALLABLES: Set<String> =
             setOf("kotlin.collections.contentEquals", "kotlin.collections.contentDeepEquals")

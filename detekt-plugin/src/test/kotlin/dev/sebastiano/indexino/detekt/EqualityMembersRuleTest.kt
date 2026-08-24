@@ -1053,6 +1053,53 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `stored receiver lambda invoked as extension on this preserves class receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class StoredExtension(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is StoredExtension) return false
+                            val matches: StoredExtension.() -> Boolean = { value == other.value }
+                            return this.matches()
+                        }
+                        override fun hashCode(): Int = value.hashCode()
+                        override fun toString(): String = "StoredExtension(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
+    fun `Objects deepEquals is structural equality`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    import java.util.Objects
+
+                    class DeepObjects(val values: Array<Array<String>>) {
+                        override fun equals(other: Any?): Boolean =
+                            other is DeepObjects && Objects.deepEquals(values, other.values)
+                        override fun hashCode(): Int = values.contentDeepHashCode()
+                        override fun toString(): String = values.contentDeepToString()
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `lambda label matching class name does not count as class receiver`() {
         val findings =
             rule()
