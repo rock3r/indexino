@@ -205,7 +205,9 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         if (structuralCallKind == StructuralCallKind.ORDERING && !isComparedWithZeroForEquality()) {
             return false
         }
-        if (structuralCallKind != StructuralCallKind.ORDERING && isNegated()) return false
+        if (structuralCallKind != StructuralCallKind.ORDERING && !hasPositiveBooleanPolarity()) {
+            return false
+        }
         val qualifiedCall = parent as? KtQualifiedExpression
         if (
             structuralCallKind == StructuralCallKind.RECEIVER &&
@@ -248,7 +250,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
             (symbol.allOverriddenSymbols + symbol)
                 .mapNotNull { it.callableId?.asSingleFqName()?.asString() }
                 .any { it in RECEIVER_COMPARISON_CALLABLES }
-        } && !isNegated()
+        } && hasPositiveBooleanPolarity()
 
     private fun KtBinaryExpression.isPositiveEqualityComparison(): Boolean =
         when (operationToken) {
@@ -257,7 +259,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
             else -> false
         }
 
-    private fun KtBinaryExpression.isEarlyFalseGuard(): Boolean {
+    private fun KtExpression.isEarlyFalseGuard(): Boolean {
         val guard =
             generateSequence(parent) { it.parent }
                 .filterIsInstance<KtIfExpression>()
@@ -396,8 +398,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                 }
         }
         val comparison = operand.parent as? KtBinaryExpression ?: return false
-        return (comparison.operationToken == KtTokens.EQEQ ||
-            comparison.operationToken == KtTokens.EXCLEQ) &&
+        return comparison.isPositiveEqualityComparison() &&
             ((comparison.left == operand && comparison.right?.isZeroConstant() == true) ||
                 (comparison.right == operand && comparison.left?.isZeroConstant() == true))
     }
@@ -433,6 +434,9 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         }
         return negations % 2 != 0
     }
+
+    private fun KtExpression.hasPositiveBooleanPolarity(): Boolean =
+        isNegated() == isEarlyFalseGuard()
 
     private fun KtNamedFunction.isInvokedOnCurrent(
         equalsFunction: KtNamedFunction,

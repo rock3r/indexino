@@ -1537,6 +1537,54 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `returned nonzero floating comparison is not structural equality`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class NonzeroCompare(val value: Double) {
+                        override fun equals(other: Any?): Boolean =
+                            other is NonzeroCompare &&
+                                java.lang.Double.compare(value, other.value) != 0
+                        override fun hashCode(): Int = value.hashCode()
+                        override fun toString(): String = "NonzeroCompare(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
+    fun `infix equality in false guard is not positive structural equality`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class RejectedInfix(val values: IntArray) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is RejectedInfix) return false
+                            if (values contentEquals other.values) return false
+                            return true
+                        }
+                        override fun hashCode(): Int = values.contentHashCode()
+                        override fun toString(): String = values.contentToString()
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("values"))
+    }
+
+    @Test
     fun `lambda label matching class name does not count as class receiver`() {
         val findings =
             rule()
