@@ -1585,6 +1585,82 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `immutable cast alias of other is the peer receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class PeerAlias(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            val peer = other as? PeerAlias ?: return false
+                            return value == peer.value
+                        }
+                        override fun hashCode(): Int = value.hashCode()
+                        override fun toString(): String = "PeerAlias(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
+    fun `same named member is not stored lambda invocation`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class StoredOverload(val value: String) {
+                        private fun matches(ignored: StoredOverload): Boolean = true
+
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is StoredOverload) return false
+                            val matches: StoredOverload.() -> Boolean = { value == other.value }
+                            return this.matches(this)
+                        }
+                        override fun hashCode(): Int = value.hashCode()
+                        override fun toString(): String = "StoredOverload(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
+    fun `conditional inequality guard is not sufficient structural equality`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class ConditionalGuard(val value: String, val reject: Boolean) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is ConditionalGuard) return false
+                            if (value != other.value && reject) return false
+                            return reject == other.reject
+                        }
+                        override fun hashCode(): Int = 31 * value.hashCode() + reject.hashCode()
+                        override fun toString(): String =
+                            "ConditionalGuard(value=${'$'}value, reject=${'$'}reject)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `lambda label matching class name does not count as class receiver`() {
         val findings =
             rule()

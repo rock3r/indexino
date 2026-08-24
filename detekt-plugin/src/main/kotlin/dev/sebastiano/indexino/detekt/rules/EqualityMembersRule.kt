@@ -22,6 +22,7 @@ import org.jetbrains.kotlin.analysis.api.types.symbol
 import org.jetbrains.kotlin.idea.references.mainReference
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.KtBinaryExpression
+import org.jetbrains.kotlin.psi.KtBinaryExpressionWithTypeRHS
 import org.jetbrains.kotlin.psi.KtBlockExpression
 import org.jetbrains.kotlin.psi.KtCallExpression
 import org.jetbrains.kotlin.psi.KtCatchClause
@@ -261,9 +262,18 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
 
     private fun KtExpression.isEarlyFalseGuard(): Boolean {
         val guard =
-            generateSequence(parent) { it.parent }
-                .filterIsInstance<KtIfExpression>()
-                .firstOrNull { PsiTreeUtil.isAncestor(it.condition, this, false) } ?: return false
+            generateSequence(parent) { it.parent }.filterIsInstance<KtIfExpression>().firstOrNull()
+                ?: return false
+        var guardedExpression = guard.condition ?: return false
+        while (true) {
+            guardedExpression =
+                when (guardedExpression) {
+                    is KtParenthesizedExpression -> guardedExpression.expression ?: break
+                    is KtPrefixExpression -> guardedExpression.baseExpression ?: break
+                    else -> break
+                }
+        }
+        if (guardedExpression != this) return false
         val rejectingBranch = guard.then?.text?.filterNot(Char::isWhitespace) ?: return false
         return rejectingBranch == "returnfalse" || rejectingBranch == "{returnfalse}"
     }
@@ -601,10 +611,11 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         equalsFunction: KtNamedFunction,
         receiverClass: KtClass,
     ): Boolean {
-        val propertyName = (parent as? KtProperty)?.name ?: return false
+        val property = parent as? KtProperty ?: return false
+        val propertyName = property.name ?: return false
         val invocations =
             PsiTreeUtil.collectElementsOfType(equalsFunction, KtCallExpression::class.java).filter {
-                it.calleeExpression?.text == propertyName
+                it.calleeExpression?.text == propertyName && it.calleeResolvesTo(property)
             }
         return invocations.isNotEmpty() &&
             invocations.all { invocation ->
@@ -617,6 +628,11 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                     }
                 receiver?.isCurrentReceiver(equalsFunction, receiverClass) == true
             }
+    }
+
+    private fun KtCallExpression.calleeResolvesTo(property: KtProperty): Boolean {
+        val callee = calleeExpression as? KtNameReferenceExpression ?: return false
+        return analyze(callee) { callee.mainReference.resolveToSymbol()?.psi == property }
     }
 
     private fun KtCallExpression.receiverLambdaArguments(): List<KtExpression> =
@@ -742,13 +758,27 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         equalsFunction: KtNamedFunction,
         parameterName: String,
     ): Boolean {
-        if (this is KtParenthesizedExpression) {
-            return expression?.resolvesToEqualsParameter(equalsFunction, parameterName) == true
+        when (this) {
+            is KtParenthesizedExpression ->
+                return expression?.resolvesToEqualsParameter(equalsFunction, parameterName) == true
+            is KtBinaryExpressionWithTypeRHS ->
+                return left.resolvesToEqualsParameter(equalsFunction, parameterName)
+            is KtBinaryExpression ->
+                if (operationToken == KtTokens.ELVIS) {
+                    return left?.resolvesToEqualsParameter(equalsFunction, parameterName) == true
+                }
         }
         if (this !is KtNameReferenceExpression) return false
         val parameter =
             equalsFunction.valueParameters.singleOrNull { it.name == parameterName } ?: return false
-        return analyze(this) { mainReference.resolveToSymbol() == parameter.symbol }
+        val alias =
+            analyze(this) {
+                val resolvedSymbol = mainReference.resolveToSymbol()
+                if (resolvedSymbol == parameter.symbol) return true
+                resolvedSymbol?.psi as? KtProperty
+            } ?: return false
+        if (alias.isVar) return false
+        return alias.initializer?.resolvesToEqualsParameter(equalsFunction, parameterName) == true
     }
 
     private fun checkDirectPropertyUsage(function: KtNamedFunction, properties: Set<String>) {
