@@ -84,6 +84,27 @@ class IndexinoScriptHostHardeningTest {
     }
 
     @Test
+    fun `rejects fully qualified references to forbidden packages`() {
+        val workspace = createWorkspace()
+        val script = workspace.resolve("bad-fqn.indexino.kts")
+        script.writeText(
+            """
+            val ignored = dev.sebastiano.indexino.engine.WorkspaceRuntime::class
+            context.report(ScriptFinding.messageOnly("should not run"))
+            """
+                .trimIndent() + "\n"
+        )
+        withIndexedWorkspace(workspace) {
+            val failure =
+                assertFailsWith<IndexinoScriptException> {
+                    IndexinoScriptHost.create().run(ScriptRequest.forFile(workspace, script))
+                }
+            assertEquals(IndexinoScriptException.Kind.COMPILATION, failure.kind)
+            assertTrue(failure.diagnostics.any { it.contains("engine") })
+        }
+    }
+
+    @Test
     fun `maps runtime failures to actionable script diagnostics`() {
         val workspace = createWorkspace()
         val script = workspace.resolve("runtime.indexino.kts")

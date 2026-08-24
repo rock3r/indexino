@@ -77,19 +77,51 @@ internal object ScriptDependencyPolicy {
     fun forbiddenImportDiagnostics(source: String): List<String> {
         val diagnostics = mutableListOf<String>()
         source.lineSequence().forEachIndexed { index, line ->
-            val trimmed = line.trim()
-            if (!trimmed.startsWith("import ")) return@forEachIndexed
-            val imported = trimmed.removePrefix("import ").removeSuffix(".*").trim()
-            val forbidden = FORBIDDEN_IMPORT_PREFIXES.firstOrNull { prefix ->
-                imported == prefix || imported.startsWith("$prefix.")
+            val code = stripLineComment(line).trim()
+            if (code.isEmpty()) return@forEachIndexed
+            if (code.startsWith("import ")) {
+                val imported = code.removePrefix("import ").removeSuffix(".*").trim()
+                val forbidden = FORBIDDEN_IMPORT_PREFIXES.firstOrNull { prefix ->
+                    imported == prefix || imported.startsWith("$prefix.")
+                }
+                if (forbidden != null) {
+                    diagnostics +=
+                        "line ${index + 1}: import '$imported' is outside the allowed script " +
+                            "dependency set (forbidden package '$forbidden')"
+                }
+                return@forEachIndexed
             }
-            if (forbidden != null) {
-                diagnostics +=
-                    "line ${index + 1}: import '$imported' is outside the allowed script " +
-                        "dependency set (forbidden package '$forbidden')"
+            FORBIDDEN_IMPORT_PREFIXES.forEach { prefix ->
+                val pattern = Regex("""(^|[^\w.])${Regex.escape(prefix)}(\.|$)""")
+                if (pattern.containsMatchIn(code)) {
+                    diagnostics +=
+                        "line ${index + 1}: reference to '$prefix' is outside the allowed " +
+                            "script dependency set"
+                }
             }
         }
-        return diagnostics
+        return diagnostics.distinct()
+    }
+
+    private fun stripLineComment(line: String): String {
+        val inString = StringBuilder()
+        var i = 0
+        var quoted = false
+        while (i < line.length) {
+            val ch = line[i]
+            if (ch == '"' && (i == 0 || line[i - 1] != '\\')) {
+                quoted = !quoted
+                inString.append(ch)
+                i++
+                continue
+            }
+            if (!quoted && ch == '/' && i + 1 < line.length && line[i + 1] == '/') {
+                break
+            }
+            inString.append(ch)
+            i++
+        }
+        return inString.toString()
     }
 
     private fun codeSourceFile(type: Class<*>): File? {

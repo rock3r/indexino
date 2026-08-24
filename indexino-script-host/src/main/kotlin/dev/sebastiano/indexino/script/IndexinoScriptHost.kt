@@ -130,12 +130,18 @@ public class IndexinoScriptHost private constructor() {
             }
         }
         var abandonWorker = false
+        val evaluationActive = AtomicBoolean(false)
         try {
             val future =
                 executor.submit<Unit> {
-                    throwIfCancelled(cancellation)
-                    evaluate(source, context, cacheKey)
-                    throwIfCancelled(cancellation)
+                    evaluationActive.set(true)
+                    try {
+                        throwIfCancelled(cancellation)
+                        evaluate(source, context, cacheKey)
+                        throwIfCancelled(cancellation)
+                    } finally {
+                        evaluationActive.set(false)
+                    }
                 }
             val pollMillis = 50L
             var remaining = timeoutMillis
@@ -144,6 +150,7 @@ public class IndexinoScriptHost private constructor() {
                     interruptAndMaybeAbandon(
                         future = future,
                         worker = worker.get(),
+                        evaluationActive = evaluationActive,
                         timedOut = false,
                         timeoutMillis = timeoutMillis,
                     )
@@ -158,6 +165,7 @@ public class IndexinoScriptHost private constructor() {
                         interruptAndMaybeAbandon(
                             future = future,
                             worker = worker.get(),
+                            evaluationActive = evaluationActive,
                             timedOut = true,
                             timeoutMillis = timeoutMillis,
                         )
@@ -182,13 +190,17 @@ public class IndexinoScriptHost private constructor() {
     private fun interruptAndMaybeAbandon(
         future: Future<*>,
         worker: Thread?,
+        evaluationActive: AtomicBoolean,
         timedOut: Boolean,
         timeoutMillis: Long,
     ): Nothing {
         future.cancel(true)
-        worker?.join(ABANDON_GRACE_MILLIS)
-        val abandoned = worker?.isAlive == true
-        if (abandoned) {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(ABANDON_GRACE_MILLIS)
+        while (evaluationActive.get() && System.nanoTime() < deadline) {
+            Thread.sleep(10L)
+        }
+        val abandoned = evaluationActive.get()
+        if (abandoned && worker != null) {
             abandonedWorker.set(worker)
         }
         throwTerminalStop(timedOut, timeoutMillis, abandoned)
