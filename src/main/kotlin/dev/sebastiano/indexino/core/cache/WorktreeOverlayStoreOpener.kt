@@ -13,6 +13,19 @@ internal object WorktreeOverlayStoreOpener {
         workspace: Path,
         clientId: String,
         manifest: WorkspaceGenerationManifest,
+    ): CodeIndexStore = openResolvedStore(cacheRoot, workspace, manifest, clientId)
+
+    fun openForBuildBase(
+        cacheRoot: Path,
+        workspace: Path,
+        manifest: WorkspaceGenerationManifest,
+    ): CodeIndexStore = openResolvedStore(cacheRoot, workspace, manifest, clientId = null)
+
+    private fun openResolvedStore(
+        cacheRoot: Path,
+        workspace: Path,
+        manifest: WorkspaceGenerationManifest,
+        clientId: String?,
     ): CodeIndexStore {
         if (manifest.representation != WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) {
             val storePath =
@@ -29,17 +42,8 @@ internal object WorktreeOverlayStoreOpener {
         val baseWorkspace =
             WorkspaceRegistryStore(cacheRoot).entry(manifest.baseWorkspaceId)?.path?.let(Path::of)
                 ?: error("Base workspace ${manifest.baseWorkspaceId} is unknown")
-        val baseStorePath =
-            materializedGenerationStore(
-                cacheRoot = cacheRoot,
-                workspace = baseWorkspace,
-                manifest = baseManifest,
-            )
-        val baseStore = XodusCodeIndexStore.open(baseStorePath, readOnly = true)
-        val overlayStore =
-            overlayDeltaStorePath(workspace, clientId, manifest.generation)
-                .takeIf { Files.isDirectory(it) }
-                ?.let { XodusCodeIndexStore.open(it, readOnly = true) }
+        val baseStore = openResolvedStore(cacheRoot, baseWorkspace, baseManifest, clientId)
+        val overlayStore = openOverlayDeltaStore(cacheRoot, workspace, manifest, clientId)
         return WorktreeOverlayIndexStore(baseStore, overlayStore, manifest.tombstonePrefixes)
     }
 
@@ -69,7 +73,38 @@ internal object WorktreeOverlayStoreOpener {
     ): Path? {
         val overlayKey = manifest.overlayPackKeys.singleOrNull() ?: return null
         val destination = overlayDeltaStorePath(workspace, clientId, manifest.generation)
-        ContentAddressedPackCache(cacheRoot).materializeDirectory(overlayKey, destination)
+        materializeOverlayPack(cacheRoot, overlayKey, destination)
+        val sharedDestination =
+            InProcessCacheLayout.sharedOverlayDeltaStore(workspace, manifest.generation)
+        if (!Files.isDirectory(sharedDestination)) {
+            materializeOverlayPack(cacheRoot, overlayKey, sharedDestination)
+        }
         return destination
+    }
+
+    private fun openOverlayDeltaStore(
+        cacheRoot: Path,
+        workspace: Path,
+        manifest: WorkspaceGenerationManifest,
+        clientId: String?,
+    ): CodeIndexStore? {
+        if (manifest.overlayPackKeys.isEmpty()) return null
+        val sharedPath =
+            InProcessCacheLayout.sharedOverlayDeltaStore(workspace, manifest.generation)
+        if (!Files.isDirectory(sharedPath)) {
+            materializeOverlayPack(cacheRoot, manifest.overlayPackKeys.single(), sharedPath)
+        }
+        if (clientId != null) {
+            val clientPath = overlayDeltaStorePath(workspace, clientId, manifest.generation)
+            if (!Files.isDirectory(clientPath)) {
+                materializeOverlayPack(cacheRoot, manifest.overlayPackKeys.single(), clientPath)
+            }
+        }
+        return XodusCodeIndexStore.open(sharedPath, readOnly = true)
+    }
+
+    private fun materializeOverlayPack(cacheRoot: Path, overlayKey: String, destination: Path) {
+        if (Files.isDirectory(destination)) return
+        ContentAddressedPackCache(cacheRoot).materializeDirectory(overlayKey, destination)
     }
 }

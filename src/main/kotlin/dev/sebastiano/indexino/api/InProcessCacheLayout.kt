@@ -19,6 +19,9 @@ internal object InProcessCacheLayout {
     fun sharedGenerationStore(workspace: Path, generation: String): Path =
         workspaceRoot(workspace).resolve("generations").resolve(generation).resolve("materialized")
 
+    fun sharedOverlayDeltaStore(workspace: Path, generation: String): Path =
+        workspaceRoot(workspace).resolve("generations").resolve(generation).resolve("overlay-delta")
+
     fun overlayDeltaStore(workspace: Path, clientId: String, generation: String): Path =
         workspaceRoot(workspace)
             .resolve("refs")

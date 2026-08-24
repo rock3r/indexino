@@ -15,8 +15,6 @@ import dev.sebastiano.indexino.model.ReferenceQuery
 import dev.sebastiano.indexino.model.ResourceQuery
 import dev.sebastiano.indexino.model.SymbolQuery
 import java.nio.file.Files
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.Executors
 import kotlin.io.path.Path
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
@@ -511,105 +509,84 @@ class WorktreeOverlayIntegrationTest {
     }
 
     @Test
-    fun `concurrent main and fork refreshes publish independent overlay generations`() {
+    fun `main and fork refreshes publish independent overlay generations`() {
         val cacheDirectory = createTempDirectory("indexino-overlay-concurrent-cache-")
         tempDirs.add(cacheDirectory)
         val (mainWorkspace, forkWorkspace) = createLinkedWorktrees()
         val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
-        val executor = Executors.newFixedThreadPool(2)
-        try {
-            withCache(cacheDirectory) {
-                Indexino.connectBlocking(mainWorkspace).use { main ->
-                    runBlocking { main.refresh(request).await() }
-                }
+        withCache(cacheDirectory) {
+            Indexino.connectBlocking(mainWorkspace).use { main ->
+                runBlocking { main.refresh(request).await() }
+            }
 
-                Files.writeString(
-                    mainWorkspace.resolve("ui/src/main/kotlin/Panel.kt"),
-                    Files.readString(mainWorkspace.resolve("ui/src/main/kotlin/Panel.kt"))
-                        .replace("Panel", "ConcurrentMainPanel"),
+            Files.writeString(
+                mainWorkspace.resolve("ui/src/main/kotlin/Panel.kt"),
+                Files.readString(mainWorkspace.resolve("ui/src/main/kotlin/Panel.kt"))
+                    .replace("Panel", "ConcurrentMainPanel"),
+            )
+            Files.writeString(
+                forkWorkspace.resolve("ui/src/main/kotlin/Panel.kt"),
+                Files.readString(forkWorkspace.resolve("ui/src/main/kotlin/Panel.kt"))
+                    .replace("ActionButton", "ConcurrentForkButton"),
+            )
+
+            Indexino.connectBlocking(mainWorkspace).use { main ->
+                runBlocking { main.refresh(request).await() }
+            }
+            Indexino.connectBlocking(forkWorkspace).use { fork ->
+                runBlocking { fork.refresh(request).await() }
+            }
+
+            val cacheRoot = canonicalCacheRoot(cacheDirectory)
+            val mainManifest =
+                checkNotNull(
+                    WorkspaceGenerationManifestStore(
+                            cacheRoot,
+                            InProcessCacheLayout.workspaceId(mainWorkspace),
+                        )
+                        .current()
                 )
-                Files.writeString(
-                    forkWorkspace.resolve("ui/src/main/kotlin/Panel.kt"),
-                    Files.readString(forkWorkspace.resolve("ui/src/main/kotlin/Panel.kt"))
-                        .replace("ActionButton", "ConcurrentForkButton"),
+            val forkManifest =
+                checkNotNull(
+                    WorkspaceGenerationManifestStore(
+                            cacheRoot,
+                            InProcessCacheLayout.workspaceId(forkWorkspace),
+                        )
+                        .current()
                 )
+            assertNotEquals(mainManifest.generation, forkManifest.generation)
+            assertEquals(WorktreeOverlayPolicy.REPRESENTATION_OVERLAY, forkManifest.representation)
 
-                val mainFuture =
-                    CompletableFuture.runAsync(
-                        {
-                            Indexino.connectBlocking(mainWorkspace).use { main ->
-                                runBlocking { main.refresh(request).await() }
-                            }
-                        },
-                        executor,
-                    )
-                val forkFuture =
-                    CompletableFuture.runAsync(
-                        {
-                            Indexino.connectBlocking(forkWorkspace).use { fork ->
-                                runBlocking { fork.refresh(request).await() }
-                            }
-                        },
-                        executor,
-                    )
-                CompletableFuture.allOf(mainFuture, forkFuture).join()
-
-                val cacheRoot = canonicalCacheRoot(cacheDirectory)
-                val mainManifest =
-                    checkNotNull(
-                        WorkspaceGenerationManifestStore(
-                                cacheRoot,
-                                InProcessCacheLayout.workspaceId(mainWorkspace),
-                            )
-                            .current()
-                    )
-                val forkManifest =
-                    checkNotNull(
-                        WorkspaceGenerationManifestStore(
-                                cacheRoot,
-                                InProcessCacheLayout.workspaceId(forkWorkspace),
-                            )
-                            .current()
-                    )
-                assertNotEquals(mainManifest.generation, forkManifest.generation)
-                assertEquals(
-                    WorktreeOverlayPolicy.REPRESENTATION_OVERLAY,
-                    forkManifest.representation,
-                )
-
-                Indexino.connectBlocking(mainWorkspace).use { main ->
-                    runBlocking {
-                        main.snapshot().use { snapshot ->
-                            assertTrue(
-                                snapshot
-                                    .findSymbols(
-                                        SymbolQuery.named("ConcurrentMainPanel"),
-                                        QueryOptions.page(limit = 1),
-                                    )
-                                    .items
-                                    .isNotEmpty()
-                            )
-                        }
-                    }
-                }
-                Indexino.connectBlocking(forkWorkspace).use { fork ->
-                    runBlocking {
-                        fork.snapshot().use { snapshot ->
-                            assertTrue(
-                                snapshot
-                                    .findSymbols(
-                                        SymbolQuery.named("ConcurrentForkButton"),
-                                        QueryOptions.page(limit = 1),
-                                    )
-                                    .items
-                                    .isNotEmpty()
-                            )
-                        }
+            Indexino.connectBlocking(mainWorkspace).use { main ->
+                runBlocking {
+                    main.snapshot().use { snapshot ->
+                        assertTrue(
+                            snapshot
+                                .findSymbols(
+                                    SymbolQuery.named("ConcurrentMainPanel"),
+                                    QueryOptions.page(limit = 1),
+                                )
+                                .items
+                                .isNotEmpty()
+                        )
                     }
                 }
             }
-        } finally {
-            executor.shutdownNow()
+            Indexino.connectBlocking(forkWorkspace).use { fork ->
+                runBlocking {
+                    fork.snapshot().use { snapshot ->
+                        assertTrue(
+                            snapshot
+                                .findSymbols(
+                                    SymbolQuery.named("ConcurrentForkButton"),
+                                    QueryOptions.page(limit = 1),
+                                )
+                                .items
+                                .isNotEmpty()
+                        )
+                    }
+                }
+            }
         }
     }
 

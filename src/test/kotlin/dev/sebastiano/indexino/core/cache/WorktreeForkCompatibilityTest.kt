@@ -238,6 +238,88 @@ class WorktreeForkCompatibilityTest {
         )
     }
 
+    @Test
+    fun `findCompatibleBase prefers the deepest compatible overlay base`() {
+        val cacheRoot = createTempDirectory("indexino-fork-deepest-cache-").also(tempDirs::add)
+        val (mainWorkspace, forkWorkspace) = createLinkedWorktrees()
+        val gitCommonDir = checkNotNull(GitWorktreeLayout.commonDir(mainWorkspace))
+        val mainId = dev.sebastiano.indexino.api.InProcessCacheLayout.workspaceId(mainWorkspace)
+        val forkId = dev.sebastiano.indexino.api.InProcessCacheLayout.workspaceId(forkWorkspace)
+        val compatibility =
+            IndexManifest(
+                commit = "abc123",
+                indexerVersion = Version.NAME,
+                basicFactSchemaVersion = BASIC_FACT_SCHEMA_VERSION,
+                scope = ":ui",
+                topology = "gradle",
+                includeDeps = true,
+                sourceFileCount = 4,
+                sourcesContentHash = "hash",
+                builtAt = "2026-01-01T00:00:00Z",
+            )
+        val registry = WorkspaceRegistryStore(cacheRoot)
+        registry.upsert(mainId, mainWorkspace, gitCommonDir)
+        registry.upsert(forkId, forkWorkspace, gitCommonDir)
+        WorkspaceGenerationManifestStore(cacheRoot, mainId)
+            .publish(
+                WorkspaceGenerationManifest(
+                    basicFactSchemaVersion = BASIC_FACT_SCHEMA_VERSION,
+                    generation = "gen-materialized",
+                    workspaceRevisionFingerprint = "revision",
+                    originId = "workspace",
+                    revision = "abc123",
+                    stateFingerprint = "hash",
+                    packKeys = listOf("ab".repeat(32)),
+                    compatibilityManifest = compatibility,
+                    representation = WorktreeOverlayPolicy.REPRESENTATION_MATERIALIZED,
+                )
+            )
+        WorkspaceGenerationManifestStore(cacheRoot, forkId)
+            .publish(
+                WorkspaceGenerationManifest(
+                    basicFactSchemaVersion = BASIC_FACT_SCHEMA_VERSION,
+                    generation = "gen-overlay",
+                    workspaceRevisionFingerprint = "revision",
+                    originId = "workspace",
+                    revision = "abc123",
+                    stateFingerprint = "hash",
+                    packKeys = emptyList(),
+                    compatibilityManifest = compatibility,
+                    representation = WorktreeOverlayPolicy.REPRESENTATION_OVERLAY,
+                    baseWorkspaceId = mainId,
+                    baseGeneration = "gen-materialized",
+                    overlayChainDepth = 2,
+                )
+            )
+
+        val thirdWorkspace = createTempDirectory("indexino-worktree-third-").also(tempDirs::add)
+        runGit(
+            mainWorkspace,
+            "worktree",
+            "add",
+            "-b",
+            "overlay-third-${System.nanoTime()}",
+            thirdWorkspace.toString(),
+        )
+        val criteria =
+            ManifestFreshness.criteriaFrom(
+                commit = compatibility.commit,
+                scope = compatibility.scope,
+                includeDeps = compatibility.includeDeps,
+                sourcesContentHash = compatibility.sourcesContentHash,
+                applications = compatibility.applications,
+            )
+
+        val forkBase =
+            WorktreeForkCompatibility.findCompatibleBase(
+                project = thirdWorkspace,
+                cacheRoot = cacheRoot,
+                criteria = criteria,
+            )
+        assertEquals(forkId, forkBase?.baseWorkspaceId)
+        assertEquals(3, forkBase?.overlayChainDepth)
+    }
+
     private fun createLinkedWorktrees(): Pair<java.nio.file.Path, java.nio.file.Path> {
         val mainWorkspace = createGitWorkspace()
         val forkWorkspace = createTempDirectory("indexino-worktree-fork-").also(tempDirs::add)

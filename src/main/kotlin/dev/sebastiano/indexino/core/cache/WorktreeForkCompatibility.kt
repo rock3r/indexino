@@ -29,16 +29,56 @@ internal object WorktreeForkCompatibility {
             registry.entries().filter { entry ->
                 entry.gitCommonDir == gitCommonDir && entry.path != projectPath
             }
-        return candidates
-            .sortedBy { it.path }
-            .firstNotNullOfOrNull { candidate -> resolveForkBase(candidate, cacheRoot, criteria) }
+        val deepest =
+            candidates
+                .mapNotNull { candidate -> resolveForkCandidate(candidate, cacheRoot, criteria) }
+                .maxWithOrNull(
+                    compareBy<ForkCandidate> { it.overlayDepth }.thenBy { it.entry.path }
+                ) ?: return null
+        if (
+            deepest.published.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY &&
+                deepest.published.overlayChainDepth >= WorktreeOverlayPolicy.MAX_CHAIN_DEPTH
+        ) {
+            return null
+        }
+        return deepest.toForkBase(criteria)
     }
 
-    private fun resolveForkBase(
+    private data class ForkCandidate(
+        val entry: WorkspaceRegistryEntry,
+        val published: WorkspaceGenerationManifest,
+        val basePath: Path,
+    ) {
+        val overlayDepth: Int =
+            if (published.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) {
+                published.overlayChainDepth
+            } else {
+                0
+            }
+
+        fun toForkBase(criteria: ManifestFreshnessCriteria): WorktreeForkBase {
+            val compatibility = checkNotNull(published.compatibilityManifest)
+            return WorktreeForkBase(
+                baseWorkspaceId = entry.workspaceId,
+                baseGeneration = published.generation,
+                baseWorkspacePath = basePath,
+                baseManifest = compatibility,
+                unchanged = compatibility.sourcesContentHash == criteria.sourcesContentHash,
+                overlayChainDepth =
+                    if (published.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) {
+                        published.overlayChainDepth + 1
+                    } else {
+                        1
+                    },
+            )
+        }
+    }
+
+    private fun resolveForkCandidate(
         candidate: WorkspaceRegistryEntry,
         cacheRoot: Path,
         criteria: ManifestFreshnessCriteria,
-    ): WorktreeForkBase? {
+    ): ForkCandidate? {
         val basePath = Path.of(candidate.path)
         if (!Files.isDirectory(basePath)) return null
         val published =
@@ -47,25 +87,7 @@ internal object WorktreeForkCompatibility {
         val compatibility = published.compatibilityManifest ?: return null
         if (!isForkCompatibleBase(compatibility, criteria)) return null
         if (published.basicFactSchemaVersion != criteria.basicFactSchemaVersion) return null
-        if (
-            published.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY &&
-                published.overlayChainDepth >= WorktreeOverlayPolicy.MAX_CHAIN_DEPTH
-        ) {
-            return null
-        }
-        return WorktreeForkBase(
-            baseWorkspaceId = candidate.workspaceId,
-            baseGeneration = published.generation,
-            baseWorkspacePath = basePath,
-            baseManifest = compatibility,
-            unchanged = compatibility.sourcesContentHash == criteria.sourcesContentHash,
-            overlayChainDepth =
-                if (published.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) {
-                    published.overlayChainDepth + 1
-                } else {
-                    1
-                },
-        )
+        return ForkCandidate(candidate, published, basePath)
     }
 
     private fun isForkCompatibleBase(

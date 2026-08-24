@@ -322,19 +322,19 @@ internal class IndexBuildRunner(
         }
         val store =
             if (forkBase != null) {
-                val baseStorePath =
-                    WorktreeOverlayStoreOpener.materializedGenerationStore(
+                val baseManifest =
+                    WorkspaceGenerationManifestStore(
+                            InProcessCacheLayout.cacheRoot(),
+                            forkBase.baseWorkspaceId,
+                        )
+                        .readGeneration(forkBase.baseGeneration)
+                        ?: error("Missing base generation ${forkBase.baseGeneration}")
+                val baseStore =
+                    WorktreeOverlayStoreOpener.openForBuildBase(
                         cacheRoot = InProcessCacheLayout.cacheRoot(),
                         workspace = forkBase.baseWorkspacePath,
-                        manifest =
-                            WorkspaceGenerationManifestStore(
-                                    InProcessCacheLayout.cacheRoot(),
-                                    forkBase.baseWorkspaceId,
-                                )
-                                .readGeneration(forkBase.baseGeneration)
-                                ?: error("Missing base generation ${forkBase.baseGeneration}"),
+                        manifest = baseManifest,
                     )
-                val baseStore = XodusCodeIndexStore.open(baseStorePath, readOnly = true)
                 val deltaStore =
                     XodusCodeIndexStore.open(checkNotNull(overlayDeltaPath), readOnly = false)
                 WorktreeOverlayIndexStore(baseStore, deltaStore, emptyList())
