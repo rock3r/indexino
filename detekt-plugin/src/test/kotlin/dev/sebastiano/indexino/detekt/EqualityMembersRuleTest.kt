@@ -1342,6 +1342,49 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `negated equality helper is not positive structural equality`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class NegatedHelper(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is NegatedHelper && !value.equals(other.value)
+                        override fun hashCode(): Int = value.hashCode()
+                        override fun toString(): String = "NegatedHelper(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
+    fun `double negated equality helper remains positive structural equality`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class DoubleNegatedHelper(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is DoubleNegatedHelper && !!value.equals(other.value)
+                        override fun hashCode(): Int = value.hashCode()
+                        override fun toString(): String = "DoubleNegatedHelper(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `lambda label matching class name does not count as class receiver`() {
         val findings =
             rule()

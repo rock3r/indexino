@@ -38,6 +38,7 @@ import org.jetbrains.kotlin.psi.KtLambdaExpression
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
 import org.jetbrains.kotlin.psi.KtNamedFunction
 import org.jetbrains.kotlin.psi.KtParenthesizedExpression
+import org.jetbrains.kotlin.psi.KtPrefixExpression
 import org.jetbrains.kotlin.psi.KtProperty
 import org.jetbrains.kotlin.psi.KtQualifiedExpression
 import org.jetbrains.kotlin.psi.KtSafeQualifiedExpression
@@ -207,6 +208,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         if (structuralCallKind == StructuralCallKind.ORDERING && !isComparedWithZeroForEquality()) {
             return false
         }
+        if (structuralCallKind != StructuralCallKind.ORDERING && isNegated()) return false
         val qualifiedCall = parent as? KtQualifiedExpression
         if (
             structuralCallKind == StructuralCallKind.RECEIVER &&
@@ -390,6 +392,32 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
             is KtParenthesizedExpression -> expression?.isZeroConstant() == true
             else -> text == "0"
         }
+
+    private fun KtExpression.isNegated(): Boolean {
+        var expression = this
+        var negations = 0
+        while (true) {
+            expression =
+                when (val container = expression.parent) {
+                    is KtQualifiedExpression ->
+                        if (container.selectorExpression == expression) container else break
+                    is KtParenthesizedExpression ->
+                        if (container.expression == expression) container else break
+                    is KtPrefixExpression ->
+                        if (
+                            container.baseExpression == expression &&
+                                container.operationToken == KtTokens.EXCL
+                        ) {
+                            negations += 1
+                            container
+                        } else {
+                            break
+                        }
+                    else -> break
+                }
+        }
+        return negations % 2 != 0
+    }
 
     private fun KtNamedFunction.isInvokedOnCurrent(
         equalsFunction: KtNamedFunction,
