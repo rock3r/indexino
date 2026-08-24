@@ -1480,6 +1480,63 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `same named member call is not a local extension invocation`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class ExtensionOverload(val value: String) {
+                        private fun matches(): Boolean = true
+
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is ExtensionOverload) return false
+                            fun ExtensionOverload.matches(unused: Int): Boolean =
+                                value == other.value
+                            return this.matches()
+                        }
+                        override fun hashCode(): Int = value.hashCode()
+                        override fun toString(): String = "ExtensionOverload(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
+    fun `local kotlin value is not the Kotlin package qualifier`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class KotlinQualifier(val value: String) {
+                        private class Scope(private val target: KotlinQualifier) {
+                            fun with(block: KotlinQualifier.() -> Boolean): Boolean = target.block()
+                        }
+
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is KotlinQualifier) return false
+                            val kotlin = Scope(other)
+                            return kotlin.with { value == other.value }
+                        }
+                        override fun hashCode(): Int = value.hashCode()
+                        override fun toString(): String = "KotlinQualifier(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `lambda label matching class name does not count as class receiver`() {
         val findings =
             rule()

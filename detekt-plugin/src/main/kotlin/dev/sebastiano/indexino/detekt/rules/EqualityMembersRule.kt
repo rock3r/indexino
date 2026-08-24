@@ -442,7 +442,8 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         val invocations =
             PsiTreeUtil.collectElementsOfType(equalsFunction, KtCallExpression::class.java).filter {
                 it.calleeExpression?.text == functionName &&
-                    !PsiTreeUtil.isAncestor(this, it, false)
+                    !PsiTreeUtil.isAncestor(this, it, false) &&
+                    it.resolvesTo(this)
             }
         return invocations.isNotEmpty() &&
             invocations.all { invocation ->
@@ -454,6 +455,9 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                 }
             }
     }
+
+    private fun KtCallExpression.resolvesTo(function: KtNamedFunction): Boolean =
+        analyze(this) { resolveToCall()?.singleFunctionCallOrNull()?.symbol?.psi == function }
 
     private fun KtCallExpression.hasCurrentImplicitExtensionReceiver(
         equalsFunction: KtNamedFunction,
@@ -550,7 +554,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                 ?: return !lambda.isStoredReceiverBoundToCurrent(equalsFunction, receiverClass)
         val qualifiedCall = call.parent as? KtQualifiedExpression
         if (qualifiedCall?.selectorExpression == call) {
-            if (qualifiedCall.receiverExpression.text == "kotlin") {
+            if (call.resolvesToKotlinPackageCallable()) {
                 val receiverArguments = call.receiverLambdaArguments()
                 if (receiverArguments.size > 1) return true
                 val receiver = receiverArguments.singleOrNull() ?: return false
@@ -571,6 +575,16 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         val receiver = receiverArguments.singleOrNull() ?: return call.hasReceiverLambdaParameter()
         return !receiver.isCurrentReceiver(equalsFunction, receiverClass)
     }
+
+    private fun KtCallExpression.resolvesToKotlinPackageCallable(): Boolean =
+        analyze(this) {
+            resolveToCall()
+                ?.singleFunctionCallOrNull()
+                ?.symbol
+                ?.callableId
+                ?.packageName
+                ?.asString() == "kotlin"
+        }
 
     private fun KtCallExpression.hasReceiverLambdaParameter(): Boolean =
         analyze(this) {
