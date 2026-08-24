@@ -30,7 +30,11 @@ internal object LinkIndexQueryRunner {
         try {
             store.forEachPrefix("sym:") { _, record ->
                 val symbol = record as? SymbolRecord
-                if (symbol != null && symbolMatches(symbol, symbolName)) {
+                if (
+                    symbol != null &&
+                        symbolMatches(symbol, symbolName) &&
+                        symbolMatchesMapping(registration, symbol)
+                ) {
                     matches += linkedResultForSymbol(registration, symbol)
                 }
                 true
@@ -53,6 +57,19 @@ internal object LinkIndexQueryRunner {
 
     private fun symbolMatches(record: SymbolRecord, symbolName: String): Boolean =
         record.fqn.contains(symbolName) || record.name == symbolName
+
+    private fun symbolMatchesMapping(
+        registration: SerializedSourceLinkRegistration,
+        record: SymbolRecord,
+    ): Boolean {
+        val allowedRoots =
+            registration.sourceRoots.ifEmpty { listOf(registration.mappingSourceRoot) }
+        return allowedRoots.any { root ->
+            record.relativeFile == root ||
+                record.relativeFile.startsWith("$root/") ||
+                record.fqn.startsWith(registration.mappingBinaryPrefix)
+        }
+    }
 
     @OptIn(IndexinoInternalApi::class)
     private fun linkedResultForSymbol(

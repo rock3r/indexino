@@ -362,13 +362,24 @@ private constructor(
                     nextCursor = null,
                     totalCount = 0,
                 )
-        val registrySnapshot =
-            SourceLinkRegistryStore(
-                    InProcessCacheLayout.cacheRoot()
-                        .resolve("workspaces")
-                        .resolve(InProcessCacheLayout.workspaceId(workspace))
+        val pinnedGeneration =
+            linkGeneration
+                ?: return QueryPage(
+                    items = emptyList(),
+                    offset = options.offset,
+                    limit = options.limit,
+                    hasMore = false,
+                    nextCursor = null,
+                    totalCount = 0,
                 )
-                .readCurrent()
+        val registryStore =
+            SourceLinkRegistryStore(
+                InProcessCacheLayout.cacheRoot()
+                    .resolve("workspaces")
+                    .resolve(InProcessCacheLayout.workspaceId(workspace))
+            )
+        val registrySnapshot =
+            registryStore.readGeneration(pinnedGeneration)
                 ?: return QueryPage(
                     items = emptyList(),
                     offset = options.offset,

@@ -60,12 +60,13 @@ internal object SourceLinkConfigParser {
             if (separator <= 0) return
             flushList()
             val key = line.substring(0, separator).trim()
-            val value = line.substring(separator + 1).trim().trim('"')
+            val rawValue = line.substring(separator + 1).trim()
+            val value = parseScalarOrArray(rawValue)
             values[key] = value
             if (key == "sourceRoots") {
                 listKey = key
                 listValues.clear()
-                listValues.add(value)
+                listValues.addAll(parseSourceRoots(value))
             }
         }
 
@@ -77,6 +78,27 @@ internal object SourceLinkConfigParser {
             listKey = null
             listValues.clear()
         }
+    }
+
+    private fun parseScalarOrArray(rawValue: String): String {
+        val trimmed = rawValue.trim()
+        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+            return parseSourceRoots(trimmed).joinToString("\u0001")
+        }
+        return trimmed.trim('"')
+    }
+
+    private fun parseSourceRoots(rawValue: String): List<String> {
+        val trimmed = rawValue.trim()
+        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+            return trimmed
+                .removePrefix("[")
+                .removeSuffix("]")
+                .split(',')
+                .map { it.trim().trim('"') }
+                .filter(String::isNotBlank)
+        }
+        return listOf(trimmed.trim('"')).filter(String::isNotBlank)
     }
 
     private fun entryFrom(map: Map<String, String>): SourceLinkConfigEntry {

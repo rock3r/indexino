@@ -30,19 +30,32 @@ internal object LinkGenerationComputer {
                     "${it.component.coordinate.value}\u0000${it.component.artifactDigest.value}"
                 }
                 .joinToString("\u0001") { registration ->
-                    listOf(
-                            registration.component.coordinate.value,
-                            registration.component.artifactDigest.value,
-                            registration.component.variant.orEmpty(),
-                            registration.component.substitution.orEmpty(),
-                            registration.linkedGeneration.value,
-                            registration.sourceOriginId.value,
-                            registration.evidence.value,
-                            registration.checkout.revision.orEmpty(),
-                            registration.checkout.tag.orEmpty(),
-                            registration.checkout.dirty.toString(),
-                        )
-                        .joinToString("\u0002")
+                    SourceLinkRegistryStore.serializeRegistration(registration).let { serialized ->
+                        listOf(
+                                serialized.coordinate,
+                                serialized.artifactDigest,
+                                serialized.variant.orEmpty(),
+                                serialized.substitution.orEmpty(),
+                                serialized.repositoryIdentity,
+                                serialized.checkoutPath,
+                                serialized.revision.orEmpty(),
+                                serialized.tag.orEmpty(),
+                                serialized.dirty.toString(),
+                                serialized.submoduleRevisions.entries.joinToString(",") {
+                                    "${it.key}=${it.value}"
+                                },
+                                serialized.sourceRoots.joinToString("\u0002"),
+                                serialized.sourceOriginId,
+                                serialized.linkedGeneration,
+                                serialized.mappingBinaryPrefix,
+                                serialized.mappingSourceRoot,
+                                serialized.evidence,
+                                serialized.diagnostics.joinToString("\u0002") {
+                                    "${it.code}=${it.message}"
+                                },
+                            )
+                            .joinToString("\u0003")
+                    }
                 }
         val linkGeneration = LinkGenerationId.of(sha256(fingerprintInput))
         return linkGeneration to

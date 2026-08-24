@@ -77,6 +77,15 @@ internal class SourceLinkRegistryStore(private val workspaceRoot: Path) {
         )
     }
 
+    fun readGeneration(linkGeneration: LinkGenerationId): SourceLinkRegistrySnapshot? {
+        val path = generationPath(linkGeneration)
+        if (!Files.isRegularFile(path)) return null
+        return json.decodeFromString(
+            SourceLinkRegistrySnapshot.serializer(),
+            Files.readString(path),
+        )
+    }
+
     fun publish(
         linkGeneration: LinkGenerationId,
         registrations: List<SourceLinkRegistration>,
@@ -89,8 +98,10 @@ internal class SourceLinkRegistryStore(private val workspaceRoot: Path) {
                 edges = edges.map(::serializeEdge),
             )
         val generationPath = generationPath(linkGeneration)
-        Files.createDirectories(generationPath.parent)
-        writeAtomically(generationPath, json.encodeToString(snapshot))
+        if (!Files.isRegularFile(generationPath)) {
+            Files.createDirectories(generationPath.parent)
+            writeAtomically(generationPath, json.encodeToString(snapshot))
+        }
         writeAtomically(registryPath(), json.encodeToString(snapshot))
     }
 
