@@ -326,7 +326,10 @@ class ShrunkCliDistributionTest {
         val EXPECTED_SERVICES =
             mapOf(
                 "dev.sebastiano.indexino.plugin.api.IndexinoPluginProvider" to
-                    setOf("dev.sebastiano.indexino.plugin.selection.SelectionContextPlugin"),
+                    setOf(
+                        "dev.sebastiano.indexino.plugin.selection.SelectionContextPlugin",
+                        "dev.sebastiano.indexino.plugin.compose.decoration.ComposeDecorationPlugin",
+                    ),
                 "kotlin.reflect.jvm.internal.impl.builtins.BuiltInsLoader" to
                     setOf(
                         "kotlin.reflect.jvm.internal.impl.serialization.deserialization.builtins.BuiltInsLoaderImpl"

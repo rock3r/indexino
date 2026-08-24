@@ -139,16 +139,34 @@ public interface PostProcessorV1 {
 @IndexinoInternalApi
 public class PostProcessContextV1
 public constructor(
+    public val queries: BasicFactQueries,
     public val facts: PluginFactSinkV1,
     public val originId: SourceOriginId? = null,
     private val active: () -> Boolean,
 ) {
     public constructor(
         facts: PluginFactSinkV1,
+        originId: SourceOriginId? = null,
+        active: () -> Boolean,
+    ) : this(
+        queries = UnavailableBasicFactQueries,
+        facts = facts,
+        originId = originId,
+        active = active,
+    )
+
+    public constructor(
+        facts: PluginFactSinkV1,
         active: () -> Boolean,
     ) : this(facts = facts, originId = null, active = active)
 
     public fun ensureActive(): Unit = check(active()) { "Plugin post-processing was cancelled" }
+
+    override fun equals(other: Any?): Boolean = this === other
+
+    override fun hashCode(): Int = System.identityHashCode(this)
+
+    override fun toString(): String = "PostProcessContextV1(queries=$queries, originId=$originId)"
 }
 
 @OptIn(IndexinoInternalApi::class)

@@ -135,7 +135,13 @@ class MavenPublicationTest {
         assertTrue(bomPom.isFile, "Expected published BOM at $bomPom")
         val pomText = bomPom.readText()
         assertTrue(pomText.contains("<packaging>pom</packaging>"), pomText)
-        listOf("indexino-model", "indexino", "indexino-plugin-api", "indexino-selection-context")
+        listOf(
+                "indexino-model",
+                "indexino",
+                "indexino-plugin-api",
+                "indexino-selection-context",
+                "indexino-compose-decoration",
+            )
             .forEach { artifactId ->
                 assertTrue(
                     pomText.contains("<artifactId>$artifactId</artifactId>"),
@@ -157,20 +163,30 @@ class MavenPublicationTest {
         val hostJar = publishedMainJar(repository, groupId, "indexino", version)
         JarFile(hostJar).use { jar ->
             assertEquals(
-                "1.0.0",
+                "1.1.0",
                 jar.manifest.mainAttributes.getValue("Indexino-Plugin-ABI-Version"),
             )
             assertEquals(
-                "1.0.0..1.0.0",
+                "1.0.0..1.1.0",
                 jar.manifest.mainAttributes.getValue("Indexino-Plugin-ABI-Supported"),
             )
             assertNotNull(jar.getEntry("META-INF/indexino/host-plugin-abi.properties"))
         }
 
-        val pluginJar = publishedMainJar(repository, groupId, "indexino-selection-context", version)
-        JarFile(pluginJar).use { jar ->
+        val selectionPluginJar =
+            publishedMainJar(repository, groupId, "indexino-selection-context", version)
+        JarFile(selectionPluginJar).use { jar ->
             assertEquals(
-                "1.0.0",
+                "1.1.0",
+                jar.manifest.mainAttributes.getValue("Indexino-Plugin-ABI-Target"),
+            )
+        }
+
+        val composeDecorationJar =
+            publishedMainJar(repository, groupId, "indexino-compose-decoration", version)
+        JarFile(composeDecorationJar).use { jar ->
+            assertEquals(
+                "1.1.0",
                 jar.manifest.mainAttributes.getValue("Indexino-Plugin-ABI-Target"),
             )
         }

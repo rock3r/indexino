@@ -22,6 +22,8 @@ private constructor(
 
         @JvmStatic
         public fun inFile(file: SourceFile): CallQuery = CallQuery(null, null, null, file)
+
+        @JvmStatic public fun any(): CallQuery = CallQuery(null, null, null, null)
     }
 
     override fun equals(other: Any?): Boolean =

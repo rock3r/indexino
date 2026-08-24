@@ -1,0 +1,110 @@
+// Signature format: 5.0
+package dev.sebastiano.indexino.plugin.compose.decoration {
+
+  public final class ComposeDecorationPlugin implements dev.sebastiano.indexino.plugin.api.IndexinoPluginProvider {
+    ctor public ComposeDecorationPlugin();
+    method public void install(dev.sebastiano.indexino.plugin.api.IndexinoPluginRegistrar registrar);
+  }
+
+  public final class ComposeDecorationQueries {
+    method public static suspend Object? findSiteByComposableCallId(dev.sebastiano.indexino.plugin.api.PluginFactViewV1 facts, dev.sebastiano.indexino.model.CallSiteId composableCallId, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.plugin.compose.decoration.DecorationSite?>);
+    method public static suspend Object? findSites(dev.sebastiano.indexino.plugin.api.PluginFactViewV1 facts, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.plugin.compose.decoration.DecorationSite>>);
+    method public static suspend Object? findSitesForCalls(dev.sebastiano.indexino.model.BasicFactQueries queries, dev.sebastiano.indexino.plugin.api.PluginFactViewV1 facts, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.plugin.compose.decoration.DecorationSite>>);
+    field public static final dev.sebastiano.indexino.plugin.compose.decoration.ComposeDecorationQueries.Companion Companion;
+    field public static final String FACT_PREFIX = "decoration-site:";
+  }
+
+  public static final class ComposeDecorationQueries.Companion {
+    method public suspend Object? findSiteByComposableCallId(dev.sebastiano.indexino.plugin.api.PluginFactViewV1 facts, dev.sebastiano.indexino.model.CallSiteId composableCallId, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.plugin.compose.decoration.DecorationSite?>);
+    method public suspend Object? findSites(dev.sebastiano.indexino.plugin.api.PluginFactViewV1 facts, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.plugin.compose.decoration.DecorationSite>>);
+    method public suspend Object? findSitesForCalls(dev.sebastiano.indexino.model.BasicFactQueries queries, dev.sebastiano.indexino.plugin.api.PluginFactViewV1 facts, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.plugin.compose.decoration.DecorationSite>>);
+    property public static String FACT_PREFIX;
+  }
+
+  public final class ConditionalBranch {
+    method @InaccessibleFromKotlin public String getLabel();
+    method @InaccessibleFromKotlin public java.util.List<dev.sebastiano.indexino.plugin.compose.decoration.ModifierLink> getLinks();
+    method public static dev.sebastiano.indexino.plugin.compose.decoration.ConditionalBranch of(String label, java.util.List<dev.sebastiano.indexino.plugin.compose.decoration.ModifierLink> links);
+    property public String label;
+    property public java.util.List<dev.sebastiano.indexino.plugin.compose.decoration.ModifierLink> links;
+    field public static final dev.sebastiano.indexino.plugin.compose.decoration.ConditionalBranch.Companion Companion;
+  }
+
+  public static final class ConditionalBranch.Companion {
+    method public dev.sebastiano.indexino.plugin.compose.decoration.ConditionalBranch of(String label, java.util.List<dev.sebastiano.indexino.plugin.compose.decoration.ModifierLink> links);
+  }
+
+  public final class DecorationSite {
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.plugin.compose.decoration.ModifierChain getChain();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.ResolutionConfidence getChainConfidence();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.CallSiteId getComposableCallId();
+    method @InaccessibleFromKotlin public String getComposableCalleeName();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.ResolutionConfidence getComposableConfidence();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceRange getComposableRange();
+    method @InaccessibleFromKotlin public boolean getHasModifierArgument();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceRange? getModifierArgumentRange();
+    method public static dev.sebastiano.indexino.plugin.compose.decoration.DecorationSite of(dev.sebastiano.indexino.model.CallSiteId composableCallId, String composableCalleeName, dev.sebastiano.indexino.model.SourceRange composableRange, dev.sebastiano.indexino.model.ResolutionConfidence composableConfidence, boolean hasModifierArgument, dev.sebastiano.indexino.model.SourceRange? modifierArgumentRange, dev.sebastiano.indexino.plugin.compose.decoration.ModifierChain chain, dev.sebastiano.indexino.model.ResolutionConfidence chainConfidence);
+    property public dev.sebastiano.indexino.plugin.compose.decoration.ModifierChain chain;
+    property public dev.sebastiano.indexino.model.ResolutionConfidence chainConfidence;
+    property public dev.sebastiano.indexino.model.CallSiteId composableCallId;
+    property public String composableCalleeName;
+    property public dev.sebastiano.indexino.model.ResolutionConfidence composableConfidence;
+    property public dev.sebastiano.indexino.model.SourceRange composableRange;
+    property public boolean hasModifierArgument;
+    property public dev.sebastiano.indexino.model.SourceRange? modifierArgumentRange;
+    field public static final dev.sebastiano.indexino.plugin.compose.decoration.DecorationSite.Companion Companion;
+  }
+
+  public static final class DecorationSite.Companion {
+    method public dev.sebastiano.indexino.plugin.compose.decoration.DecorationSite of(dev.sebastiano.indexino.model.CallSiteId composableCallId, String composableCalleeName, dev.sebastiano.indexino.model.SourceRange composableRange, dev.sebastiano.indexino.model.ResolutionConfidence composableConfidence, boolean hasModifierArgument, dev.sebastiano.indexino.model.SourceRange? modifierArgumentRange, dev.sebastiano.indexino.plugin.compose.decoration.ModifierChain chain, dev.sebastiano.indexino.model.ResolutionConfidence chainConfidence);
+  }
+
+  public final class ModifierChain {
+    method public static dev.sebastiano.indexino.plugin.compose.decoration.ModifierChain empty();
+    method @InaccessibleFromKotlin public java.util.List<dev.sebastiano.indexino.plugin.compose.decoration.ModifierLink> getLinks();
+    method public static dev.sebastiano.indexino.plugin.compose.decoration.ModifierChain of(java.util.List<dev.sebastiano.indexino.plugin.compose.decoration.ModifierLink> links);
+    property public java.util.List<dev.sebastiano.indexino.plugin.compose.decoration.ModifierLink> links;
+    field public static final dev.sebastiano.indexino.plugin.compose.decoration.ModifierChain.Companion Companion;
+  }
+
+  public static final class ModifierChain.Companion {
+    method public dev.sebastiano.indexino.plugin.compose.decoration.ModifierChain empty();
+    method public dev.sebastiano.indexino.plugin.compose.decoration.ModifierChain of(java.util.List<dev.sebastiano.indexino.plugin.compose.decoration.ModifierLink> links);
+  }
+
+  public final class ModifierLink {
+    method @InaccessibleFromKotlin public java.util.List<java.lang.String> getArgumentNames();
+    method @InaccessibleFromKotlin public java.util.List<dev.sebastiano.indexino.plugin.compose.decoration.ConditionalBranch> getBranches();
+    method @InaccessibleFromKotlin public String getCalleeName();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.ResolutionConfidence getConfidence();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.plugin.compose.decoration.ModifierLinkKind getKind();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceRange getRange();
+    method @InaccessibleFromKotlin public String? getReceiver();
+    method public static dev.sebastiano.indexino.plugin.compose.decoration.ModifierLink of(dev.sebastiano.indexino.plugin.compose.decoration.ModifierLinkKind kind, String calleeName, String? receiver, java.util.List<java.lang.String> argumentNames, dev.sebastiano.indexino.model.SourceRange range, dev.sebastiano.indexino.model.ResolutionConfidence confidence);
+    method public static dev.sebastiano.indexino.plugin.compose.decoration.ModifierLink of(dev.sebastiano.indexino.plugin.compose.decoration.ModifierLinkKind kind, String calleeName, String? receiver, java.util.List<java.lang.String> argumentNames, dev.sebastiano.indexino.model.SourceRange range, dev.sebastiano.indexino.model.ResolutionConfidence confidence, java.util.List<dev.sebastiano.indexino.plugin.compose.decoration.ConditionalBranch> branches);
+    property public java.util.List<java.lang.String> argumentNames;
+    property public java.util.List<dev.sebastiano.indexino.plugin.compose.decoration.ConditionalBranch> branches;
+    property public String calleeName;
+    property public dev.sebastiano.indexino.model.ResolutionConfidence confidence;
+    property public dev.sebastiano.indexino.plugin.compose.decoration.ModifierLinkKind kind;
+    property public dev.sebastiano.indexino.model.SourceRange range;
+    property public String? receiver;
+    field public static final dev.sebastiano.indexino.plugin.compose.decoration.ModifierLink.Companion Companion;
+  }
+
+  public static final class ModifierLink.Companion {
+    method public dev.sebastiano.indexino.plugin.compose.decoration.ModifierLink of(dev.sebastiano.indexino.plugin.compose.decoration.ModifierLinkKind kind, String calleeName, String? receiver, java.util.List<java.lang.String> argumentNames, dev.sebastiano.indexino.model.SourceRange range, dev.sebastiano.indexino.model.ResolutionConfidence confidence);
+    method public dev.sebastiano.indexino.plugin.compose.decoration.ModifierLink of(dev.sebastiano.indexino.plugin.compose.decoration.ModifierLinkKind kind, String calleeName, String? receiver, java.util.List<java.lang.String> argumentNames, dev.sebastiano.indexino.model.SourceRange range, dev.sebastiano.indexino.model.ResolutionConfidence confidence, java.util.List<dev.sebastiano.indexino.plugin.compose.decoration.ConditionalBranch> branches);
+  }
+
+  public enum ModifierLinkKind {
+    enum_constant public static final dev.sebastiano.indexino.plugin.compose.decoration.ModifierLinkKind COMPOSED;
+    enum_constant public static final dev.sebastiano.indexino.plugin.compose.decoration.ModifierLinkKind CONDITIONAL;
+    enum_constant public static final dev.sebastiano.indexino.plugin.compose.decoration.ModifierLinkKind DIRECT;
+    enum_constant public static final dev.sebastiano.indexino.plugin.compose.decoration.ModifierLinkKind HELPER;
+    enum_constant public static final dev.sebastiano.indexino.plugin.compose.decoration.ModifierLinkKind THEN;
+    enum_constant public static final dev.sebastiano.indexino.plugin.compose.decoration.ModifierLinkKind UNRESOLVED;
+  }
+
+}
+

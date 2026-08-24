@@ -20,6 +20,7 @@ placement (and target modules) follows the accepted public API design:
 | Client facade (`Indexino`, refresh, snapshot) | `…api` | `indexino` |
 | Plugin SPI (providers, contexts, fact sink) | `…plugin.api` | `indexino-plugin-api` |
 | Selection-context plugin | `…plugin.selection` | `indexino-selection-context` |
+| Compose decoration plugin | `…plugin.compose.decoration` | `indexino-compose-decoration` |
 | Script host + `ScriptFinding` | `…script` | `indexino-script-host` |
 | Workspace runtime, refresh registry, pack cache | `…engine` | internal (impl of `indexino`) |
 | CLI entry + subcommands (daemon, cache, index, query) | `…cli` | CLI fat/shrunk only |

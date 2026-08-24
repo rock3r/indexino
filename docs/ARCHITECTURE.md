@@ -7,10 +7,11 @@
 - a standalone fat CLI JAR (and R8-shrunk native-packaging input),
 - self-contained native CLI ZIPs, and
 - thin Maven artifacts for embedding (`indexino-model`, `indexino`, `indexino-plugin-api`,
-  optional `indexino-script-host`).
+  optional `indexino-script-host`, `indexino-compose-decoration`).
 
 It is not a SelectionContainer one-off — **selection-context** is the first **compiled plugin** on
-shared storage and topology. Binding product design:
+shared storage and topology; **compose-decoration** (S11) derives ordered modifier chains from
+generic call/argument facts. Binding product design:
 [PUBLIC-API-DESIGN.html](PUBLIC-API-DESIGN.html) (Accepted 2026-07-25).
 
 ```
@@ -49,6 +50,8 @@ shared storage and topology. Binding product design:
 | `indexino-model` | Shared public types: IDs, locations, `QueryPage`, `Finding`, `BasicFactQueries`, `PluginFactValue`, `IndexinoInternalApi` |
 | `indexino` (`…api`) | Client facade: connect, refresh, snapshot, status, diagnostics |
 | `indexino-plugin-api` | Versioned SPI: analyzers, post-processors, checks, fact sink/view |
+| `indexino-selection-context` | SelectionContainer / DisableSelection compiled plugin |
+| `indexino-compose-decoration` | Compose modifier-chain decoration compiled plugin (S11) |
 | `indexino-script-host` | Optional Alpha `.indexino.kts` (non-suspend DSL) |
 | `engine` (internal) | Workspace runtime, refresh registry, coordinator, pack cache, GC |
 | `cli` (internal) | Clikt, daemon/cache commands, JSONL, exit codes |
@@ -88,7 +91,7 @@ Metadata is disabled for that artifact so Gradle consumers resolve the filtered 
 unfiltered `.module` graph. The fat CLI distribution still contains its runtime dependencies.
 
 S5 publishes a complete signed Central release train: `indexino-bom`, `indexino-model`, `indexino`,
-`indexino-plugin-api`, and `indexino-selection-context`. S8 adds the optional Alpha
+`indexino-plugin-api`, `indexino-selection-context`, and `indexino-compose-decoration`. S8 adds the optional Alpha
 `indexino-script-host` artifact to that aligned train. The BOM aligns those coordinates for
 Gradle and Maven consumers, and the tag workflow uploads every artifact together. Maven Local
 remains available for dogfooding, but is no longer the only publication path.

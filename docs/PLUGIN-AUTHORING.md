@@ -12,10 +12,13 @@ compile the plugin. It is not the plugin version, the Indexino product version, 
 schema, or a handwritten compatibility range. A plugin build may target an older ABI only after
 the plugin compatibility test kit proves that the compiled artifact links and runs against it.
 
-Indexino's reference `indexino-selection-context` plugin demonstrates the build contract: its JAR
-task reads the generated metadata from `indexino-plugin-api` and writes the target attribute. A
-third-party build should likewise resolve `META-INF/indexino/plugin-abi.properties` from its
-compile dependency and copy the `current` value into the manifest.
+Indexino's reference plugins demonstrate the build contract:
+
+- `indexino-selection-context` — file analyzer + check over Kotlin PSI
+- `indexino-compose-decoration` — post-processor + check over generic call facts
+
+Both read the generated metadata from `indexino-plugin-api` and write the target
+attribute into the manifest.
 
 ## Load compatibility
 

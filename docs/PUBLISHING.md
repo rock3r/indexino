@@ -3,7 +3,7 @@
 The release train is published with
 [`com.vanniktech.maven.publish`](https://github.com/vanniktech/gradle-maven-publish-plugin):
 `indexino-bom`, `indexino-model`, `indexino`, `indexino-plugin-api`,
-`indexino-selection-context`, and the optional Alpha `indexino-script-host` share Central metadata,
+`indexino-selection-context`, `indexino-compose-decoration`, and the optional Alpha `indexino-script-host` share Central metadata,
 signing, and one release version. The Shadow
 `*-all.jar` remains the standalone CLI distribution and the `*-shrunk.jar` remains an internal
 native-packaging input. Both are deliberately excluded from Maven publication.
