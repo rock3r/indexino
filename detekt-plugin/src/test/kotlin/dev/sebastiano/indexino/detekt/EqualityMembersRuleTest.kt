@@ -1124,6 +1124,62 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `receiver alias resolution respects lexical scope`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class ScopedAlias(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is ScopedAlias) return false
+                            val self = other
+                            run { val self = this }
+                            return self.value == other.value
+                        }
+                        override fun hashCode(): Int = value.hashCode()
+                        override fun toString(): String = "ScopedAlias(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
+    fun `java Arrays helpers are structural equality`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    import java.util.Arrays
+
+                    class JavaArrays(
+                        val values: IntArray,
+                        val nested: Array<Array<String>>,
+                    ) {
+                        override fun equals(other: Any?): Boolean =
+                            other is JavaArrays &&
+                                Arrays.equals(values, other.values) &&
+                                Arrays.deepEquals(nested, other.nested)
+                        override fun hashCode(): Int = 31 * Arrays.hashCode(values) + Arrays.deepHashCode(nested)
+                    override fun toString(): String =
+                        "JavaArrays(values=${'$'}{values.contentToString()}, " +
+                            "nested=${'$'}{nested.contentDeepToString()})"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `lambda label matching class name does not count as class receiver`() {
         val findings =
             rule()

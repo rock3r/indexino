@@ -258,7 +258,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                     .mapNotNull { it.callableId?.asSingleFqName()?.asString() }
                     .toSet()
             when {
-                callableNames.any { it in JAVA_OBJECTS_COMPARISONS } ->
+                callableNames.any { it in TWO_ARGUMENT_COMPARISONS } ->
                     StructuralCallKind.JAVA_OBJECTS
                 KOTLIN_ANY_EQUALS in callableNames ||
                     callableNames.any { it in RECEIVER_COMPARISON_CALLABLES } ->
@@ -398,12 +398,8 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         }
         if (this is KtNameReferenceExpression) {
             val alias =
-                PsiTreeUtil.collectElementsOfType(equalsFunction, KtProperty::class.java)
-                    .asSequence()
-                    .filter {
-                        !it.isVar && it.name == getReferencedName() && it.textOffset < textOffset
-                    }
-                    .maxByOrNull { it.textOffset }
+                analyze(this) { mainReference.resolveToSymbol()?.psi as? KtProperty }
+                    ?.takeUnless { it.isVar }
             val initializer = alias?.initializer ?: return false
             if (initializer.isName(getReferencedName())) return false
             return initializer.isCurrentReceiver(equalsFunction, receiverClass)
@@ -655,8 +651,13 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                 "dev.sebastiano.indexino.api",
                 "dev.sebastiano.indexino.plugin.api",
             )
-        val JAVA_OBJECTS_COMPARISONS: Set<String> =
-            setOf("java.util.Objects.equals", "java.util.Objects.deepEquals")
+        val TWO_ARGUMENT_COMPARISONS: Set<String> =
+            setOf(
+                "java.util.Objects.equals",
+                "java.util.Objects.deepEquals",
+                "java.util.Arrays.equals",
+                "java.util.Arrays.deepEquals",
+            )
         const val KOTLIN_ANY_EQUALS: String = "kotlin.Any.equals"
         val RECEIVER_COMPARISON_CALLABLES: Set<String> =
             setOf("kotlin.collections.contentEquals", "kotlin.collections.contentDeepEquals")
