@@ -372,26 +372,33 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         val qualifiedCall = call.parent as? KtQualifiedExpression
         if (qualifiedCall?.selectorExpression == call) {
             if (qualifiedCall.receiverExpression.text == "kotlin") {
-                val receiver = call.receiverLambdaArgument() ?: return false
+                val receiverArguments = call.receiverLambdaArguments()
+                if (receiverArguments.size > 1) return true
+                val receiver = receiverArguments.singleOrNull() ?: return false
                 return !receiver.isCurrentReceiver(equalsFunction, receiverClass)
             }
             val receiver =
                 if (call.hasExtensionReceiver()) {
                     qualifiedCall.receiverExpression
                 } else {
-                    call.receiverLambdaArgument() ?: qualifiedCall.receiverExpression
+                    val receiverArguments = call.receiverLambdaArguments()
+                    if (receiverArguments.size > 1) return true
+                    receiverArguments.singleOrNull() ?: qualifiedCall.receiverExpression
                 }
             return !receiver.isCurrentReceiver(equalsFunction, receiverClass)
         }
-        val receiver = call.receiverLambdaArgument() ?: return false
+        val receiverArguments = call.receiverLambdaArguments()
+        if (receiverArguments.size > 1) return true
+        val receiver = receiverArguments.singleOrNull() ?: return false
         return !receiver.isCurrentReceiver(equalsFunction, receiverClass)
     }
 
-    private fun KtCallExpression.receiverLambdaArgument(): KtExpression? =
+    private fun KtCallExpression.receiverLambdaArguments(): List<KtExpression> =
         valueArguments
             .asSequence()
             .mapNotNull { it.getArgumentExpression() }
-            .firstOrNull { it !is KtLambdaExpression }
+            .filter { it !is KtLambdaExpression }
+            .toList()
 
     private fun KtCallExpression.hasExtensionReceiver(): Boolean =
         analyze(this) {

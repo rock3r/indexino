@@ -514,6 +514,37 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `ambiguous member receiver lambda arguments do not count as current receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class AmbiguousScope(val value: String) {
+                        private fun <T> scope(
+                            owner: AmbiguousScope,
+                            target: T,
+                            block: T.() -> Boolean,
+                        ): Boolean = target.block()
+
+                        override fun equals(other: Any?): Boolean =
+                            other is AmbiguousScope &&
+                                this.scope(this, other) { value == other.value }
+
+                        override fun hashCode(): Int = value.hashCode()
+
+                        override fun toString(): String = "AmbiguousScope(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `custom plain lambda preserves the class receiver`() {
         val findings =
             rule()
