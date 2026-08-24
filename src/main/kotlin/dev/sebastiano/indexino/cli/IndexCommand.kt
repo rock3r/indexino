@@ -41,6 +41,7 @@ internal class IndexCommand : CliktCommand(name = "index") {
     private val includeDeps by option("--include-deps").flag(default = false)
     private val noAutoRefresh by option("--no-auto-refresh").flag(default = false)
     private val applications by option("--applications").split(",").default(emptyList())
+    private val plugins by trustedPluginOption()
     private val progressFormat by option("--progress-format").default("text")
 
     @Suppress("CyclomaticComplexMethod")
@@ -57,6 +58,8 @@ internal class IndexCommand : CliktCommand(name = "index") {
                     )
             }
         val scope = daemonScope(project.toPath())
+        CliTrustedPlugins.registerFromCli(plugins)
+        CliTrustedPlugins.install()
         if (jsonlProgress) JsonlIndexBuildProgressReporter { echo(it) }.discoveryStarted()
         runBlocking {
             Indexino.connectBlockingForCli(
@@ -67,11 +70,12 @@ internal class IndexCommand : CliktCommand(name = "index") {
                 )
                 .use { indexino ->
                     val request =
-                        applications.filter(String::isNotBlank).fold(
-                            RefreshRequest.forScope(scope)
-                        ) { current, application ->
-                            current.withPlugin(PluginId.of(application))
-                        }
+                        (applications.filter(String::isNotBlank) +
+                                CliTrustedPlugins.registeredPluginIds().map(PluginId::value))
+                            .distinct()
+                            .fold(RefreshRequest.forScope(scope)) { current, application ->
+                                current.withPlugin(PluginId.of(application))
+                            }
                     val handle = indexino.refresh(request)
                     val awaiting = async { runCatching { handle.await() } }
                     val emittedText = mutableSetOf<String>()

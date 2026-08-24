@@ -334,6 +334,16 @@ val normalizedCliJar by
         normalizedTimestampMillis.set(normalizedCliJarTimestampMillis)
     }
 
+val normalizedExtensionWorkerJar by
+    tasks.registering(NormalizedJar::class) {
+        description =
+            "Build the metadata-normalized extension worker JAR packaged beside native installs"
+        inputJar.set(tasks.shadowJar.flatMap(ShadowJar::getArchiveFile))
+        archiveFileName.set("indexino-extension-worker.jar")
+        destinationDirectory.set(layout.buildDirectory.dir("native-distributions/application"))
+        normalizedTimestampMillis.set(normalizedCliJarTimestampMillis)
+    }
+
 val nativeDistributionPinsFile =
     layout.projectDirectory.file("gradle/native-distributions.properties")
 val nativeDistributionPins =
@@ -428,6 +438,10 @@ construo {
     packageFiles.put(
         "licenses/roast-LICENSE",
         layout.projectDirectory.file("third-party/roast/LICENSE"),
+    )
+    packageFiles.put(
+        "indexino-extension-worker.jar",
+        normalizedExtensionWorkerJar.flatMap(NormalizedJar::getArchiveFile),
     )
     jlink {
         modules.addAll("jdk.compiler", "jdk.unsupported", "jdk.crypto.ec")
@@ -684,7 +698,7 @@ val ideaHomeDir =
     }
 
 tasks.test {
-    dependsOn(":indexino-compose-decoration:jar")
+    dependsOn(":indexino-compose-decoration:jar", ":indexino-selection-context:jar")
     useJUnitPlatform {
         val excludedTags =
             mutableListOf(

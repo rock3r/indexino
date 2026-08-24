@@ -2999,7 +2999,7 @@ host.abi.major == plugin.targetAbi.major</code></pre>
               <tr><td class="conditional">Deferred</td><td>True zero-copy base-plus-delta worktree overlays</td><td>Desirable eventual representation, but overlay queries, tombstones, compaction, chain depth, migration, and cross-worktree GC are not required to guarantee zero analyzer work on a compatible fork.</td></tr>
               <tr><td class="conditional">Deferred</td><td>Provenance-aware dependency source links</td><td>Resolved artifacts may federate to explicitly configured local source repositories, but exact semantic results require recorded component/digest/revision evidence; tags and manual paths alone remain qualified hints.</td></tr>
               <tr><td class="conditional">Deferred</td><td>Java async adapter</td><td>Should be demand-driven and separately versioned rather than shape the Kotlin core.</td></tr>
-              <tr><td class="conditional">Deferred</td><td>Dynamic extensions in native distributions</td><td>Requires static bundling or a future out-of-process protocol; arbitrary JVM loading is not a native capability.</td></tr>
+              <tr><td class="yes">Accepted</td><td>Dynamic extensions in native distributions (protocol v1 tracer)</td><td>Out-of-process worker + mediated snapshot queries; static bundled plugins unchanged. See <code>docs/NATIVE-DYNAMIC-EXTENSIONS.md</code>.</td></tr>
             </tbody>
           </table>
         </div>

@@ -60,11 +60,15 @@ dynamic Kotlin script compiler host:
 | Basic index/query CLI | Yes | Yes | Yes |
 | Bundled compiled plugins | Yes | Only if bundled before shrinking | Only statically bundled |
 | `indexino script` / `.indexino.kts` | Yes (with script-host) | No — fails fast | No — fails fast |
-| Arbitrary external plugin JARs | Yes (explicit path) | No | No |
+| Arbitrary external plugin JARs | Yes (explicit path) | No | **Out-of-process worker** (protocol v1) |
+| Dynamic extension worker JAR | No | No | `indexino/indexino-extension-worker.jar` (JVM sidecar) |
 
 Use a JVM thin/fat distribution or depend on `indexino-script-host` from an embedded process when
-you need disposable scripts. Do not expect silent fallback or partial script execution inside native
-images; the CLI rejects the command with a clear classpath/host diagnostic instead.
+you need disposable scripts. Dynamic compiled checks on native distributions spawn a separate JVM
+worker over the versioned extension protocol documented in
+[NATIVE-DYNAMIC-EXTENSIONS.md](NATIVE-DYNAMIC-EXTENSIONS.md); the Roast/native process never loads
+arbitrary plugin bytecode. Do not expect silent fallback or partial script execution inside native
+images; the CLI rejects unsupported commands with a clear classpath/host diagnostic instead.
 
 ## External tools
 

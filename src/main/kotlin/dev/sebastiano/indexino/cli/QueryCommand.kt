@@ -36,10 +36,13 @@ internal class QueryCommand : CliktCommand(name = "query") {
         option("--project").file(mustExist = true, mustBeReadable = true).required()
     private val application by option("--application").required()
     private val preset by option("--preset").required()
+    private val plugins by trustedPluginOption()
     private val format by option("--format").default("jsonl")
     private val sessionId by option("--session-id")
 
     override fun run() {
+        CliTrustedPlugins.registerFromCli(plugins)
+        CliTrustedPlugins.install()
         runQuery(
             project = requireNotNull(project).toPath(),
             application = application,

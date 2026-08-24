@@ -133,6 +133,13 @@ tasks.named<Jar>("jar") {
             requireNotNull(properties.getProperty("current")) {
                 "Generated plugin ABI metadata has no current version"
             }
+        manifest.attributes["Indexino-Plugin-Id"] = "dev.sebastiano.compose-decoration"
+        manifest.attributes["Indexino-Plugin-Version"] = "1"
+        manifest.attributes["Indexino-Plugin-Fact-Schema-Version"] = "1"
+        manifest.attributes["Indexino-Plugin-Required-Basic-Fact-Schema"] = "1"
+        manifest.attributes["Indexino-Plugin-Display-Name"] = "Compose decoration"
+        manifest.attributes["Indexino-Plugin-Produced-Namespaces"] =
+            "dev.sebastiano.compose-decoration"
     }
 }
 
