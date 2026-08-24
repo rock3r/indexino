@@ -231,7 +231,10 @@ class NativeDistributionTest {
         val installation = extractArchive(requiredFile("indexino.nativeArchive"), target, "install")
         val launcher = installation.resolve(launcherRelativePath(target))
         assertTrue(Files.isRegularFile(launcher), "Missing launcher: $launcher")
-        assertFalse(Files.exists(installation.resolve(runtimeJavaRelativePath(target))))
+        assertTrue(
+            Files.isRegularFile(installation.resolve(runtimeJavaRelativePath(target))),
+            "Extension worker java launcher must be packaged",
+        )
         assertEquals(
             FileTime.fromMillis(NORMALIZED_JAR_MTIME_MILLIS),
             Files.getLastModifiedTime(installation.resolve("indexino-cli.jar")),
