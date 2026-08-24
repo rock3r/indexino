@@ -204,12 +204,9 @@ class IndexinoScriptHostHardeningTest {
         val script = workspace.resolve("spin.indexino.kts")
         script.writeText(
             """
+            var counter = 0L
             while (true) {
-                try {
-                    Thread.sleep(10_000L)
-                } catch (ignored: InterruptedException) {
-                    // Swallow interrupts so this evaluation is deliberately uncooperative.
-                }
+                counter += 1L
             }
             """
                 .trimIndent() + "\n"
