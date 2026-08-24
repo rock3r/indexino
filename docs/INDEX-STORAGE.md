@@ -46,6 +46,8 @@ worktree for product storage.
     staging/<refresh-id>/manifest
     current                            # atomic pointer
     refs/<runtime-or-snapshot-id>
+    source-links/registry.json           # dependency-to-source link registry snapshot
+    source-links/generations/<link-generation>/snapshot.json
     change-journal
     legacy-store/                      # S1 bridge; removed as one unit in S2
       index/<commit>/                  # mutable incremental writer

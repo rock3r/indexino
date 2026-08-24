@@ -40,6 +40,7 @@ internal data class WorkspaceGenerationManifest(
     val overlayPackKeys: List<String> = emptyList(),
     val tombstonePrefixes: List<String> = emptyList(),
     val overlayChainDepth: Int = 0,
+    val linkGeneration: String? = null,
 )
 
 /** Publishes immutable workspace generation manifests through a short current pointer. */

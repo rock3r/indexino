@@ -16,6 +16,17 @@ package dev.sebastiano.indexino.model {
     property public dev.sebastiano.indexino.model.ArgumentKind VALUE;
   }
 
+  public final class ArtifactDigest {
+    method @InaccessibleFromKotlin public String getValue();
+    method public static dev.sebastiano.indexino.model.ArtifactDigest of(String value);
+    property public String value;
+    field public static final dev.sebastiano.indexino.model.ArtifactDigest.Companion Companion;
+  }
+
+  public static final class ArtifactDigest.Companion {
+    method public dev.sebastiano.indexino.model.ArtifactDigest of(String value);
+  }
+
   public interface BasicFactQueries {
     method public suspend Object? findCalls(dev.sebastiano.indexino.model.CallQuery query, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.CallSite>>);
     method public suspend Object? findReferences(dev.sebastiano.indexino.model.ReferenceQuery query, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.Reference>>);
@@ -124,6 +135,23 @@ package dev.sebastiano.indexino.model {
     method public dev.sebastiano.indexino.model.CheckRequest of(dev.sebastiano.indexino.model.PluginId pluginId, String checkId);
   }
 
+  public final class DependencyToGenerationEdge {
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.ResolvedComponentIdentity getComponent();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceLinkEvidence getEvidence();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.LinkGenerationId getLinkGeneration();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.WorkspaceGenerationId getLinkedGeneration();
+    method public static dev.sebastiano.indexino.model.DependencyToGenerationEdge of(dev.sebastiano.indexino.model.ResolvedComponentIdentity component, dev.sebastiano.indexino.model.WorkspaceGenerationId linkedGeneration, dev.sebastiano.indexino.model.LinkGenerationId linkGeneration, dev.sebastiano.indexino.model.SourceLinkEvidence evidence);
+    property public dev.sebastiano.indexino.model.ResolvedComponentIdentity component;
+    property public dev.sebastiano.indexino.model.SourceLinkEvidence evidence;
+    property public dev.sebastiano.indexino.model.LinkGenerationId linkGeneration;
+    property public dev.sebastiano.indexino.model.WorkspaceGenerationId linkedGeneration;
+    field public static final dev.sebastiano.indexino.model.DependencyToGenerationEdge.Companion Companion;
+  }
+
+  public static final class DependencyToGenerationEdge.Companion {
+    method public dev.sebastiano.indexino.model.DependencyToGenerationEdge of(dev.sebastiano.indexino.model.ResolvedComponentIdentity component, dev.sebastiano.indexino.model.WorkspaceGenerationId linkedGeneration, dev.sebastiano.indexino.model.LinkGenerationId linkGeneration, dev.sebastiano.indexino.model.SourceLinkEvidence evidence);
+  }
+
   @kotlin.annotation.Retention(kotlin.annotation.AnnotationRetention.BINARY) @kotlin.annotation.Target(allowedTargets=kotlin.annotation.AnnotationTarget.PROPERTY) public @interface ExcludeFromEquality {
   }
 
@@ -193,6 +221,53 @@ package dev.sebastiano.indexino.model {
   }
 
   @kotlin.RequiresOptIn(level=kotlin.RequiresOptIn.Level.ERROR, message="Internal Indexino host API; not for application or plugin authors.") @kotlin.annotation.Retention(kotlin.annotation.AnnotationRetention.BINARY) @kotlin.annotation.Target(allowedTargets={kotlin.annotation.AnnotationTarget.CLASS, kotlin.annotation.AnnotationTarget.CONSTRUCTOR, kotlin.annotation.AnnotationTarget.FUNCTION, kotlin.annotation.AnnotationTarget.PROPERTY}) public @interface IndexinoInternalApi {
+  }
+
+  public final class LinkGenerationId {
+    method @InaccessibleFromKotlin public String getValue();
+    method public static dev.sebastiano.indexino.model.LinkGenerationId of(String value);
+    property public String value;
+    field public static final dev.sebastiano.indexino.model.LinkGenerationId.Companion Companion;
+  }
+
+  public static final class LinkGenerationId.Companion {
+    method public dev.sebastiano.indexino.model.LinkGenerationId of(String value);
+  }
+
+  public final class LinkedSourceQuery {
+    method public static dev.sebastiano.indexino.model.LinkedSourceQuery forComponentSymbol(String symbolName, dev.sebastiano.indexino.model.ResolvedComponentCoordinate componentCoordinate);
+    method public static dev.sebastiano.indexino.model.LinkedSourceQuery forSymbol(String symbolName);
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.ResolvedComponentCoordinate? getComponentCoordinate();
+    method @InaccessibleFromKotlin public String getSymbolName();
+    property public dev.sebastiano.indexino.model.ResolvedComponentCoordinate? componentCoordinate;
+    property public String symbolName;
+    field public static final dev.sebastiano.indexino.model.LinkedSourceQuery.Companion Companion;
+  }
+
+  public static final class LinkedSourceQuery.Companion {
+    method public dev.sebastiano.indexino.model.LinkedSourceQuery forComponentSymbol(String symbolName, dev.sebastiano.indexino.model.ResolvedComponentCoordinate componentCoordinate);
+    method public dev.sebastiano.indexino.model.LinkedSourceQuery forSymbol(String symbolName);
+  }
+
+  public final class LinkedSourceResult {
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.ResolvedComponentIdentity getComponent();
+    method @InaccessibleFromKotlin public java.util.List<dev.sebastiano.indexino.model.SourceLinkDiagnostic> getDiagnostics();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceLinkEvidence getEvidence();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceLocation getLocation();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceOriginRevision getSourceRevision();
+    method @InaccessibleFromKotlin public String getSymbolName();
+    method public static dev.sebastiano.indexino.model.LinkedSourceResult of(dev.sebastiano.indexino.model.ResolvedComponentIdentity component, dev.sebastiano.indexino.model.SourceOriginRevision sourceRevision, dev.sebastiano.indexino.model.SourceLinkEvidence evidence, java.util.List<dev.sebastiano.indexino.model.SourceLinkDiagnostic> diagnostics, dev.sebastiano.indexino.model.SourceLocation location, String symbolName);
+    property public dev.sebastiano.indexino.model.ResolvedComponentIdentity component;
+    property public java.util.List<dev.sebastiano.indexino.model.SourceLinkDiagnostic> diagnostics;
+    property public dev.sebastiano.indexino.model.SourceLinkEvidence evidence;
+    property public dev.sebastiano.indexino.model.SourceLocation location;
+    property public dev.sebastiano.indexino.model.SourceOriginRevision sourceRevision;
+    property public String symbolName;
+    field public static final dev.sebastiano.indexino.model.LinkedSourceResult.Companion Companion;
+  }
+
+  public static final class LinkedSourceResult.Companion {
+    method public dev.sebastiano.indexino.model.LinkedSourceResult of(dev.sebastiano.indexino.model.ResolvedComponentIdentity component, dev.sebastiano.indexino.model.SourceOriginRevision sourceRevision, dev.sebastiano.indexino.model.SourceLinkEvidence evidence, java.util.List<dev.sebastiano.indexino.model.SourceLinkDiagnostic> diagnostics, dev.sebastiano.indexino.model.SourceLocation location, String symbolName);
   }
 
   public enum NameMatchMode {
@@ -394,6 +469,34 @@ package dev.sebastiano.indexino.model {
     property public dev.sebastiano.indexino.model.ResolutionConfidence UNRESOLVED;
   }
 
+  public final class ResolvedComponentCoordinate {
+    method @InaccessibleFromKotlin public String getValue();
+    method public static dev.sebastiano.indexino.model.ResolvedComponentCoordinate of(String value);
+    property public String value;
+    field public static final dev.sebastiano.indexino.model.ResolvedComponentCoordinate.Companion Companion;
+  }
+
+  public static final class ResolvedComponentCoordinate.Companion {
+    method public dev.sebastiano.indexino.model.ResolvedComponentCoordinate of(String value);
+  }
+
+  public final class ResolvedComponentIdentity {
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.ArtifactDigest getArtifactDigest();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.ResolvedComponentCoordinate getCoordinate();
+    method @InaccessibleFromKotlin public String? getSubstitution();
+    method @InaccessibleFromKotlin public String? getVariant();
+    method public static dev.sebastiano.indexino.model.ResolvedComponentIdentity of(dev.sebastiano.indexino.model.ResolvedComponentCoordinate coordinate, dev.sebastiano.indexino.model.ArtifactDigest artifactDigest, String? variant, String? substitution);
+    property public dev.sebastiano.indexino.model.ArtifactDigest artifactDigest;
+    property public dev.sebastiano.indexino.model.ResolvedComponentCoordinate coordinate;
+    property public String? substitution;
+    property public String? variant;
+    field public static final dev.sebastiano.indexino.model.ResolvedComponentIdentity.Companion Companion;
+  }
+
+  public static final class ResolvedComponentIdentity.Companion {
+    method public dev.sebastiano.indexino.model.ResolvedComponentIdentity of(dev.sebastiano.indexino.model.ResolvedComponentCoordinate coordinate, dev.sebastiano.indexino.model.ArtifactDigest artifactDigest, String? variant, String? substitution);
+  }
+
   public final class ResourceDefinition {
     ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public ResourceDefinition(dev.sebastiano.indexino.model.ResourceId id, String qualifiers, dev.sebastiano.indexino.model.SourceLocation location);
     method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.ResourceId getId();
@@ -463,6 +566,106 @@ package dev.sebastiano.indexino.model {
 
   public static final class SourceFile.Companion {
     method public dev.sebastiano.indexino.model.SourceFile of(dev.sebastiano.indexino.model.SourceOriginId originId, String path, String displayPath);
+  }
+
+  public final class SourceLinkCheckout {
+    method @InaccessibleFromKotlin public String getCheckoutPath();
+    method @InaccessibleFromKotlin public boolean getDirty();
+    method @InaccessibleFromKotlin public String getRepositoryIdentity();
+    method @InaccessibleFromKotlin public String? getRevision();
+    method @InaccessibleFromKotlin public java.util.List<java.lang.String> getSourceRoots();
+    method @InaccessibleFromKotlin public java.util.Map<java.lang.String,java.lang.String> getSubmoduleRevisions();
+    method @InaccessibleFromKotlin public String? getTag();
+    method public static dev.sebastiano.indexino.model.SourceLinkCheckout of(String repositoryIdentity, String checkoutPath, String? revision, String? tag, boolean dirty, java.util.Map<java.lang.String,java.lang.String> submoduleRevisions, java.util.List<java.lang.String> sourceRoots);
+    property public String checkoutPath;
+    property public boolean dirty;
+    property public String repositoryIdentity;
+    property public String? revision;
+    property public java.util.List<java.lang.String> sourceRoots;
+    property public java.util.Map<java.lang.String,java.lang.String> submoduleRevisions;
+    property public String? tag;
+    field public static final dev.sebastiano.indexino.model.SourceLinkCheckout.Companion Companion;
+  }
+
+  public static final class SourceLinkCheckout.Companion {
+    method public dev.sebastiano.indexino.model.SourceLinkCheckout of(String repositoryIdentity, String checkoutPath, String? revision, String? tag, boolean dirty, java.util.Map<java.lang.String,java.lang.String> submoduleRevisions, java.util.List<java.lang.String> sourceRoots);
+  }
+
+  public final class SourceLinkDiagnostic {
+    method @InaccessibleFromKotlin public String getCode();
+    method @InaccessibleFromKotlin public String getMessage();
+    method public static dev.sebastiano.indexino.model.SourceLinkDiagnostic of(String code, String message);
+    property public String code;
+    property public String message;
+    field public static final dev.sebastiano.indexino.model.SourceLinkDiagnostic.Companion Companion;
+  }
+
+  public static final class SourceLinkDiagnostic.Companion {
+    method public dev.sebastiano.indexino.model.SourceLinkDiagnostic of(String code, String message);
+  }
+
+  public final class SourceLinkEvidence {
+    method public boolean allowsExactCrossRepositorySemantics();
+    method public boolean allowsQualifiedIndexedQueries();
+    method @InaccessibleFromKotlin public String getValue();
+    method public boolean isNavigationHintOnly();
+    property public String value;
+    field public static final dev.sebastiano.indexino.model.SourceLinkEvidence.Companion Companion;
+    field public static final dev.sebastiano.indexino.model.SourceLinkEvidence DECLARED;
+    field public static final dev.sebastiano.indexino.model.SourceLinkEvidence MISMATCH;
+    field public static final dev.sebastiano.indexino.model.SourceLinkEvidence RECONSTRUCTED;
+    field public static final dev.sebastiano.indexino.model.SourceLinkEvidence VERIFIED;
+  }
+
+  public static final class SourceLinkEvidence.Companion {
+    property public dev.sebastiano.indexino.model.SourceLinkEvidence DECLARED;
+    property public dev.sebastiano.indexino.model.SourceLinkEvidence MISMATCH;
+    property public dev.sebastiano.indexino.model.SourceLinkEvidence RECONSTRUCTED;
+    property public dev.sebastiano.indexino.model.SourceLinkEvidence VERIFIED;
+  }
+
+  public final class SourceLinkMappingRule {
+    method @InaccessibleFromKotlin public String getBinaryPrefix();
+    method @InaccessibleFromKotlin public String getKind();
+    method @InaccessibleFromKotlin public String getSourceRoot();
+    method public static dev.sebastiano.indexino.model.SourceLinkMappingRule packagePrefix(String binaryPrefix, String sourceRoot);
+    property public String binaryPrefix;
+    property public String kind;
+    property public String sourceRoot;
+    field public static final dev.sebastiano.indexino.model.SourceLinkMappingRule.Companion Companion;
+  }
+
+  public static final class SourceLinkMappingRule.Companion {
+    method public dev.sebastiano.indexino.model.SourceLinkMappingRule packagePrefix(String binaryPrefix, String sourceRoot);
+  }
+
+  public interface SourceLinkQueries {
+    method public suspend Object? findLinkedSources(dev.sebastiano.indexino.model.LinkedSourceQuery query, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.LinkedSourceResult>>);
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.LinkGenerationId? getLinkGeneration();
+    property public abstract dev.sebastiano.indexino.model.LinkGenerationId? linkGeneration;
+  }
+
+  public final class SourceLinkRegistration {
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceLinkCheckout getCheckout();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.ResolvedComponentIdentity getComponent();
+    method @InaccessibleFromKotlin public java.util.List<dev.sebastiano.indexino.model.SourceLinkDiagnostic> getDiagnostics();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceLinkEvidence getEvidence();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.WorkspaceGenerationId getLinkedGeneration();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceLinkMappingRule getMappingRule();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceOriginId getSourceOriginId();
+    method public static dev.sebastiano.indexino.model.SourceLinkRegistration of(dev.sebastiano.indexino.model.ResolvedComponentIdentity component, dev.sebastiano.indexino.model.SourceLinkCheckout checkout, dev.sebastiano.indexino.model.SourceOriginId sourceOriginId, dev.sebastiano.indexino.model.WorkspaceGenerationId linkedGeneration, dev.sebastiano.indexino.model.SourceLinkMappingRule mappingRule, dev.sebastiano.indexino.model.SourceLinkEvidence evidence, java.util.List<dev.sebastiano.indexino.model.SourceLinkDiagnostic> diagnostics);
+    property public dev.sebastiano.indexino.model.SourceLinkCheckout checkout;
+    property public dev.sebastiano.indexino.model.ResolvedComponentIdentity component;
+    property public java.util.List<dev.sebastiano.indexino.model.SourceLinkDiagnostic> diagnostics;
+    property public dev.sebastiano.indexino.model.SourceLinkEvidence evidence;
+    property public dev.sebastiano.indexino.model.WorkspaceGenerationId linkedGeneration;
+    property public dev.sebastiano.indexino.model.SourceLinkMappingRule mappingRule;
+    property public dev.sebastiano.indexino.model.SourceOriginId sourceOriginId;
+    field public static final dev.sebastiano.indexino.model.SourceLinkRegistration.Companion Companion;
+  }
+
+  public static final class SourceLinkRegistration.Companion {
+    method public dev.sebastiano.indexino.model.SourceLinkRegistration of(dev.sebastiano.indexino.model.ResolvedComponentIdentity component, dev.sebastiano.indexino.model.SourceLinkCheckout checkout, dev.sebastiano.indexino.model.SourceOriginId sourceOriginId, dev.sebastiano.indexino.model.WorkspaceGenerationId linkedGeneration, dev.sebastiano.indexino.model.SourceLinkMappingRule mappingRule, dev.sebastiano.indexino.model.SourceLinkEvidence evidence, java.util.List<dev.sebastiano.indexino.model.SourceLinkDiagnostic> diagnostics);
   }
 
   public final class SourceLocation {

@@ -52,9 +52,10 @@ package dev.sebastiano.indexino.api {
     method public dev.sebastiano.indexino.api.IndexScope gradle(String module);
   }
 
-  public final class IndexSnapshot implements java.lang.AutoCloseable dev.sebastiano.indexino.model.BasicFactQueries {
+  public final class IndexSnapshot implements java.lang.AutoCloseable dev.sebastiano.indexino.model.BasicFactQueries dev.sebastiano.indexino.model.SourceLinkQueries {
     method public void close();
     method public suspend Object? findCalls(dev.sebastiano.indexino.model.CallQuery query, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.CallSite>>);
+    method public suspend Object? findLinkedSources(dev.sebastiano.indexino.model.LinkedSourceQuery query, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.LinkedSourceResult>>);
     method public suspend Object? findReferences(dev.sebastiano.indexino.model.ReferenceQuery query, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.Reference>>);
     method public suspend Object? findResourceUsages(dev.sebastiano.indexino.model.ResourceQuery query, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.ResourceUsage>>);
     method public suspend Object? findResources(dev.sebastiano.indexino.model.ResourceQuery query, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.ResourceDefinition>>);
@@ -62,11 +63,13 @@ package dev.sebastiano.indexino.api {
     method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.BasicFactSchemaVersion getBasicFactSchemaVersion();
     method @InaccessibleFromKotlin public dev.sebastiano.indexino.api.SnapshotFreshness getFreshnessAtAcquisition();
     method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.WorkspaceGenerationId getGeneration();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.LinkGenerationId? getLinkGeneration();
     method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.WorkspaceRevision getRevision();
     method public suspend Object? runCheck(dev.sebastiano.indexino.model.CheckRequest request, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.Finding>>);
     property public dev.sebastiano.indexino.model.BasicFactSchemaVersion basicFactSchemaVersion;
     property public dev.sebastiano.indexino.api.SnapshotFreshness freshnessAtAcquisition;
     property public dev.sebastiano.indexino.model.WorkspaceGenerationId generation;
+    property public dev.sebastiano.indexino.model.LinkGenerationId? linkGeneration;
     property public dev.sebastiano.indexino.model.WorkspaceRevision revision;
   }
 

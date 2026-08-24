@@ -19,6 +19,7 @@ import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.IndexManifest
 import dev.sebastiano.indexino.core.manifest.workspaceRevisionFingerprint
 import dev.sebastiano.indexino.core.path.IndexPathResolver
+import dev.sebastiano.indexino.core.sourcelink.LinkIndexService
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.engine.InFlightRefresh
 import dev.sebastiano.indexino.engine.IndexingCoordinator
@@ -31,6 +32,7 @@ import dev.sebastiano.indexino.engine.RuntimeRefreshHandle
 import dev.sebastiano.indexino.engine.RuntimeSnapshotClient
 import dev.sebastiano.indexino.model.IndexFailureCategory
 import dev.sebastiano.indexino.model.IndexinoInternalApi
+import dev.sebastiano.indexino.model.LinkGenerationId
 import dev.sebastiano.indexino.model.RefreshId
 import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.SourceOriginRevision
@@ -377,6 +379,8 @@ private constructor(
         overlayDeltaPath: Path? = null,
         tombstonePrefixes: List<String> = emptyList(),
     ) {
+        val cacheRoot = InProcessCacheLayout.cacheRoot()
+        val linkGeneration = LinkIndexService(cacheRoot, workspace).publishFromConfig()?.value
         val publishedStore =
             publishGenerationStore(
                 commit,
@@ -388,6 +392,7 @@ private constructor(
                 forkBase,
                 overlayDeltaPath,
                 tombstonePrefixes,
+                linkGeneration,
             )
         afterPublishGenerationStoreForTests?.invoke()
         synchronized(generationLock) {
@@ -486,6 +491,15 @@ private constructor(
                         SnapshotFreshness.UNKNOWN
                     },
                 onClose = { releaseGeneration(generation.generation) },
+                consumerWorkspace = workspace,
+                linkGeneration =
+                    WorkspaceGenerationManifestStore(
+                            InProcessCacheLayout.cacheRoot(),
+                            InProcessCacheLayout.workspaceId(workspace),
+                        )
+                        .readGeneration(generation.generation.value)
+                        ?.linkGeneration
+                        ?.let(LinkGenerationId::of),
             )
         } catch (thrown: IndexinoException) {
             closeStoreAndReleaseGeneration(openedStore, generation.generation, thrown)
@@ -655,6 +669,7 @@ private constructor(
         forkBase: WorktreeForkBase? = null,
         overlayDeltaPath: Path? = null,
         tombstonePrefixes: List<String> = emptyList(),
+        linkGeneration: String? = null,
     ): PublishedStore {
         val cacheRoot = InProcessCacheLayout.cacheRoot()
         val workspaceId = InProcessCacheLayout.workspaceId(workspace)
@@ -683,6 +698,7 @@ private constructor(
                 forkBase = forkBase,
                 overlayDeltaPath = overlayDeltaPath,
                 tombstonePrefixes = tombstonePrefixes,
+                linkGeneration = linkGeneration,
             )
         }
 
@@ -697,6 +713,7 @@ private constructor(
             applications = applications,
             compatibilityManifest = compatibilityManifest,
             legacyOrigin = legacyOrigin,
+            linkGeneration = linkGeneration,
         )
     }
 
@@ -713,6 +730,7 @@ private constructor(
         forkBase: WorktreeForkBase,
         overlayDeltaPath: Path?,
         tombstonePrefixes: List<String>,
+        linkGeneration: String? = null,
     ): PublishedStore {
         val overlayPackKeys =
             overlayDeltaPath
@@ -739,6 +757,7 @@ private constructor(
                     overlayPackKeys = overlayPackKeys,
                     tombstonePrefixes = tombstonePrefixes,
                     overlayChainDepth = forkBase.overlayChainDepth,
+                    linkGeneration = linkGeneration,
                 )
             )
         if (overlayPackKeys.isNotEmpty()) {
@@ -765,6 +784,7 @@ private constructor(
         applications: List<String>,
         compatibilityManifest: IndexManifest,
         legacyOrigin: SourceOriginRevision,
+        linkGeneration: String? = null,
     ): PublishedStore {
         val source =
             IndexPathResolver(workspace, storeRootOverride = storeRoot).resolveBaseStore(commit)
@@ -781,6 +801,7 @@ private constructor(
                     legacyOrigin = legacyOrigin,
                     packKeys = listOf(packKey),
                     representation = WorktreeOverlayPolicy.REPRESENTATION_MATERIALIZED,
+                    linkGeneration = linkGeneration,
                 )
             )
         val sharedDestination =
@@ -810,6 +831,7 @@ private constructor(
         overlayPackKeys: List<String> = emptyList(),
         tombstonePrefixes: List<String> = emptyList(),
         overlayChainDepth: Int = 0,
+        linkGeneration: String? = null,
     ): WorkspaceGenerationManifest =
         WorkspaceGenerationManifest(
             basicFactSchemaVersion = BASIC_FACT_SCHEMA_VERSION,
@@ -839,6 +861,7 @@ private constructor(
             overlayPackKeys = overlayPackKeys,
             tombstonePrefixes = tombstonePrefixes,
             overlayChainDepth = overlayChainDepth,
+            linkGeneration = linkGeneration,
         )
 
     private fun openPublishedStore(generation: WorkspaceGenerationId): CodeIndexStore {
