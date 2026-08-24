@@ -1385,6 +1385,52 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `returned inequality is not positive structural equality`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class ReturnedInequality(val value: String) {
+                        override fun equals(other: Any?): Boolean =
+                            other is ReturnedInequality && value != other.value
+                        override fun hashCode(): Int = value.hashCode()
+                        override fun toString(): String = "ReturnedInequality(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
+    fun `inequality early false guard is positive structural equality`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class GuardedInequality(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is GuardedInequality) return false
+                            if (value != other.value) return false
+                            return true
+                        }
+                        override fun hashCode(): Int = value.hashCode()
+                        override fun toString(): String = "GuardedInequality(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `lambda label matching class name does not count as class receiver`() {
         val findings =
             rule()

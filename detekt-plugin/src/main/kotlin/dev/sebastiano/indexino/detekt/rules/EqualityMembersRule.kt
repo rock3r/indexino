@@ -33,6 +33,7 @@ import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.psi.KtForExpression
 import org.jetbrains.kotlin.psi.KtFunction
 import org.jetbrains.kotlin.psi.KtFunctionLiteral
+import org.jetbrains.kotlin.psi.KtIfExpression
 import org.jetbrains.kotlin.psi.KtLabeledExpression
 import org.jetbrains.kotlin.psi.KtLambdaExpression
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
@@ -154,11 +155,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         val binaryComparedProperties =
             body
                 ?.let { PsiTreeUtil.collectElementsOfType(it, KtBinaryExpression::class.java) }
-                ?.filter {
-                    it.operationToken == KtTokens.EQEQ ||
-                        it.operationToken == KtTokens.EXCLEQ ||
-                        it.isStructuralInfixComparison()
-                }
+                ?.filter { it.isPositiveEqualityComparison() || it.isStructuralInfixComparison() }
                 ?.flatMap { expression ->
                     properties.filter { property ->
                         expression.comparesReceiverAndOtherProperty(
@@ -251,7 +248,23 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
             (symbol.allOverriddenSymbols + symbol)
                 .mapNotNull { it.callableId?.asSingleFqName()?.asString() }
                 .any { it in RECEIVER_COMPARISON_CALLABLES }
+        } && !isNegated()
+
+    private fun KtBinaryExpression.isPositiveEqualityComparison(): Boolean =
+        when (operationToken) {
+            KtTokens.EQEQ -> !isNegated()
+            KtTokens.EXCLEQ -> isNegated() || isEarlyFalseGuard()
+            else -> false
         }
+
+    private fun KtBinaryExpression.isEarlyFalseGuard(): Boolean {
+        val guard =
+            generateSequence(parent) { it.parent }
+                .filterIsInstance<KtIfExpression>()
+                .firstOrNull { PsiTreeUtil.isAncestor(it.condition, this, false) } ?: return false
+        val rejectingBranch = guard.then?.text?.filterNot(Char::isWhitespace) ?: return false
+        return rejectingBranch == "returnfalse" || rejectingBranch == "{returnfalse}"
+    }
 
     private fun KtCallExpression.structuralCallKind(): StructuralCallKind? =
         analyze(this) {
