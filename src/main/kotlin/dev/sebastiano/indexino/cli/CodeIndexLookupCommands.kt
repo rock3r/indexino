@@ -9,7 +9,9 @@ import com.github.ajalt.clikt.parameters.options.required
 import com.github.ajalt.clikt.parameters.types.file
 import dev.sebastiano.indexino.api.Indexino
 import dev.sebastiano.indexino.api.IndexinoException
+import dev.sebastiano.indexino.core.BASIC_FACT_SCHEMA_VERSION
 import dev.sebastiano.indexino.core.git.GitHeadResolver
+import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.core.record.CodeIndexRecord
 import dev.sebastiano.indexino.core.record.CodeIndexRecordCodec
@@ -87,7 +89,12 @@ internal class FindSymbolCommand : CliktCommand(name = "find-symbol") {
                     (language == null || symbol.language == language)
             }
             .sortedWith(
-                compareBy(SymbolRecord::fqn, SymbolRecord::relativeFile, SymbolRecord::line)
+                compareBy(
+                    SymbolRecord::fqn,
+                    SymbolRecord::relativeFile,
+                    SymbolRecord::line,
+                    SymbolRecord::column,
+                )
             )
             .toList()
 }
@@ -212,7 +219,12 @@ internal class ResolveResourceCommand : CliktCommand(name = "resolve-resource") 
             .filterIsInstance<SymbolRecord>()
             .filter { it.fqn == "res:$type:$name" }
             .sortedWith(
-                compareBy(SymbolRecord::relativeFile, SymbolRecord::line, SymbolRecord::fqn)
+                compareBy(
+                    SymbolRecord::relativeFile,
+                    SymbolRecord::line,
+                    SymbolRecord::column,
+                    SymbolRecord::fqn,
+                )
             )
             .toList()
 }
@@ -222,6 +234,7 @@ private fun symbolRecord(symbol: dev.sebastiano.indexino.model.Symbol): SymbolRe
         fqn = symbol.aliases.lastOrNull() ?: symbol.id.value,
         relativeFile = symbol.location.file.path,
         line = symbol.location.line,
+        column = symbol.location.column ?: 1,
         kind = symbol.kind,
         name = symbol.name,
         language = symbol.language,
@@ -255,8 +268,15 @@ private fun referenceRecord(
 private fun <T> withStore(project: Path, sessionId: String?, block: (CodeIndexStore) -> T): T {
     val commit = GitHeadResolver.resolve(project)
     val resolver = IndexPathResolver(project)
-    if (!resolver.resolveManifest(commit).exists()) {
+    val manifestPath = resolver.resolveManifest(commit)
+    if (!manifestPath.exists()) {
         throw IndexNotFoundException(commit)
+    }
+    val manifest = ManifestIO.read(manifestPath)
+    check(manifest.basicFactSchemaVersion == BASIC_FACT_SCHEMA_VERSION) {
+        "Index for commit $commit has incompatible basic fact schema " +
+            "${manifest.basicFactSchemaVersion}; run 'index' to rebuild it with schema " +
+            BASIC_FACT_SCHEMA_VERSION
     }
     val store = IndexStoreOpener.openForQuery(project, commit, sessionId)
     return try {

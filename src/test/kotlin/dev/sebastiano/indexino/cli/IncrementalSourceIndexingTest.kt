@@ -200,6 +200,36 @@ class IncrementalSourceIndexingTest {
         }
     }
 
+    @Test
+    fun `basic fact schema change forces all source producers to rebuild`() {
+        val workspace = createWorkspace()
+        val request = TopologyRequest(buildSystem = BuildSystem.GRADLE, gradleModule = ":app")
+        val command = IndexCommand()
+        assertEquals(0, command.runIndexedBuild(workspace, request, emptyList()))
+        val commit = runGit(workspace, "rev-parse", "HEAD").trim()
+        val manifestPath = IndexPathResolver(workspace).resolveManifest(commit)
+        val currentManifest = Files.readString(manifestPath)
+        val oldSchemaManifest =
+            if ("\"basicFactSchemaVersion\"" in currentManifest) {
+                currentManifest.replace(
+                    Regex("\"basicFactSchemaVersion\":\\d+"),
+                    "\"basicFactSchemaVersion\":1",
+                )
+            } else {
+                currentManifest.dropLast(1) + ",\"basicFactSchemaVersion\":1}"
+            }
+        Files.writeString(manifestPath, oldSchemaManifest)
+
+        val progress = mutableListOf<String>()
+        assertEquals(
+            0,
+            command.runIndexedBuild(workspace, request, emptyList(), progress = progress::add),
+        )
+
+        assertTrue(progress.any { it.endsWith("Changed.java") }, progress.toString())
+        assertTrue(progress.any { it.endsWith("Untouched.java") }, progress.toString())
+    }
+
     private fun createWorkspace(): java.nio.file.Path {
         val workspace = createTempDirectory("incremental-index-")
         tempDirs.add(workspace)

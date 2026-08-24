@@ -230,7 +230,8 @@ storage does not use project-local session paths; do not extend this layout.
 ### `find-symbol`
 
 Find definitions by exact short name, language-neutral ID, or alias. Results are deterministic
-JSONL rows and retain language, owner, signature, arity, and source location.
+JSONL rows and retain language, owner, signature, arity, and source location. Declaration locations
+include 1-based lines and columns for Kotlin, Java, and XML symbols.
 
 ```bash
 indexino find-symbol --project /path/to/repo --name Panel
@@ -274,7 +275,8 @@ The protocol version is the same `version: 1` stream used by `index` progress.
 Lookups collect and sort every match before emitting any `lookup_match` event. This is deliberate:
 it guarantees that event records and final stdout rows have exactly the same stable order, rather
 than exposing unordered store-scan hits as live results. This preserves the command-specific final
-ordering: `find-symbol` sorts by FQN, then workspace-relative file and line; `find-references` and
+ordering: `find-symbol` sorts by FQN, then workspace-relative file, line, and column;
+`find-references` and
 `resolve-resource` sort by workspace-relative file and line, with reference column as the next key.
 Consumers receive `lookup_started` while the scan is running, then sorted match events after the
 collection completes. A zero-match lookup emits `lookup_started` followed by `lookup_completed`

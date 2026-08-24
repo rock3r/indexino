@@ -90,6 +90,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                     relativeFile = indexedFile.relativePath,
                     originId = indexedFile.originId,
                     line = symbol.line,
+                    column = symbol.column,
                     kind = symbol.kind,
                     name = symbol.name,
                     language = LANGUAGE,

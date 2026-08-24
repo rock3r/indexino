@@ -5,6 +5,7 @@ package dev.sebastiano.indexino.api
 import dev.sebastiano.indexino.cli.CliExitCodes
 import dev.sebastiano.indexino.cli.IndexBuildExecution
 import dev.sebastiano.indexino.cli.IndexBuildRunner
+import dev.sebastiano.indexino.core.BASIC_FACT_SCHEMA_VERSION
 import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifest
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
@@ -45,8 +46,6 @@ import java.util.UUID
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.atomic.AtomicBoolean
-
-private const val BASIC_FACT_SCHEMA_VERSION = 2
 
 @Suppress("LargeClass", "TooManyFunctions")
 public class Indexino

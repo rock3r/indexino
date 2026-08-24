@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.producer.xml
 
+import dev.sebastiano.indexino.core.record.CodeIndexRecordCodec
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
@@ -16,6 +17,240 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class XmlResourceProducerTest {
+    @Test
+    fun `preserves one based declaration columns for XML symbols`() {
+        val values =
+            """
+            <resources>
+                <!-- <fake> -->
+                <![CDATA[<also-fake>]]>
+                <string
+                    name="title">Title</string>
+            </resources>
+            """
+                .trimIndent()
+        val layout =
+            """
+            <LinearLayout
+                xmlns:android="http://schemas.android.com/apk/res/android"
+                xmlns:tools="http://schemas.android.com/tools">
+                <TextView
+                    note=" android:id='decoy' "
+                    android:id="@+id/title"
+                    tools:id="
+                        @+id/preview_title" />
+            </LinearLayout>
+            """
+                .trimIndent()
+
+        withStore { store ->
+            checkNotNull(ProducerRegistry.get("xml-resources"))
+                .produce(
+                    IndexBuildContext.forInlineSources(
+                        store = store,
+                        commitHash = "columns",
+                        sourceFiles =
+                            mapOf(
+                                "src/main/res/values/strings.xml" to values,
+                                "src/main/res/layout/main.xml" to layout,
+                            ),
+                    )
+                )
+
+            val encodedSymbols =
+                store
+                    .prefixScan("res:")
+                    .map { CodeIndexRecordCodec.encode(it.second).decodeToString() }
+                    .toList()
+            assertTrue(encodedSymbols.any { "\"name\":\"main\"" in it && "\"column\":1" in it })
+            assertTrue(
+                encodedSymbols.any {
+                    "\"name\":\"title\"" in it && "\"line\":4" in it && "\"column\":5" in it
+                }
+            )
+            assertTrue(
+                encodedSymbols.any {
+                    "\"name\":\"title\"" in it && "\"line\":6" in it && "\"column\":21" in it
+                }
+            )
+            assertTrue(
+                encodedSymbols.any {
+                    "\"name\":\"preview_title\"" in it &&
+                        "\"line\":8" in it &&
+                        "\"column\":13" in it
+                }
+            )
+        }
+    }
+
+    @Test
+    fun `preserves raw XML reference positions across text and entities`() {
+        val values =
+            """
+            <resources>
+                <string name="plain">@string/title</string>
+                <string name="cdata"><![CDATA[@string/title]]></string>
+                <string name="comment"><!-- @string/title -->@string/title</string>
+                <string name="entity-text">@string/foo&#95;bar</string>
+                <string name="literal"><![CDATA[@string/foo&#95;bar]]></string>
+            </resources>
+            """
+                .trimIndent()
+        val layout =
+            """
+            <TextView
+                note="&#10;@string/title"
+                android:text="@string/foo&#95;bar"
+                xmlns:android="http://schemas.android.com/apk/res/android" />
+            """
+                .trimIndent()
+        val crlfLayout =
+            "<TextView xmlns:android=\"http://schemas.android.com/apk/res/android\" android:text=\"\r\n @string/title\" />"
+        val crLayout =
+            "<TextView xmlns:android=\"http://schemas.android.com/apk/res/android\"\r android:text=\"@string/title\" />"
+
+        withStore { store ->
+            assertNotNull(ProducerRegistry.get("xml-resources"))
+                .produce(
+                    IndexBuildContext.forInlineSources(
+                        store = store,
+                        commitHash = "raw-reference-columns",
+                        sourceFiles =
+                            mapOf(
+                                "src/main/res/values/strings.xml" to values,
+                                "src/main/res/layout/main.xml" to layout,
+                                "src/main/res/layout/crlf.xml" to crlfLayout,
+                                "src/main/res/layout/cr.xml" to crLayout,
+                            ),
+                    )
+                )
+
+            val references =
+                store
+                    .prefixScan("ref:res:string:")
+                    .map { it.second }
+                    .filterIsInstance<ReferenceRecord>()
+                    .toList()
+            assertReference(references, "res:string:title", "strings.xml", 2, 26)
+            assertReference(references, "res:string:title", "strings.xml", 3, 35)
+            assertReference(references, "res:string:title", "strings.xml", 4, 50)
+            assertReference(references, "res:string:foo_bar", "strings.xml", 5, 32)
+            assertReference(references, "res:string:foo", "strings.xml", 6, 37)
+            assertReference(references, "res:string:title", "main.xml", 2, 16)
+            assertReference(references, "res:string:foo_bar", "main.xml", 3, 19)
+            assertReference(references, "res:string:title", "crlf.xml", 2, 2)
+            assertReference(references, "res:string:title", "cr.xml", 2, 16)
+        }
+    }
+
+    @Test
+    fun `keeps same line duplicate XML declarations distinct`() {
+        val layout =
+            """<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"><View android:id="@+id/item"/><View android:id="@+id/item"/></LinearLayout>"""
+
+        withStore { store ->
+            assertNotNull(ProducerRegistry.get("xml-resources"))
+                .produce(
+                    IndexBuildContext.forInlineSources(
+                        store = store,
+                        commitHash = "same-line-columns",
+                        sourceFiles = mapOf("src/main/res/layout/main.xml" to layout),
+                    )
+                )
+
+            val declarations =
+                store
+                    .prefixScan("res:id:item")
+                    .map { it.second }
+                    .filterIsInstance<SymbolRecord>()
+                    .toList()
+            assertEquals(listOf(92, 122), declarations.map { it.column }.sorted())
+        }
+    }
+
+    @Test
+    fun `skips complete internal DTD subsets when locating declarations`() {
+        val values =
+            """
+            <!DOCTYPE resources [<!-- [ --><?pi [?><!ENTITY unused '<fake><bar>'>]>
+            <resources>
+                <string name="title">Title</string>
+            </resources>
+            """
+                .trimIndent()
+
+        withStore { store ->
+            assertNotNull(ProducerRegistry.get("xml-resources"))
+                .produce(
+                    IndexBuildContext.forInlineSources(
+                        store = store,
+                        commitHash = "internal-dtd-columns",
+                        sourceFiles = mapOf("src/main/res/values/strings.xml" to values),
+                    )
+                )
+
+            val title =
+                store
+                    .prefixScan("res:string:title")
+                    .map { it.second }
+                    .filterIsInstance<SymbolRecord>()
+                    .single()
+            assertEquals(3, title.line)
+            assertEquals(5, title.column)
+        }
+    }
+
+    @Test
+    fun `counts XML 1_1 line separators in declaration locations`() {
+        val values =
+            "<?xml version=\"1.1\"?>\r\u0085<resources>\u2028<string\u0085name=\"title\">Title</string></resources>"
+
+        withStore { store ->
+            assertNotNull(ProducerRegistry.get("xml-resources"))
+                .produce(
+                    IndexBuildContext.forInlineSources(
+                        store = store,
+                        commitHash = "xml-1-1-columns",
+                        sourceFiles = mapOf("src/main/res/values/strings.xml" to values),
+                    )
+                )
+
+            val title =
+                store
+                    .prefixScan("res:string:title")
+                    .map { it.second }
+                    .filterIsInstance<SymbolRecord>()
+                    .single()
+            assertEquals(3, title.line)
+            assertEquals(1, title.column)
+        }
+    }
+
+    @Test
+    fun `keeps XML 1_1-only separators on the same line in XML 1_0`() {
+        val values = "<resources>\u0085<string name=\"title\">Title</string>\u2028</resources>"
+
+        withStore { store ->
+            assertNotNull(ProducerRegistry.get("xml-resources"))
+                .produce(
+                    IndexBuildContext.forInlineSources(
+                        store = store,
+                        commitHash = "xml-1-0-columns",
+                        sourceFiles = mapOf("src/main/res/values/strings.xml" to values),
+                    )
+                )
+
+            val title =
+                store
+                    .prefixScan("res:string:title")
+                    .map { it.second }
+                    .filterIsInstance<SymbolRecord>()
+                    .single()
+            assertEquals(1, title.line)
+            assertEquals(13, title.column)
+        }
+    }
+
     @Test
     fun `keeps equal resource paths from separate origins distinct`() {
         val firstRoot = createTempDirectory("indexino-resource-origin-first-")
@@ -182,5 +417,22 @@ class XmlResourceProducerTest {
         } finally {
             store.close()
         }
+    }
+
+    private fun assertReference(
+        references: List<ReferenceRecord>,
+        symbolFqn: String,
+        fileSuffix: String,
+        line: Int,
+        column: Int,
+    ) {
+        assertTrue(
+            references.any {
+                it.symbolFqn == symbolFqn &&
+                    it.relativeFile.endsWith(fileSuffix) &&
+                    it.line == line &&
+                    it.column == column
+            }
+        )
     }
 }

@@ -2,6 +2,7 @@
 
 package dev.sebastiano.indexino.api
 
+import dev.sebastiano.indexino.core.BASIC_FACT_SCHEMA_VERSION
 import dev.sebastiano.indexino.core.plugin.StorePluginFactView
 import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
@@ -39,7 +40,8 @@ private constructor(
     private val store: CodeIndexStore?,
     public val revision: WorkspaceRevision,
     override val generation: WorkspaceGenerationId,
-    override val basicFactSchemaVersion: BasicFactSchemaVersion = BasicFactSchemaVersion.of(2),
+    override val basicFactSchemaVersion: BasicFactSchemaVersion =
+        BasicFactSchemaVersion.of(BASIC_FACT_SCHEMA_VERSION),
     public val freshnessAtAcquisition: SnapshotFreshness,
     private val onClose: () -> Unit,
     private val pluginRegistry: PluginRegistry?,
@@ -69,6 +71,7 @@ private constructor(
                         SymbolRecord::originId,
                         SymbolRecord::relativeFile,
                         SymbolRecord::line,
+                        SymbolRecord::column,
                         { it.signature.orEmpty() },
                         SymbolRecord::name,
                     ),

@@ -1,6 +1,7 @@
 package dev.sebastiano.indexino.cli
 
 import dev.sebastiano.indexino.api.InProcessCacheLayout
+import dev.sebastiano.indexino.core.BASIC_FACT_SCHEMA_VERSION
 import dev.sebastiano.indexino.core.Version
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.git.GitHeadResolver
@@ -184,7 +185,9 @@ internal class IndexBuildRunner(
             pluginRegistry = pluginRegistry,
             pluginCoordinates = pluginCoordinates,
             forceFullRebuild =
-                existingManifest == null || existingManifest.indexerVersion != Version.NAME,
+                existingManifest == null ||
+                    existingManifest.indexerVersion != Version.NAME ||
+                    existingManifest.basicFactSchemaVersion != BASIC_FACT_SCHEMA_VERSION,
         )
         machineProgress?.completed("indexed")
         return CliExitCodes.SUCCESS
@@ -297,6 +300,7 @@ internal class IndexBuildRunner(
                 IndexManifest(
                     commit = commit,
                     indexerVersion = Version.NAME,
+                    basicFactSchemaVersion = BASIC_FACT_SCHEMA_VERSION,
                     scope = scope,
                     topology = topology,
                     includeDeps = includeDeps,

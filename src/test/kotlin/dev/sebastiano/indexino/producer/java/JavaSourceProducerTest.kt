@@ -1,6 +1,7 @@
 package dev.sebastiano.indexino.producer.java
 
 import dev.sebastiano.indexino.core.record.CallSiteRecord
+import dev.sebastiano.indexino.core.record.CodeIndexRecordCodec
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
@@ -16,6 +17,42 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class JavaSourceProducerTest {
+    @Test
+    fun `preserves one based declaration columns for Java symbols`() {
+        val source =
+            """
+            class FirstColumn {
+                void multiline(
+                    String value
+                ) {}
+            }
+            """
+                .trimIndent()
+
+        withStore { store ->
+            checkNotNull(ProducerRegistry.get("java-source"))
+                .produce(
+                    IndexBuildContext.forInlineSources(
+                        store = store,
+                        commitHash = "columns",
+                        sourceFiles = mapOf("Columns.java" to source),
+                    )
+                )
+
+            val encodedSymbols =
+                store
+                    .prefixScan("sym:")
+                    .map { CodeIndexRecordCodec.encode(it.second).decodeToString() }
+                    .toList()
+            assertTrue(
+                encodedSymbols.any { "\"name\":\"FirstColumn\"" in it && "\"column\":1" in it }
+            )
+            assertTrue(
+                encodedSymbols.any { "\"name\":\"multiline\"" in it && "\"column\":5" in it }
+            )
+        }
+    }
+
     @Test
     fun `keeps equal Java paths from separate origins distinct`() {
         val firstRoot = createTempDirectory("indexino-java-origin-first-")

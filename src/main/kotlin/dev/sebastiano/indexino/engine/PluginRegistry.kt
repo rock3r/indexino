@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.engine
 
+import dev.sebastiano.indexino.core.BASIC_FACT_SCHEMA_VERSION
 import dev.sebastiano.indexino.model.BasicFactSchemaVersion
 import dev.sebastiano.indexino.model.IndexinoInternalApi
 import dev.sebastiano.indexino.model.PluginId
@@ -39,7 +40,8 @@ internal constructor(
     )
 
     internal companion object {
-        private val HOST_BASIC_FACT_SCHEMA: BasicFactSchemaVersion = BasicFactSchemaVersion.of(2)
+        private val HOST_BASIC_FACT_SCHEMA: BasicFactSchemaVersion =
+            BasicFactSchemaVersion.of(BASIC_FACT_SCHEMA_VERSION)
 
         @OptIn(IndexinoInternalApi::class)
         internal fun load(classLoader: ClassLoader): PluginRegistry {

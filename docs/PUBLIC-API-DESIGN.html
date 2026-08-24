@@ -2307,7 +2307,7 @@ host.abi.major == plugin.targetAbi.major</code></pre>
 <span class="kw">public class</span> <span class="ty">SourceLocation</span> <span class="kw">private constructor</span>(
     <span class="kw">public val</span> file: SourceFile,
     <span class="kw">public val</span> line: Int,
-    <span class="kw">public val</span> column: Int?,
+    <span class="kw">public val</span> column: Int?, <span class="cm">// line/column are 1-based; declarations preserve their syntactic start</span>
     <span class="kw">public val</span> offset: Int?, <span class="cm">// UTF-16 offset when known; nullable for legacy rows</span>
 ) {
     <span class="kw">public companion object</span> {

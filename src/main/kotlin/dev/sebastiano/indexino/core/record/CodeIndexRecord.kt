@@ -23,6 +23,7 @@ internal data class SymbolRecord(
     val fqn: String,
     val relativeFile: String,
     val line: Int,
+    val column: Int = 1,
     val kind: String,
     val name: String,
     val language: String = "unknown",

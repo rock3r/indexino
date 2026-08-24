@@ -1,6 +1,7 @@
 package dev.sebastiano.indexino.producer.kotlinpsi
 
 import dev.sebastiano.indexino.core.record.CallSiteRecord
+import dev.sebastiano.indexino.core.record.CodeIndexRecordCodec
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
@@ -17,6 +18,35 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class KotlinPsiSymbolProducerTest {
+    @Test
+    fun `preserves one based declaration columns for Kotlin symbols`() {
+        val source =
+            """
+            class FirstColumn
+
+                fun multiline(
+                    value: String,
+                ) = value
+            """
+                .trimIndent()
+        val context =
+            IndexBuildContext.forInlineSources(
+                store = store,
+                commitHash = "columns",
+                sourceFiles = mapOf("Columns.kt" to source),
+            )
+
+        checkNotNull(ProducerRegistry.get("kotlin-psi-symbols")).produce(context, store)
+
+        val encodedSymbols =
+            store
+                .prefixScan("sym:")
+                .map { CodeIndexRecordCodec.encode(it.second).decodeToString() }
+                .toList()
+        assertTrue(encodedSymbols.any { "\"name\":\"FirstColumn\"" in it && "\"column\":1" in it })
+        assertTrue(encodedSymbols.any { "\"name\":\"multiline\"" in it && "\"column\":5" in it })
+    }
+
     @Test
     fun `keeps equal Kotlin paths from separate origins distinct`() {
         val firstRoot = createTempDirectory("indexino-kotlin-origin-first-")

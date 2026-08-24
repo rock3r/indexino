@@ -15,6 +15,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Assumptions.assumeTrue
@@ -356,6 +357,7 @@ class NativeCompatibilityTest {
             setOf(
                 "commit",
                 "indexerVersion",
+                "basicFactSchemaVersion",
                 "scope",
                 "topology",
                 "includeDeps",
@@ -373,6 +375,7 @@ class NativeCompatibilityTest {
             requiredProperty("indexino.version"),
             json.getValue("indexerVersion").jsonPrimitive.content,
         )
+        assertEquals(3, json.getValue("basicFactSchemaVersion").jsonPrimitive.int)
     }
 
     private fun indexArguments(workspace: Path): Array<String> =
