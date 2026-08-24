@@ -178,6 +178,43 @@ class IndexinoScriptHostHardeningTest {
     }
 
     @Test
+    fun `refuses new runs while an uncooperative timed-out evaluation is abandoned`() {
+        val workspace = createWorkspace()
+        val script = workspace.resolve("spin.indexino.kts")
+        script.writeText(
+            """
+            while (true) {
+                try {
+                    Thread.sleep(10_000L)
+                } catch (ignored: InterruptedException) {
+                    // Swallow interrupts so this evaluation is deliberately uncooperative.
+                }
+            }
+            """
+                .trimIndent() + "\n"
+        )
+        withIndexedWorkspace(workspace) {
+            val host = IndexinoScriptHost.create()
+            val failure =
+                assertFailsWith<IndexinoScriptException> {
+                    host.run(
+                        ScriptRequest.forFile(workspace, script).withTimeout(Duration.ofMillis(200))
+                    )
+                }
+            assertEquals(IndexinoScriptException.Kind.TIMEOUT, failure.kind)
+            assertTrue(failure.message.orEmpty().contains("abandoned"))
+
+            val refused =
+                assertFailsWith<IndexinoScriptException> {
+                    host.run(
+                        ScriptRequest.forFile(workspace, script).withTimeout(Duration.ofMillis(200))
+                    )
+                }
+            assertEquals(IndexinoScriptException.Kind.INVALID_REQUEST, refused.kind)
+        }
+    }
+
+    @Test
     fun `compilation failures do not leave a poisoned compiled-script cache entry`() {
         val workspace = createWorkspace()
         val script = workspace.resolve("poison.indexino.kts")

@@ -57,7 +57,11 @@ lineage tracked for `indexino-plugin-api` (issue #39):
 - Import/dependency policy stays explicit: default imports cover `script.*` and `model.*`; engine,
   CLI, producer, topology, and PSI packages are rejected before compilation. Do not broaden that
   set silently.
-- Native and R8-shrunk distributions do not host `.indexino.kts` (see [DISTRIBUTIONS.md](DISTRIBUTIONS.md)).
+Time limits and cancellation are cooperative (interrupt flag and optional cancel token). Scripts
+that ignore interruption may leave an evaluation worker running; after that happens the host
+refuses new runs until the abandoned worker finishes, and the snapshot is closed so index
+resources are not kept pinned. Native and R8-shrunk distributions do not host `.indexino.kts`
+(see [DISTRIBUTIONS.md](DISTRIBUTIONS.md)).
 
 ## Adding the first API
 

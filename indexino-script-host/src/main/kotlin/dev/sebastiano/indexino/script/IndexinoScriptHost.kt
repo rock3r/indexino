@@ -10,9 +10,11 @@ import java.util.HexFormat
 import java.util.LinkedHashMap
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.script.experimental.api.CompiledScript
 import kotlin.script.experimental.api.ResultValue
 import kotlin.script.experimental.api.ResultWithDiagnostics
@@ -30,7 +32,14 @@ import kotlin.script.experimental.jvm.updateClasspath
 import kotlin.script.experimental.jvmhost.JvmScriptCompiler
 import kotlinx.coroutines.runBlocking
 
-/** Evaluates trusted `.indexino.kts` files against one immutable Indexino snapshot. */
+/**
+ * Evaluates trusted `.indexino.kts` files against one immutable Indexino snapshot.
+ *
+ * Time limits and cancellation are cooperative (interrupt + optional cancel flag). JVM evaluation
+ * cannot forcibly stop a spinning script; after an uncooperative timeout this host refuses new runs
+ * until the abandoned worker finishes, and closes the snapshot so abandoned work cannot keep index
+ * resources pinned.
+ */
 @ExperimentalIndexinoApi
 @OptIn(IndexinoInternalApi::class)
 public class IndexinoScriptHost private constructor() {
@@ -38,10 +47,12 @@ public class IndexinoScriptHost private constructor() {
     private val evaluator = BasicJvmScriptEvaluator()
     private val cacheLock = Any()
     private val compiledScripts = LinkedHashMap<String, CompiledScript>(CACHE_CAPACITY, 0.75F, true)
+    private val abandonedWorker = AtomicReference<Thread?>(null)
 
     public companion object {
         private const val SCRIPT_SUFFIX = ".indexino.kts"
         private const val CACHE_CAPACITY = 32
+        private const val ABANDON_GRACE_MILLIS = 250L
 
         @Volatile
         internal var connectForTests: (Path) -> Indexino = { workspace ->
@@ -57,6 +68,7 @@ public class IndexinoScriptHost private constructor() {
         require(request.script.fileName.toString().endsWith(SCRIPT_SUFFIX)) {
             "Indexino scripts must use the $SCRIPT_SUFFIX suffix"
         }
+        ensureNoAbandonedEvaluation()
         val source = Files.readString(request.script)
         val digest = sha256(source)
         val forbidden = ScriptDependencyPolicy.forbiddenImportDiagnostics(source)
@@ -89,6 +101,18 @@ public class IndexinoScriptHost private constructor() {
         }
     }
 
+    private fun ensureNoAbandonedEvaluation() {
+        val abandoned = abandonedWorker.get() ?: return
+        if (!abandoned.isAlive) {
+            abandonedWorker.compareAndSet(abandoned, null)
+            return
+        }
+        throw IndexinoScriptException.invalidRequest(
+            "A previous script evaluation is still running after timeout/cancellation; " +
+                "create a new IndexinoScriptHost or wait for that worker to finish"
+        )
+    }
+
     private fun evaluateBounded(
         source: SourceCode,
         context: IndexinoScriptContext,
@@ -96,9 +120,16 @@ public class IndexinoScriptHost private constructor() {
         timeoutMillis: Long,
         cancellation: AtomicBoolean?,
     ) {
+        val worker = AtomicReference<Thread?>(null)
         val executor = Executors.newSingleThreadExecutor { runnable ->
-            Thread(runnable, "indexino-script-eval").apply { isDaemon = true }
+            Thread(runnable, "indexino-script-eval").also { thread ->
+                // Daemon so an abandoned uncooperative evaluation cannot pin the process;
+                // the host still refuses new runs until that Future completes.
+                thread.isDaemon = true
+                worker.set(thread)
+            }
         }
+        var abandonWorker = false
         try {
             val future =
                 executor.submit<Unit> {
@@ -109,7 +140,14 @@ public class IndexinoScriptHost private constructor() {
             val pollMillis = 50L
             var remaining = timeoutMillis
             while (true) {
-                throwIfCancelled(cancellation)
+                if (cancellation?.get() == true) {
+                    interruptAndMaybeAbandon(
+                        future = future,
+                        worker = worker.get(),
+                        timedOut = false,
+                        timeoutMillis = timeoutMillis,
+                    )
+                }
                 val wait = minOf(pollMillis, remaining)
                 try {
                     future.get(wait, TimeUnit.MILLISECONDS)
@@ -117,18 +155,68 @@ public class IndexinoScriptHost private constructor() {
                 } catch (_: TimeoutException) {
                     remaining -= wait
                     if (remaining <= 0L) {
-                        future.cancel(true)
-                        throw IndexinoScriptException.timeout(
-                            "Script exceeded time limit of ${timeoutMillis}ms"
+                        interruptAndMaybeAbandon(
+                            future = future,
+                            worker = worker.get(),
+                            timedOut = true,
+                            timeoutMillis = timeoutMillis,
                         )
                     }
                 } catch (failure: ExecutionException) {
                     throw mapEvaluationFailure(failure.cause ?: failure)
                 }
             }
+        } catch (failure: IndexinoScriptException) {
+            abandonWorker = abandonedWorker.get()?.isAlive == true
+            throw failure
         } finally {
-            executor.shutdownNow()
+            if (!abandonWorker) {
+                executor.shutdownNow()
+                worker.get()?.join(ABANDON_GRACE_MILLIS)
+            } else {
+                executor.shutdown()
+            }
         }
+    }
+
+    private fun interruptAndMaybeAbandon(
+        future: Future<*>,
+        worker: Thread?,
+        timedOut: Boolean,
+        timeoutMillis: Long,
+    ): Nothing {
+        future.cancel(true)
+        worker?.join(ABANDON_GRACE_MILLIS)
+        val abandoned = worker?.isAlive == true
+        if (abandoned) {
+            abandonedWorker.set(worker)
+        }
+        throwTerminalStop(timedOut, timeoutMillis, abandoned)
+    }
+
+    private fun throwTerminalStop(
+        timedOut: Boolean,
+        timeoutMillis: Long,
+        abandoned: Boolean,
+    ): Nothing {
+        if (timedOut) {
+            throw IndexinoScriptException.timeout(
+                if (abandoned) {
+                    "Script exceeded time limit of ${timeoutMillis}ms; evaluation did not stop " +
+                        "cooperatively and was abandoned (this host refuses new runs until it ends)"
+                } else {
+                    "Script exceeded time limit of ${timeoutMillis}ms"
+                }
+            )
+        }
+        throw IndexinoScriptException.cancelled(
+            if (abandoned) {
+                "Script evaluation was cancelled but did not stop cooperatively and was abandoned " +
+                    "(this host refuses new runs until it ends)"
+            } else {
+                "Script evaluation was cancelled"
+            }
+        )
     }
 
     private fun evaluate(source: SourceCode, context: IndexinoScriptContext, cacheKey: String) {
