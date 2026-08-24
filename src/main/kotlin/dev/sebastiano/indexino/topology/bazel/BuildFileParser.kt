@@ -71,6 +71,7 @@ internal object BuildFileParser {
         }
 
         for (relative in extractResourceFiles(content, packageDir)) {
+            if (isBazelLabel(relative)) continue
             paths += workspaceRelativeLiteral(relative, packagePrefix)
         }
 
@@ -263,6 +264,12 @@ internal object BuildFileParser {
 
     private fun isIndexablePath(path: String): Boolean =
         path.substringAfterLast('.', "") in INDEXABLE_EXTENSIONS
+
+    private fun isBazelLabel(path: String): Boolean =
+        path.startsWith(":") ||
+            path.startsWith("@") ||
+            path.startsWith("//") && ':' in path ||
+            ':' in path
 
     private fun extractBalancedBracketBody(content: String, openBracketIndex: Int): String? {
         val endIndex = findBalancedBracketEnd(content, openBracketIndex) ?: return null
