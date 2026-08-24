@@ -1009,6 +1009,50 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `infix array content comparison is structural equality`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class InfixArrays(val values: IntArray) {
+                        override fun equals(other: Any?): Boolean =
+                            other is InfixArrays && (values contentEquals other.values)
+                        override fun hashCode(): Int = values.contentHashCode()
+                        override fun toString(): String = values.contentToString()
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
+    fun `statically imported Objects equals is structural equality`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    import java.util.Objects.equals as same
+
+                    class ImportedObjects(val value: String?) {
+                        override fun equals(other: Any?): Boolean =
+                            other is ImportedObjects && same(value, other.value)
+                        override fun hashCode(): Int = value?.hashCode() ?: 0
+                        override fun toString(): String = "ImportedObjects(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `lambda label matching class name does not count as class receiver`() {
         val findings =
             rule()

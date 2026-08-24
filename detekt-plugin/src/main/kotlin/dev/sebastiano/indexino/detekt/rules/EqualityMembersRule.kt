@@ -154,7 +154,9 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
             body
                 ?.let { PsiTreeUtil.collectElementsOfType(it, KtBinaryExpression::class.java) }
                 ?.filter {
-                    it.operationToken == KtTokens.EQEQ || it.operationToken == KtTokens.EXCLEQ
+                    it.operationToken == KtTokens.EQEQ ||
+                        it.operationToken == KtTokens.EXCLEQ ||
+                        it.isStructuralInfixComparison()
                 }
                 ?.flatMap { expression ->
                     properties.filter { property ->
@@ -225,11 +227,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                         receiverClass,
                     ))
         }
-        if (
-            structuralCallKind != StructuralCallKind.JAVA_OBJECTS ||
-                valueArguments.size != 2 ||
-                qualifiedCall?.selectorExpression != this
-        ) {
+        if (structuralCallKind != StructuralCallKind.JAVA_OBJECTS || valueArguments.size != 2) {
             return false
         }
         val first = valueArguments[0].getArgumentExpression() ?: return false
@@ -239,6 +237,16 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
             (second.isReceiverProperty(equalsFunction, property, receiverClass) &&
                 first.isOtherProperty(equalsFunction, otherParameter, property, receiverClass))
     }
+
+    private fun KtBinaryExpression.isStructuralInfixComparison(): Boolean =
+        analyze(operationReference) {
+            val symbol =
+                operationReference.mainReference.resolveToSymbol() as? KaNamedFunctionSymbol
+                    ?: return false
+            (symbol.allOverriddenSymbols + symbol)
+                .mapNotNull { it.callableId?.asSingleFqName()?.asString() }
+                .any { it in RECEIVER_COMPARISON_CALLABLES }
+        }
 
     private fun KtCallExpression.structuralCallKind(): StructuralCallKind? =
         analyze(this) {
