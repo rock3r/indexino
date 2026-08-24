@@ -96,9 +96,10 @@ workflow leaves the validated deployment waiting for manual promotion in the Cen
 Native release drafting is a separately gated continuation of the tag workflow. It remains skipped
 unless `release/native-redistribution-manifest.json` has `approvalStatus` set to `APPROVED` by a
 reviewed change and the repository variable `NATIVE_RELEASE_APPROVED` is exactly `true`. While that
-gate is pending, the tag workflow still publishes the Maven train and creates a **non-draft**
+gate is pending, the tag workflow still publishes the Maven train and creates a **draft**
 GitHub release with `release/RELEASE_NOTES-<version>.md` and the generated
-`bundled-dependencies.txt` inventory. Native ZIP drafting stays disabled.
+`bundled-dependencies.txt` inventory. Publish that draft only after Central promotion and external
+resolution checks succeed. Native ZIP drafting stays disabled.
 
 Once both native gates are present, the tag workflow calls the reusable Tier 1 matrix with the
 release version. The macOS job signs all Mach-O payloads, creates the immutable final ZIP, submits
@@ -132,7 +133,9 @@ git push origin v0.2.0
 ```
 
 After the workflow succeeds, inspect the deployment in the Central Portal and promote it manually.
-When native redistribution is still pending counsel approval, the GitHub release documents the
-Maven-only scope and attaches the bundled-dependency inventory. If native release approval was
-enabled later, independently inspect the draft GitHub release, signed aggregate provenance,
-checksums, legal manifest, and all three verification logs before publishing that draft manually.
+When native redistribution is still pending counsel approval, the GitHub release is created as a
+draft documenting the Maven-only scope and attaching the bundled-dependency inventory. Promote the
+Central deployment, verify public coordinates from a clean consumer, then publish the draft
+(`gh release edit <tag> --draft=false`). If native release approval was enabled later, independently
+inspect the draft GitHub release, signed aggregate provenance, checksums, legal manifest, and all
+three verification logs before publishing that draft manually.

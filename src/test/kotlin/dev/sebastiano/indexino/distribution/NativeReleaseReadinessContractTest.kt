@@ -137,6 +137,7 @@ class NativeReleaseReadinessContractTest {
         assertContains(workflow, "maven-release:")
         assertContains(workflow, "Publish Maven-only GitHub release")
         assertContains(workflow, "native_release == 'false'")
+        assertContains(workflow, "--prerelease")
         assertContains(workflow, "RELEASE_NOTES-")
         assertContains(workflow, "Upload complete Maven Central release train")
         assertContains(workflow, "publishToMavenCentral")

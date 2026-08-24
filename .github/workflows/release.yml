@@ -154,12 +154,15 @@ jobs:
         shell: bash
         run: |
           test -f "release/RELEASE_NOTES-${{ needs.readiness.outputs.version }}.md"
-      - name: Create GitHub release
+      - name: Create draft GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          release_args=(--draft --verify-tag --title "Indexino ${{ needs.readiness.outputs.version }}")
+          if [[ "${{ needs.readiness.outputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-.+ ]]; then
+            release_args+=(--prerelease)
+          fi
           gh release create "$GITHUB_REF_NAME" \
             release-assets/bundled-dependencies.txt \
-            --verify-tag \
-            --title "Indexino ${{ needs.readiness.outputs.version }}" \
+            "${release_args[@]}" \
             --notes-file "release/RELEASE_NOTES-${{ needs.readiness.outputs.version }}.md"
