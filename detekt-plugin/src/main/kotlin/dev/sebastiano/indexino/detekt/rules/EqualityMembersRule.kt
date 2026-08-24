@@ -13,6 +13,8 @@ import org.jetbrains.kotlin.analysis.api.symbols.KaClassSymbol
 import org.jetbrains.kotlin.analysis.api.symbols.KaNamedFunctionSymbol
 import org.jetbrains.kotlin.analysis.api.symbols.KaPropertySymbol
 import org.jetbrains.kotlin.analysis.api.symbols.KaReceiverParameterSymbol
+import org.jetbrains.kotlin.analysis.api.types.KaType
+import org.jetbrains.kotlin.analysis.api.types.KaTypeParameterType
 import org.jetbrains.kotlin.analysis.api.types.symbol
 import org.jetbrains.kotlin.idea.references.mainReference
 import org.jetbrains.kotlin.lexer.KtTokens
@@ -317,17 +319,23 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
     private fun KtFunctionLiteral.hasReceiverType(receiverClass: KtClass): Boolean =
         analyze(this) {
             val targetClass = receiverClass.symbol as? KaClassSymbol ?: return false
-            (symbol.receiverParameter?.returnType?.symbol as? KaClassSymbol)?.isSameOrSubclassOf(
-                targetClass
-            ) == true
+            symbol.receiverParameter?.returnType?.canSupplyPropertiesOf(targetClass) == true
         }
 
     private fun KtNamedFunction.hasReceiverType(receiverClass: KtClass): Boolean =
         analyze(this) {
             val targetClass = receiverClass.symbol as? KaClassSymbol ?: return false
-            ((symbol as? KaNamedFunctionSymbol)?.receiverParameter?.returnType?.symbol
-                    as? KaClassSymbol)
-                ?.isSameOrSubclassOf(targetClass) == true
+            (symbol as? KaNamedFunctionSymbol)
+                ?.receiverParameter
+                ?.returnType
+                ?.canSupplyPropertiesOf(targetClass) == true
+        }
+
+    private fun KaType.canSupplyPropertiesOf(targetClass: KaClassSymbol): Boolean =
+        when (this) {
+            is KaTypeParameterType ->
+                symbol.upperBounds.any { it.canSupplyPropertiesOf(targetClass) }
+            else -> (symbol as? KaClassSymbol)?.isSameOrSubclassOf(targetClass) == true
         }
 
     private fun KaClassSymbol.isSameOrSubclassOf(targetClass: KaClassSymbol): Boolean =

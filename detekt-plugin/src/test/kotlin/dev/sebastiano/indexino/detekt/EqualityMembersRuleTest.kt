@@ -924,6 +924,32 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `bounded type parameter receiver does not count as current receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    open class BoundedReceiver(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is BoundedReceiver) return false
+                            fun <T : BoundedReceiver> T.matches(): Boolean =
+                                value == other.value
+                            return other.matches()
+                        }
+                        override fun hashCode(): Int = value.hashCode()
+                        override fun toString(): String = "BoundedReceiver(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `lambda label matching class name does not count as class receiver`() {
         val findings =
             rule()
