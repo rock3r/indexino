@@ -750,6 +750,55 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `receiver lambda without a syntactic target does not count as current receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class HiddenTarget(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is HiddenTarget) return false
+                            fun scope(block: HiddenTarget.() -> Boolean) = other.block()
+                            return scope { value == other.value }
+                        }
+                        override fun hashCode(): Int = value.hashCode()
+                        override fun toString(): String = "HiddenTarget(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
+    fun `stored receiver lambda invoked on this preserves class receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class StoredReceiver(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is StoredReceiver) return false
+                            val matches: StoredReceiver.() -> Boolean = { value == other.value }
+                            return matches(this)
+                        }
+                        override fun hashCode(): Int = value.hashCode()
+                        override fun toString(): String = "StoredReceiver(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `stored extension lambda uses its extension receiver`() {
         val findings =
             rule()

@@ -368,7 +368,8 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         val lambda = parent as? KtLambdaExpression ?: return true
         if (!hasExtensionReceiver()) return false
         val call =
-            PsiTreeUtil.getParentOfType(lambda, KtCallExpression::class.java, false) ?: return true
+            PsiTreeUtil.getParentOfType(lambda, KtCallExpression::class.java, false)
+                ?: return !lambda.isStoredReceiverBoundToCurrent(equalsFunction, receiverClass)
         val qualifiedCall = call.parent as? KtQualifiedExpression
         if (qualifiedCall?.selectorExpression == call) {
             if (qualifiedCall.receiverExpression.text == "kotlin") {
@@ -389,8 +390,32 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         }
         val receiverArguments = call.receiverLambdaArguments()
         if (receiverArguments.size > 1) return true
-        val receiver = receiverArguments.singleOrNull() ?: return false
+        val receiver =
+            receiverArguments.singleOrNull() ?: return call.targetsSourceDeclaredFunction()
         return !receiver.isCurrentReceiver(equalsFunction, receiverClass)
+    }
+
+    private fun KtCallExpression.targetsSourceDeclaredFunction(): Boolean {
+        val callableName = calleeExpression?.text ?: return false
+        return PsiTreeUtil.collectElementsOfType(containingKtFile, KtNamedFunction::class.java)
+            .any { it.name == callableName }
+    }
+
+    private fun KtLambdaExpression.isStoredReceiverBoundToCurrent(
+        equalsFunction: KtNamedFunction,
+        receiverClass: KtClass,
+    ): Boolean {
+        val propertyName = (parent as? KtProperty)?.name ?: return false
+        val invocations =
+            PsiTreeUtil.collectElementsOfType(equalsFunction, KtCallExpression::class.java).filter {
+                it.calleeExpression?.text == propertyName
+            }
+        return invocations.isNotEmpty() &&
+            invocations.all { invocation ->
+                val arguments = invocation.receiverLambdaArguments()
+                arguments.size == 1 &&
+                    arguments.single().isCurrentReceiver(equalsFunction, receiverClass)
+            }
     }
 
     private fun KtCallExpression.receiverLambdaArguments(): List<KtExpression> =
