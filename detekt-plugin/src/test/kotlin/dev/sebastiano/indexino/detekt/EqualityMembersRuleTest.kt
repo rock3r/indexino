@@ -1180,6 +1180,31 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `floating point compare helpers are structural equality`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class FloatingPoint(val doubleValue: Double, val floatValue: Float) {
+                        override fun equals(other: Any?): Boolean =
+                            other is FloatingPoint &&
+                                java.lang.Double.compare(doubleValue, other.doubleValue) == 0 &&
+                                java.lang.Float.compare(floatValue, other.floatValue) == 0
+                        override fun hashCode(): Int =
+                            31 * doubleValue.hashCode() + floatValue.hashCode()
+                        override fun toString(): String =
+                            "FloatingPoint(doubleValue=${'$'}doubleValue, floatValue=${'$'}floatValue)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `lambda label matching class name does not count as class receiver`() {
         val findings =
             rule()

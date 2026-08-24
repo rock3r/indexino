@@ -657,6 +657,8 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                 "java.util.Objects.deepEquals",
                 "java.util.Arrays.equals",
                 "java.util.Arrays.deepEquals",
+                "java.lang.Double.compare",
+                "java.lang.Float.compare",
             )
         const val KOTLIN_ANY_EQUALS: String = "kotlin.Any.equals"
         val RECEIVER_COMPARISON_CALLABLES: Set<String> =
