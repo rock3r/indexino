@@ -1,6 +1,0 @@
-script-host: address Codex timeout and classpath review
-
-- Derive allowed script classpath from loaded type code sources
-- Treat uncooperative timeouts as abandoned; refuse new runs until worker ends
-- Cover abandon refusal with an interrupt-swallowing fixture
-
