@@ -25,8 +25,6 @@ import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.CallArgumentRecord
 import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
-import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
-import dev.sebastiano.indexino.core.record.ResourceUsageRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.store.hasSymbol
@@ -159,6 +157,22 @@ internal class JavaSourceProducer : IndexProducer {
         private val classSuperTypes = ArrayDeque<String>()
         private val variableScopes = ArrayDeque<MutableMap<String, String>>()
         private val methodOwners = ArrayDeque<String>()
+        private val resourceUsageIndexer =
+            JavaResourceUsageIndexer(
+                originId = originId,
+                relativePath = relativePath,
+                defaultResourcePackage = defaultResourcePackage,
+                packageName = packageName,
+                store = store,
+                imports = imports,
+                staticImports = staticImports,
+                staticWildcardImports = staticWildcardImports,
+                variableScopes = variableScopes,
+                positionOf = { tree ->
+                    val start = position(tree)
+                    JavaResourceUsageIndexer.SourcePosition(start.line, start.column, start.offset)
+                },
+            )
 
         override fun visitImport(node: ImportTree, data: Unit?) {
             val imported = node.qualifiedIdentifier.toString()
@@ -182,169 +196,15 @@ internal class JavaSourceProducer : IndexProducer {
         override fun visitMemberSelect(node: MemberSelectTree, data: Unit?) {
             val parent = currentPath.parentPath?.leaf
             if (parent !is MemberSelectTree || parent.expression != node) {
-                indexResourceUsage(node)
+                resourceUsageIndexer.indexResourceUsage(node, currentPath)
             }
             super.visitMemberSelect(node, data)
         }
 
         override fun visitIdentifier(node: IdentifierTree, data: Unit?) {
-            indexStaticResourceUsage(node)
+            resourceUsageIndexer.indexStaticResourceUsage(node, currentPath)
             super.visitIdentifier(node, data)
         }
-
-        private fun indexStaticResourceUsage(node: IdentifierTree) {
-            val parent = currentPath.parentPath?.leaf
-            if (shouldSkipStaticResourceIdentifier(node, parent)) return
-            val name = node.name.toString()
-            if (variableScopes.reversed().any { scope -> name in scope }) return
-            if (isClassResourceChain(node, parent)) return
-            val explicitOwner = staticImports[name]
-            val owners =
-                if (explicitOwner != null) listOf(explicitOwner)
-                else staticWildcardImports.distinct()
-            if (owners.isEmpty()) return
-            val start = position(node)
-            owners.forEach { owner ->
-                putStaticResourceUsage(owner, name, start, explicitOwner == null)
-            }
-        }
-
-        private fun shouldSkipStaticResourceIdentifier(
-            node: IdentifierTree,
-            parent: Tree?,
-        ): Boolean =
-            generateSequence(currentPath.parentPath) { it.parentPath }
-                .any { it.leaf is ImportTree } ||
-                (parent is MemberSelectTree && parent.expression != node) ||
-                (parent is MethodInvocationTree && parent.methodSelect == node) ||
-                (parent is MemberSelectTree &&
-                    parent.identifier.toString() in ResourceMetadata.RESOURCE_TYPES) ||
-                (parent as? VariableTree)?.name == node.name ||
-                (parent as? MethodTree)?.name == node.name
-
-        private fun isClassResourceChain(node: IdentifierTree, parent: Tree?): Boolean {
-            if (parent !is MemberSelectTree || parent.expression != node) return false
-            val outermost =
-                generateSequence(currentPath.parentPath) { it.parentPath }
-                    .map { it.leaf }
-                    .filterIsInstance<MemberSelectTree>()
-                    .lastOrNull()
-            val segments = outermost?.let(::memberSelectSegments)
-            return segments != null && ("R" in segments || "Res" in segments)
-        }
-
-        private fun putStaticResourceUsage(
-            owner: String,
-            name: String,
-            start: SourcePosition,
-            requireDefinition: Boolean,
-        ) {
-            val marker = ".R."
-            if (marker !in owner) return
-            val resourcePackage = owner.substringBefore(marker)
-            val type = owner.substringAfter(marker)
-            if ('.' in type || type !in ResourceMetadata.RESOURCE_TYPES) return
-            if (requireDefinition && !hasResourceDefinition(resourcePackage, type, name)) return
-            store.put(
-                CodeIndexKey.resourceUsage(
-                    packageName = resourcePackage,
-                    type = type,
-                    name = name,
-                    originId = originId,
-                    relativeFile = relativePath,
-                    line = start.line,
-                    column = start.column,
-                ),
-                ResourceUsageRecord(
-                    packageName = resourcePackage,
-                    type = type,
-                    name = name,
-                    relativeFile = relativePath,
-                    line = start.line,
-                    column = start.column,
-                    offset = start.offset,
-                    language = LANGUAGE,
-                    originId = originId,
-                ),
-            )
-        }
-
-        private fun hasResourceDefinition(
-            resourcePackage: String,
-            type: String,
-            name: String,
-        ): Boolean {
-            var found = false
-            store.forEachPrefix("resdef:$resourcePackage:$type:$name:") { _, record ->
-                if (
-                    record is ResourceDefinitionRecord &&
-                        record.packageName == resourcePackage &&
-                        record.type == type &&
-                        record.name == name
-                ) {
-                    found = true
-                }
-                !found
-            }
-            return found
-        }
-
-        private fun indexResourceUsage(node: MemberSelectTree) {
-            if (
-                generateSequence(currentPath.parentPath) { it.parentPath }
-                    .any { it.leaf is ImportTree }
-            ) {
-                return
-            }
-            val segments = memberSelectSegments(node) ?: return
-            val rIndex =
-                segments.indices.firstOrNull { index ->
-                    index + 2 <= segments.lastIndex &&
-                        (segments[index] == "R" ||
-                            imports[segments[index]]?.substringAfterLast('.') == "R") &&
-                        segments[index + 1] in ResourceMetadata.RESOURCE_TYPES
-                } ?: return
-            val explicitPackage = segments.take(rIndex).joinToString(".").ifBlank { null }
-            val importedOwner = imports[segments[rIndex]]
-            val resourcePackage =
-                explicitPackage
-                    ?: importedOwner?.substringBeforeLast('.', "")?.takeIf(String::isNotBlank)
-                    ?: defaultResourcePackage
-                    ?: packageName.ifBlank { null }
-            val type = segments[rIndex + 1]
-            val name = segments[rIndex + 2]
-            val start = position(node)
-            store.put(
-                CodeIndexKey.resourceUsage(
-                    packageName = resourcePackage,
-                    type = type,
-                    name = name,
-                    originId = originId,
-                    relativeFile = relativePath,
-                    line = start.line,
-                    column = start.column,
-                ),
-                ResourceUsageRecord(
-                    packageName = resourcePackage,
-                    type = type,
-                    name = name,
-                    relativeFile = relativePath,
-                    line = start.line,
-                    column = start.column,
-                    offset = start.offset,
-                    language = LANGUAGE,
-                    originId = originId,
-                ),
-            )
-        }
-
-        private fun memberSelectSegments(tree: Tree): List<String>? =
-            when (tree) {
-                is IdentifierTree -> listOf(tree.name.toString())
-                is MemberSelectTree ->
-                    memberSelectSegments(tree.expression)?.plus(tree.identifier.toString())
-                else -> null
-            }
 
         override fun visitClass(node: ClassTree, data: Unit?) {
             val name = node.simpleName.toString()

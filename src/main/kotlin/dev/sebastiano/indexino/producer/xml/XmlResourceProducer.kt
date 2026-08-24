@@ -439,13 +439,7 @@ internal class XmlResourceProducer : IndexProducer {
         val styleName = value.substringAfter(':').substringAfter('/')
         val target = resourceFqn(stylePackage, "style", styleName)
         store.put(
-            CodeIndexKey.ref(
-                target,
-                indexedSource.originId,
-                indexedSource.path,
-                line,
-                column,
-            ),
+            CodeIndexKey.ref(target, indexedSource.originId, indexedSource.path, line, column),
             ReferenceRecord(
                 symbolFqn = target,
                 relativeFile = indexedSource.path,

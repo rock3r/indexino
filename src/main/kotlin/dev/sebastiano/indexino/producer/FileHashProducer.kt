@@ -75,7 +75,9 @@ internal class FileHashProducer : IndexProducer {
                         onFileProcessed?.invoke(index + 1, sortedSources.size, source)
                         val hash =
                             sourceSnapshot?.contentHash(source)
-                                ?: contentHash(Files.readAllBytes(source.originRoot.resolve(source.path)))
+                                ?: contentHash(
+                                    Files.readAllBytes(source.originRoot.resolve(source.path))
+                                )
                         "${source.originId}:${source.path}:$hash"
                     }
                     .joinToString("\n")
