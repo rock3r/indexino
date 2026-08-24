@@ -19,6 +19,10 @@ import dev.sebastiano.indexino.model.QueryPage
 import dev.sebastiano.indexino.model.Reference
 import dev.sebastiano.indexino.model.ReferenceQuery
 import dev.sebastiano.indexino.model.ResolutionConfidence
+import dev.sebastiano.indexino.model.ResourceDefinition
+import dev.sebastiano.indexino.model.ResourceId
+import dev.sebastiano.indexino.model.ResourceQuery
+import dev.sebastiano.indexino.model.ResourceUsage
 import dev.sebastiano.indexino.model.SourceFile
 import dev.sebastiano.indexino.model.SourceLocation
 import dev.sebastiano.indexino.model.SourceOriginId
@@ -73,6 +77,28 @@ internal class RuntimeSnapshotClient(private val connection: RuntimeConnection) 
     fun findCalls(leaseId: String, query: CallQuery, options: QueryOptions): QueryPage<CallSite> =
         RuntimeSnapshotProtocol.decodeFindCallsResponse(
             connection.request(RuntimeSnapshotProtocol.findCallsCommand(leaseId, query, options))
+        )
+
+    fun findResources(
+        leaseId: String,
+        query: ResourceQuery,
+        options: QueryOptions,
+    ): QueryPage<ResourceDefinition> =
+        RuntimeSnapshotProtocol.decodeFindResourcesResponse(
+            connection.request(
+                RuntimeSnapshotProtocol.findResourcesCommand(leaseId, query, options)
+            )
+        )
+
+    fun findResourceUsages(
+        leaseId: String,
+        query: ResourceQuery,
+        options: QueryOptions,
+    ): QueryPage<ResourceUsage> =
+        RuntimeSnapshotProtocol.decodeFindResourceUsagesResponse(
+            connection.request(
+                RuntimeSnapshotProtocol.findResourceUsagesCommand(leaseId, query, options)
+            )
         )
 
     fun runCheck(
@@ -146,6 +172,22 @@ internal class RuntimeSnapshotDispatcher(
                     runBlocking { snapshot.findCalls(query, options) }
                 )
             }
+            RuntimeSnapshotProtocol.FIND_RESOURCES -> {
+                val snapshot = snapshot(input.readUTF())
+                val query = RuntimeSnapshotProtocol.decodeResourceQuery(input)
+                val options = RuntimeSnapshotProtocol.decodeQueryOptions(input)
+                RuntimeSnapshotProtocol.findResourcesResponse(
+                    runBlocking { snapshot.findResources(query, options) }
+                )
+            }
+            RuntimeSnapshotProtocol.FIND_RESOURCE_USAGES -> {
+                val snapshot = snapshot(input.readUTF())
+                val query = RuntimeSnapshotProtocol.decodeResourceQuery(input)
+                val options = RuntimeSnapshotProtocol.decodeQueryOptions(input)
+                RuntimeSnapshotProtocol.findResourceUsagesResponse(
+                    runBlocking { snapshot.findResourceUsages(query, options) }
+                )
+            }
             RuntimeSnapshotProtocol.RUN_CHECK -> {
                 val snapshot = snapshot(input.readUTF())
                 val request = RuntimeSnapshotProtocol.decodeCheckRequest(input)
@@ -177,6 +219,8 @@ internal object RuntimeSnapshotProtocol {
     const val FIND_REFERENCES = 13
     const val FIND_CALLS = 14
     const val RUN_CHECK = 15
+    const val FIND_RESOURCES = 16
+    const val FIND_RESOURCE_USAGES = 17
 
     fun acquireCommand(freshness: FreshnessPolicy): ByteArray = bytes {
         writeByte(ACQUIRE)
@@ -218,6 +262,28 @@ internal object RuntimeSnapshotProtocol {
             query.file?.let { file -> writeSourceFile(file) }
             writeQueryOptions(options)
         }
+
+    fun findResourcesCommand(
+        leaseId: String,
+        query: ResourceQuery,
+        options: QueryOptions,
+    ): ByteArray = bytes {
+        writeByte(FIND_RESOURCES)
+        writeUTF(leaseId)
+        writeResourceQuery(query)
+        writeQueryOptions(options)
+    }
+
+    fun findResourceUsagesCommand(
+        leaseId: String,
+        query: ResourceQuery,
+        options: QueryOptions,
+    ): ByteArray = bytes {
+        writeByte(FIND_RESOURCE_USAGES)
+        writeUTF(leaseId)
+        writeResourceQuery(query)
+        writeQueryOptions(options)
+    }
 
     fun runCheckCommand(leaseId: String, request: CheckRequest, options: QueryOptions): ByteArray =
         bytes {
@@ -314,6 +380,28 @@ internal object RuntimeSnapshotProtocol {
         }
 
     @OptIn(IndexinoInternalApi::class)
+    fun findResourcesResponse(page: QueryPage<ResourceDefinition>): ByteArray = bytes {
+        writeQueryPage(page) { resource -> writeResourceDefinition(resource) }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    fun decodeFindResourcesResponse(response: ByteArray): QueryPage<ResourceDefinition> =
+        DataInputStream(ByteArrayInputStream(response)).use { input ->
+            readQueryPage(input) { readResourceDefinition(input) }
+        }
+
+    @OptIn(IndexinoInternalApi::class)
+    fun findResourceUsagesResponse(page: QueryPage<ResourceUsage>): ByteArray = bytes {
+        writeQueryPage(page) { usage -> writeResourceUsage(usage) }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    fun decodeFindResourceUsagesResponse(response: ByteArray): QueryPage<ResourceUsage> =
+        DataInputStream(ByteArrayInputStream(response)).use { input ->
+            readQueryPage(input) { readResourceUsage(input) }
+        }
+
+    @OptIn(IndexinoInternalApi::class)
     fun runCheckResponse(page: QueryPage<Finding>): ByteArray = bytes {
         writeQueryPage(page) { finding -> writeFinding(finding) }
     }
@@ -350,6 +438,21 @@ internal object RuntimeSnapshotProtocol {
         return query.withMatch(NameMatchMode.valueOf(input.readUTF()))
     }
 
+    fun decodeResourceQuery(input: DataInputStream): ResourceQuery {
+        val packageName = input.readNullableUtf()
+        val type = input.readNullableUtf()
+        val name = input.readNullableUtf()
+        val exactIdentity = input.readBoolean()
+        return when {
+            exactIdentity ->
+                ResourceQuery.named(
+                    ResourceId.of(packageName, checkNotNull(type), checkNotNull(name))
+                )
+            packageName == null && type == null && name == null -> ResourceQuery.all()
+            else -> ResourceQuery.of(packageName, type, name)
+        }
+    }
+
     fun decodeQueryOptions(input: DataInputStream): QueryOptions {
         val limit = input.readInt()
         val offset = input.readInt()
@@ -371,6 +474,13 @@ internal object RuntimeSnapshotProtocol {
         writeInt(options.limit)
         writeInt(options.offset)
         writeNullableUtf(options.afterCursor)
+    }
+
+    private fun DataOutputStream.writeResourceQuery(query: ResourceQuery) {
+        writeNullableUtf(query.packageName)
+        writeNullableUtf(query.type)
+        writeNullableUtf(query.name)
+        writeBoolean(query.id != null)
     }
 
     @OptIn(IndexinoInternalApi::class)
@@ -457,6 +567,50 @@ internal object RuntimeSnapshotProtocol {
             qualifier = input.readNullableUtf(),
             candidateSymbolIds = List(input.readInt()) { SymbolId.of(input.readUTF()) },
             arity = input.readNullableInt(),
+        )
+
+    @OptIn(IndexinoInternalApi::class)
+    private fun DataOutputStream.writeResourceDefinition(resource: ResourceDefinition) {
+        writeNullableUtf(resource.id.packageName)
+        writeUTF(resource.id.type)
+        writeUTF(resource.id.name)
+        writeUTF(resource.qualifiers)
+        writeSourceLocation(resource.location)
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    private fun readResourceDefinition(input: DataInputStream): ResourceDefinition =
+        ResourceDefinition(
+            id =
+                ResourceId.of(
+                    packageName = input.readNullableUtf(),
+                    type = input.readUTF(),
+                    name = input.readUTF(),
+                ),
+            qualifiers = input.readUTF(),
+            location = input.readSourceLocation(),
+        )
+
+    @OptIn(IndexinoInternalApi::class)
+    private fun DataOutputStream.writeResourceUsage(usage: ResourceUsage) {
+        writeNullableUtf(usage.id.packageName)
+        writeUTF(usage.id.type)
+        writeUTF(usage.id.name)
+        writeSourceLocation(usage.location)
+        writeUTF(usage.language)
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    private fun readResourceUsage(input: DataInputStream): ResourceUsage =
+        ResourceUsage(
+            id =
+                ResourceId.of(
+                    packageName = input.readNullableUtf(),
+                    type = input.readUTF(),
+                    name = input.readUTF(),
+                ),
+            location = input.readSourceLocation(),
+            language = input.readUTF(),
         )
 
     @OptIn(IndexinoInternalApi::class)

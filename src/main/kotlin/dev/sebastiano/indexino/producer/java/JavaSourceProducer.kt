@@ -32,6 +32,7 @@ import dev.sebastiano.indexino.producer.IndexBuildContext
 import dev.sebastiano.indexino.producer.IndexProducer
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.SourceRecordCleanup
+import dev.sebastiano.indexino.producer.xml.ResourceMetadata
 import java.net.URI
 import javax.tools.Diagnostic
 import javax.tools.DiagnosticCollector
@@ -45,27 +46,61 @@ internal class JavaSourceProducer : IndexProducer {
     override val displayName: String = "JavaSourceProducer"
 
     override val progressTotal: (IndexBuildContext) -> Int = { context ->
-        context.changedSources.count { it.path.endsWith(".java") }
+        sourceFilesToProcess(context).size
     }
 
     override fun produce(context: IndexBuildContext, store: CodeIndexStore) {
         val affectedSources =
-            (context.changedSources + context.deletedSources).filterTo(linkedSetOf()) {
-                it.path.endsWith(".java")
-            }
-        SourceRecordCleanup.deleteLanguageOriginRecords(store, LANGUAGE, ".java", affectedSources)
-        val javaFiles = context.changedSources.filter { it.path.endsWith(".java") }
+            ((context.changedSources + context.deletedSources).filter {
+                    it.path.endsWith(".java")
+                } + metadataDependentSources(context))
+                .distinctBy { it.originId to it.path }
+        SourceRecordCleanup.deleteLanguageOriginRecords(
+            store,
+            LANGUAGE,
+            ".java",
+            affectedSources.toSet(),
+        )
+        val javaFiles = sourceFilesToProcess(context)
         // Seed declarations from every changed file before final call materialization. The parser
         // writes deterministic keys, so the final pass overwrites equivalent symbol/reference facts
         // while letting caller files resolve parameter names from callees later in source order.
-        javaFiles.forEach { source -> parse(source, context.readSource(source), store) }
+        javaFiles.forEach { source -> parse(source, context.readSource(source), store, context) }
         javaFiles.forEachIndexed { index, source ->
             context.reportFileProgress(index + 1, javaFiles.size, source)
-            parse(source, context.readSource(source), store)
+            parse(source, context.readSource(source), store, context)
         }
     }
 
-    private fun parse(indexedSource: IndexedSource, source: String, store: CodeIndexStore) {
+    private fun sourceFilesToProcess(context: IndexBuildContext): List<IndexedSource> =
+        (context.changedSources.filter { it.path.endsWith(".java") } +
+                metadataDependentSources(context))
+            .distinctBy { it.originId to it.path }
+
+    private fun metadataDependentSources(context: IndexBuildContext): List<IndexedSource> {
+        val metadataModules =
+            (context.changedSources + context.deletedSources).mapNotNull { source ->
+                ResourceMetadata.metadataModule(source.path)?.let { source.originId to it }
+            }
+        val resourceModules =
+            (context.changedSources + context.deletedSources)
+                .filter { ResourceMetadata.isResourceXml(it.path) }
+                .map { it.originId to ResourceMetadata.moduleDirectory(it.path) }
+        val dependencyModules = metadataModules + resourceModules
+        if (dependencyModules.isEmpty()) return emptyList()
+        return context.sources.filter { source ->
+            source.path.endsWith(".java") &&
+                (source.originId to ResourceMetadata.moduleDirectory(source.path)) in
+                    dependencyModules
+        }
+    }
+
+    private fun parse(
+        indexedSource: IndexedSource,
+        source: String,
+        store: CodeIndexStore,
+        context: IndexBuildContext,
+    ) {
         val relativePath = indexedSource.path
         val compiler =
             checkNotNull(ToolProvider.getSystemJavaCompiler()) { "JDK compiler is unavailable" }
@@ -83,7 +118,14 @@ internal class JavaSourceProducer : IndexProducer {
         val unit = task.parse().single()
         val error = diagnostics.diagnostics.firstOrNull { it.kind == Diagnostic.Kind.ERROR }
         check(error == null) { "$relativePath:${error?.lineNumber}: ${error?.getMessage(null)}" }
-        JavaRecordScanner(indexedSource.originId, relativePath, unit, Trees.instance(task), store)
+        JavaRecordScanner(
+                indexedSource.originId,
+                relativePath,
+                ResourceMetadata.resourcePackage(context, indexedSource),
+                unit,
+                Trees.instance(task),
+                store,
+            )
             .scan(unit, Unit)
     }
 
@@ -99,6 +141,7 @@ internal class JavaSourceProducer : IndexProducer {
     private class JavaRecordScanner(
         private val originId: String,
         private val relativePath: String,
+        private val defaultResourcePackage: String?,
         private val unit: CompilationUnitTree,
         private val trees: Trees,
         private val store: CodeIndexStore,
@@ -114,6 +157,22 @@ internal class JavaSourceProducer : IndexProducer {
         private val classSuperTypes = ArrayDeque<String>()
         private val variableScopes = ArrayDeque<MutableMap<String, String>>()
         private val methodOwners = ArrayDeque<String>()
+        private val resourceUsageIndexer =
+            JavaResourceUsageIndexer(
+                originId = originId,
+                relativePath = relativePath,
+                defaultResourcePackage = defaultResourcePackage,
+                packageName = packageName,
+                store = store,
+                imports = imports,
+                staticImports = staticImports,
+                staticWildcardImports = staticWildcardImports,
+                variableScopes = variableScopes,
+                positionOf = { tree ->
+                    val start = position(tree)
+                    JavaResourceUsageIndexer.SourcePosition(start.line, start.column, start.offset)
+                },
+            )
 
         override fun visitImport(node: ImportTree, data: Unit?) {
             val imported = node.qualifiedIdentifier.toString()
@@ -132,6 +191,19 @@ internal class JavaSourceProducer : IndexProducer {
             }
             reference(target, imported.substringAfterLast('.'), null, node, "import")
             super.visitImport(node, data)
+        }
+
+        override fun visitMemberSelect(node: MemberSelectTree, data: Unit?) {
+            val parent = currentPath.parentPath?.leaf
+            if (parent !is MemberSelectTree || parent.expression != node) {
+                resourceUsageIndexer.indexResourceUsage(node, currentPath)
+            }
+            super.visitMemberSelect(node, data)
+        }
+
+        override fun visitIdentifier(node: IdentifierTree, data: Unit?) {
+            resourceUsageIndexer.indexStaticResourceUsage(node, currentPath)
+            super.visitIdentifier(node, data)
         }
 
         override fun visitClass(node: ClassTree, data: Unit?) {

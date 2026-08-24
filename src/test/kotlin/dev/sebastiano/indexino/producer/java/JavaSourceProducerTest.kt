@@ -1,8 +1,11 @@
 package dev.sebastiano.indexino.producer.java
 
+import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.CodeIndexRecordCodec
 import dev.sebastiano.indexino.core.record.ReferenceRecord
+import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
+import dev.sebastiano.indexino.core.record.ResourceUsageRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.producer.IndexBuildContext
@@ -599,6 +602,196 @@ class JavaSourceProducerTest {
                     .toList()
             assertEquals(1, references.count { it.symbolFqn == "sample.Second#render" })
             assertEquals(1, references.count { it.symbolFqn == "sample.First#render" })
+        }
+    }
+
+    @Test
+    fun `indexes Java R resource usages with package identity`() {
+        val source =
+            """
+            package com.example.app;
+
+            import com.example.feature.R;
+            import static com.example.shared.R.string.shared_title;
+            import static com.example.wild.R.color.*;
+
+            class Screen {
+                int wildcardColor = wildcard_accent;
+                void call() { notAResource(); }
+                int title = R.string.title;
+                int staticallyImported = shared_title;
+                int staticLength = shared_title.length();
+                int[] styleable = R.styleable.CustomView;
+                int titleLength = R.string.title.length();
+                int icon = com.example.assets.R.drawable.icon;
+                int notResource = foo.R.state.ordinal();
+            }
+            """
+                .trimIndent()
+
+        withStore { store ->
+            val producer = assertNotNull(ProducerRegistry.get("java-source"))
+            store.put(
+                CodeIndexKey.resourceDefinition(
+                    packageName = "com.example.wild",
+                    type = "color",
+                    name = "wildcard_accent",
+                    qualifiers = "",
+                    originId = "workspace",
+                    relativeFile = "app/src/main/res/values/colors.xml",
+                    line = 2,
+                ),
+                ResourceDefinitionRecord(
+                    packageName = "com.example.wild",
+                    type = "color",
+                    name = "wildcard_accent",
+                    qualifiers = "",
+                    relativeFile = "app/src/main/res/values/colors.xml",
+                    line = 2,
+                ),
+            )
+            producer.produce(
+                IndexBuildContext.forInlineSources(
+                    store = store,
+                    commitHash = "resources",
+                    sourceFiles =
+                        mapOf(
+                            "app/build.gradle.kts" to
+                                "android { namespace = \"com.example.namespace\" }",
+                            "app/src/main/java/com/example/app/Screen.java" to source,
+                            "app/src/main/java/com/example/app/LocalScreen.java" to
+                                "package com.example.app; class LocalScreen { int local = R.string.local_title; }",
+                            "app/src/main/java/com/example/app/Shadowed.java" to
+                                """
+                                package com.example.app;
+                                import static com.example.shared.R.string.shared_title;
+                                class Shadowed { int shared_title; int read() { return shared_title; } }
+                                """
+                                    .trimIndent(),
+                        ),
+                )
+            )
+
+            val usages =
+                store
+                    .prefixScan("resuse:")
+                    .map { it.second }
+                    .filterIsInstance<ResourceUsageRecord>()
+                    .toList()
+            assertEquals(8, usages.size)
+            assertEquals(
+                setOf(
+                    "com.example.namespace:string:local_title",
+                    "com.example.feature:string:title",
+                    "com.example.shared:string:shared_title",
+                    "com.example.wild:color:wildcard_accent",
+                    "com.example.feature:styleable:CustomView",
+                    "com.example.assets:drawable:icon",
+                ),
+                usages
+                    .map { listOf(it.packageName.orEmpty(), it.type, it.name).joinToString(":") }
+                    .toSet(),
+            )
+            assertTrue(usages.all { it.language == "java" })
+            assertTrue(usages.all { it.offset > 0 })
+            assertTrue(usages.all { it.relativeFile.endsWith("Screen.java") })
+        }
+    }
+
+    @Test
+    fun `namespace metadata changes reindex Java R usages`() {
+        val source = "package com.example.app; class Screen { int title = R.string.title; }"
+        val initial =
+            mapOf(
+                "app/build.gradle.kts" to "android { namespace = \"com.example.old\" }",
+                "app/src/main/java/com/example/app/Screen.java" to source,
+            )
+
+        withStore { store ->
+            val producer = assertNotNull(ProducerRegistry.get("java-source"))
+            producer.produce(IndexBuildContext.forInlineSources(store, "initial", initial))
+            val updated =
+                initial + ("app/build.gradle.kts" to "android { namespace = \"com.example.new\" }")
+            producer.produce(
+                IndexBuildContext(
+                    store = store,
+                    commitHash = "updated",
+                    sourceFiles = updated.keys.toList(),
+                    sourceContentOverrides = updated,
+                    changedSourceFiles = setOf("app/build.gradle.kts"),
+                )
+            )
+
+            val packages =
+                store
+                    .prefixScan("resuse:")
+                    .map { it.second }
+                    .filterIsInstance<ResourceUsageRecord>()
+                    .map { it.packageName }
+                    .toSet()
+            assertEquals(setOf("com.example.new"), packages)
+        }
+    }
+
+    @Test
+    fun `resource definition changes reindex wildcard R imports`() {
+        val javaSource =
+            """
+            package com.example.wild;
+            import static com.example.wild.R.color.*;
+            class Screen { int color = wildcard_accent; }
+            """
+                .trimIndent()
+        val xmlSource = "<resources><color name=\"wildcard_accent\">#fff</color></resources>"
+        val sources =
+            mapOf(
+                "app/build.gradle.kts" to "android { namespace = \"com.example.wild\" }",
+                "app/src/main/java/com/example/wild/Screen.java" to javaSource,
+                "app/src/main/res/values/colors.xml" to xmlSource,
+            )
+
+        withStore { store ->
+            val javaProducer = assertNotNull(ProducerRegistry.get("java-source"))
+            javaProducer.produce(
+                IndexBuildContext(
+                    store = store,
+                    commitHash = "initial",
+                    sourceFiles = sources.keys.toList(),
+                    sourceContentOverrides = sources,
+                    changedSourceFiles = setOf("app/src/main/java/com/example/wild/Screen.java"),
+                )
+            )
+            assertTrue(store.prefixScan("resuse:").toList().isEmpty())
+
+            assertNotNull(ProducerRegistry.get("xml-resources"))
+                .produce(
+                    IndexBuildContext(
+                        store = store,
+                        commitHash = "updated",
+                        sourceFiles = sources.keys.toList(),
+                        sourceContentOverrides = sources,
+                        changedSourceFiles = setOf("app/src/main/res/values/colors.xml"),
+                    )
+                )
+            javaProducer.produce(
+                IndexBuildContext(
+                    store = store,
+                    commitHash = "updated",
+                    sourceFiles = sources.keys.toList(),
+                    sourceContentOverrides = sources,
+                    changedSourceFiles = setOf("app/src/main/res/values/colors.xml"),
+                )
+            )
+
+            val usages =
+                store
+                    .prefixScan("resuse:")
+                    .map { it.second }
+                    .filterIsInstance<ResourceUsageRecord>()
+                    .toList()
+            assertEquals(1, usages.size)
+            assertEquals("com.example.wild", usages.single().packageName)
+            assertEquals("wildcard_accent", usages.single().name)
         }
     }
 

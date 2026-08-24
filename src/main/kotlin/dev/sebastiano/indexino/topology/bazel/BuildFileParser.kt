@@ -248,7 +248,7 @@ internal object BuildFileParser {
                                 .toSet()
                         extractIncludePatterns(body)
                             .flatMap { BuildFileGlob.expandGlob(packageDir, it) }
-                            .filter { it.endsWith(".xml") && it !in excluded }
+                            .filter { it !in excluded }
                             .forEach(::add)
                     }
                 (QUOTED_STRING.findAll(expression) + SINGLE_QUOTED_STRING.findAll(expression))
@@ -257,7 +257,7 @@ internal object BuildFileParser {
                             !BuildFileComments.isCommentedOutInBlock(expression, quoted.range.first)
                     }
                     .map { it.groupValues[1] }
-                    .filter { it.endsWith(".xml") }
+                    .filterNot(::isBazelLabel)
                     .forEach(::add)
             }
     }
@@ -292,3 +292,6 @@ internal object BuildFileParser {
 
 private fun workspaceRelativeLiteral(path: String, packagePrefix: String): String =
     if (path.startsWith("//")) path.removePrefix("//") else "$packagePrefix$path"
+
+private fun isBazelLabel(path: String): Boolean =
+    path.startsWith(":") || path.startsWith("@") || ':' in path

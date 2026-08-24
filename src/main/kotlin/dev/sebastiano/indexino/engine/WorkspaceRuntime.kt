@@ -101,6 +101,8 @@ private constructor(
             RuntimeSnapshotProtocol.FIND_SYMBOLS,
             RuntimeSnapshotProtocol.FIND_REFERENCES,
             RuntimeSnapshotProtocol.FIND_CALLS,
+            RuntimeSnapshotProtocol.FIND_RESOURCES,
+            RuntimeSnapshotProtocol.FIND_RESOURCE_USAGES,
             RuntimeSnapshotProtocol.RUN_CHECK -> snapshotDispatcher.dispatch(session, command)
             else -> throw RuntimeProtocolException("Unknown runtime command")
         }

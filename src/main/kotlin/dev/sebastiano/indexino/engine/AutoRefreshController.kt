@@ -358,6 +358,6 @@ internal class AutoRefreshController(
         const val MAX_RETRY_ATTEMPTS = 3
         const val MAX_MODULE_DISCOVERY_DEPTH = 6
         val RETRY_DELAYS_MILLIS = longArrayOf(1_000L, 5_000L, 30_000L)
-        val SOURCE_ROOT_NAMES = setOf("kotlin", "java", "resources", "res")
+        val SOURCE_ROOT_NAMES = setOf("kotlin", "java", "resources", "res", "composeResources")
     }
 }

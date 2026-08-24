@@ -3,6 +3,7 @@ package dev.sebastiano.indexino.producer.kotlinpsi
 import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.CodeIndexRecordCodec
 import dev.sebastiano.indexino.core.record.ReferenceRecord
+import dev.sebastiano.indexino.core.record.ResourceUsageRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.producer.IndexBuildContext
@@ -152,6 +153,120 @@ class KotlinPsiSymbolProducerTest {
         assertEquals("content", container.arguments.single().resolvedName)
         assertEquals("LAMBDA", container.arguments.single().kind)
         assertEquals(')', source[container.endOffset])
+    }
+
+    @Test
+    fun `indexes Kotlin R resource usages with package identity`() {
+        val source =
+            """
+            package com.example.app
+
+            import com.example.feature.R as FeatureR
+            import com.example.feature.R.string.title
+            import com.example.shared.R.string.shared_title as appSharedTitle
+
+            class Screen {
+                val title = R.string.title
+                val styleable = R.styleable.CustomView
+                val shadowedTitle = title
+                val accent = R.attr.accent
+                val composeTitle = Res.string.compose_title
+                val assetComposeIcon = com.example.assets.Res.drawable.asset_icon
+                val titleLength = R.string.title.length()
+                val subtitle = FeatureR.string.subtitle
+                val icon = com.example.assets.R.drawable.icon
+                val notResource = foo.R.state.idle
+            }
+
+            fun useStaticTitle() = title
+            fun staticTitleLength() = title.length()
+            fun useAliasedTitle() = appSharedTitle
+            """
+                .trimIndent()
+        val producer = checkNotNull(ProducerRegistry.get("kotlin-psi-symbols"))
+        producer.produce(
+            IndexBuildContext.forInlineSources(
+                store = store,
+                commitHash = "resources",
+                sourceFiles =
+                    mapOf(
+                        "app/build.gradle.kts" to
+                            "android { namespace = \"com.example.namespace\" }",
+                        "app/src/main/kotlin/com/example/app/Screen.kt" to source,
+                        "app/src/main/kotlin/com/example/app/Shadow.kt" to
+                            """
+                            package com.example.app
+                            import com.example.feature.R.string.title
+                            val title = "shadow"
+                            fun topLevelShadowed() = title
+                            class ConstructorShadow(val title: String) { fun read() = title }
+                            object ObjectShadow { val title = "shadow"; fun read() = title }
+                            """
+                                .trimIndent(),
+                    ),
+            ),
+            store,
+        )
+
+        val usages =
+            store
+                .prefixScan("resuse:")
+                .map { it.second }
+                .filterIsInstance<ResourceUsageRecord>()
+                .toList()
+        assertEquals(11, usages.size)
+        assertEquals(
+            setOf(
+                "com.example.namespace:string:title",
+                "com.example.namespace:styleable:CustomView",
+                "com.example.namespace:string:compose_title",
+                "com.example.namespace:attr:accent",
+                "com.example.feature:string:title",
+                "com.example.shared:string:shared_title",
+                "com.example.feature:string:subtitle",
+                "com.example.assets:drawable:icon",
+                "com.example.assets:drawable:asset_icon",
+            ),
+            usages
+                .map { listOf(it.packageName.orEmpty(), it.type, it.name).joinToString(":") }
+                .toSet(),
+        )
+        assertTrue(usages.all { it.language == "kotlin" })
+        assertTrue(usages.all { it.offset > 0 })
+        assertTrue(usages.all { it.relativeFile.endsWith("Screen.kt") })
+    }
+
+    @Test
+    fun `namespace metadata changes reindex Kotlin R usages`() {
+        val source = "package com.example.app\nclass Screen { val title = R.string.title }"
+        val initial =
+            mapOf(
+                "app/build.gradle.kts" to "android { namespace = \"com.example.old\" }",
+                "app/src/main/kotlin/com/example/app/Screen.kt" to source,
+            )
+        val producer = checkNotNull(ProducerRegistry.get("kotlin-psi-symbols"))
+        producer.produce(IndexBuildContext.forInlineSources(store, "initial", initial), store)
+        val updated =
+            initial + ("app/build.gradle.kts" to "android { namespace = \"com.example.new\" }")
+        producer.produce(
+            IndexBuildContext(
+                store = store,
+                commitHash = "updated",
+                sourceFiles = updated.keys.toList(),
+                sourceContentOverrides = updated,
+                changedSourceFiles = setOf("app/build.gradle.kts"),
+            ),
+            store,
+        )
+
+        val packages =
+            store
+                .prefixScan("resuse:")
+                .map { it.second }
+                .filterIsInstance<ResourceUsageRecord>()
+                .map { it.packageName }
+                .toSet()
+        assertEquals(setOf("com.example.new"), packages)
     }
 
     private lateinit var store: XodusCodeIndexStore

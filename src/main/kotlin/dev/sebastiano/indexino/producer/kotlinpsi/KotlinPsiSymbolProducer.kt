@@ -4,13 +4,16 @@ import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.CallArgumentRecord
 import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
+import dev.sebastiano.indexino.core.record.ResourceUsageRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.store.hasSymbol
 import dev.sebastiano.indexino.parse.KotlinPsiParser
 import dev.sebastiano.indexino.producer.IndexBuildContext
 import dev.sebastiano.indexino.producer.IndexProducer
+import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.SourceRecordCleanup
+import dev.sebastiano.indexino.producer.xml.ResourceMetadata
 import org.jetbrains.kotlin.com.intellij.psi.PsiElement
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.KtBinaryExpression
@@ -26,6 +29,7 @@ import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtForExpression
 import org.jetbrains.kotlin.psi.KtFunctionLiteral
+import org.jetbrains.kotlin.psi.KtImportDirective
 import org.jetbrains.kotlin.psi.KtLambdaExpression
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
 import org.jetbrains.kotlin.psi.KtNamedFunction
@@ -44,29 +48,59 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
     override val displayName: String = "KotlinPsiSymbolProducer"
 
     override val progressTotal: (IndexBuildContext) -> Int = { context ->
-        context.changedSources.count { it.path.endsWith(".kt") }
+        sourceFilesToProcess(context, ".kt").size
     }
 
     override fun produce(context: IndexBuildContext, store: CodeIndexStore) {
         val affectedSources =
-            (context.changedSources + context.deletedSources).filterTo(linkedSetOf()) {
-                it.path.endsWith(".kt")
-            }
-        SourceRecordCleanup.deleteLanguageOriginRecords(store, LANGUAGE, ".kt", affectedSources)
+            ((context.changedSources + context.deletedSources).filter { it.path.endsWith(".kt") } +
+                    metadataDependentSources(context, ".kt"))
+                .distinctBy { it.originId to it.path }
+        SourceRecordCleanup.deleteLanguageOriginRecords(
+            store,
+            LANGUAGE,
+            ".kt",
+            affectedSources.toSet(),
+        )
         KotlinPsiParser().use { parser ->
-            val ktFiles = context.changedSources.filter { it.path.endsWith(".kt") }
+            val ktFiles = sourceFilesToProcess(context, ".kt")
             val indexedFiles = ktFiles.mapIndexed { index, source ->
                 context.reportFileProgress(index + 1, ktFiles.size, source)
                 val file = parser.parseFile(source.path, context.readSource(source))
                 IndexedKotlinFile(
                     source.originId,
                     source.path,
+                    ResourceMetadata.resourcePackage(context, source),
                     file,
                     collectSymbols(file).map { it.copy(originId = source.originId) },
                 )
             }
             val projectSymbols = indexedFiles.flatMap { it.symbols }
             indexedFiles.forEach { indexedFile -> indexFile(indexedFile, projectSymbols, store) }
+        }
+    }
+
+    private fun sourceFilesToProcess(
+        context: IndexBuildContext,
+        extension: String,
+    ): List<IndexedSource> =
+        (context.changedSources.filter { it.path.endsWith(extension) } +
+                metadataDependentSources(context, extension))
+            .distinctBy { it.originId to it.path }
+
+    private fun metadataDependentSources(
+        context: IndexBuildContext,
+        extension: String,
+    ): List<IndexedSource> {
+        val metadataModules =
+            (context.changedSources + context.deletedSources).mapNotNull { source ->
+                ResourceMetadata.metadataModule(source.path)?.let { source.originId to it }
+            }
+        if (metadataModules.isEmpty()) return emptyList()
+        return context.sources.filter { source ->
+            source.path.endsWith(extension) &&
+                (source.originId to ResourceMetadata.moduleDirectory(source.path)) in
+                    metadataModules
         }
     }
 
@@ -152,7 +186,212 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             store,
         )
         indexMemberReferences(file, indexedFile.originId, indexedFile.relativePath, store, imports)
+        indexResourceUsages(
+            file,
+            indexedFile.originId,
+            indexedFile.relativePath,
+            imports,
+            indexedFile.defaultResourcePackage,
+            store,
+        )
+        indexStaticResourceUsages(
+            file,
+            indexedFile.originId,
+            indexedFile.relativePath,
+            imports,
+            store,
+        )
     }
+
+    private fun indexStaticResourceUsages(
+        file: KtFile,
+        originId: String,
+        relativePath: String,
+        imports: Map<String, String>,
+        store: CodeIndexStore,
+    ) {
+        file.collectDescendantsOfType<KtNameReferenceExpression>().forEach { expression ->
+            if (generateSequence(expression.parent) { it.parent }.any { it is KtImportDirective }) {
+                return@forEach
+            }
+            val parent = expression.parent
+            if (parent is KtQualifiedExpression && parent.selectorExpression == expression) {
+                return@forEach
+            }
+            val name = expression.getReferencedName()
+            val imported = imports[name] ?: return@forEach
+            val marker = ".R."
+            if (marker !in imported) return@forEach
+            val resourcePackage = imported.substringBefore(marker)
+            val parts = imported.substringAfter(marker).split('.')
+            if (parts.size != 2 || parts[0] !in ResourceMetadata.RESOURCE_TYPES) {
+                return@forEach
+            }
+            val resourceName = parts[1]
+            if (hasShadowedName(expression, name)) return@forEach
+            store.put(
+                CodeIndexKey.resourceUsage(
+                    packageName = resourcePackage,
+                    type = parts[0],
+                    name = resourceName,
+                    originId = originId,
+                    relativeFile = relativePath,
+                    line = expression.lineNumber(),
+                    column = expression.columnNumber(),
+                ),
+                ResourceUsageRecord(
+                    packageName = resourcePackage,
+                    type = parts[0],
+                    name = resourceName,
+                    relativeFile = relativePath,
+                    line = expression.lineNumber(),
+                    column = expression.columnNumber(),
+                    offset = expression.textOffset,
+                    language = LANGUAGE,
+                    originId = originId,
+                ),
+            )
+        }
+    }
+
+    private fun indexResourceUsages(
+        file: KtFile,
+        originId: String,
+        relativePath: String,
+        imports: Map<String, String>,
+        defaultResourcePackage: String?,
+        store: CodeIndexStore,
+    ) {
+        file.collectDescendantsOfType<KtQualifiedExpression>().forEach { expression ->
+            if (generateSequence(expression.parent) { it.parent }.any { it is KtImportDirective }) {
+                return@forEach
+            }
+            val parent = expression.parent
+            if (parent is KtQualifiedExpression && parent.receiverExpression == expression) {
+                return@forEach
+            }
+            val chain = qualifiedNameChain(expression) ?: return@forEach
+            val accessor = resourceAccessor(chain.segments, imports) ?: return@forEach
+            val rIndex = accessor.index
+            val explicitPackage = chain.segments.take(rIndex).joinToString(".").ifBlank { null }
+            val importedOwner = imports[chain.segments[rIndex]]
+            val packageName =
+                explicitPackage
+                    ?: importedOwner?.substringBeforeLast('.', "")?.takeIf(String::isNotBlank)
+                    ?: defaultResourcePackage
+                    ?: file.packageFqName.asString().ifBlank { null }
+            val type = chain.segments[rIndex + 1]
+            val name = chain.segments[rIndex + 2]
+            val selector = chain.selectors.getOrNull(rIndex + 1) ?: return@forEach
+            store.put(
+                CodeIndexKey.resourceUsage(
+                    packageName = packageName,
+                    type = type,
+                    name = name,
+                    originId = originId,
+                    relativeFile = relativePath,
+                    line = selector.lineNumber(),
+                    column = selector.columnNumber(),
+                ),
+                ResourceUsageRecord(
+                    packageName = packageName,
+                    type = type,
+                    name = name,
+                    relativeFile = relativePath,
+                    line = selector.lineNumber(),
+                    column = selector.columnNumber(),
+                    offset = selector.textOffset,
+                    language = LANGUAGE,
+                    originId = originId,
+                ),
+            )
+        }
+    }
+
+    private fun hasShadowedName(useSite: KtElement, name: String): Boolean {
+        var scope = useSite.parent
+        var insideMemberFunction = false
+        while (scope != null) {
+            if (scope is KtNamedFunction && scope.parent is KtClassBody) {
+                insideMemberFunction = true
+            }
+            if (hasNameInScope(scope, useSite, name, insideMemberFunction)) return true
+            scope = scope.parent
+        }
+        return false
+    }
+
+    private fun hasNameInScope(
+        scope: PsiElement,
+        useSite: KtElement,
+        name: String,
+        insideMemberFunction: Boolean,
+    ): Boolean =
+        when (scope) {
+            is KtNamedFunction ->
+                (insideMemberFunction || scope.parent !is KtClassBody) &&
+                    scope.valueParameters.any { it.name == name }
+            is KtFunctionLiteral -> scope.valueParameters.any { it.name == name }
+            is KtCatchClause -> scope.catchParameter?.name == name
+            is KtForExpression -> scope.loopParameter?.name == name
+            is KtBlockExpression ->
+                scope.statements.filterIsInstance<KtProperty>().any {
+                    it.name == name && it.textOffset < useSite.textOffset
+                }
+            is KtClassOrObject ->
+                scope.declarations.filterIsInstance<KtProperty>().any { it.name == name } ||
+                    (scope as? KtClass)?.primaryConstructorParameters.orEmpty().any {
+                        it.hasValOrVar() && it.name == name
+                    }
+            is KtFile -> scope.declarations.filterIsInstance<KtProperty>().any { it.name == name }
+            else -> false
+        }
+
+    private data class ResourceAccessor(val index: Int, val compose: Boolean)
+
+    private fun resourceAccessor(
+        segments: List<String>,
+        imports: Map<String, String>,
+    ): ResourceAccessor? =
+        segments.indices.firstNotNullOfOrNull { index ->
+            if (index + 2 > segments.lastIndex) return@firstNotNullOfOrNull null
+            val importedSimpleName = imports[segments[index]]?.substringAfterLast('.')
+            when {
+                segments[index] == "Res" || importedSimpleName == "Res" ->
+                    ResourceAccessor(index, compose = true)
+                segments[index] == "R" || importedSimpleName == "R" ->
+                    ResourceAccessor(index, compose = false)
+                else -> null
+            }?.takeIf { segments[index + 1] in ResourceMetadata.RESOURCE_TYPES }
+        }
+
+    private data class QualifiedNameChain(
+        val segments: List<String>,
+        val selectors: List<KtExpression>,
+    )
+
+    private fun qualifiedNameChain(expression: KtExpression): QualifiedNameChain? =
+        when (expression) {
+            is KtNameReferenceExpression ->
+                QualifiedNameChain(listOf(expression.getReferencedName()), emptyList())
+            is KtQualifiedExpression -> {
+                val receiver = qualifiedNameChain(expression.receiverExpression) ?: return null
+                val selectorExpression = expression.selectorExpression ?: return null
+                val selectorName =
+                    when (selectorExpression) {
+                        is KtNameReferenceExpression -> selectorExpression.getReferencedName()
+                        is KtCallExpression ->
+                            (selectorExpression.calleeExpression as? KtNameReferenceExpression)
+                                ?.getReferencedName() ?: return null
+                        else -> return null
+                    }
+                QualifiedNameChain(
+                    receiver.segments + selectorName,
+                    receiver.selectors + selectorExpression,
+                )
+            }
+            else -> null
+        }
 
     private fun indexCalls(
         file: KtFile,
@@ -727,6 +966,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
     private data class IndexedKotlinFile(
         val originId: String,
         val relativePath: String,
+        val defaultResourcePackage: String?,
         val file: KtFile,
         val symbols: List<ResolvedSymbol>,
     )

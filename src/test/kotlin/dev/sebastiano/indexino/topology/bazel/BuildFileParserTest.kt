@@ -43,6 +43,75 @@ class BuildFileParserTest {
     }
 
     @Test
+    fun `includes non XML Android resource files`() {
+        val workspace = createTempDirectory("build-file-parser-binary-resources-")
+        val packageDir = workspace.resolve("app")
+        packageDir.resolve("res/drawable/icon.png").toFile().apply {
+            parentFile.mkdirs()
+            writeText("not-a-real-png")
+        }
+        packageDir.resolve("res/font/display.ttf").toFile().apply {
+            parentFile.mkdirs()
+            writeText("not-a-real-font")
+        }
+        packageDir
+            .resolve("BUILD.bazel")
+            .toFile()
+            .writeText(
+                """
+                android_library(
+                    name = "app",
+                    resource_files = [
+                        "res/drawable/icon.png",
+                        "res/font/display.ttf",
+                    ],
+                )
+                """
+                    .trimIndent()
+            )
+
+        val result =
+            BuildFileParser.parseKotlinSources(packageDir.resolve("BUILD.bazel"), workspace)
+
+        assertEquals(
+            listOf("app/res/drawable/icon.png", "app/res/font/display.ttf"),
+            result.paths.sorted(),
+        )
+    }
+
+    @Test
+    fun `resource_files Bazel labels are not treated as source paths`() {
+        val workspace = createTempDirectory("build-file-parser-resource-labels-")
+        val packageDir = workspace.resolve("app")
+        packageDir.resolve("res/layout/main.xml").toFile().apply {
+            parentFile.mkdirs()
+            writeText("<FrameLayout />")
+        }
+        packageDir
+            .resolve("BUILD.bazel")
+            .toFile()
+            .writeText(
+                """
+                android_library(
+                    name = "app",
+                    resource_files = [
+                        "res/layout/main.xml",
+                        ":generated_res",
+                        "//external:shared_res",
+                        "@repo//pkg:assets",
+                    ],
+                )
+                """
+                    .trimIndent()
+            )
+
+        val result =
+            BuildFileParser.parseKotlinSources(packageDir.resolve("BUILD.bazel"), workspace)
+
+        assertEquals(listOf("app/res/layout/main.xml"), result.paths)
+    }
+
+    @Test
     fun `commented resource file entries are not indexed`() {
         val workspace = createTempDirectory("build-file-parser-commented-resources-")
         val packageDir = workspace.resolve("app")

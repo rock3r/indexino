@@ -19,9 +19,9 @@ internal object ProducerRegistry {
     fun all(): Collection<IndexProducer> = producers.values
 
     fun forApplications(applicationIds: List<String>): List<IndexProducer> = buildList {
+        add(dev.sebastiano.indexino.producer.xml.XmlResourceProducer())
         add(dev.sebastiano.indexino.producer.java.JavaSourceProducer())
         add(dev.sebastiano.indexino.producer.kotlinpsi.KotlinPsiSymbolProducer())
-        add(dev.sebastiano.indexino.producer.xml.XmlResourceProducer())
         for (id in applicationIds) {
             producers[id]?.takeUnless { it is FileHashProducer }?.let { add(it) }
         }

@@ -1,5 +1,8 @@
 package dev.sebastiano.indexino.cli
 
+import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
+import dev.sebastiano.indexino.core.record.ResourceUsageRecord
+import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.JsonlIndexBuildProgressReporter
 import dev.sebastiano.indexino.topology.BuildSystem
@@ -334,6 +337,139 @@ class IndexBuildRunnerTest {
             setOf("git:ui"),
             execution.changes?.changedSources?.map { it.originId }?.toSet(),
         )
+    }
+
+    @Test
+    fun `gradle namespace changes refresh resource package identities`() {
+        val workspace = tempDir.resolve("resource-namespace")
+        Files.createDirectories(workspace.resolve("app/src/main/res/values"))
+        Files.createDirectories(workspace.resolve("app/src/main/res/drawable"))
+        Files.write(
+            workspace.resolve("app/src/main/res/drawable/icon.png"),
+            byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x80.toByte()),
+        )
+        Files.writeString(
+            workspace.resolve("settings.gradle.kts"),
+            "rootProject.name = \"resources\"\ninclude(\":app\")\n",
+        )
+        Files.writeString(
+            workspace.resolve("app/build.gradle.kts"),
+            "android { namespace = \"com.example.old\" }\n",
+        )
+        Files.writeString(
+            workspace.resolve("app/src/main/res/values/strings.xml"),
+            "<resources><string name=\"title\">Hello</string></resources>",
+        )
+        git(workspace, "init")
+        git(workspace, "config", "user.email", "test@example.invalid")
+        git(workspace, "config", "user.name", "Indexino Test")
+        git(workspace, "add", ".")
+        git(workspace, "commit", "-m", "resources")
+        val commit = git(workspace, "rev-parse", "HEAD").trim()
+        val storeRoot = tempDir.resolve("store")
+
+        fun runIndex(): Int =
+            IndexBuildRunner(
+                    project = workspace,
+                    topologyRequest =
+                        TopologyRequest(buildSystem = BuildSystem.GRADLE, gradleModule = ":app"),
+                    applications = emptyList(),
+                    bazelQueryExecutor = null,
+                    bazelProcessRunner = null,
+                    progress = {},
+                    machineProgress = null,
+                    storeRootOverride = storeRoot,
+                )
+                .runDetailed()
+                .exitCode
+
+        assertEquals(CliExitCodes.SUCCESS, runIndex())
+        Files.writeString(
+            workspace.resolve("app/build.gradle.kts"),
+            "android { namespace = \"com.example.new\" }\n",
+        )
+        assertEquals(CliExitCodes.SUCCESS, runIndex())
+
+        val store =
+            XodusCodeIndexStore.open(
+                storeRoot.resolve("index").resolve(commit).resolve("base.xodus")
+            )
+        try {
+            val packages =
+                store
+                    .prefixScan("resdef:")
+                    .map { it.second }
+                    .filterIsInstance<ResourceDefinitionRecord>()
+                    .map { it.packageName }
+                    .toSet()
+            assertEquals(setOf("com.example.new"), packages)
+        } finally {
+            store.close()
+        }
+    }
+
+    @Test
+    fun `gradle namespace changes refresh code only R usages`() {
+        val workspace = tempDir.resolve("resource-code-only")
+        Files.createDirectories(workspace.resolve("app/src/main/kotlin/com/example/app"))
+        Files.writeString(
+            workspace.resolve("settings.gradle.kts"),
+            "rootProject.name = \"resources\"\ninclude(\":app\")\n",
+        )
+        Files.writeString(
+            workspace.resolve("app/build.gradle.kts"),
+            "android { namespace = \"com.example.old\" }\n",
+        )
+        Files.writeString(
+            workspace.resolve("app/src/main/kotlin/com/example/app/Screen.kt"),
+            "package com.example.app\nclass Screen { val title = R.string.title }\n",
+        )
+        git(workspace, "init")
+        git(workspace, "config", "user.email", "test@example.invalid")
+        git(workspace, "config", "user.name", "Indexino Test")
+        git(workspace, "add", ".")
+        git(workspace, "commit", "-m", "resources")
+        val commit = git(workspace, "rev-parse", "HEAD").trim()
+        val storeRoot = tempDir.resolve("store")
+
+        fun runIndex(): Int =
+            IndexBuildRunner(
+                    project = workspace,
+                    topologyRequest =
+                        TopologyRequest(buildSystem = BuildSystem.GRADLE, gradleModule = ":app"),
+                    applications = emptyList(),
+                    bazelQueryExecutor = null,
+                    bazelProcessRunner = null,
+                    progress = {},
+                    machineProgress = null,
+                    storeRootOverride = storeRoot,
+                )
+                .runDetailed()
+                .exitCode
+
+        assertEquals(CliExitCodes.SUCCESS, runIndex())
+        Files.writeString(
+            workspace.resolve("app/build.gradle.kts"),
+            "android { namespace = \"com.example.new\" }\n",
+        )
+        assertEquals(CliExitCodes.SUCCESS, runIndex())
+
+        val store =
+            XodusCodeIndexStore.open(
+                storeRoot.resolve("index").resolve(commit).resolve("base.xodus")
+            )
+        try {
+            val packages =
+                store
+                    .prefixScan("resuse:")
+                    .map { it.second }
+                    .filterIsInstance<ResourceUsageRecord>()
+                    .map { it.packageName }
+                    .toSet()
+            assertEquals(setOf("com.example.new"), packages)
+        } finally {
+            store.close()
+        }
     }
 
     @TempDir lateinit var tempDir: Path

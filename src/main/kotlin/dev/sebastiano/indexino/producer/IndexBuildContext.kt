@@ -1,9 +1,11 @@
 package dev.sebastiano.indexino.producer
 
 import dev.sebastiano.indexino.core.store.CodeIndexStore
+import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.Path
 import kotlin.io.path.readText
+import kotlin.text.Charsets
 
 internal data class IndexBuildContext(
     val store: CodeIndexStore,
@@ -50,7 +52,12 @@ internal data class IndexBuildContext(
             ?: source.originRoot.resolve(source.path).readText()
 
     fun sourceHash(source: IndexedSource): String =
-        sourceSnapshot?.contentHash(source) ?: FileHashProducer.contentHash(readSource(source))
+        sourceSnapshot?.contentHash(source) ?: FileHashProducer.contentHash(readSourceBytes(source))
+
+    fun readSourceBytes(source: IndexedSource): ByteArray =
+        sourceSnapshot?.contentBytes(source)
+            ?: sourceContentOverrides[source.path]?.toByteArray(Charsets.UTF_8)
+            ?: Files.readAllBytes(source.originRoot.resolve(source.path))
 
     fun reportFileProgress(index: Int, total: Int, source: IndexedSource) {
         progress?.invoke("[$index/$total] ${source.originId}:${source.path}")

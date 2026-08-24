@@ -12,4 +12,14 @@ public interface BasicFactQueries {
     ): QueryPage<Reference>
 
     public suspend fun findCalls(query: CallQuery, options: QueryOptions): QueryPage<CallSite>
+
+    public suspend fun findResources(
+        query: ResourceQuery,
+        options: QueryOptions,
+    ): QueryPage<ResourceDefinition>
+
+    public suspend fun findResourceUsages(
+        query: ResourceQuery,
+        options: QueryOptions,
+    ): QueryPage<ResourceUsage>
 }

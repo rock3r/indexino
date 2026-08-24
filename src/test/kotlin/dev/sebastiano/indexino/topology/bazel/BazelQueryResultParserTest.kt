@@ -21,6 +21,28 @@ class BazelQueryResultParserTest {
     }
 
     @Test
+    fun `parses non XML Android resource paths`() {
+        val paths =
+            BazelQueryResultParser.parseKotlinSourcePaths(
+                listOf(
+                    "//app:res/drawable/icon.png",
+                    "//app:src/main/res/font/display.ttf",
+                    "//app:src/commonMain/composeResources/drawable/icon.png",
+                    "//app:docs/readme.md",
+                )
+            )
+
+        assertEquals(
+            listOf(
+                "app/res/drawable/icon.png",
+                "app/src/main/res/font/display.ttf",
+                "app/src/commonMain/composeResources/drawable/icon.png",
+            ),
+            paths,
+        )
+    }
+
+    @Test
     fun `parses Kotlin Java and XML source paths`() {
         val paths =
             BazelQueryResultParser.parseKotlinSourcePaths(

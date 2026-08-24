@@ -19,6 +19,8 @@ package dev.sebastiano.indexino.model {
   public interface BasicFactQueries {
     method public suspend Object? findCalls(dev.sebastiano.indexino.model.CallQuery query, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.CallSite>>);
     method public suspend Object? findReferences(dev.sebastiano.indexino.model.ReferenceQuery query, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.Reference>>);
+    method public suspend Object? findResourceUsages(dev.sebastiano.indexino.model.ResourceQuery query, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.ResourceUsage>>);
+    method public suspend Object? findResources(dev.sebastiano.indexino.model.ResourceQuery query, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.ResourceDefinition>>);
     method public suspend Object? findSymbols(dev.sebastiano.indexino.model.SymbolQuery query, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.Symbol>>);
     method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.BasicFactSchemaVersion getBasicFactSchemaVersion();
     method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.WorkspaceGenerationId getGeneration();
@@ -388,6 +390,62 @@ package dev.sebastiano.indexino.model {
     property public dev.sebastiano.indexino.model.ResolutionConfidence HEURISTIC;
     property public dev.sebastiano.indexino.model.ResolutionConfidence RESOLVED;
     property public dev.sebastiano.indexino.model.ResolutionConfidence UNRESOLVED;
+  }
+
+  public final class ResourceDefinition {
+    ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public ResourceDefinition(dev.sebastiano.indexino.model.ResourceId id, String qualifiers, dev.sebastiano.indexino.model.SourceLocation location);
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.ResourceId getId();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceLocation getLocation();
+    method @InaccessibleFromKotlin public String getQualifiers();
+    property public dev.sebastiano.indexino.model.ResourceId id;
+    property public dev.sebastiano.indexino.model.SourceLocation location;
+    property public String qualifiers;
+  }
+
+  public final class ResourceId {
+    method @InaccessibleFromKotlin public String getName();
+    method @InaccessibleFromKotlin public String? getPackageName();
+    method @InaccessibleFromKotlin public String getType();
+    method public static dev.sebastiano.indexino.model.ResourceId of(String? packageName, String type, String name);
+    property public String name;
+    property public String? packageName;
+    property public String type;
+    field public static final dev.sebastiano.indexino.model.ResourceId.Companion Companion;
+  }
+
+  public static final class ResourceId.Companion {
+    method public dev.sebastiano.indexino.model.ResourceId of(String? packageName, String type, String name);
+  }
+
+  public final class ResourceQuery {
+    method public static dev.sebastiano.indexino.model.ResourceQuery all();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.ResourceId? getId();
+    method @InaccessibleFromKotlin public String? getName();
+    method @InaccessibleFromKotlin public String? getPackageName();
+    method @InaccessibleFromKotlin public String? getType();
+    method public static dev.sebastiano.indexino.model.ResourceQuery named(dev.sebastiano.indexino.model.ResourceId id);
+    method public static dev.sebastiano.indexino.model.ResourceQuery of(String? packageName, String? type, String? name);
+    property public dev.sebastiano.indexino.model.ResourceId? id;
+    property public String? name;
+    property public String? packageName;
+    property public String? type;
+    field public static final dev.sebastiano.indexino.model.ResourceQuery.Companion Companion;
+  }
+
+  public static final class ResourceQuery.Companion {
+    method public dev.sebastiano.indexino.model.ResourceQuery all();
+    method public dev.sebastiano.indexino.model.ResourceQuery named(dev.sebastiano.indexino.model.ResourceId id);
+    method public dev.sebastiano.indexino.model.ResourceQuery of(String? packageName, String? type, String? name);
+  }
+
+  public final class ResourceUsage {
+    ctor @dev.sebastiano.indexino.model.IndexinoInternalApi public ResourceUsage(dev.sebastiano.indexino.model.ResourceId id, dev.sebastiano.indexino.model.SourceLocation location, String language);
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.ResourceId getId();
+    method @InaccessibleFromKotlin public String getLanguage();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceLocation getLocation();
+    property public dev.sebastiano.indexino.model.ResourceId id;
+    property public String language;
+    property public dev.sebastiano.indexino.model.SourceLocation location;
   }
 
   public final class SourceFile {

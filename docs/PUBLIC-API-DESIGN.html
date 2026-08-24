@@ -1575,7 +1575,7 @@ Before deleting or moving an indexed workspace next time, run:
           <li><code>status()</code> is cheap by default: manifest + last known freshness, no topology rediscovery. Freshness is a single <code>SnapshotFreshness</code>-aligned field—not three overlapping booleans (<code>indexed</code>/<code>fresh</code>/<code>dirty</code>). An explicit reconcile path (manual <code>refresh</code> / <code>AWAIT_CURRENT</code>) may rehash.</li>
           <li><code>snapshot(PUBLISHED)</code> immediately pins the latest complete published generation; it never waits for an active successor or exposes staging. <code>snapshot(AWAIT_CURRENT)</code> joins the durable refresh path first. <code>freshnessAtAcquisition</code> is fixed for the pin; the world may move on without updating that field.</li>
           <li>After <code>refresh(request).await()</code>, a new <code>snapshot()</code> observes that completed generation. Existing snapshots remain pinned and deterministic.</li>
-          <li><code>findSymbols</code>, <code>findReferences</code>, and <code>findCalls</code> are deterministic within a snapshot. Resource queries arrive in slice S10 and are absent from earlier experimental cuts.</li>
+          <li><code>findSymbols</code>, <code>findReferences</code>, and <code>findCalls</code> are deterministic within a snapshot. Slice S10 adds deterministic <code>findResources</code> and <code>findResourceUsages</code> queries over package/type/name identities; earlier experimental cuts do not expose resource queries.</li>
           <li>Queries merge shard results through the pinned link/routing generation. Symbol/call IDs are opaque and generation-local (see Entity IDs). Source paths are always origin-qualified.</li>
           <li>Duplicate FQNs across shards remain distinct candidates. Build/classpath precedence may rank or resolve them, but storage order never decides semantic identity.</li>
           <li>Compiled plugins expose checks through a generic <code>runCheck</code> route keyed by <code>PluginId</code> and check ID. The host memoises check results per <code>(snapshot generation, CheckRequest)</code> so <code>QueryPage</code> offsets do not re-run the whole check; <code>IndexinoCheckV1.run</code> still returns a full <code>List</code> to the host. A plugin may publish a typed convenience wrapper in its own artifact.</li>
@@ -2568,7 +2568,8 @@ host.abi.major == plugin.targetAbi.major</code></pre>
 }
 
 <span class="cm">// RefreshEvent sealed hierarchy, RefreshHandle, diagnostics — unchanged in role;</span>
-<span class="cm">// result types carry equals/hashCode/toString. ResourceQuery deferred to S10.</span>
+<span class="cm">// result types carry equals/hashCode/toString. S10 adds ResourceId, ResourceQuery,</span>
+<span class="cm">// ResourceDefinition, and ResourceUsage over the same paged snapshot contract.</span>
 </code></pre>
         </div>
         <div class="code-block">

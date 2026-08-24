@@ -2,6 +2,8 @@ package dev.sebastiano.indexino.producer
 
 import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
+import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
+import dev.sebastiano.indexino.core.record.ResourceUsageRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 
@@ -15,6 +17,7 @@ internal object SourceRecordCleanup {
         deleteMatching(store, "sym:", language, extension, affectedFiles)
         deleteMatching(store, "ref:", language, extension, affectedFiles)
         deleteMatching(store, "call:", language, extension, affectedFiles)
+        deleteMatching(store, "resuse:", language, extension, affectedFiles)
     }
 
     fun deleteLanguageOriginRecords(
@@ -26,12 +29,14 @@ internal object SourceRecordCleanup {
         deleteOriginMatching(store, "sym:", language, extension, affectedSources)
         deleteOriginMatching(store, "ref:", language, extension, affectedSources)
         deleteOriginMatching(store, "call:", language, extension, affectedSources)
+        deleteOriginMatching(store, "resuse:", language, extension, affectedSources)
     }
 
     fun deleteXmlRecords(store: CodeIndexStore, affectedFiles: Set<String>) {
         deleteMatching(store, "sym:", "xml", ".xml", affectedFiles)
         deleteMatching(store, "ref:", "xml", ".xml", affectedFiles)
         deleteMatching(store, "res:", "xml", ".xml", affectedFiles)
+        deleteMatching(store, "resdef:", "xml", ".xml", affectedFiles)
     }
 
     fun deleteXmlOriginRecords(store: CodeIndexStore, affectedSources: Set<IndexedSource>) {
@@ -40,6 +45,8 @@ internal object SourceRecordCleanup {
             .prefixScan("sym:")
             .plus(store.prefixScan("ref:"))
             .plus(store.prefixScan("res:"))
+            .plus(store.prefixScan("resdef:"))
+            .plus(store.prefixScan("resuse:"))
             .filter { (_, record) ->
                 val originId: String
                 val relativeFile: String
@@ -49,6 +56,14 @@ internal object SourceRecordCleanup {
                         relativeFile = record.relativeFile
                     }
                     is ReferenceRecord -> {
+                        originId = record.originId
+                        relativeFile = record.relativeFile
+                    }
+                    is ResourceDefinitionRecord -> {
+                        originId = record.originId
+                        relativeFile = record.relativeFile
+                    }
+                    is ResourceUsageRecord -> {
                         originId = record.originId
                         relativeFile = record.relativeFile
                     }
@@ -79,6 +94,8 @@ internal object SourceRecordCleanup {
                         is ReferenceRecord ->
                             record.language == language || record.relativeFile.endsWith(extension)
                         is CallSiteRecord -> record.relativeFile.endsWith(extension)
+                        is ResourceUsageRecord ->
+                            record.language == language || record.relativeFile.endsWith(extension)
                         else -> false
                     }
                 matchesLanguage &&
@@ -87,6 +104,8 @@ internal object SourceRecordCleanup {
                         is ReferenceRecord ->
                             (record.originId to record.relativeFile) in affectedKeys
                         is CallSiteRecord ->
+                            (record.originId to record.relativeFile) in affectedKeys
+                        is ResourceUsageRecord ->
                             (record.originId to record.relativeFile) in affectedKeys
                         else -> false
                     }
@@ -116,6 +135,12 @@ internal object SourceRecordCleanup {
                     is CallSiteRecord ->
                         record.relativeFile in affectedFiles &&
                             record.relativeFile.endsWith(extension)
+                    is ResourceDefinitionRecord ->
+                        record.relativeFile in affectedFiles &&
+                            record.relativeFile.endsWith(extension)
+                    is ResourceUsageRecord ->
+                        record.relativeFile in affectedFiles &&
+                            (record.language == language || record.relativeFile.endsWith(extension))
                     else -> false
                 }
             }

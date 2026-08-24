@@ -66,6 +66,32 @@ internal value class CodeIndexKey(val value: String) {
             column: Int,
         ): CodeIndexKey = CodeIndexKey("res:$type:$name:$originId:$relativeFile:$line:$column")
 
+        fun resourceDefinition(
+            packageName: String?,
+            type: String,
+            name: String,
+            qualifiers: String,
+            originId: String,
+            relativeFile: String,
+            line: Int,
+        ): CodeIndexKey =
+            CodeIndexKey(
+                "resdef:${packageName.orEmpty()}:$type:$name:$qualifiers:$originId:$relativeFile:$line"
+            )
+
+        fun resourceUsage(
+            packageName: String?,
+            type: String,
+            name: String,
+            originId: String,
+            relativeFile: String,
+            line: Int,
+            column: Int,
+        ): CodeIndexKey =
+            CodeIndexKey(
+                "resuse:${packageName.orEmpty()}:$type:$name:$originId:$relativeFile:$line:$column"
+            )
+
         fun file(relativeFile: String, contentHash: String): CodeIndexKey =
             CodeIndexKey("file:$relativeFile:$contentHash")
 
