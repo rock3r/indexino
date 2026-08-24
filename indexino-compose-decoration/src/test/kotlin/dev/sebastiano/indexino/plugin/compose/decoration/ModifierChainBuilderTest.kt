@@ -101,6 +101,46 @@ class ModifierChainBuilderTest {
     }
 
     @Test
+    fun `conditional branches are grouped into a conditional link`() {
+        val thenBranch =
+            call(
+                "fillMaxWidth",
+                receiver = "Modifier",
+                offset = 40,
+                id = "then-branch",
+                parent = null,
+            )
+        val elseBranch =
+            call("padding", receiver = "Modifier", offset = 70, id = "else-branch", parent = null)
+        val column =
+            composableCall(
+                callee = "Column",
+                modifierNested = listOf(thenBranch.id, elseBranch.id),
+                offset = 0,
+            )
+        val callsById =
+            mapOf(thenBranch.id to thenBranch, elseBranch.id to elseBranch, column.id to column)
+
+        val site = ModifierChainBuilder.buildDecorationSite(column, callsById)
+
+        assertEquals(ModifierLinkKind.CONDITIONAL, site.chain.links.single().kind)
+        assertEquals(2, site.chain.links.single().branches.size)
+    }
+
+    @Test
+    fun `composed modifier is classified as composed`() {
+        val composed = call("composed", receiver = "Modifier", offset = 20, id = "composed")
+        val box = composableCall(callee = "Box", modifierNested = listOf(composed.id), offset = 0)
+        val site =
+            ModifierChainBuilder.buildDecorationSite(
+                box,
+                mapOf(composed.id to composed, box.id to box),
+            )
+
+        assertEquals(ModifierLinkKind.COMPOSED, site.chain.links.single().kind)
+    }
+
+    @Test
     fun `unresolved callee uses unresolved confidence`() {
         val unknown =
             call(

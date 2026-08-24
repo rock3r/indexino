@@ -684,6 +684,7 @@ val ideaHomeDir =
     }
 
 tasks.test {
+    dependsOn(":indexino-compose-decoration:jar")
     useJUnitPlatform {
         val excludedTags =
             mutableListOf(
@@ -710,6 +711,16 @@ tasks.test {
     systemProperty("idea.system.path", ideaHomeDir.resolve("system").absolutePath)
     systemProperty("idea.plugins.path", ideaHomeDir.resolve("plugins").absolutePath)
     systemProperty("indexino.expectedVersionName", version.toString())
+    systemProperty(
+        "indexino.composeDecorationJar",
+        project(":indexino-compose-decoration")
+            .tasks
+            .jar
+            .flatMap { it.archiveFile }
+            .get()
+            .asFile
+            .absolutePath,
+    )
 }
 
 val verifyShrunkCli by

@@ -38,58 +38,12 @@ internal object ModifierChainBuilder {
         modifierArgument: CallArgument,
         callsById: Map<CallSiteId, CallSite>,
     ): ModifierChain {
-        val calls = modifierArgument.nestedCallIds.mapNotNull { callsById[it] }
+        val calls = ModifierChainOrdering.collectModifierCalls(modifierArgument, callsById)
         if (calls.isEmpty()) return ModifierChain.empty()
         val callSet = calls.associateBy { it.id }
-        val ordered = orderModifierCalls(calls, callSet)
+        val ordered = ModifierChainOrdering.orderModifierCalls(calls, callSet)
         val links = ordered.flatMap { classifyCall(it, callSet) }
         return ModifierChain.of(links)
-    }
-
-    private fun orderModifierCalls(
-        calls: List<CallSite>,
-        callSet: Map<CallSiteId, CallSite>,
-    ): List<CallSite> {
-        val roots = calls.filter { call ->
-            call.parentCallId == null || call.parentCallId !in callSet
-        }
-        val outermost = roots.maxByOrNull { it.range.end.offset ?: it.range.start.offset ?: 0 }
-        if (outermost == null) return calls.sortedBy { it.range.start.offset ?: 0 }
-        return collectInnerFirst(outermost, calls, callSet)
-    }
-
-    private fun collectInnerFirst(
-        call: CallSite,
-        calls: List<CallSite>,
-        callSet: Map<CallSiteId, CallSite>,
-    ): List<CallSite> {
-        val children = calls.filter { it.parentCallId == call.id }
-        val receiverChild =
-            children
-                .filter { child -> isReceiverChild(call, child) }
-                .minByOrNull { it.range.start.offset ?: 0 }
-        val result = mutableListOf<CallSite>()
-        if (receiverChild != null) {
-            result += collectInnerFirst(receiverChild, calls, callSet)
-        }
-        result += call
-        if (call.calleeName == "then") {
-            val argumentChild =
-                children
-                    .filter { it.id != receiverChild?.id }
-                    .minByOrNull { it.range.start.offset ?: 0 }
-            if (argumentChild != null) {
-                result += collectInnerFirst(argumentChild, calls, callSet)
-            }
-        }
-        return result
-    }
-
-    private fun isReceiverChild(parent: CallSite, child: CallSite): Boolean {
-        val receiver = parent.receiver ?: return false
-        return receiver.contains(child.calleeName) &&
-            (child.range.end.offset ?: 0) <=
-                (parent.range.start.offset ?: Int.MAX_VALUE) + receiver.length
     }
 
     private fun classifyCall(
