@@ -108,6 +108,259 @@ class SourceLinkIntegrationTest {
         }
     }
 
+    @Test
+    fun `dirty checkout disables exact linking with loud diagnostics`() {
+        val cacheDirectory = tempDirectory("indexino-source-link-dirty-cache-")
+        val (providerWorkspace, consumerWorkspace) = createLinkedWorkspaces()
+        writeSourceLinks(consumerWorkspace, verified = true)
+        providerWorkspace
+            .resolve("src/main/kotlin/com/example/lib/ProviderLib.kt")
+            .toFile()
+            .appendText("\n// dirty edit")
+        val request = RefreshRequest.forScope(IndexScope.gradle(":").includingDependencies())
+        withCache(cacheDirectory) {
+            Indexino.connectBlocking(providerWorkspace).use { provider ->
+                runBlocking { provider.refresh(request).await() }
+            }
+            Indexino.connectBlocking(consumerWorkspace).use { consumer ->
+                runBlocking { consumer.refresh(request).await() }
+                runBlocking {
+                    consumer.snapshot().use { snapshot ->
+                        val page =
+                            snapshot.findLinkedSources(
+                                LinkedSourceQuery.forSymbol("ProviderLib"),
+                                QueryOptions.page(10),
+                            )
+                        assertTrue(page.items.isNotEmpty())
+                        val result = page.items.first()
+                        assertEquals(SourceLinkEvidence.MISMATCH, result.evidence)
+                        assertTrue(result.evidence.isNavigationHintOnly())
+                        assertTrue(result.diagnostics.any { it.code == "checkout.dirty" })
+                        assertTrue(!result.evidence.allowsExactCrossRepositorySemantics())
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `digest mismatch disables exact linking`() {
+        val cacheDirectory = tempDirectory("indexino-source-link-digest-cache-")
+        val (providerWorkspace, consumerWorkspace) = createLinkedWorkspaces()
+        writeSourceLinks(
+            consumerWorkspace,
+            verified = true,
+            publishedCompanion = "sha256:wrong-companion",
+        )
+        val request = RefreshRequest.forScope(IndexScope.gradle(":").includingDependencies())
+        withCache(cacheDirectory) {
+            Indexino.connectBlocking(providerWorkspace).use { provider ->
+                runBlocking { provider.refresh(request).await() }
+            }
+            Indexino.connectBlocking(consumerWorkspace).use { consumer ->
+                runBlocking { consumer.refresh(request).await() }
+                runBlocking {
+                    consumer.snapshot().use { snapshot ->
+                        val page =
+                            snapshot.findLinkedSources(
+                                LinkedSourceQuery.forSymbol("ProviderLib"),
+                                QueryOptions.page(10),
+                            )
+                        assertTrue(page.items.isNotEmpty())
+                        val result = page.items.first()
+                        assertEquals(SourceLinkEvidence.MISMATCH, result.evidence)
+                        assertTrue(result.diagnostics.any { it.code == "digest.mismatch" })
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `unresolved ref mismatch disables exact linking`() {
+        val cacheDirectory = tempDirectory("indexino-source-link-ref-cache-")
+        val (providerWorkspace, consumerWorkspace) = createLinkedWorkspaces()
+        writeSourceLinks(consumerWorkspace, verified = false, ref = "v9.9.9")
+        val request = RefreshRequest.forScope(IndexScope.gradle(":").includingDependencies())
+        withCache(cacheDirectory) {
+            Indexino.connectBlocking(providerWorkspace).use { provider ->
+                runBlocking { provider.refresh(request).await() }
+            }
+            Indexino.connectBlocking(consumerWorkspace).use { consumer ->
+                runBlocking { consumer.refresh(request).await() }
+                runBlocking {
+                    consumer.snapshot().use { snapshot ->
+                        val page =
+                            snapshot.findLinkedSources(
+                                LinkedSourceQuery.forSymbol("ProviderLib"),
+                                QueryOptions.page(10),
+                            )
+                        assertTrue(page.items.isNotEmpty())
+                        val result = page.items.first()
+                        assertEquals(SourceLinkEvidence.MISMATCH, result.evidence)
+                        assertTrue(result.diagnostics.any { it.code == "ref.unresolved" })
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `missing checkout surfaces source missing diagnostic`() {
+        val cacheDirectory = tempDirectory("indexino-source-link-missing-cache-")
+        val (providerWorkspace, consumerWorkspace) = createLinkedWorkspaces()
+        writeSourceLinks(consumerWorkspace, verified = true, checkout = "missing-provider")
+        val request = RefreshRequest.forScope(IndexScope.gradle(":").includingDependencies())
+        withCache(cacheDirectory) {
+            Indexino.connectBlocking(providerWorkspace).use { provider ->
+                runBlocking { provider.refresh(request).await() }
+            }
+            Indexino.connectBlocking(consumerWorkspace).use { consumer ->
+                runBlocking { consumer.refresh(request).await() }
+                runBlocking {
+                    consumer.snapshot().use { snapshot ->
+                        val page =
+                            snapshot.findLinkedSources(
+                                LinkedSourceQuery.forSymbol("ProviderLib"),
+                                QueryOptions.page(10),
+                            )
+                        assertTrue(page.items.isNotEmpty())
+                        val result = page.items.first()
+                        assertEquals(SourceLinkEvidence.MISMATCH, result.evidence)
+                        assertTrue(result.diagnostics.any { it.code == "source.missing" })
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `dependency substitution is recorded on linked results`() {
+        val cacheDirectory = tempDirectory("indexino-source-link-substitution-cache-")
+        val (providerWorkspace, consumerWorkspace) = createLinkedWorkspaces()
+        writeSourceLinks(
+            consumerWorkspace,
+            verified = true,
+            substitution = "com.example:lib:1.0.0 -> com.example:lib-local:1.0.0",
+        )
+        val request = RefreshRequest.forScope(IndexScope.gradle(":").includingDependencies())
+        withCache(cacheDirectory) {
+            Indexino.connectBlocking(providerWorkspace).use { provider ->
+                runBlocking { provider.refresh(request).await() }
+            }
+            Indexino.connectBlocking(consumerWorkspace).use { consumer ->
+                runBlocking { consumer.refresh(request).await() }
+                runBlocking {
+                    consumer.snapshot().use { snapshot ->
+                        val page =
+                            snapshot.findLinkedSources(
+                                LinkedSourceQuery.forSymbol("ProviderLib"),
+                                QueryOptions.page(10),
+                            )
+                        assertTrue(page.items.isNotEmpty())
+                        assertEquals(
+                            "com.example:lib:1.0.0 -> com.example:lib-local:1.0.0",
+                            page.items.first().component.substitution,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `linked source generation change invalidates link generation`() {
+        val cacheDirectory = tempDirectory("indexino-source-link-invalidation-cache-")
+        val (providerWorkspace, consumerWorkspace) = createLinkedWorkspaces()
+        writeSourceLinks(consumerWorkspace, verified = true)
+        val request = RefreshRequest.forScope(IndexScope.gradle(":").includingDependencies())
+        withCache(cacheDirectory) {
+            Indexino.connectBlocking(providerWorkspace).use { provider ->
+                runBlocking { provider.refresh(request).await() }
+            }
+            Indexino.connectBlocking(consumerWorkspace).use { consumer ->
+                runBlocking { consumer.refresh(request).await() }
+            }
+            val firstLinkGeneration = readConsumerLinkGeneration(cacheDirectory, consumerWorkspace)
+            assertNotNull(firstLinkGeneration)
+
+            providerWorkspace
+                .resolve("src/main/kotlin/com/example/lib/ProviderLib.kt")
+                .toFile()
+                .appendText("\nfun extraFeature() = Unit")
+            runGit(providerWorkspace, "add", ".")
+            runGit(providerWorkspace, "commit", "-m", "provider change")
+
+            Indexino.connectBlocking(providerWorkspace).use { provider ->
+                runBlocking { provider.refresh(request).await() }
+            }
+            Indexino.connectBlocking(consumerWorkspace).use { consumer ->
+                runBlocking { consumer.refresh(request).await() }
+            }
+            val secondLinkGeneration = readConsumerLinkGeneration(cacheDirectory, consumerWorkspace)
+            assertNotNull(secondLinkGeneration)
+            assertTrue(firstLinkGeneration != secondLinkGeneration)
+        }
+    }
+
+    @Test
+    fun `chained jvm to native skiko skia link resolves through federation`() {
+        val cacheDirectory = tempDirectory("indexino-source-link-skiko-cache-")
+        val (skiaWorkspace, skikoWorkspace, consumerWorkspace) = createSkikoChainWorkspaces()
+        val request = RefreshRequest.forScope(IndexScope.gradle(":").includingDependencies())
+        withCache(cacheDirectory) {
+            Indexino.connectBlocking(skiaWorkspace).use { skia ->
+                runBlocking { skia.refresh(request).await() }
+            }
+            Indexino.connectBlocking(skikoWorkspace).use { skiko ->
+                runBlocking { skiko.refresh(request).await() }
+            }
+            Indexino.connectBlocking(consumerWorkspace).use { consumer ->
+                runBlocking { consumer.refresh(request).await() }
+                runBlocking {
+                    consumer.snapshot().use { snapshot ->
+                        val page =
+                            snapshot.findLinkedSources(
+                                LinkedSourceQuery.forComponentSymbol(
+                                    symbolName = "SkikoBridge",
+                                    componentCoordinate =
+                                        ResolvedComponentCoordinate.of(
+                                            "org.jetbrains.skiko:skiko:0.8.0"
+                                        ),
+                                ),
+                                QueryOptions.page(10),
+                            )
+                        assertTrue(page.items.isNotEmpty())
+                        val result = page.items.first()
+                        assertEquals(SourceLinkEvidence.VERIFIED, result.evidence)
+                        assertTrue(result.symbolName.contains("SkikoBridge"))
+                        assertEquals("jvm", result.component.variant)
+                    }
+                }
+            }
+            assertNotNull(readConsumerLinkGeneration(cacheDirectory, consumerWorkspace))
+        }
+    }
+
+    private fun readConsumerLinkGeneration(cacheDirectory: Path, consumerWorkspace: Path): String? {
+        val previous = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        return try {
+            WorkspaceGenerationManifestStore(
+                    InProcessCacheLayout.cacheRoot(),
+                    InProcessCacheLayout.workspaceId(consumerWorkspace),
+                )
+                .current()
+                ?.linkGeneration
+        } finally {
+            if (previous == null) {
+                System.clearProperty("indexino.cache.dir")
+            } else {
+                System.setProperty("indexino.cache.dir", previous)
+            }
+        }
+    }
+
     private fun createLinkedWorkspaces(): Pair<Path, Path> {
         val root = tempDirectory("indexino-source-link-workspaces-")
         val provider = root.resolve("provider")
@@ -125,28 +378,96 @@ class SourceLinkIntegrationTest {
         consumerWorkspace: Path,
         verified: Boolean,
         declaredOnly: Boolean = false,
+        ref: String = "v1.0.0",
+        checkout: String = "provider",
+        substitution: String? = null,
+        publishedCompanion: String? = null,
     ) {
         val configDir = consumerWorkspace.resolve(".indexino")
         Files.createDirectories(configDir)
-        val companionLine =
-            if (verified) {
-                "publishedSourceCompanion = \"sha256:provider-lib-1.0.0\""
-            } else {
-                ""
-            }
+        val companionDigest =
+            publishedCompanion
+                ?: if (verified) {
+                    "sha256:provider-lib-1.0.0"
+                } else {
+                    null
+                }
+        val companionLine = companionDigest?.let { "publishedSourceCompanion = \"$it\"" }.orEmpty()
         val declaredLine = if (declaredOnly) "declaredOnly = true" else ""
+        val substitutionLine = substitution?.let { "substitution = \"$it\"" }.orEmpty()
         Files.writeString(
             configDir.resolve("source-links.toml"),
             """
             [[sourceLink]]
             component = "com.example:lib:1.0.0"
             binarySha256 = "sha256:provider-lib-1.0.0"
-            checkout = "provider"
+            checkout = "$checkout"
             linkedWorkspace = "provider"
-            ref = "v1.0.0"
+            ref = "$ref"
             sourceRoots = ["src/main/kotlin"]
             $companionLine
             $declaredLine
+            $substitutionLine
+            """
+                .trimIndent(),
+        )
+    }
+
+    private fun createSkikoChainWorkspaces(): Triple<Path, Path, Path> {
+        val root = tempDirectory("indexino-skiko-chain-workspaces-")
+        val skia = root.resolve("skia")
+        val skiko = root.resolve("skiko")
+        val consumer = root.resolve("consumer")
+        copyFixture("skiko-chain/skia", skia)
+        copyFixture("skiko-chain/skiko", skiko)
+        copyFixture("skiko-chain/consumer", consumer)
+        Files.createSymbolicLink(skiko.resolve("skia"), skia)
+        Files.createSymbolicLink(consumer.resolve("skiko"), skiko)
+        writeSkikoSourceLinks(skiko)
+        initializeGitRepository(skia)
+        runGit(skia, "tag", "m116-0.1.0")
+        initializeGitRepository(skiko)
+        runGit(skiko, "tag", "v0.8.0")
+        writeSkikoConsumerSourceLinks(consumer)
+        initializeGitRepository(consumer)
+        return Triple(skia, skiko, consumer)
+    }
+
+    private fun writeSkikoSourceLinks(skikoWorkspace: Path) {
+        val configDir = skikoWorkspace.resolve(".indexino")
+        Files.createDirectories(configDir)
+        Files.writeString(
+            configDir.resolve("source-links.toml"),
+            """
+            [[sourceLink]]
+            component = "org.jetbrains.skia:skia:0.1.0"
+            binarySha256 = "sha256:skia-native-0.1.0"
+            checkout = "skia"
+            linkedWorkspace = "skia"
+            ref = "m116-0.1.0"
+            variant = "native"
+            sourceRoots = ["src/main/kotlin", "native/src"]
+            publishedSourceCompanion = "sha256:skia-native-0.1.0"
+            """
+                .trimIndent(),
+        )
+    }
+
+    private fun writeSkikoConsumerSourceLinks(consumerWorkspace: Path) {
+        val configDir = consumerWorkspace.resolve(".indexino")
+        Files.createDirectories(configDir)
+        Files.writeString(
+            configDir.resolve("source-links.toml"),
+            """
+            [[sourceLink]]
+            component = "org.jetbrains.skiko:skiko:0.8.0"
+            binarySha256 = "sha256:skiko-jvm-0.8.0"
+            checkout = "skiko"
+            linkedWorkspace = "skiko"
+            ref = "v0.8.0"
+            variant = "jvm"
+            sourceRoots = ["src/main/kotlin"]
+            publishedSourceCompanion = "sha256:skiko-jvm-0.8.0"
             """
                 .trimIndent(),
         )
