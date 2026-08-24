@@ -1100,6 +1100,30 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `immutable alias of this preserves current receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class AliasedThis(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is AliasedThis) return false
+                            val self = this
+                            return self.value == other.value
+                        }
+                        override fun hashCode(): Int = value.hashCode()
+                        override fun toString(): String = "AliasedThis(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `lambda label matching class name does not count as class receiver`() {
         val findings =
             rule()

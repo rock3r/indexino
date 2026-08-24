@@ -396,6 +396,18 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         if (this is KtParenthesizedExpression) {
             return expression?.isCurrentReceiver(equalsFunction, receiverClass) == true
         }
+        if (this is KtNameReferenceExpression) {
+            val alias =
+                PsiTreeUtil.collectElementsOfType(equalsFunction, KtProperty::class.java)
+                    .asSequence()
+                    .filter {
+                        !it.isVar && it.name == getReferencedName() && it.textOffset < textOffset
+                    }
+                    .maxByOrNull { it.textOffset }
+            val initializer = alias?.initializer ?: return false
+            if (initializer.isName(getReferencedName())) return false
+            return initializer.isCurrentReceiver(equalsFunction, receiverClass)
+        }
         if (this !is KtThisExpression) return false
         return analyze(this) {
             val targetClass = receiverClass.symbol as? KaClassSymbol ?: return false
