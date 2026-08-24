@@ -1,6 +1,7 @@
 package dev.sebastiano.indexino.cli
 
 import com.github.ajalt.clikt.testing.test
+import dev.sebastiano.indexino.core.BASIC_FACT_SCHEMA_VERSION
 import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.manifest.IndexManifest
 import dev.sebastiano.indexino.core.manifest.ManifestIO
@@ -205,6 +206,30 @@ class CodeIndexLookupCommandTest {
     }
 
     @Test
+    fun `raw lookup rejects an incompatible basic fact schema`() {
+        val workspace = indexedWorkspace(basicFactSchemaVersion = BASIC_FACT_SCHEMA_VERSION - 1)
+
+        val result =
+            runCli(
+                "resolve-resource",
+                "--project",
+                workspace.toString(),
+                "--type",
+                "string",
+                "--name",
+                "title",
+                "--progress-format",
+                "jsonl",
+            )
+
+        assertEquals(CliExitCodes.ANALYSIS_ERROR, result.statusCode, result.output)
+        val failed = progressEvents(result.stderr).last()
+        assertEquals("lookup_failed", failed.value("event"))
+        assertTrue(failed.value("message")!!.contains("incompatible basic fact schema"))
+        assertFalse(result.output.contains("res:string:title"))
+    }
+
+    @Test
     fun `invalid progress format remains a usage error`() {
         val workspace = indexedWorkspace()
         val result =
@@ -328,7 +353,9 @@ class CodeIndexLookupCommandTest {
         return workspace
     }
 
-    private fun indexedWorkspace(): java.nio.file.Path {
+    private fun indexedWorkspace(
+        basicFactSchemaVersion: Int = BASIC_FACT_SCHEMA_VERSION
+    ): java.nio.file.Path {
         val workspace = createTempDirectory("lookup-cli-")
         tempDirs.add(workspace)
         runGit(workspace, "init")
@@ -355,6 +382,7 @@ class CodeIndexLookupCommandTest {
                 sourceFileCount = 3,
                 sourcesContentHash = "sha256:test",
                 builtAt = "2026-01-01T00:00:00Z",
+                basicFactSchemaVersion = basicFactSchemaVersion,
             ),
         )
         return workspace
