@@ -130,6 +130,7 @@ dependencies {
     api(project(":indexino-model"))
     implementation(project(":indexino-plugin-api"))
     implementation(project(":indexino-selection-context"))
+    implementation(project(":indexino-compose-decoration"))
     api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
     implementation(libs.kotlin.compiler.embeddable)
     implementation(libs.clikt)
@@ -142,6 +143,7 @@ dependencies {
 
     testImplementation(kotlin("test"))
     testImplementation(project(":indexino-selection-context"))
+    testImplementation(project(":indexino-compose-decoration"))
     testRuntimeOnly(project(":indexino-script-host"))
     testImplementation(gradleTestKit())
 }
@@ -649,6 +651,7 @@ listOf(
         ":indexino-model",
         ":indexino-plugin-api",
         ":indexino-selection-context",
+        ":indexino-compose-decoration",
         ":indexino-script-host",
     )
     .forEach {
@@ -681,6 +684,7 @@ val ideaHomeDir =
     }
 
 tasks.test {
+    dependsOn(":indexino-compose-decoration:jar")
     useJUnitPlatform {
         val excludedTags =
             mutableListOf(
@@ -707,6 +711,16 @@ tasks.test {
     systemProperty("idea.system.path", ideaHomeDir.resolve("system").absolutePath)
     systemProperty("idea.plugins.path", ideaHomeDir.resolve("plugins").absolutePath)
     systemProperty("indexino.expectedVersionName", version.toString())
+    systemProperty(
+        "indexino.composeDecorationJar",
+        project(":indexino-compose-decoration")
+            .tasks
+            .jar
+            .flatMap { it.archiveFile }
+            .get()
+            .asFile
+            .absolutePath,
+    )
 }
 
 val verifyShrunkCli by
@@ -932,6 +946,7 @@ val verifyMavenPublication by
             ":indexino-model:publishAllPublicationsToTestRepository",
             ":indexino-plugin-api:publishAllPublicationsToTestRepository",
             ":indexino-selection-context:publishAllPublicationsToTestRepository",
+            ":indexino-compose-decoration:publishAllPublicationsToTestRepository",
             ":indexino-script-host:publishAllPublicationsToTestRepository",
         )
         testClassesDirs = sourceSets.test.get().output.classesDirs

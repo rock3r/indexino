@@ -7,17 +7,27 @@ import kotlin.test.assertTrue
 
 class PluginRegistryTest {
     @Test
-    fun `discovers external selection plugin`() {
+    fun `discovers bundled reference plugins`() {
         val registry = PluginRegistry.load(javaClass.classLoader)
 
         assertEquals(
             "Selection context",
             registry.descriptor(PluginId.of("dev.sebastiano.selection-context"))?.displayName,
         )
+        assertEquals(
+            "Compose decoration",
+            registry.descriptor(PluginId.of("dev.sebastiano.compose-decoration"))?.displayName,
+        )
         assertTrue(
             registry.checks.any {
                 it.pluginId == PluginId.of("dev.sebastiano.selection-context") &&
                     it.check.id == "interactive-in-selection"
+            }
+        )
+        assertTrue(
+            registry.postProcessors.any {
+                it.pluginId == PluginId.of("dev.sebastiano.compose-decoration") &&
+                    it.processor.id == "modifier-chains"
             }
         )
     }

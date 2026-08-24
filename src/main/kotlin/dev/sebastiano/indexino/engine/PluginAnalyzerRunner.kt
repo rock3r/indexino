@@ -1,10 +1,15 @@
 package dev.sebastiano.indexino.engine
 
+import dev.sebastiano.indexino.api.IndexSnapshot
+import dev.sebastiano.indexino.api.SnapshotFreshness
 import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.plugin.StorePluginFactSink
 import dev.sebastiano.indexino.core.record.PluginFactRecord
 import dev.sebastiano.indexino.model.SourceFile
 import dev.sebastiano.indexino.model.SourceOriginId
+import dev.sebastiano.indexino.model.SourceOriginRevision
+import dev.sebastiano.indexino.model.WorkspaceGenerationId
+import dev.sebastiano.indexino.model.WorkspaceRevision
 import dev.sebastiano.indexino.plugin.api.FileAnalysisContextV1
 import dev.sebastiano.indexino.plugin.api.PostProcessContextV1
 import dev.sebastiano.indexino.plugin.api.PostProcessLevelV1
@@ -98,12 +103,14 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                     it.pluginId.value == pluginId && it.processor.level == PostProcessLevelV1.SHARD
                 }
                 .forEach { registered ->
+                    val buildQueries = context.buildQueriesSnapshot()
                     context.resolvedOriginIds
                         .ifEmpty { setOf("workspace") }
                         .forEach { originId ->
                             runBlocking {
                                 registered.processor.process(
                                     PostProcessContextV1(
+                                        queries = buildQueries,
                                         facts =
                                             StorePluginFactSink(
                                                 context.store,
@@ -124,9 +131,11 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                         it.processor.level == PostProcessLevelV1.COMPOSITE
                 }
                 .forEach { registered ->
+                    val buildQueries = context.buildQueriesSnapshot()
                     runBlocking {
                         registered.processor.process(
                             PostProcessContextV1(
+                                queries = buildQueries,
                                 facts =
                                     StorePluginFactSink(
                                         context.store,
@@ -144,4 +153,29 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
     private companion object {
         const val POST_PROCESSOR_FILE: String = "__postprocess__"
     }
+}
+
+@OptIn(dev.sebastiano.indexino.model.IndexinoInternalApi::class)
+private fun IndexBuildContext.buildQueriesSnapshot(): IndexSnapshot {
+    val originIds = resolvedOriginIds.ifEmpty { setOf("workspace") }
+    return IndexSnapshot.create(
+        store = store,
+        revision =
+            WorkspaceRevision(
+                fingerprint = commitHash,
+                origins =
+                    originIds
+                        .map { originId ->
+                            SourceOriginRevision(
+                                originId = SourceOriginId.of(originId),
+                                revision = commitHash,
+                                stateFingerprint = commitHash,
+                                expectedRevision = null,
+                            )
+                        }
+                        .toList(),
+            ),
+        generation = WorkspaceGenerationId.of("build:$commitHash"),
+        freshnessAtAcquisition = SnapshotFreshness.UNKNOWN,
+    )
 }

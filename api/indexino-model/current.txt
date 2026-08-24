@@ -54,6 +54,7 @@ package dev.sebastiano.indexino.model {
   }
 
   public final class CallQuery {
+    method public static dev.sebastiano.indexino.model.CallQuery any();
     method public static dev.sebastiano.indexino.model.CallQuery byId(dev.sebastiano.indexino.model.CallSiteId callSiteId);
     method public static dev.sebastiano.indexino.model.CallQuery enclosedBy(dev.sebastiano.indexino.model.SymbolId symbolId);
     method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.CallSiteId? getCallSiteId();
@@ -70,6 +71,7 @@ package dev.sebastiano.indexino.model {
   }
 
   public static final class CallQuery.Companion {
+    method public dev.sebastiano.indexino.model.CallQuery any();
     method public dev.sebastiano.indexino.model.CallQuery byId(dev.sebastiano.indexino.model.CallSiteId callSiteId);
     method public dev.sebastiano.indexino.model.CallQuery enclosedBy(dev.sebastiano.indexino.model.SymbolId symbolId);
     method public dev.sebastiano.indexino.model.CallQuery inFile(dev.sebastiano.indexino.model.SourceFile file);

@@ -94,6 +94,7 @@ class MavenLocalPublicationContractTest {
                     ":indexino-model:publishToMavenLocal",
                     ":indexino-plugin-api:publishToMavenLocal",
                     ":indexino-selection-context:publishToMavenLocal",
+                    ":indexino-compose-decoration:publishToMavenLocal",
                     ":publishToMavenLocal",
                     "-Dmaven.repo.local=${localRepository.absolutePath}",
                     "--stacktrace",
