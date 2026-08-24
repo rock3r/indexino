@@ -5,7 +5,11 @@ import kotlin.test.assertEquals
 
 class VersionTest {
     @Test
-    fun `version is defined`() {
-        assertEquals("0.3.0-SNAPSHOT", Version.NAME)
+    fun `version matches Gradle VERSION_NAME`() {
+        val expected =
+            checkNotNull(System.getProperty("indexino.expectedVersionName")) {
+                "Gradle test task must inject indexino.expectedVersionName"
+            }
+        assertEquals(expected, Version.NAME)
     }
 }

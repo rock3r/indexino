@@ -131,4 +131,38 @@ jobs:
             --draft \
             --verify-tag \
             --title "Indexino ${{ needs.readiness.outputs.version }}" \
-            --notes "Native ZIPs are signed/provenance-bound release candidates. Maven Central promotion remains manual."
+            --notes-file "release/RELEASE_NOTES-${{ needs.readiness.outputs.version }}.md"
+
+  maven-release:
+    name: Publish Maven-only GitHub release
+    needs: [readiness, publish]
+    if: >-
+      always() &&
+      needs.readiness.outputs.native_release == 'false' &&
+      needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download dependency inventory
+        uses: actions/download-artifact@v4
+        with:
+          name: native-dependency-inventory
+          path: release-assets
+      - name: Verify release notes exist
+        shell: bash
+        run: |
+          test -f "release/RELEASE_NOTES-${{ needs.readiness.outputs.version }}.md"
+      - name: Create draft GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_args=(--draft --verify-tag --title "Indexino ${{ needs.readiness.outputs.version }}")
+          if [[ "${{ needs.readiness.outputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-.+ ]]; then
+            release_args+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            release-assets/bundled-dependencies.txt \
+            "${release_args[@]}" \
+            --notes-file "release/RELEASE_NOTES-${{ needs.readiness.outputs.version }}.md"
