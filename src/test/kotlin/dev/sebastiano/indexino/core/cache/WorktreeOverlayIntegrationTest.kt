@@ -4,7 +4,11 @@ import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.api.IndexScope
 import dev.sebastiano.indexino.api.Indexino
 import dev.sebastiano.indexino.api.RefreshRequest
+import dev.sebastiano.indexino.cli.CacheMaintenance
+import dev.sebastiano.indexino.core.store.WorktreeOverlayIndexStore
+import dev.sebastiano.indexino.model.CallQuery
 import dev.sebastiano.indexino.model.QueryOptions
+import dev.sebastiano.indexino.model.ReferenceQuery
 import dev.sebastiano.indexino.model.SymbolQuery
 import java.nio.file.Files
 import kotlin.io.path.Path
@@ -13,6 +17,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.parallel.Execution
@@ -144,6 +149,255 @@ class WorktreeOverlayIntegrationTest {
 
         assertEquals(rebuiltSymbols.sorted(), overlaySymbols.sorted())
     }
+
+    @Test
+    fun `fork deleting a file tombstones base symbols from overlay queries`() {
+        val cacheDirectory = createTempDirectory("indexino-overlay-delete-cache-")
+        tempDirs.add(cacheDirectory)
+        val (mainWorkspace, forkWorkspace) = createLinkedWorktrees()
+        val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+        val forkSource = forkWorkspace.resolve("ui/src/main/kotlin/Panel.kt")
+        withCache(cacheDirectory) {
+            Indexino.connectBlocking(mainWorkspace).use { main ->
+                runBlocking { main.refresh(request).await() }
+            }
+            Files.delete(forkSource)
+            Indexino.connectBlocking(forkWorkspace).use { fork ->
+                runBlocking { fork.refresh(request).await() }
+                runBlocking {
+                    fork.snapshot().use { snapshot ->
+                        assertTrue(
+                            snapshot
+                                .findSymbols(
+                                    SymbolQuery.named("Panel"),
+                                    QueryOptions.page(limit = 10),
+                                )
+                                .items
+                                .isEmpty()
+                        )
+                        assertTrue(
+                            snapshot
+                                .findSymbols(
+                                    SymbolQuery.named("ActionButton"),
+                                    QueryOptions.page(limit = 10),
+                                )
+                                .items
+                                .isEmpty()
+                        )
+                    }
+                }
+            }
+
+            val forkManifest =
+                checkNotNull(
+                    WorkspaceGenerationManifestStore(
+                            canonicalCacheRoot(cacheDirectory),
+                            InProcessCacheLayout.workspaceId(forkWorkspace),
+                        )
+                        .current()
+                )
+            assertTrue(
+                forkManifest.tombstonePrefixes.contains(
+                    WorktreeOverlayIndexStore.tombstonePrefixForRelativeFile(
+                        "ui/src/main/kotlin/Panel.kt"
+                    )
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `fork falls back to materialized generation when base chain is at max depth`() {
+        val cacheDirectory = createTempDirectory("indexino-overlay-depth-cache-")
+        tempDirs.add(cacheDirectory)
+        val (mainWorkspace, forkWorkspace) = createLinkedWorktrees()
+        val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+        val forkSource = forkWorkspace.resolve("ui/src/main/kotlin/Panel.kt")
+        withCache(cacheDirectory) {
+            Indexino.connectBlocking(mainWorkspace).use { main ->
+                runBlocking { main.refresh(request).await() }
+            }
+            val cacheRoot = canonicalCacheRoot(cacheDirectory)
+            val mainWorkspaceId = InProcessCacheLayout.workspaceId(mainWorkspace)
+            val mainStore = WorkspaceGenerationManifestStore(cacheRoot, mainWorkspaceId)
+            val mainManifest = checkNotNull(mainStore.current())
+            mainStore.publish(
+                mainManifest.copy(
+                    representation = WorktreeOverlayPolicy.REPRESENTATION_OVERLAY,
+                    overlayChainDepth = WorktreeOverlayPolicy.MAX_CHAIN_DEPTH,
+                )
+            )
+
+            Files.writeString(
+                forkSource,
+                Files.readString(forkSource).replace("ActionButton", "DepthFallbackButton"),
+            )
+            Indexino.connectBlocking(forkWorkspace).use { fork ->
+                runBlocking { fork.refresh(request).await() }
+            }
+
+            val forkManifest =
+                checkNotNull(
+                    WorkspaceGenerationManifestStore(
+                            cacheRoot,
+                            InProcessCacheLayout.workspaceId(forkWorkspace),
+                        )
+                        .current()
+                )
+            assertEquals(
+                WorktreeOverlayPolicy.REPRESENTATION_MATERIALIZED,
+                forkManifest.representation,
+            )
+            assertNull(forkManifest.baseWorkspaceId)
+            assertTrue(forkManifest.packKeys.isNotEmpty())
+        }
+    }
+
+    @Test
+    fun `forget fork workspace retains base packs referenced by main`() {
+        val cacheDirectory = createTempDirectory("indexino-overlay-gc-cache-")
+        tempDirs.add(cacheDirectory)
+        val (mainWorkspace, forkWorkspace) = createLinkedWorktrees()
+        val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+        val forkSource = forkWorkspace.resolve("ui/src/main/kotlin/Panel.kt")
+        withCache(cacheDirectory) {
+            Indexino.connectBlocking(mainWorkspace).use { main ->
+                runBlocking { main.refresh(request).await() }
+            }
+            Files.writeString(
+                forkSource,
+                Files.readString(forkSource).replace("ActionButton", "GcForkButton"),
+            )
+            Indexino.connectBlocking(forkWorkspace).use { fork ->
+                runBlocking { fork.refresh(request).await() }
+            }
+
+            val cacheRoot = canonicalCacheRoot(cacheDirectory)
+            val mainPackKey =
+                checkNotNull(
+                        WorkspaceGenerationManifestStore(
+                                cacheRoot,
+                                InProcessCacheLayout.workspaceId(mainWorkspace),
+                            )
+                            .current()
+                    )
+                    .packKeys
+                    .single()
+            val forkManifest =
+                checkNotNull(
+                    WorkspaceGenerationManifestStore(
+                            cacheRoot,
+                            InProcessCacheLayout.workspaceId(forkWorkspace),
+                        )
+                        .current()
+                )
+            val forkOnlyPackKeys = forkManifest.overlayPackKeys.filter { it != mainPackKey }.toSet()
+            assertTrue(forkOnlyPackKeys.isNotEmpty())
+
+            CacheMaintenance.forget(cacheRoot, forkWorkspace)
+            CacheMaintenance.gc(cacheRoot)
+
+            assertTrue(Files.exists(packPath(cacheRoot, mainPackKey)))
+            forkOnlyPackKeys.forEach { packKey ->
+                assertFalse(Files.exists(packPath(cacheRoot, packKey)))
+            }
+        }
+    }
+
+    @Test
+    fun `base plus overlay reference and call queries match a clean materialized rebuild`() {
+        val cacheDirectory = createTempDirectory("indexino-overlay-ref-call-cache-")
+        tempDirs.add(cacheDirectory)
+        val (mainWorkspace, forkWorkspace) = createLinkedWorktrees()
+        val rebuildWorkspace = createGitWorkspaceCopy(mainWorkspace)
+        val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+        val forkSource = forkWorkspace.resolve("ui/src/main/kotlin/Panel.kt")
+        Files.writeString(
+            forkSource,
+            Files.readString(forkSource).replace("ActionButton", "ForkActionButton"),
+        )
+        Files.writeString(
+            rebuildWorkspace.resolve("ui/src/main/kotlin/Panel.kt"),
+            Files.readString(forkSource),
+        )
+
+        lateinit var overlayReferenceFiles: List<String>
+        lateinit var rebuiltReferenceFiles: List<String>
+        lateinit var overlayCallNames: List<String>
+        lateinit var rebuiltCallNames: List<String>
+        withCache(cacheDirectory) {
+            Indexino.connectBlocking(mainWorkspace).use { main ->
+                runBlocking { main.refresh(request).await() }
+            }
+            Indexino.connectBlocking(forkWorkspace).use { fork ->
+                runBlocking { fork.refresh(request).await() }
+                runBlocking {
+                    fork.snapshot().use { snapshot ->
+                        val actionButton =
+                            snapshot
+                                .findSymbols(
+                                    SymbolQuery.named("ForkActionButton"),
+                                    QueryOptions.page(limit = 1),
+                                )
+                                .items
+                                .single()
+                        overlayReferenceFiles =
+                            snapshot
+                                .findReferences(
+                                    ReferenceQuery.to(actionButton.id),
+                                    QueryOptions.page(limit = 10),
+                                )
+                                .items
+                                .map { it.location.file.path }
+                        overlayCallNames =
+                            snapshot
+                                .findCalls(CallQuery.to("Panel"), QueryOptions.page(limit = 10))
+                                .items
+                                .map { it.calleeName }
+                    }
+                }
+            }
+        }
+
+        val rebuildCache = createTempDirectory("indexino-overlay-ref-call-rebuild-")
+        tempDirs.add(rebuildCache)
+        withCache(rebuildCache) {
+            Indexino.connectBlocking(rebuildWorkspace).use { rebuilt ->
+                runBlocking { rebuilt.refresh(request).await() }
+                runBlocking {
+                    rebuilt.snapshot().use { snapshot ->
+                        val actionButton =
+                            snapshot
+                                .findSymbols(
+                                    SymbolQuery.named("ForkActionButton"),
+                                    QueryOptions.page(limit = 1),
+                                )
+                                .items
+                                .single()
+                        rebuiltReferenceFiles =
+                            snapshot
+                                .findReferences(
+                                    ReferenceQuery.to(actionButton.id),
+                                    QueryOptions.page(limit = 10),
+                                )
+                                .items
+                                .map { it.location.file.path }
+                        rebuiltCallNames =
+                            snapshot
+                                .findCalls(CallQuery.to("Panel"), QueryOptions.page(limit = 10))
+                                .items
+                                .map { it.calleeName }
+                    }
+                }
+            }
+        }
+
+        assertEquals(rebuiltReferenceFiles.sorted(), overlayReferenceFiles.sorted())
+        assertEquals(rebuiltCallNames.sorted(), overlayCallNames.sorted())
+    }
+
+    private fun packPath(cacheRoot: java.nio.file.Path, key: String): java.nio.file.Path =
+        cacheRoot.resolve("chunks").resolve(key.take(2)).resolve(key.substring(2, 4)).resolve(key)
 
     private fun indexMainAndFork(
         mainWorkspace: java.nio.file.Path,
