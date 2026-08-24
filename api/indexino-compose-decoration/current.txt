@@ -9,7 +9,7 @@ package dev.sebastiano.indexino.plugin.compose.decoration {
   public final class ComposeDecorationQueries {
     method public static suspend Object? findSiteByComposableCallId(dev.sebastiano.indexino.plugin.api.PluginFactViewV1 facts, dev.sebastiano.indexino.model.CallSiteId composableCallId, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.plugin.compose.decoration.DecorationSite?>);
     method public static suspend Object? findSites(dev.sebastiano.indexino.plugin.api.PluginFactViewV1 facts, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.plugin.compose.decoration.DecorationSite>>);
-    method public static suspend Object? findSitesForCalls(dev.sebastiano.indexino.model.BasicFactQueries queries, dev.sebastiano.indexino.plugin.api.PluginFactViewV1 facts, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.plugin.compose.decoration.DecorationSite>>);
+    method public static suspend Object? findSitesForCalls(dev.sebastiano.indexino.plugin.api.PluginFactViewV1 facts, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.plugin.compose.decoration.DecorationSite>>);
     field public static final dev.sebastiano.indexino.plugin.compose.decoration.ComposeDecorationQueries.Companion Companion;
     field public static final String FACT_PREFIX = "decoration-site:";
   }
@@ -17,7 +17,7 @@ package dev.sebastiano.indexino.plugin.compose.decoration {
   public static final class ComposeDecorationQueries.Companion {
     method public suspend Object? findSiteByComposableCallId(dev.sebastiano.indexino.plugin.api.PluginFactViewV1 facts, dev.sebastiano.indexino.model.CallSiteId composableCallId, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.plugin.compose.decoration.DecorationSite?>);
     method public suspend Object? findSites(dev.sebastiano.indexino.plugin.api.PluginFactViewV1 facts, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.plugin.compose.decoration.DecorationSite>>);
-    method public suspend Object? findSitesForCalls(dev.sebastiano.indexino.model.BasicFactQueries queries, dev.sebastiano.indexino.plugin.api.PluginFactViewV1 facts, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.plugin.compose.decoration.DecorationSite>>);
+    method public suspend Object? findSitesForCalls(dev.sebastiano.indexino.plugin.api.PluginFactViewV1 facts, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.plugin.compose.decoration.DecorationSite>>);
     property public static String FACT_PREFIX;
   }
 
