@@ -15,6 +15,9 @@ import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.engine.PluginRegistry
 import dev.sebastiano.indexino.engine.RuntimeProtocolException
 import dev.sebastiano.indexino.engine.RuntimeSnapshotClient
+import dev.sebastiano.indexino.engine.extension.DistributionCapabilities
+import dev.sebastiano.indexino.engine.extension.DynamicPluginCatalog
+import dev.sebastiano.indexino.engine.extension.ExtensionHostRegistry
 import dev.sebastiano.indexino.model.BasicFactQueries
 import dev.sebastiano.indexino.model.BasicFactSchemaVersion
 import dev.sebastiano.indexino.model.CallQuery
@@ -71,6 +74,8 @@ private constructor(
     private val checkResults = ConcurrentHashMap<CheckRequest, CompletableDeferred<List<Finding>>>()
     private val localStore: CodeIndexStore
         get() = checkNotNull(store)
+
+    @IndexinoInternalApi internal fun localStoreForExtension(): CodeIndexStore = localStore
 
     override suspend fun findSymbols(query: SymbolQuery, options: QueryOptions): QueryPage<Symbol> {
         ensureOpen()
@@ -297,6 +302,26 @@ private constructor(
         remoteClient?.let { client ->
             return mapUnexpectedFailuresSuspend {
                 client.runCheck(checkNotNull(remoteLeaseId), request, options)
+            }
+        }
+        if (DistributionCapabilities.requiresOutOfProcessExtensions()) {
+            val registration = DynamicPluginCatalog.registrationFor(request.pluginId)
+            if (registration != null) {
+                validateCheckQueryOptions(options)
+                return mapUnexpectedFailuresSuspend {
+                    ExtensionHostRegistry.hostFor(
+                            cacheRoot = InProcessCacheLayout.cacheRoot(),
+                            workspaceId = "ext00000000000001",
+                            parent = IndexSnapshot::class.java.classLoader,
+                        )
+                        .runCheck(
+                            snapshot = this,
+                            request = request,
+                            descriptor = registration.descriptor,
+                            pluginJar = registration.jar,
+                            options = options,
+                        )
+                }
             }
         }
         validateCheckQueryOptions(options)

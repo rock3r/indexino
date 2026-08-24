@@ -105,9 +105,26 @@ internal constructor(
         private val HOST_BASIC_FACT_SCHEMA: BasicFactSchemaVersion =
             BasicFactSchemaVersion.of(BASIC_FACT_SCHEMA_VERSION)
 
+        private val cliPluginJars = java.util.concurrent.ConcurrentHashMap.newKeySet<Path>()
+
+        internal fun registerCliPluginJar(jar: Path) {
+            cliPluginJars.add(jar.toAbsolutePath().normalize())
+        }
+
+        internal fun clearCliPluginJarsForTests() {
+            cliPluginJars.clear()
+        }
+
         @OptIn(IndexinoInternalApi::class)
-        internal fun load(classLoader: ClassLoader): PluginRegistry =
-            registryOf(registrationsFrom(classLoader))
+        internal fun load(classLoader: ClassLoader): PluginRegistry {
+            if (
+                dev.sebastiano.indexino.engine.extension.DistributionCapabilities
+                    .requiresOutOfProcessExtensions() || cliPluginJars.isEmpty()
+            ) {
+                return registryOf(registrationsFrom(classLoader))
+            }
+            return load(cliPluginJars.toList(), classLoader)
+        }
 
         @OptIn(IndexinoInternalApi::class)
         private fun registrationsFrom(
@@ -156,6 +173,38 @@ internal constructor(
 
         internal fun load(pluginJars: List<Path>, parent: ClassLoader): PluginRegistry =
             load(pluginJars, parent, PluginAbiSupport.load(parent))
+
+        /** Loads plugins only from explicit JARs (no bundled ServiceLoader providers). */
+        @OptIn(IndexinoInternalApi::class)
+        internal fun loadFromPluginJarsOnly(
+            pluginJars: List<Path>,
+            parent: ClassLoader,
+        ): PluginRegistry {
+            val abiSupport = PluginAbiSupport.load(parent)
+            pluginJars.forEach { pluginJar ->
+                val target =
+                    JarFile(pluginJar.toFile()).use { jar ->
+                        jar.manifest?.mainAttributes?.getValue(PLUGIN_ABI_TARGET_ATTRIBUTE)
+                    }
+                        ?: throw PluginAbiCompatibilityException(
+                            pluginId = pluginJar.fileName.toString(),
+                            hostAbi = abiSupport.current.toString(),
+                            targetAbi = "<missing>",
+                            supportedRange = "[${abiSupport.minimum}, ${abiSupport.current}]",
+                            remediation =
+                                "Rebuild the plugin with Indexino-Plugin-ABI-Target generated " +
+                                    "from its indexino-plugin-api dependency.",
+                        )
+                abiSupport.requireCompatible(pluginJar.fileName.toString(), target)
+            }
+            val pluginClassLoaders = pluginJars.map { IsolatedPluginClassLoader(it, parent) }
+            val registrations = pluginClassLoaders.flatMap { pluginClassLoader ->
+                registrationsFrom(pluginClassLoader) { provider ->
+                    provider.classLoader === pluginClassLoader
+                }
+            }
+            return registryOf(registrations)
+        }
 
         @OptIn(IndexinoInternalApi::class)
         internal fun load(

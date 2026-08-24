@@ -313,6 +313,7 @@ val shrunkCliJar by
     tasks.registering(ShadowJar::class) {
         description = "Build the R8-shrunk native-distribution CLI JAR"
         configureCliArchive("shrunk")
+        manifest { attributes["Indexino-Closed-World"] = "true" }
         // Shadow 9.6 extracts dependency rules but its merger deduplicates repeated rule lines,
         // including the closing braces shared by multiline blocks.
         // Keep the runtime-sensitive rules in vetted one-line form until the merger accepts the
@@ -330,6 +331,16 @@ val normalizedCliJar by
         description = "Build the metadata-normalized application JAR used by native distributions"
         inputJar.set(shrunkCliJar.flatMap(ShadowJar::getArchiveFile))
         archiveFileName.set("indexino-cli.jar")
+        destinationDirectory.set(layout.buildDirectory.dir("native-distributions/application"))
+        normalizedTimestampMillis.set(normalizedCliJarTimestampMillis)
+    }
+
+val normalizedExtensionWorkerJar by
+    tasks.registering(NormalizedJar::class) {
+        description =
+            "Build the metadata-normalized extension worker JAR packaged beside native installs"
+        inputJar.set(tasks.shadowJar.flatMap(ShadowJar::getArchiveFile))
+        archiveFileName.set("indexino-extension-worker.jar")
         destinationDirectory.set(layout.buildDirectory.dir("native-distributions/application"))
         normalizedTimestampMillis.set(normalizedCliJarTimestampMillis)
     }
@@ -429,6 +440,10 @@ construo {
         "licenses/roast-LICENSE",
         layout.projectDirectory.file("third-party/roast/LICENSE"),
     )
+    packageFiles.put(
+        "indexino-extension-worker.jar",
+        normalizedExtensionWorkerJar.flatMap(NormalizedJar::getArchiveFile),
+    )
     jlink {
         modules.addAll("jdk.compiler", "jdk.unsupported", "jdk.crypto.ec")
         guessModulesFromJar.set(true)
@@ -464,6 +479,10 @@ construo {
                 "runtime/lib/server/classes.jsa",
                 aotTraining.flatMap(AotTrainingTask::getAotCache),
             )
+            packageFiles.put(
+                "runtime/bin/java",
+                aotTraining.flatMap(AotTrainingTask::getTargetJdkRoot).map { it.file("bin/java") },
+            )
         }
         create<Target.MacOs>("macArm64") {
             architecture.set(Target.Architecture.AARCH64)
@@ -490,6 +509,10 @@ construo {
                 "runtime/lib/server/classes.jsa",
                 aotTraining.flatMap(AotTrainingTask::getAotCache),
             )
+            packageFiles.put(
+                "runtime/bin/java",
+                aotTraining.flatMap(AotTrainingTask::getTargetJdkRoot).map { it.file("bin/java") },
+            )
         }
         create<Target.Windows>("windowsX64") {
             architecture.set(Target.Architecture.X86_64)
@@ -514,6 +537,12 @@ construo {
             packageFiles.put(
                 "runtime/bin/server/classes.jsa",
                 aotTraining.flatMap(AotTrainingTask::getAotCache),
+            )
+            packageFiles.put(
+                "runtime/bin/java.exe",
+                aotTraining.flatMap(AotTrainingTask::getTargetJdkRoot).map {
+                    it.file("bin/java.exe")
+                },
             )
         }
     }
@@ -684,7 +713,7 @@ val ideaHomeDir =
     }
 
 tasks.test {
-    dependsOn(":indexino-compose-decoration:jar")
+    dependsOn(":indexino-compose-decoration:jar", ":indexino-selection-context:jar")
     useJUnitPlatform {
         val excludedTags =
             mutableListOf(

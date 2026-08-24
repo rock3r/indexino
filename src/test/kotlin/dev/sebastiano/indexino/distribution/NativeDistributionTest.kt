@@ -61,9 +61,7 @@ class NativeDistributionTest {
             val launcher = entries.getValue(launcherEntry(target))
             assertFalse(launcher.isDirectory)
             val applicationJar = entries.getValue("indexino/indexino-cli.jar")
-            if (target != MACOS_ARM64) {
-                assertEquals(NORMALIZED_JAR_MTIME_MILLIS, applicationJar.time)
-            }
+            assertPackagedExtensionWorker(entries, target, applicationJar)
             assertEquals(
                 Files.size(requiredFile("indexino.normalizedApplicationJar")),
                 applicationJar.size,
@@ -93,7 +91,7 @@ class NativeDistributionTest {
             )
             assertFalse(launcherConfiguration.contains("AOTMode"))
             assertFalse(launcherConfiguration.contains("-Xlog:aot"))
-            assertFalse(entries.containsKey(runtimeJavaEntry(target)))
+            assertTrue(entries.containsKey(runtimeJavaEntry(target)))
             assertPackagedAotCache(zip, entries, aotCache, target)
 
             val release =
@@ -233,7 +231,10 @@ class NativeDistributionTest {
         val installation = extractArchive(requiredFile("indexino.nativeArchive"), target, "install")
         val launcher = installation.resolve(launcherRelativePath(target))
         assertTrue(Files.isRegularFile(launcher), "Missing launcher: $launcher")
-        assertFalse(Files.exists(installation.resolve(runtimeJavaRelativePath(target))))
+        assertTrue(
+            Files.isRegularFile(installation.resolve(runtimeJavaRelativePath(target))),
+            "Extension worker java launcher must be packaged",
+        )
         assertEquals(
             FileTime.fromMillis(NORMALIZED_JAR_MTIME_MILLIS),
             Files.getLastModifiedTime(installation.resolve("indexino-cli.jar")),
@@ -1200,6 +1201,20 @@ class NativeDistributionTest {
     }
 
     private data class Timing(val wallSeconds: Double, val userSeconds: Double)
+
+    private fun assertPackagedExtensionWorker(
+        entries: Map<String, ZipEntry>,
+        target: String,
+        applicationJar: ZipEntry,
+    ) {
+        val extensionWorkerJar = entries.getValue("indexino/indexino-extension-worker.jar")
+        assertTrue(!extensionWorkerJar.isDirectory && extensionWorkerJar.size > 0)
+        if (target != MACOS_ARM64) {
+            listOf(applicationJar, extensionWorkerJar).forEach { jar ->
+                assertEquals(NORMALIZED_JAR_MTIME_MILLIS, jar.time)
+            }
+        }
+    }
 
     private companion object {
         val nativeConsoleTypeDefinition =
