@@ -220,7 +220,9 @@ indexino script --project /path/to/repo path/to/query.indexino.kts
 Maps to `IndexinoScriptHost.run` and prints each `ScriptFinding` in deterministic order (source
 path, offset, then message). The non-suspend DSL pins one published snapshot for the run and does
 not refresh it. Compilation and runtime failures print actionable diagnostics on stderr and exit
-`ANALYSIS_ERROR` without mutating the index or daemon state.
+`ANALYSIS_ERROR` without mutating the index or daemon state. Embedded `ScriptRequest` time limits
+and cancellation apply to **evaluation** only (compilation is outside that budget); uncooperative
+evaluations are abandoned and the host refuses further runs on that instance until the worker ends.
 
 The fat JVM JAR bundles the optional host. **R8-shrunk JARs and native distributions do not ship a
 dynamic Kotlin compiler host** — `indexino script` fails fast there rather than silently degrading.

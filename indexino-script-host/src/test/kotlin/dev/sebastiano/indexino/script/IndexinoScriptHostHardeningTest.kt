@@ -213,6 +213,8 @@ class IndexinoScriptHostHardeningTest {
         )
         withIndexedWorkspace(workspace) {
             val host = IndexinoScriptHost.create()
+            // Compilation is outside the evaluation time budget; a short timeout must still
+            // abandon a non-cooperative evaluation loop on cold CI hosts.
             val failure =
                 assertFailsWith<IndexinoScriptException> {
                     host.run(
@@ -220,7 +222,10 @@ class IndexinoScriptHostHardeningTest {
                     )
                 }
             assertEquals(IndexinoScriptException.Kind.TIMEOUT, failure.kind)
-            assertTrue(failure.message.orEmpty().contains("abandoned"))
+            assertTrue(
+                failure.message.orEmpty().contains("abandoned"),
+                "expected abandoned timeout, got: ${failure.message}",
+            )
 
             val refused =
                 assertFailsWith<IndexinoScriptException> {

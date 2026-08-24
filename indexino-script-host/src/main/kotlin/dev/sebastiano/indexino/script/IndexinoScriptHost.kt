@@ -35,10 +35,10 @@ import kotlinx.coroutines.runBlocking
 /**
  * Evaluates trusted `.indexino.kts` files against one immutable Indexino snapshot.
  *
- * Time limits and cancellation are cooperative (interrupt + optional cancel flag). JVM evaluation
- * cannot forcibly stop a spinning script; after an uncooperative timeout this host refuses new runs
- * until the abandoned worker finishes, and closes the snapshot so abandoned work cannot keep index
- * resources pinned.
+ * Time limits and cancellation are cooperative (interrupt + optional cancel flag) and apply to
+ * script **evaluation**, not compilation. JVM evaluation cannot forcibly stop a spinning script;
+ * after an uncooperative timeout this host refuses new runs until the abandoned worker finishes,
+ * and closes the snapshot so abandoned work cannot keep index resources pinned.
  */
 @ExperimentalIndexinoApi
 @OptIn(IndexinoInternalApi::class)
@@ -121,6 +121,11 @@ public class IndexinoScriptHost private constructor() {
         timeoutMillis: Long,
         cancellation: AtomicBoolean?,
     ) {
+        // Compile on the caller thread so cold compilation does not consume the evaluation
+        // time budget (and so timeout/abandon tests observe real evaluation, not compile).
+        throwIfCancelled(cancellation)
+        val compiled = compileCached(source, cacheKey)
+        throwIfCancelled(cancellation)
         val worker = AtomicReference<Thread?>(null)
         val executor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "indexino-script-eval").also { thread ->
@@ -138,7 +143,7 @@ public class IndexinoScriptHost private constructor() {
                     evaluationActive.set(true)
                     try {
                         throwIfCancelled(cancellation)
-                        evaluate(source, context, cacheKey)
+                        evaluateCompiled(compiled, context)
                         throwIfCancelled(cancellation)
                     } finally {
                         evaluationActive.set(false)
@@ -232,33 +237,36 @@ public class IndexinoScriptHost private constructor() {
         )
     }
 
-    private fun evaluate(source: SourceCode, context: IndexinoScriptContext, cacheKey: String) {
-        val compiled =
-            synchronized(cacheLock) { compiledScripts[cacheKey] }
-                ?: run {
-                    val result = runBlocking { compiler(source, compilationConfiguration) }
-                    val created =
-                        when (result) {
-                            is ResultWithDiagnostics.Success -> result.value
-                            is ResultWithDiagnostics.Failure -> {
-                                throw IndexinoScriptException.compilation(
-                                    message = "Script compilation failed: ${source.name}",
-                                    diagnostics = formatDiagnostics(result.reports),
-                                )
-                            }
-                        }
-                    synchronized(cacheLock) {
-                        compiledScripts[cacheKey]
-                            ?: created.also {
-                                compiledScripts[cacheKey] = it
-                                while (compiledScripts.size > CACHE_CAPACITY) {
-                                    val iterator = compiledScripts.entries.iterator()
-                                    iterator.next()
-                                    iterator.remove()
-                                }
-                            }
+    private fun compileCached(source: SourceCode, cacheKey: String): CompiledScript {
+        synchronized(cacheLock) { compiledScripts[cacheKey] }
+            ?.let {
+                return it
+            }
+        val result = runBlocking { compiler(source, compilationConfiguration) }
+        val created =
+            when (result) {
+                is ResultWithDiagnostics.Success -> result.value
+                is ResultWithDiagnostics.Failure -> {
+                    throw IndexinoScriptException.compilation(
+                        message = "Script compilation failed: ${source.name}",
+                        diagnostics = formatDiagnostics(result.reports),
+                    )
+                }
+            }
+        return synchronized(cacheLock) {
+            compiledScripts[cacheKey]
+                ?: created.also {
+                    compiledScripts[cacheKey] = it
+                    while (compiledScripts.size > CACHE_CAPACITY) {
+                        val iterator = compiledScripts.entries.iterator()
+                        iterator.next()
+                        iterator.remove()
                     }
                 }
+        }
+    }
+
+    private fun evaluateCompiled(compiled: CompiledScript, context: IndexinoScriptContext) {
         val result = runBlocking {
             evaluator(compiled, ScriptEvaluationConfiguration { implicitReceivers(context) })
         }
