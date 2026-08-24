@@ -59,6 +59,7 @@ daemon protocol, auto-refresh + large-repository gate, multi-origin topology ada
 - User-local content-addressed cache (not under the worktree)
 - Metalava-reviewed signatures and forward Kotlin/Java consumer fixtures
 - `indexino-selection-context` reference plugin
+- Resource query APIs (`findResources`, `findResourceUsages`) on the public model and snapshot surfaces
 
 ## Experimental / Alpha
 
@@ -68,7 +69,7 @@ daemon protocol, auto-refresh + large-repository gate, multi-origin topology ada
 
 ## Deferred (not release blockers)
 
-- **S10** — Android/CMP resource indexing (later minor)
+- **S10 follow-on** — broader Android/CMP resource indexing coverage beyond the shipped query APIs
 - **S11** — Compose decoration plugin
 - Native CLI ZIP publication pending counsel approval of redistribution terms
 - Post-v1 worktree overlay optimizations (#44)
