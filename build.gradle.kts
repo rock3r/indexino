@@ -208,15 +208,46 @@ val cliMainClass = "dev.sebastiano.indexino.cli.MainCommandKt"
 
 application { mainClass.set(cliMainClass) }
 
+val pluginAbiMetadata =
+    project(":indexino-plugin-api")
+        .layout
+        .buildDirectory
+        .file("generated/plugin-abi/plugin-abi.properties")
+
+tasks.named<Jar>("jar") {
+    dependsOn(":indexino-plugin-api:verifyPluginAbiLineage")
+    from(pluginAbiMetadata) {
+        into("META-INF/indexino")
+        rename { "host-plugin-abi.properties" }
+    }
+    doFirst {
+        val properties = Properties()
+        pluginAbiMetadata.get().asFile.inputStream().use(properties::load)
+        manifest.attributes["Indexino-Plugin-ABI-Version"] = properties.getProperty("current")
+        manifest.attributes["Indexino-Plugin-ABI-Supported"] = properties.getProperty("supported")
+    }
+}
+
 val mainSourceSet = sourceSets.main
 val runtimeClasspathConfiguration = configurations.runtimeClasspath
 
 fun ShadowJar.configureCliArchive(classifier: String) {
     group = "distribution"
+    dependsOn(":indexino-plugin-api:verifyPluginAbiLineage")
     from(mainSourceSet.map { it.output })
+    from(pluginAbiMetadata) {
+        into("META-INF/indexino")
+        rename { "host-plugin-abi.properties" }
+    }
     configurations = listOf(runtimeClasspathConfiguration.get())
     archiveClassifier.set(classifier)
     manifest { attributes["Main-Class"] = cliMainClass }
+    doFirst {
+        val properties = Properties()
+        pluginAbiMetadata.get().asFile.inputStream().use(properties::load)
+        manifest.attributes["Indexino-Plugin-ABI-Version"] = properties.getProperty("current")
+        manifest.attributes["Indexino-Plugin-ABI-Supported"] = properties.getProperty("supported")
+    }
     duplicatesStrategy = DuplicatesStrategy.INCLUDE
     mergeServiceFiles()
     exclude("META-INF/versions/*/module-info.class")

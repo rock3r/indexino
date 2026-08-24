@@ -122,6 +122,7 @@ publication verification and the release flow.
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layers |
 | [docs/INDEX-STORAGE.md](docs/INDEX-STORAGE.md) | User-local cache + keys |
 | [docs/API-STABILITY.md](docs/API-STABILITY.md) | Public API boundary and compatibility gates |
+| [docs/PLUGIN-AUTHORING.md](docs/PLUGIN-AUTHORING.md) | Compiled plugin ABI and manifest contract |
 | [docs/PUBLISHING.md](docs/PUBLISHING.md) | Maven coordinates and release flow |
 | [docs/DISTRIBUTIONS.md](docs/DISTRIBUTIONS.md) | Native installation, support, and release gates |
 | [AGENTS.md](AGENTS.md) | Agent rules |

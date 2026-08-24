@@ -1,0 +1,110 @@
+// Signature format: 5.0
+package dev.sebastiano.indexino.plugin.api {
+
+  @dev.sebastiano.indexino.model.IndexinoInternalApi public final class CheckContextV1 {
+    ctor public CheckContextV1(dev.sebastiano.indexino.model.BasicFactQueries queries, dev.sebastiano.indexino.plugin.api.PluginFactViewV1 facts, kotlin.jvm.functions.Function0<java.lang.Boolean> active);
+    method public void ensureActive();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.plugin.api.PluginFactViewV1 getFacts();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.BasicFactQueries getQueries();
+    property public dev.sebastiano.indexino.plugin.api.PluginFactViewV1 facts;
+    property public dev.sebastiano.indexino.model.BasicFactQueries queries;
+  }
+
+  @dev.sebastiano.indexino.model.IndexinoInternalApi public final class FileAnalysisContextV1 {
+    ctor public FileAnalysisContextV1(dev.sebastiano.indexino.model.SourceFile file, String sourceText, dev.sebastiano.indexino.plugin.api.PluginFactSinkV1 facts, kotlin.jvm.functions.Function0<java.lang.Boolean> active);
+    method public void ensureActive();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.plugin.api.PluginFactSinkV1 getFacts();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceFile getFile();
+    method @InaccessibleFromKotlin public String getSourceText();
+    property public dev.sebastiano.indexino.plugin.api.PluginFactSinkV1 facts;
+    property public dev.sebastiano.indexino.model.SourceFile file;
+    property public String sourceText;
+  }
+
+  public interface FileAnalyzerV1 {
+    method public suspend Object? analyze(dev.sebastiano.indexino.plugin.api.FileAnalysisContextV1 context, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+    method @InaccessibleFromKotlin public String getId();
+    property public abstract String id;
+  }
+
+  public interface IndexinoCheckV1 {
+    method @InaccessibleFromKotlin public String getId();
+    method public suspend Object? run(dev.sebastiano.indexino.plugin.api.CheckContextV1 context, kotlin.coroutines.Continuation<? super java.util.List<dev.sebastiano.indexino.model.Finding>>);
+    property public abstract String id;
+  }
+
+  public fun interface IndexinoPluginProvider {
+    method public void install(dev.sebastiano.indexino.plugin.api.IndexinoPluginRegistrar registrar);
+  }
+
+  @dev.sebastiano.indexino.model.IndexinoInternalApi public final class IndexinoPluginRegistrar {
+    ctor public IndexinoPluginRegistrar();
+    method public void check(dev.sebastiano.indexino.plugin.api.IndexinoCheckV1 check);
+    method @dev.sebastiano.indexino.model.IndexinoInternalApi public java.util.List<dev.sebastiano.indexino.plugin.api.IndexinoCheckV1> checks();
+    method @dev.sebastiano.indexino.model.IndexinoInternalApi public dev.sebastiano.indexino.plugin.api.PluginDescriptor descriptor();
+    method public void fileAnalyzer(dev.sebastiano.indexino.plugin.api.FileAnalyzerV1 analyzer);
+    method @dev.sebastiano.indexino.model.IndexinoInternalApi public java.util.List<dev.sebastiano.indexino.plugin.api.FileAnalyzerV1> fileAnalyzers();
+    method public void plugin(dev.sebastiano.indexino.plugin.api.PluginDescriptor descriptor);
+    method public void postProcessor(dev.sebastiano.indexino.plugin.api.PostProcessorV1 processor);
+    method @dev.sebastiano.indexino.model.IndexinoInternalApi public java.util.List<dev.sebastiano.indexino.plugin.api.PostProcessorV1> postProcessors();
+  }
+
+  public final class PluginDescriptor {
+    method @InaccessibleFromKotlin public String getDisplayName();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.PluginFactSchemaVersion getFactSchemaVersion();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.PluginId getId();
+    method @InaccessibleFromKotlin public java.util.Set<java.lang.String> getProducedNamespaces();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.BasicFactSchemaVersion getRequiredBasicFactSchema();
+    method @InaccessibleFromKotlin public String getVersion();
+    method public static dev.sebastiano.indexino.plugin.api.PluginDescriptor of(dev.sebastiano.indexino.model.PluginId id, String version, dev.sebastiano.indexino.model.PluginFactSchemaVersion factSchemaVersion, dev.sebastiano.indexino.model.BasicFactSchemaVersion requiredBasicFactSchema, java.util.Set<java.lang.String> producedNamespaces, String displayName);
+    property public String displayName;
+    property public dev.sebastiano.indexino.model.PluginFactSchemaVersion factSchemaVersion;
+    property public dev.sebastiano.indexino.model.PluginId id;
+    property public java.util.Set<java.lang.String> producedNamespaces;
+    property public dev.sebastiano.indexino.model.BasicFactSchemaVersion requiredBasicFactSchema;
+    property public String version;
+    field public static final dev.sebastiano.indexino.plugin.api.PluginDescriptor.Companion Companion;
+  }
+
+  public static final class PluginDescriptor.Companion {
+    method public dev.sebastiano.indexino.plugin.api.PluginDescriptor of(dev.sebastiano.indexino.model.PluginId id, String version, dev.sebastiano.indexino.model.PluginFactSchemaVersion factSchemaVersion, dev.sebastiano.indexino.model.BasicFactSchemaVersion requiredBasicFactSchema, java.util.Set<java.lang.String> producedNamespaces, String displayName);
+  }
+
+  public interface PluginFactSinkV1 {
+    method public suspend Object? put(String key, dev.sebastiano.indexino.model.PluginFactValue value, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+    method public suspend Object? putAt(String key, dev.sebastiano.indexino.model.SourceRange? range, dev.sebastiano.indexino.model.PluginFactValue value, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+  }
+
+  public interface PluginFactViewV1 {
+    method public suspend Object? entries(String prefix, dev.sebastiano.indexino.model.QueryOptions options, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.QueryPage<dev.sebastiano.indexino.model.PluginFactEntry>>);
+    method public suspend Object? get(String key, kotlin.coroutines.Continuation<? super dev.sebastiano.indexino.model.PluginFactValue?>);
+  }
+
+  @dev.sebastiano.indexino.model.IndexinoInternalApi public final class PostProcessContextV1 {
+    ctor public PostProcessContextV1(dev.sebastiano.indexino.plugin.api.PluginFactSinkV1 facts, optional dev.sebastiano.indexino.model.SourceOriginId? originId, kotlin.jvm.functions.Function0<java.lang.Boolean> active);
+    ctor public PostProcessContextV1(dev.sebastiano.indexino.plugin.api.PluginFactSinkV1 facts, kotlin.jvm.functions.Function0<java.lang.Boolean> active);
+    method public void ensureActive();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.plugin.api.PluginFactSinkV1 getFacts();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.model.SourceOriginId? getOriginId();
+    property public dev.sebastiano.indexino.plugin.api.PluginFactSinkV1 facts;
+    property public dev.sebastiano.indexino.model.SourceOriginId? originId;
+  }
+
+  public enum PostProcessLevelV1 {
+    enum_constant public static final dev.sebastiano.indexino.plugin.api.PostProcessLevelV1 COMPOSITE;
+    enum_constant public static final dev.sebastiano.indexino.plugin.api.PostProcessLevelV1 SHARD;
+  }
+
+  public interface PostProcessorV1 {
+    method @InaccessibleFromKotlin public String getId();
+    method @InaccessibleFromKotlin public dev.sebastiano.indexino.plugin.api.PostProcessLevelV1 getLevel();
+    method @InaccessibleFromKotlin public java.util.Set<java.lang.String> getReadsBasicFactFamilies();
+    method @InaccessibleFromKotlin public java.util.Set<java.lang.String> getReadsPluginNamespaces();
+    method public suspend Object? process(dev.sebastiano.indexino.plugin.api.PostProcessContextV1 context, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+    property public abstract String id;
+    property public abstract dev.sebastiano.indexino.plugin.api.PostProcessLevelV1 level;
+    property public abstract java.util.Set<java.lang.String> readsBasicFactFamilies;
+    property public abstract java.util.Set<java.lang.String> readsPluginNamespaces;
+  }
+
+}

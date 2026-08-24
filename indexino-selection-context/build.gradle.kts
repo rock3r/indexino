@@ -2,6 +2,7 @@ import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.KotlinJvm
 import com.vanniktech.maven.publish.SourcesJar
 import java.io.File
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
@@ -119,6 +120,24 @@ val metalavaCheckSignature by tasks.registering {
 }
 
 tasks.named("check") { dependsOn(metalavaCheckSignature) }
+
+val pluginAbiMetadata =
+    project(":indexino-plugin-api")
+        .layout
+        .buildDirectory
+        .file("generated/plugin-abi/plugin-abi.properties")
+
+tasks.named<Jar>("jar") {
+    dependsOn(":indexino-plugin-api:verifyPluginAbiLineage")
+    doFirst {
+        val properties = Properties()
+        pluginAbiMetadata.get().asFile.inputStream().use(properties::load)
+        manifest.attributes["Indexino-Plugin-ABI-Target"] =
+            requireNotNull(properties.getProperty("current")) {
+                "Generated plugin ABI metadata has no current version"
+            }
+    }
+}
 
 mavenPublishing {
     coordinates(group.toString(), "indexino-selection-context", version.toString())
