@@ -26,6 +26,7 @@ import org.gradle.api.publish.tasks.GenerateModuleMetadata
 import org.gradle.api.tasks.Delete
 import org.gradle.api.tasks.JavaExec
 import org.gradle.api.tasks.Sync
+import org.gradle.api.tasks.bundling.Jar
 import org.gradle.api.tasks.testing.Test
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.w3c.dom.Element
@@ -74,8 +75,41 @@ tasks
     .matching { it.name.startsWith("ktfmtCheck") || it.name.startsWith("ktfmtFormat") }
     .configureEach { (this as? org.gradle.api.tasks.SourceTask)?.exclude(*generatedSourceExcludes) }
 
+val generatedVersionDirectory = layout.buildDirectory.dir("generated/sources/version/kotlin")
+
+val generateVersionSource by tasks.registering {
+    val versionName = providers.gradleProperty("VERSION_NAME")
+    inputs.property("versionName", versionName)
+    outputs.dir(generatedVersionDirectory)
+    doLast {
+        val packageDirectory =
+            generatedVersionDirectory.get().asFile.resolve("dev/sebastiano/indexino/core")
+        packageDirectory.mkdirs()
+        packageDirectory
+            .resolve("Version.kt")
+            .writeText(
+                """
+                    |package dev.sebastiano.indexino.core
+                    |
+                    |internal object Version {
+                    |    const val NAME = "${versionName.get()}"
+                    |}
+                    """
+                    .trimMargin() + "\n"
+            )
+    }
+}
+
+tasks.named("compileKotlin") { dependsOn(generateVersionSource) }
+
+tasks
+    .withType<Jar>()
+    .matching { it.name == "sourcesJar" }
+    .configureEach { dependsOn(generateVersionSource) }
+
 sourceSets.main {
     resources.srcDir("config")
+    kotlin.srcDir(generatedVersionDirectory)
     // Selection-context owns these runtime resources; keeping legacy root copies makes the
     // reproducible CLI archive reject duplicate entries when the plugin is bundled.
     resources.exclude("idea-home/**", "presets/known-wrappers.json")
@@ -672,6 +706,7 @@ tasks.test {
     systemProperty("idea.config.path", ideaHomeDir.resolve("config").absolutePath)
     systemProperty("idea.system.path", ideaHomeDir.resolve("system").absolutePath)
     systemProperty("idea.plugins.path", ideaHomeDir.resolve("plugins").absolutePath)
+    systemProperty("indexino.expectedVersionName", version.toString())
 }
 
 val verifyShrunkCli by

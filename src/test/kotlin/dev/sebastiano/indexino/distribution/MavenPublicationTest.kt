@@ -88,7 +88,11 @@ class MavenPublicationTest {
         assertEquals(artifactId, requireText(project, "artifactId"))
         assertEquals(publicationVersion, requireText(project, "version"))
         requireText(project, "name")
-        requireText(project, "description")
+        val description = requireText(project, "description")
+        assertFalse(
+            description.contains("Personal experimentation project only"),
+            "Published POM must not retain pre-release experimentation disclaimer",
+        )
         requireText(project, "url")
         assertNotNull(directChild(project, "licenses"), "Published POM is missing <licenses>")
         assertNotNull(directChild(project, "scm"), "Published POM is missing <scm>")

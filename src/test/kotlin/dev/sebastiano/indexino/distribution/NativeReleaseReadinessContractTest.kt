@@ -134,6 +134,10 @@ class NativeReleaseReadinessContractTest {
         assertContains(workflow, "generate-release-provenance.sh")
         assertContains(workflow, "gh release create")
         assertContains(workflow, "--draft")
+        assertContains(workflow, "maven-release:")
+        assertContains(workflow, "Publish Maven-only GitHub release")
+        assertContains(workflow, "native_release == 'false'")
+        assertContains(workflow, "RELEASE_NOTES-")
         assertContains(workflow, "Upload complete Maven Central release train")
         assertContains(workflow, "publishToMavenCentral")
         assertContains(workflow, "MAVEN_CENTRAL_USERNAME")
@@ -152,6 +156,10 @@ class NativeReleaseReadinessContractTest {
         assertContains(manifest, "UNSIGNED")
         assertContains(projectFile("third-party/roast/LICENSE").readText(), "Apache License")
         assertContains(projectFile("build.gradle.kts").readText(), "licenses/roast-LICENSE")
+        assertTrue(
+            projectFile("release/RELEASE_NOTES-0.2.0.md").isFile,
+            "First release notes must be checked in",
+        )
     }
 
     @Test
