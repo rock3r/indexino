@@ -1205,6 +1205,53 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `floating point ordering is not structural equality`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class FloatingOrder(val value: Double) {
+                        override fun equals(other: Any?): Boolean =
+                            other is FloatingOrder &&
+                                java.lang.Double.compare(value, other.value) > 0
+                        override fun hashCode(): Int = value.hashCode()
+                        override fun toString(): String = "FloatingOrder(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
+    fun `local extension invoked on this preserves current receiver`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class LocalExtension(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is LocalExtension) return false
+                            fun LocalExtension.matches(): Boolean = value == other.value
+                            return this.matches()
+                        }
+                        override fun hashCode(): Int = value.hashCode()
+                        override fun toString(): String = "LocalExtension(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertTrue(findings.isEmpty(), findings.joinToString { it.message })
+    }
+
+    @Test
     fun `lambda label matching class name does not count as class receiver`() {
         val findings =
             rule()

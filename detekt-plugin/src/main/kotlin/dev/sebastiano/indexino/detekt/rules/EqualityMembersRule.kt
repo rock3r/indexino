@@ -204,6 +204,9 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
         receiverClass: KtClass,
     ): Boolean {
         val structuralCallKind = structuralCallKind() ?: return false
+        if (structuralCallKind == StructuralCallKind.ORDERING && !isComparedWithZeroForEquality()) {
+            return false
+        }
         val qualifiedCall = parent as? KtQualifiedExpression
         if (
             structuralCallKind == StructuralCallKind.RECEIVER &&
@@ -227,7 +230,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                         receiverClass,
                     ))
         }
-        if (structuralCallKind != StructuralCallKind.JAVA_OBJECTS || valueArguments.size != 2) {
+        if (structuralCallKind == StructuralCallKind.RECEIVER || valueArguments.size != 2) {
             return false
         }
         val first = valueArguments[0].getArgumentExpression() ?: return false
@@ -260,6 +263,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
             when {
                 callableNames.any { it in TWO_ARGUMENT_COMPARISONS } ->
                     StructuralCallKind.JAVA_OBJECTS
+                callableNames.any { it in ORDERING_COMPARISONS } -> StructuralCallKind.ORDERING
                 KOTLIN_ANY_EQUALS in callableNames ||
                     callableNames.any { it in RECEIVER_COMPARISON_CALLABLES } ->
                     StructuralCallKind.RECEIVER
@@ -358,8 +362,37 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                     it.hasForeignReceiverLambdaSyntax(equalsFunction, receiverClass)) ||
                     (it is KtNamedFunction &&
                         it.receiverTypeReference != null &&
-                        it.hasReceiverType(receiverClass))
+                        it.hasReceiverType(receiverClass) &&
+                        !it.isInvokedOnCurrent(equalsFunction, receiverClass))
             }
+
+    private fun KtCallExpression.isComparedWithZeroForEquality(): Boolean {
+        return generateSequence(parent) { it.parent }
+            .filterIsInstance<KtBinaryExpression>()
+            .any { comparison ->
+                (comparison.operationToken == KtTokens.EQEQ ||
+                    comparison.operationToken == KtTokens.EXCLEQ) &&
+                    (comparison.left?.text == "0" || comparison.right?.text == "0")
+            }
+    }
+
+    private fun KtNamedFunction.isInvokedOnCurrent(
+        equalsFunction: KtNamedFunction,
+        receiverClass: KtClass,
+    ): Boolean {
+        val functionName = name ?: return false
+        val invocations =
+            PsiTreeUtil.collectElementsOfType(equalsFunction, KtCallExpression::class.java).filter {
+                it.calleeExpression?.text == functionName &&
+                    !PsiTreeUtil.isAncestor(this, it, false)
+            }
+        return invocations.isNotEmpty() &&
+            invocations.all { invocation ->
+                val qualified = invocation.parent as? KtQualifiedExpression
+                qualified?.selectorExpression == invocation &&
+                    qualified.receiverExpression.isCurrentReceiver(equalsFunction, receiverClass)
+            }
+    }
 
     private fun KtFunctionLiteral.hasReceiverType(receiverClass: KtClass): Boolean =
         analyze(this) {
@@ -657,9 +690,9 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
                 "java.util.Objects.deepEquals",
                 "java.util.Arrays.equals",
                 "java.util.Arrays.deepEquals",
-                "java.lang.Double.compare",
-                "java.lang.Float.compare",
             )
+        val ORDERING_COMPARISONS: Set<String> =
+            setOf("java.lang.Double.compare", "java.lang.Float.compare")
         const val KOTLIN_ANY_EQUALS: String = "kotlin.Any.equals"
         val RECEIVER_COMPARISON_CALLABLES: Set<String> =
             setOf("kotlin.collections.contentEquals", "kotlin.collections.contentDeepEquals")
@@ -668,5 +701,6 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
     private enum class StructuralCallKind {
         RECEIVER,
         JAVA_OBJECTS,
+        ORDERING,
     }
 }
