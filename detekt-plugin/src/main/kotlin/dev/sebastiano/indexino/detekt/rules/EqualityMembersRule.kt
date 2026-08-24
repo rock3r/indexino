@@ -252,7 +252,7 @@ public class EqualityMembersRule(config: Config) : Rule(config, DESCRIPTION), Re
 
     private fun KtBinaryExpression.isPositiveEqualityComparison(): Boolean =
         when (operationToken) {
-            KtTokens.EQEQ -> !isNegated()
+            KtTokens.EQEQ -> !isNegated() && !isEarlyFalseGuard()
             KtTokens.EXCLEQ -> isNegated() || isEarlyFalseGuard()
             else -> false
         }

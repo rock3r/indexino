@@ -1455,6 +1455,31 @@ class EqualityMembersRuleTest {
     }
 
     @Test
+    fun `equality early false guard is not positive structural equality`() {
+        val findings =
+            rule()
+                .lint(
+                    """
+                    package dev.sebastiano.indexino.model
+
+                    class RejectedEquality(val value: String) {
+                        override fun equals(other: Any?): Boolean {
+                            if (other !is RejectedEquality) return false
+                            if (value == other.value) return false
+                            return true
+                        }
+                        override fun hashCode(): Int = value.hashCode()
+                        override fun toString(): String = "RejectedEquality(value=${'$'}value)"
+                    }
+                    """
+                        .trimIndent()
+                )
+
+        assertEquals(1, findings.size)
+        assertTrue(findings.single().message.contains("value"))
+    }
+
+    @Test
     fun `lambda label matching class name does not count as class receiver`() {
         val findings =
             rule()
