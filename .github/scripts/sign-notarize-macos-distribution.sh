@@ -43,12 +43,21 @@ security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
 security import "$WORK_DIRECTORY/certificate.p12" \
   -k "$KEYCHAIN" \
   -P "$MACOS_CERTIFICATE_PASSWORD" \
-  -T /usr/bin/codesign
+  -A \
+  -t cert \
+  -f pkcs12
+# Temporary keychains are not on the default search list; codesign and
+# set-key-partition-list need the keychain selected explicitly (Spectre pattern).
+security list-keychains -d user -s "$KEYCHAIN"
+security default-keychain -d user -s "$KEYCHAIN"
 security set-key-partition-list \
   -S apple-tool:,apple:,codesign: \
   -s \
   -k "$KEYCHAIN_PASSWORD" \
   "$KEYCHAIN"
+if ! security find-identity -v -p codesigning "$KEYCHAIN" | grep -F "$MACOS_SIGNING_IDENTITY"; then
+  fail "signing identity not found in keychain: $MACOS_SIGNING_IDENTITY"
+fi
 
 readonly EXTRACTED_DIRECTORY="$WORK_DIRECTORY/extracted"
 mkdir -p "$EXTRACTED_DIRECTORY"

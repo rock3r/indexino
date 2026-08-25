@@ -198,6 +198,13 @@ class NativeReleaseReadinessContractTest {
         assertContains(signingScript, "notarytool submit")
         assertContains(signingScript, "spctl")
         assertContains(signingScript, "stapler validate")
+        assertContains(signingScript, "list-keychains -d user -s")
+        assertContains(signingScript, "default-keychain -d user -s")
+        assertContains(signingScript, "find-identity -v -p codesigning")
+        assertContains(
+            projectFile(".github/scripts/setup-macos-release-secrets.sh").readText(),
+            "-legacy",
+        )
         assertFalse(
             File(projectDirectory, ".github/scripts/generate-release-provenance.sh").isFile,
             "Aggregate provenance script must be removed",

@@ -75,27 +75,43 @@ readonly CERTIFICATE_FORMAT="$(
   detect_certificate_format "$WORK_DIRECTORY/developerID_application.cer"
 )"
 
+# OpenSSL 3 defaults to PBES2/AES PKCS#12, which macOS `security import` rejects with
+# "MAC verification failed (wrong password?)". Export with Apple-compatible PBES1.
+readonly CERTIFICATE_PEM="$WORK_DIRECTORY/developerID_application.pem"
+openssl x509 \
+  -inform "$CERTIFICATE_FORMAT" \
+  -in "$WORK_DIRECTORY/developerID_application.cer" \
+  -out "$CERTIFICATE_PEM"
+
 P12_EXPORT_PASSWORD="${P12_EXPORT_PASSWORD:-$(openssl rand -base64 24)}"
-if [[ "$CERTIFICATE_FORMAT" == DER ]]; then
-  openssl pkcs12 -export \
-    -inkey "$WORK_DIRECTORY/developer_id_application.key" \
-    -in "$WORK_DIRECTORY/developerID_application.cer" \
-    -out "$WORK_DIRECTORY/developer-id.p12" \
-    -passout "pass:${P12_EXPORT_PASSWORD}" \
-    -name "Indexino Developer ID"
-else
-  openssl pkcs12 -export \
-    -inkey "$WORK_DIRECTORY/developer_id_application.key" \
-    -in "$WORK_DIRECTORY/developerID_application.cer" \
-    -out "$WORK_DIRECTORY/developer-id.p12" \
-    -passout "pass:${P12_EXPORT_PASSWORD}" \
-    -name "Indexino Developer ID"
-fi
+openssl pkcs12 -export \
+  -inkey "$WORK_DIRECTORY/developer_id_application.key" \
+  -in "$CERTIFICATE_PEM" \
+  -out "$WORK_DIRECTORY/developer-id.p12" \
+  -passout "pass:${P12_EXPORT_PASSWORD}" \
+  -name "Indexino Developer ID" \
+  -legacy \
+  -certpbe PBE-SHA1-3DES \
+  -keypbe PBE-SHA1-3DES \
+  -macalg sha1
+
+# Prove the archive imports with the password before uploading secrets.
+readonly VERIFY_KEYCHAIN="$WORK_DIRECTORY/verify.keychain-db"
+security create-keychain -p "$P12_EXPORT_PASSWORD" "$VERIFY_KEYCHAIN"
+security set-keychain-settings -lut 21600 "$VERIFY_KEYCHAIN"
+security unlock-keychain -p "$P12_EXPORT_PASSWORD" "$VERIFY_KEYCHAIN"
+security import "$WORK_DIRECTORY/developer-id.p12" \
+  -k "$VERIFY_KEYCHAIN" \
+  -P "$P12_EXPORT_PASSWORD" \
+  -T /usr/bin/codesign \
+  -f pkcs12 \
+  >/dev/null
+security delete-keychain "$VERIFY_KEYCHAIN" >/dev/null 2>&1 || true
 
 MACOS_SIGNING_IDENTITY="$(
   openssl x509 \
-    -inform "$CERTIFICATE_FORMAT" \
-    -in "$WORK_DIRECTORY/developerID_application.cer" \
+    -inform PEM \
+    -in "$CERTIFICATE_PEM" \
     -noout \
     -subject \
     -nameopt RFC2253,sep_multiline |
