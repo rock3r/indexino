@@ -186,12 +186,11 @@ class NativeReleaseReadinessContractTest {
         assertContains(workflow, "MACOS_CERTIFICATE_P12")
         assertContains(workflow, "APPLE_APP_SPECIFIC_PASSWORD")
         assertContains(workflow, "sign-notarize-macos-distribution.sh")
-        assertContains(workflow, "INDEXINO_NATIVE_MACOS_ARM64_VERIFICATION_ARCHIVE")
-        assertContains(workflow, "verifyNativeDistributionMacArm64")
+        assertContains(workflow, "smoke-macos-release-distribution.sh")
         assertTrue(
-            workflow.indexOf("INDEXINO_NATIVE_MACOS_ARM64_VERIFICATION_ARCHIVE") <
+            workflow.indexOf("smoke-macos-release-distribution.sh") <
                 workflow.lastIndexOf(".sha256"),
-            "Final macOS verification must precede release checksum generation",
+            "Final macOS release smoke must precede release checksum generation",
         )
         assertContains(build, "INDEXINO_NATIVE_MACOS_ARM64_VERIFICATION_ARCHIVE")
         assertContains(signingScript, "codesign")
