@@ -197,6 +197,7 @@ class NativeReleaseReadinessContractTest {
         assertContains(signingScript, "codesign")
         assertContains(signingScript, "notarytool submit")
         assertContains(signingScript, "spctl")
+        assertContains(signingScript, "does not seem to be an app")
         assertContains(signingScript, "stapler validate")
         assertContains(signingScript, "list-keychains -d user -s")
         assertContains(signingScript, "default-keychain -d user -s")
