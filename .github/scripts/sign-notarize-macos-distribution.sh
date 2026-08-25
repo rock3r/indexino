@@ -14,20 +14,21 @@ require_environment() {
 
 codesign_macho() {
   local candidate="$1"
-  local preserve_metadata=()
+  # Build the argv in one array so an empty preserve-metadata list does not trip
+  # `set -u` via `"${empty[@]}"` (bash 3.2 on macOS runners).
+  local -a args=(
+    --force
+    --options runtime
+    --timestamp
+    --keychain "$KEYCHAIN"
+    --sign "$MACOS_SIGNING_IDENTITY"
+  )
   if /usr/bin/codesign --display "$candidate" >/dev/null 2>&1; then
-    preserve_metadata+=(
+    args+=(
       --preserve-metadata=identifier,entitlements,requirements,flags,runtime
     )
   fi
-  /usr/bin/codesign \
-    --force \
-    --options runtime \
-    --timestamp \
-    --keychain "$KEYCHAIN" \
-    "${preserve_metadata[@]}" \
-    --sign "$MACOS_SIGNING_IDENTITY" \
-    "$candidate"
+  /usr/bin/codesign "${args[@]}" "$candidate"
 }
 
 sign_nested_natives_in_jars() {
