@@ -201,6 +201,9 @@ class NativeReleaseReadinessContractTest {
         assertContains(signingScript, "list-keychains -d user -s")
         assertContains(signingScript, "default-keychain -d user -s")
         assertContains(signingScript, "find-identity -v -p codesigning")
+        assertContains(signingScript, "sign_nested_natives_in_jars")
+        assertContains(signingScript, "jnilib|dylib")
+        assertContains(signingScript, "notarization status is")
         assertContains(
             projectFile(".github/scripts/setup-macos-release-secrets.sh").readText(),
             "-legacy",

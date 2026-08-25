@@ -12,6 +12,43 @@ require_environment() {
   [[ -n "${!name:-}" ]] || fail "missing environment variable $name"
 }
 
+codesign_macho() {
+  local candidate="$1"
+  local preserve_metadata=()
+  if /usr/bin/codesign --display "$candidate" >/dev/null 2>&1; then
+    preserve_metadata+=(
+      --preserve-metadata=identifier,entitlements,requirements,flags,runtime
+    )
+  fi
+  /usr/bin/codesign \
+    --force \
+    --options runtime \
+    --timestamp \
+    --keychain "$KEYCHAIN" \
+    "${preserve_metadata[@]}" \
+    --sign "$MACOS_SIGNING_IDENTITY" \
+    "$candidate"
+}
+
+sign_nested_natives_in_jars() {
+  local jar nest_dir entry
+  # Apple notarization inspects Mach-O payloads inside JARs (JNA, Jansi, …).
+  while IFS= read -r -d '' jar; do
+    while IFS= read -r entry; do
+      [[ -n "$entry" ]] || continue
+      nest_dir="$(mktemp -d "$WORK_DIRECTORY/jar-native.XXXXXX")"
+      mkdir -p "$nest_dir/$(dirname "$entry")"
+      unzip -p "$jar" "$entry" > "$nest_dir/$entry"
+      codesign_macho "$nest_dir/$entry"
+      (
+        cd "$nest_dir"
+        zip -q -u "$jar" "$entry"
+      )
+      rm -rf "$nest_dir"
+    done < <(zipinfo -1 "$jar" | grep -E '\.(jnilib|dylib)$' || true)
+  done < <(find "$PAYLOAD_DIRECTORY" -type f -name '*.jar' -print0)
+}
+
 [[ "$#" == 2 ]] || fail "usage: $0 <unsigned-zip> <signed-zip>"
 readonly INPUT_ARCHIVE="$1"
 readonly OUTPUT_ARCHIVE="$2"
@@ -67,22 +104,11 @@ readonly PAYLOAD_DIRECTORY="$EXTRACTED_DIRECTORY/indexino"
 readonly LAUNCHER="$PAYLOAD_DIRECTORY/indexino"
 [[ -f "$LAUNCHER" ]] || fail "archive does not contain the Indexino launcher"
 
+sign_nested_natives_in_jars
+
 find "$PAYLOAD_DIRECTORY" -type f -print0 | while IFS= read -r -d '' candidate; do
   if [[ "$candidate" != "$LAUNCHER" ]] && /usr/bin/file "$candidate" | grep -q 'Mach-O'; then
-    preserve_metadata=()
-    if /usr/bin/codesign --display "$candidate" >/dev/null 2>&1; then
-      preserve_metadata+=(
-        --preserve-metadata=identifier,entitlements,requirements,flags,runtime
-      )
-    fi
-    /usr/bin/codesign \
-      --force \
-      --options runtime \
-      --timestamp \
-      --keychain "$KEYCHAIN" \
-      "${preserve_metadata[@]}" \
-      --sign "$MACOS_SIGNING_IDENTITY" \
-      "$candidate"
+    codesign_macho "$candidate"
   fi
 done
 
@@ -107,11 +133,28 @@ rm -f "$TEMPORARY_ARCHIVE"
 /usr/bin/ditto -c -k --keepParent "$PAYLOAD_DIRECTORY" "$TEMPORARY_ARCHIVE"
 mv "$TEMPORARY_ARCHIVE" "$OUTPUT_ARCHIVE"
 
+readonly SUBMISSION_JSON="$WORK_DIRECTORY/notary-submission.json"
 xcrun notarytool submit "$OUTPUT_ARCHIVE" \
   --apple-id "$APPLE_ID" \
   --password "$APPLE_APP_SPECIFIC_PASSWORD" \
   --team-id "$APPLE_TEAM_ID" \
-  --wait
+  --wait \
+  --output-format json > "$SUBMISSION_JSON"
+readonly NOTARY_STATUS="$(
+  /usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' \
+    "$SUBMISSION_JSON"
+)"
+readonly NOTARY_ID="$(
+  /usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' \
+    "$SUBMISSION_JSON"
+)"
+if [[ "$NOTARY_STATUS" != "Accepted" ]]; then
+  xcrun notarytool log "$NOTARY_ID" \
+    --apple-id "$APPLE_ID" \
+    --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+    --team-id "$APPLE_TEAM_ID" >&2 || true
+  fail "notarization status is $NOTARY_STATUS (expected Accepted); id=$NOTARY_ID"
+fi
 
 readonly GATEKEEPER_DIRECTORY="$WORK_DIRECTORY/gatekeeper"
 mkdir -p "$GATEKEEPER_DIRECTORY"
