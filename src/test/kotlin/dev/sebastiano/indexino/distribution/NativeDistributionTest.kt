@@ -314,6 +314,7 @@ class NativeDistributionTest {
     }
 
     @Test
+    @Tag("native-performance")
     fun `AOT launch performance and distribution sizes are reported`() {
         val target = requiredProperty("indexino.nativeTarget")
         val archive = requiredFile("indexino.nativeArchive")

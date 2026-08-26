@@ -922,7 +922,14 @@ fun registerNativeDistributionVerification(
                 targetJdkRoot.map { it.file("bin/javap$executableExtension") },
             )
             .withPropertyName("targetPackagingTools")
-        useJUnitPlatform { includeTags("native-distribution") }
+        useJUnitPlatform {
+            includeTags("native-distribution")
+            // Multi-sample AOT perf timing regularly pushes Windows past multi-hour CI budgets;
+            // keep correctness coverage, skip the optional perf report on that target only.
+            if (taskSuffix == "WindowsX64") {
+                excludeTags("native-performance")
+            }
+        }
         systemProperty("indexino.nativeArchive", archive.get().asFile.absolutePath)
         systemProperty("indexino.nativeTarget", artifactSuffix)
         systemProperty("indexino.targetJdkRoot", targetJdkRoot.get().asFile.absolutePath)

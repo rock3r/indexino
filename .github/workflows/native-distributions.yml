@@ -37,9 +37,8 @@ jobs:
   verify-native:
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
-    # Windows verifyNativeDistribution includes AOT performance sampling and often
-    # exceeds 60m on GitHub-hosted runners; keep the matrix shared timeout elevated.
-    timeout-minutes: 120
+    # Windows packaging + verify can take well over an hour on hosted runners.
+    timeout-minutes: 180
     env:
       INDEXINO_RELEASE_VERSION: ${{ inputs.version }}
     strategy:
