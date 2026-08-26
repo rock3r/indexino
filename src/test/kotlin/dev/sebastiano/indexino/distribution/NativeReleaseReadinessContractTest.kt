@@ -178,7 +178,7 @@ class NativeReleaseReadinessContractTest {
             projectFile(".github/scripts/sign-notarize-macos-distribution.sh").readText()
 
         assertContains(workflow, "workflow_call:")
-        assertContains(workflow, "timeout-minutes: 180")
+        assertContains(workflow, "timeout-minutes: 300")
         assertContains(workflow, "test -n \"\$INDEXINO_RELEASE_VERSION\"")
         assertContains(build, "excludeTags(\"native-performance\")")
         assertFalse(

@@ -37,8 +37,8 @@ jobs:
   verify-native:
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
-    # Windows packaging + verify can take well over an hour on hosted runners.
-    timeout-minutes: 180
+    # Windows packaging + verify can exceed three hours on hosted runners.
+    timeout-minutes: 300
     env:
       INDEXINO_RELEASE_VERSION: ${{ inputs.version }}
     strategy:
