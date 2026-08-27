@@ -66,7 +66,9 @@ internal class IndexCommand : CliktCommand(name = "index") {
             IndexCommand.resolveRuntimeAttachForCli(
                 hasRegisteredPlugins = CliTrustedPlugins.registeredPluginIds().isNotEmpty()
             )
-        if (jsonlProgress) JsonlIndexBuildProgressReporter { echo(it) }.discoveryStarted()
+        val machineReporter =
+            if (jsonlProgress) JsonlIndexBuildProgressReporter { echo(it) } else null
+        machineReporter?.discoveryStarted()
         runBlocking {
             Indexino.connectBlockingForCli(
                     IndexinoConfiguration.forWorkspace(project.toPath())
@@ -83,11 +85,34 @@ internal class IndexCommand : CliktCommand(name = "index") {
                             .fold(RefreshRequest.forScope(scope)) { current, application ->
                                 current.withPlugin(PluginId.of(application))
                             }
-                    val handle = indexino.refresh(request)
-                    val awaiting = async { runCatching { handle.await() } }
                     val emittedText = mutableSetOf<String>()
                     val emittedMachine = mutableSetOf<String>()
-                    while (!awaiting.isCompleted) {
+                    val handle =
+                        if (runtimeAttach == RuntimeAttachMode.IN_PROCESS) {
+                            indexino.refresh(
+                                request,
+                                progress = { message ->
+                                    if (emittedText.add(message) && !jsonlProgress) {
+                                        echo(message, err = true)
+                                    }
+                                },
+                                machineProgress = machineReporter,
+                            )
+                        } else {
+                            indexino.refresh(request)
+                        }
+                    val completion = async { runCatching { handle.await() } }
+                    if (runtimeAttach == RuntimeAttachMode.PREFER_DAEMON) {
+                        while (!completion.isCompleted) {
+                            replayProgress(
+                                indexino,
+                                handle.id.value,
+                                jsonlProgress,
+                                emittedText,
+                                emittedMachine,
+                            )
+                            delay(PROGRESS_POLL_INTERVAL_MILLIS)
+                        }
                         replayProgress(
                             indexino,
                             handle.id.value,
@@ -95,17 +120,10 @@ internal class IndexCommand : CliktCommand(name = "index") {
                             emittedText,
                             emittedMachine,
                         )
-                        delay(PROGRESS_POLL_INTERVAL_MILLIS)
                     }
-                    val result = awaiting.await().getOrNull()
-                    val failure = awaiting.await().exceptionOrNull()
-                    replayProgress(
-                        indexino,
-                        handle.id.value,
-                        jsonlProgress,
-                        emittedText,
-                        emittedMachine,
-                    )
+                    val outcome = completion.await()
+                    val result = outcome.getOrNull()
+                    val failure = outcome.exceptionOrNull()
                     result?.let {
                         materializeCliCompatibilityProjection(project.toPath().toRealPath())
                     }
@@ -113,11 +131,10 @@ internal class IndexCommand : CliktCommand(name = "index") {
                         echo("index fresh", err = true)
                     failure?.let { thrown ->
                         if (jsonlProgress) {
-                            JsonlIndexBuildProgressReporter { echo(it) }
-                                .failed(
-                                    CliExitCodes.ANALYSIS_ERROR,
-                                    thrown.message ?: thrown.javaClass.name,
-                                )
+                            machineReporter?.failed(
+                                CliExitCodes.ANALYSIS_ERROR,
+                                thrown.message ?: thrown.javaClass.name,
+                            )
                         }
                         throw thrown
                     }
