@@ -122,6 +122,7 @@ class AotTrainingTaskContractTest {
                 ":app",
                 "--applications",
                 "dev.sebastiano.selection-context",
+                "--no-auto-refresh",
             ),
             arguments.drop(7),
         )
@@ -185,6 +186,7 @@ class AotTrainingTaskContractTest {
                             "index", "--project", "training-workspace",
                             "--build-system", "gradle", "--gradle-module", ":app",
                             "--applications", "dev.sebastiano.selection-context",
+                            "--no-auto-refresh",
                         )
                     )
                     minimumHeap.set("64m")

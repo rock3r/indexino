@@ -63,14 +63,9 @@ internal class IndexCommand : CliktCommand(name = "index") {
         CliTrustedPlugins.registerFromCli(plugins)
         CliTrustedPlugins.install()
         val runtimeAttach =
-            if (
-                CliTrustedPlugins.registeredPluginIds().isNotEmpty() &&
-                    !DistributionCapabilities.requiresOutOfProcessExtensions()
-            ) {
-                RuntimeAttachMode.IN_PROCESS
-            } else {
-                RuntimeAttachMode.PREFER_DAEMON
-            }
+            IndexCommand.resolveRuntimeAttachForCli(
+                hasRegisteredPlugins = CliTrustedPlugins.registeredPluginIds().isNotEmpty()
+            )
         if (jsonlProgress) JsonlIndexBuildProgressReporter { echo(it) }.discoveryStarted()
         runBlocking {
             Indexino.connectBlockingForCli(
@@ -198,8 +193,19 @@ internal class IndexCommand : CliktCommand(name = "index") {
         }
     }
 
-    private companion object {
+    internal companion object {
         const val PROGRESS_POLL_INTERVAL_MILLIS = 50L
+
+        internal fun resolveRuntimeAttachForCli(
+            hasRegisteredPlugins: Boolean,
+            requiresOutOfProcessExtensions: Boolean =
+                DistributionCapabilities.requiresOutOfProcessExtensions(),
+        ): RuntimeAttachMode =
+            when {
+                requiresOutOfProcessExtensions -> RuntimeAttachMode.IN_PROCESS
+                hasRegisteredPlugins -> RuntimeAttachMode.IN_PROCESS
+                else -> RuntimeAttachMode.PREFER_DAEMON
+            }
     }
 
     fun runIndexedBuild(

@@ -382,6 +382,7 @@ val aotTrainingArguments =
         ":app",
         "--applications",
         "dev.sebastiano.selection-context",
+        "--no-auto-refresh",
     )
 
 fun registerAotTraining(
