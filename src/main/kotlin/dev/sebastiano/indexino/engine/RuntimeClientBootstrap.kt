@@ -7,7 +7,6 @@ import java.io.PrintStream
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
 
 /** Attaches to, or starts, the local runtime owner for a canonical workspace. */
 internal object RuntimeClientBootstrap {
@@ -109,7 +108,7 @@ internal object RuntimeClientBootstrap {
                     .redirectError(ProcessBuilder.Redirect.DISCARD)
                     .start()
             } else {
-                suppressEmbeddedRegistryWarnings()
+                RegistryWarningStderr.installIfNeeded()
                 embeddedRuntimes.computeIfAbsent(InProcessCacheLayout.workspaceId(workspace)) {
                     WorkspaceRuntime.start(workspace, cacheRoot, autoRefreshMode)
                 }
@@ -140,28 +139,8 @@ internal object RuntimeClientBootstrap {
     }
 
     private val embeddedRuntimes = ConcurrentHashMap<String, WorkspaceRuntime>()
-    private val embeddedStderrFiltered = AtomicBoolean()
-
-    private fun suppressEmbeddedRegistryWarnings() {
-        if (embeddedStderrFiltered.compareAndSet(false, true)) {
-            System.setErr(RegistryWarningFilteringPrintStream(System.err))
-        }
-    }
 
     private const val CONNECT_WAIT_ATTEMPTS = 100
     private const val START_WAIT_ATTEMPTS = 600
     private const val START_WAIT_MILLIS = 50L
-}
-
-private class RegistryWarningFilteringPrintStream(private val delegate: PrintStream) :
-    PrintStream(delegate, true) {
-    override fun println(value: String?) {
-        if (value?.startsWith(REGISTRY_WARNING_PREFIX) != true) delegate.println(value)
-    }
-
-    override fun println(value: Any?) = println(value?.toString())
-
-    private companion object {
-        const val REGISTRY_WARNING_PREFIX = "WARN: Attempt to load key '"
-    }
 }

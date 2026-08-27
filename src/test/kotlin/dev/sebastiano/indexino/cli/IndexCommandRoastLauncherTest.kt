@@ -6,6 +6,7 @@ import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class IndexCommandRoastLauncherTest {
@@ -35,6 +36,7 @@ class IndexCommandRoastLauncherTest {
 
         assertEquals(0, result.exitCode, result.stderr)
         assertTrue(result.stderr.contains("JavaSourceProducer"))
+        assertFalse(result.stderr.contains("WARN: Attempt to load key '"))
     }
 
     private fun createWorkspace(): Path {

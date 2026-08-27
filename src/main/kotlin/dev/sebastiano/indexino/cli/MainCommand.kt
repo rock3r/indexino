@@ -3,6 +3,7 @@ package dev.sebastiano.indexino.cli
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.main
 import com.github.ajalt.clikt.core.subcommands
+import dev.sebastiano.indexino.engine.RegistryWarningStderr
 
 /** Entry point for the indexino CLI. */
 internal class MainCommand : CliktCommand(name = "indexino") {
@@ -28,6 +29,7 @@ internal class MainCommand : CliktCommand(name = "indexino") {
  * and R8 JAR launch contracts are exercised by `verifyShrunkCli`.
  */
 internal fun main(args: Array<String>) {
+    RegistryWarningStderr.installIfNeeded()
     WindowsConsoleCtrlHandler.install()
     MainCommand().main(args)
 }
