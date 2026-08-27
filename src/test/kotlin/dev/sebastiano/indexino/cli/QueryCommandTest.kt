@@ -48,6 +48,9 @@ class QueryCommandTest {
                 it.contains("ActionButton is interactive inside SelectionContainer")
             }
         )
+        val finding =
+            output.lines().first { it.contains("\"checkId\":\"interactive-in-selection\"") }
+        assertTrue(finding.indexOf("\"callee\"") < finding.indexOf("\"factKey\""))
     }
 
     @Test

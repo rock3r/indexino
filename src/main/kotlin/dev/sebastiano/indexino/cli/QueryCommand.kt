@@ -159,7 +159,9 @@ internal class QueryCommand : CliktCommand(name = "query") {
                     }
                 }
                 putJsonObject("properties") {
-                    finding.properties.forEach { (key, value) -> put(key, value) }
+                    finding.properties.entries.sortedBy { it.key }.forEach { (key, value) ->
+                        put(key, value)
+                    }
                 }
             }
         )

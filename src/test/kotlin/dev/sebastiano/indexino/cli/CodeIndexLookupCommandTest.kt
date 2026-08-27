@@ -29,6 +29,36 @@ class CodeIndexLookupCommandTest {
     }
 
     @Test
+    fun `legacy store lookup exposes fqn in symbol aliases`() {
+        val workspace = indexedWorkspace()
+        val resolver = IndexPathResolver(workspace)
+        val commit = runGit(workspace, "rev-parse", "HEAD").trim()
+        val store = XodusCodeIndexStore.open(resolver.resolveBaseStore(commit))
+        try {
+            store.put(
+                CodeIndexKey.symbolDefinition(
+                    "sample.Renderer",
+                    "app/src/main/kotlin/sample/Panel.kt",
+                    3,
+                    1,
+                ),
+                SymbolRecord(
+                    fqn = "sample.Renderer",
+                    relativeFile = "app/src/main/kotlin/sample/Panel.kt",
+                    line = 3,
+                    kind = "class",
+                    name = "Renderer",
+                    language = "kotlin",
+                ),
+            )
+            val matches = FindSymbolCommand().findSymbols(store, "Renderer")
+            assertEquals(listOf("sample.Renderer"), matches.single().aliases)
+        } finally {
+            store.close()
+        }
+    }
+
+    @Test
     fun `find symbol emits lookup progress events without changing result rows`() {
         val workspace = indexedWorkspace()
         val result =

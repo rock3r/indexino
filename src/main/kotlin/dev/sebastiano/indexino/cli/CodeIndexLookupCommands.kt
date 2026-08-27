@@ -96,6 +96,7 @@ internal class FindSymbolCommand : CliktCommand(name = "find-symbol") {
                     SymbolRecord::column,
                 )
             )
+            .map(SymbolRecord::withPublicAliases)
             .toList()
 }
 
@@ -228,6 +229,9 @@ internal class ResolveResourceCommand : CliktCommand(name = "resolve-resource") 
             )
             .toList()
 }
+
+private fun SymbolRecord.withPublicAliases(): SymbolRecord =
+    copy(aliases = (aliases + fqn).distinct())
 
 private fun symbolRecord(symbol: dev.sebastiano.indexino.model.Symbol): SymbolRecord =
     SymbolRecord(
