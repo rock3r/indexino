@@ -18,6 +18,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.io.TempDir
@@ -25,6 +26,13 @@ import org.junit.jupiter.api.io.TempDir
 @Tag("native-distribution")
 class NativeCompatibilityTest {
     @TempDir lateinit var tempDir: Path
+
+    @AfterEach
+    fun releaseLeftoverCompatibilityProcesses() {
+        if (::tempDir.isInitialized) {
+            releaseCompatibilityResources(tempDir)
+        }
+    }
 
     @Test
     fun `captured output tolerates bytes outside UTF-8`() {
@@ -279,16 +287,20 @@ class NativeCompatibilityTest {
         val caller = tempDir.resolve("compatibility-caller").createDirectories()
         val commit = runCommand(template, "git", "rev-parse", "HEAD").stdout.trim()
 
-        val snapshots = entryPoints.associate { entryPoint ->
-            val workspace = tempDir.resolve("workspace-${entryPoint.name}")
-            copyTree(template, workspace)
-            entryPoint.name to snapshot(entryPoint, caller, workspace, commit)
-        }
+        try {
+            val snapshots = entryPoints.associate { entryPoint ->
+                val workspace = tempDir.resolve("workspace-${entryPoint.name}")
+                copyTree(template, workspace)
+                entryPoint.name to snapshot(entryPoint, caller, workspace, commit)
+            }
 
-        val golden = snapshots.getValue("thin")
-        snapshots.forEach { (name, snapshot) ->
-            assertEquals(golden.results, snapshot.results, "$name CLI behavior differs")
-            assertEquals(golden.manifest, snapshot.manifest, "$name manifest differs")
+            val golden = snapshots.getValue("thin")
+            snapshots.forEach { (name, snapshot) ->
+                assertEquals(golden.results, snapshot.results, "$name CLI behavior differs")
+                assertEquals(golden.manifest, snapshot.manifest, "$name manifest differs")
+            }
+        } finally {
+            releaseCompatibilityResources(tempDir, entryPoints, caller)
         }
     }
 
@@ -302,7 +314,7 @@ class NativeCompatibilityTest {
             linkedMapOf(
                 "help" to run(entryPoint, caller, "--help"),
                 "invalid" to run(entryPoint, caller, "not-a-command"),
-                "fresh-index" to run(entryPoint, caller, *indexArguments(workspace)),
+                "fresh-index" to run(entryPoint, caller, *NativeCompatibilityFixtures.indexArguments(workspace)),
                 "status" to run(entryPoint, caller, "status", "--project", workspace.toString()),
                 "symbol-jsonl" to
                     run(
@@ -378,18 +390,39 @@ class NativeCompatibilityTest {
         assertEquals(3, json.getValue("basicFactSchemaVersion").jsonPrimitive.int)
     }
 
-    private fun indexArguments(workspace: Path): Array<String> =
-        arrayOf(
-            "index",
-            "--project",
-            workspace.toString(),
-            "--build-system",
-            "gradle",
-            "--gradle-module",
-            ":app",
-            "--applications",
-            "dev.sebastiano.selection-context",
-        )
+    private fun releaseCompatibilityResources(
+        root: Path,
+        entryPoints: List<EntryPoint>? = null,
+        caller: Path? = null,
+    ) {
+        entryPoints?.forEach { entryPoint ->
+            val workspace = root.resolve("workspace-${entryPoint.name}")
+            if (Files.isDirectory(workspace)) {
+                runCatching {
+                    run(
+                        entryPoint,
+                        caller ?: root,
+                        "daemon",
+                        "stop",
+                        "--project",
+                        workspace.toString(),
+                    )
+                }
+            }
+        }
+        terminateProcessesUnder(root)
+    }
+
+    private fun terminateProcessesUnder(root: Path) {
+        val marker = root.toAbsolutePath().normalize().toString()
+        ProcessHandle.allProcesses()
+            .filter { handle -> handle.info().commandLine().orElse("").contains(marker) }
+            .forEach { handle ->
+                CapturedProcessBoundary.terminate(handle.pid())
+                handle.destroyForcibly()
+            }
+        Thread.sleep(PROCESS_RELEASE_SETTLE_MILLIS)
+    }
 
     private fun createFixtureWorkspace(): Path {
         val workspace = tempDir.resolve("compatibility-template")
@@ -591,6 +624,7 @@ class NativeCompatibilityTest {
         const val MAIN_CLASS = "dev.sebastiano.indexino.cli.MainCommandKt"
         const val PROCESS_TIMEOUT_MINUTES = 3L
         const val PROCESS_TERMINATION_GRACE_SECONDS = 2L
+        const val PROCESS_RELEASE_SETTLE_MILLIS = 500L
         const val MACOS_ARM64 = "macos-arm64"
         const val LINUX_X64 = "linux-x64"
         const val WINDOWS_X64 = "windows-x64"
