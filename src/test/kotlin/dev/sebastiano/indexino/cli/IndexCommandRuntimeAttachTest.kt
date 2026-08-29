@@ -37,4 +37,16 @@ class IndexCommandRuntimeAttachTest {
             ),
         )
     }
+
+    @Test
+    fun `one-shot index with auto refresh disabled attaches in process`() {
+        assertEquals(
+            RuntimeAttachMode.IN_PROCESS,
+            IndexCommand.resolveRuntimeAttachForCli(
+                hasRegisteredPlugins = false,
+                requiresOutOfProcessExtensions = false,
+                noAutoRefresh = true,
+            ),
+        )
+    }
 }

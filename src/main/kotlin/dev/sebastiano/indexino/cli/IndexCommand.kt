@@ -64,7 +64,8 @@ internal class IndexCommand : CliktCommand(name = "index") {
         CliTrustedPlugins.install()
         val runtimeAttach =
             IndexCommand.resolveRuntimeAttachForCli(
-                hasRegisteredPlugins = CliTrustedPlugins.registeredPluginIds().isNotEmpty()
+                hasRegisteredPlugins = CliTrustedPlugins.registeredPluginIds().isNotEmpty(),
+                noAutoRefresh = noAutoRefresh,
             )
         val machineReporter =
             if (jsonlProgress) JsonlIndexBuildProgressReporter { echo(it) } else null
@@ -217,10 +218,12 @@ internal class IndexCommand : CliktCommand(name = "index") {
             hasRegisteredPlugins: Boolean,
             requiresOutOfProcessExtensions: Boolean =
                 DistributionCapabilities.requiresOutOfProcessExtensions(),
+            noAutoRefresh: Boolean = false,
         ): RuntimeAttachMode =
             when {
                 requiresOutOfProcessExtensions -> RuntimeAttachMode.IN_PROCESS
                 hasRegisteredPlugins -> RuntimeAttachMode.IN_PROCESS
+                noAutoRefresh -> RuntimeAttachMode.IN_PROCESS
                 else -> RuntimeAttachMode.PREFER_DAEMON
             }
     }
