@@ -7,7 +7,6 @@ import com.github.ajalt.clikt.parameters.options.default
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import com.github.ajalt.clikt.parameters.types.file
-import dev.sebastiano.indexino.api.Indexino
 import dev.sebastiano.indexino.api.IndexinoException
 import dev.sebastiano.indexino.core.BASIC_FACT_SCHEMA_VERSION
 import dev.sebastiano.indexino.core.git.GitHeadResolver
@@ -54,7 +53,7 @@ internal class FindSymbolCommand : CliktCommand(name = "find-symbol") {
                     "--session-id is not supported by daemon-backed lookup"
                 }
                 runBlocking {
-                    Indexino.connect(project.toPath()).use { indexino ->
+                    CliOneShotConnect.connect(project.toPath()).use { indexino ->
                         val query =
                             SymbolQuery.named(name)
                                 .let { current -> kind?.let(current::withKind) ?: current }
@@ -127,7 +126,7 @@ internal class FindReferencesCommand : CliktCommand(name = "find-references") {
                     "--session-id is not supported by daemon-backed lookup"
                 }
                 runBlocking {
-                    Indexino.connect(project.toPath()).use { indexino ->
+                    CliOneShotConnect.connect(project.toPath()).use { indexino ->
                         indexino.snapshot().use { snapshot ->
                             snapshot
                                 .findSymbols(

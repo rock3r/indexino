@@ -6,7 +6,6 @@ import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import com.github.ajalt.clikt.parameters.types.file
 import dev.sebastiano.indexino.api.IndexSnapshot
-import dev.sebastiano.indexino.api.Indexino
 import dev.sebastiano.indexino.api.IndexinoException
 import dev.sebastiano.indexino.api.SnapshotFreshness
 import dev.sebastiano.indexino.core.git.GitHeadResolver
@@ -64,7 +63,7 @@ internal class QueryCommand : CliktCommand(name = "query") {
         require(format == "jsonl") { "Only jsonl format is supported" }
         try {
             runBlocking {
-                Indexino.connect(project).use { indexino ->
+                CliOneShotConnect.connect(project).use { indexino ->
                     indexino.snapshot().use { snapshot ->
                         val request = CheckRequest.of(PluginId.of(application), checkId)
                         var offset = 0
