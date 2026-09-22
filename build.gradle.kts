@@ -1060,7 +1060,9 @@ val publicAcceptanceDriverArchive by
         dependsOn(tasks.testClasses)
         from(sourceSets.test.map { it.output }) { into("test") }
         from(sourceSets.main.map { it.output }) { into("main") }
-        from(sourceSets.test.map { it.runtimeClasspath.filter { file -> file.isFile } }) {
+        // Drivers use production APIs, not JUnit/TestKit; their daemon must not inherit
+        // Gradle's competing logging backend from the test runtime.
+        from(sourceSets.main.map { it.runtimeClasspath.filter { file -> file.isFile } }) {
             into("lib")
         }
         archiveFileName.set("public-acceptance-driver.zip")

@@ -41,11 +41,9 @@ jobs:
 
   corpus:
     needs: build-driver
-    # This group must contain single-use VMs, never privileged persistent runners.
+    # Personal repository: repository-scoped, one-job ephemeral VMs, not organization groups.
     # There is deliberately no pull_request or pull_request_target entry point.
-    runs-on:
-      group: public-acceptance-ephemeral
-      labels: indexino-public-linux-x64
+    runs-on: [self-hosted, linux, x64, "indexino-public-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.corpus }}"]
     timeout-minutes: 360
     strategy:
       fail-fast: false
@@ -61,21 +59,19 @@ jobs:
           name: public-driver-${{ github.run_id }}-${{ github.run_attempt }}
           path: build/public-acceptance
       - name: Verify detached-child cleanup before acquiring a corpus
-        env:
-          INDEXINO_TEST_CGROUP_PARENT: ${{ vars.INDEXINO_PUBLIC_CGROUP_PARENT }}
         run: |
-          test -n "$INDEXINO_TEST_CGROUP_PARENT"
+          # Supplied by the operator's delegated runner service, never inferred from a writable ancestor.
+          export INDEXINO_TEST_CGROUP_PARENT="${INDEXINO_PUBLIC_CGROUP_PARENT:?delegated runner service required}"
           test -w "$INDEXINO_TEST_CGROUP_PARENT/cgroup.procs"
           python3 -m unittest discover -s scripts/public-acceptance -v
       - name: Run pinned public corpus with disposable caches
         env:
-          CGROUP_PARENT: ${{ vars.INDEXINO_PUBLIC_CGROUP_PARENT }}
           CORPUS: ${{ matrix.corpus }}
         run: |
           digest="$(cut -d ' ' -f1 build/public-acceptance/public-acceptance-driver.zip.sha256)"
           python3 scripts/public-acceptance/run.py --execute --corpus "$CORPUS" \
             --artifact build/public-acceptance/public-acceptance-driver.zip --sha256 "$digest" \
-            --cgroup-parent "$CGROUP_PARENT" --scratch "$RUNNER_TEMP" \
+            --cgroup-parent "$INDEXINO_PUBLIC_CGROUP_PARENT" --scratch "$RUNNER_TEMP" \
             --report "build/reports/public-acceptance/$CORPUS.json"
       - name: Check bounded report artifact
         id: bounded-report

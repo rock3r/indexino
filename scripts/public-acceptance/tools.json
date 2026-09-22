@@ -1,4 +1,9 @@
 {
+  "githubRunnerLinuxX64": {
+    "version": "2.337.0",
+    "url": "https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-x64-2.337.0.tar.gz",
+    "sha256": "70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613"
+  },
   "linux-x86_64": {
     "bazeliskUrl": "https://github.com/bazelbuild/bazelisk/releases/download/v1.29.0/bazelisk-linux-amd64",
     "bazeliskSha256": "5a408715e932c0250d28bd84555f12edbf70117de42f9181691c736eacc4a992",

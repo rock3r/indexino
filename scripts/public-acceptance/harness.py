@@ -6,6 +6,41 @@ import math
 from pathlib import Path, PurePosixPath
 
 
+def phase_metrics(events):
+    starts, phases, discovery = {}, {}, []
+    refresh_start = None
+    for row in events:
+        event, now = row["event"], row["observedNanoTime"]
+        if event == "refresh_started":
+            if refresh_start is not None:
+                raise ValueError("overlapping refresh boundaries")
+            refresh_start = now
+        elif event == "discovery_completed":
+            if refresh_start is None or now < refresh_start:
+                raise ValueError("discovery lacks refresh start")
+            discovery.append(now - refresh_start)
+        elif event == "refresh_finished":
+            if refresh_start is None or starts:
+                raise ValueError("incomplete refresh or phase boundaries")
+            refresh_start = None
+        elif event == "phase_started":
+            phase = row["phase"]
+            if phase in starts:
+                raise ValueError("overlapping phase boundaries")
+            starts[phase] = now
+        elif event == "phase_completed":
+            phase = row["phase"]
+            start = starts.pop(phase, None)
+            if start is None or now < start:
+                raise ValueError("incomplete or reversed phase boundaries")
+            phases.setdefault(phase, []).append(now - start)
+    if starts or refresh_start is not None:
+        raise ValueError("incomplete phase or refresh boundaries")
+    return {"preDiscoveryCompletedNanos": discovery, "phases": phases,
+            "topologyOnlyNanos": None, "captureAndHashNanos": None,
+            "unavailableReason": "discovery completion follows source capture; hash-preview is aggregate hashing only"}
+
+
 def compare_inventory(expected, actual):
     if len(set(expected)) != len(expected) or len(set(actual)) != len(actual):
         raise AssertionError("duplicate inventory entries")
@@ -50,6 +85,17 @@ def samples(values):
 
 def readiness(system, memory, disk, cgroup):
     reasons = []
+    if system == "Linux" and cgroup is not None:
+        try:
+            for group in (Path(cgroup), *Path(cgroup).parents):
+                if not (group / "memory.max").exists():
+                    break
+                limit = (group / "memory.max").read_text().strip()
+                if limit != "max":
+                    remaining = max(0, int(limit) - int((group / "memory.current").read_text()))
+                    memory = min(memory, remaining) if memory is not None else None
+        except (OSError, ValueError):
+            reasons.append("memory: could not measure effective ancestor cgroup limit")
     if memory is None:
         reasons.append("memory: available-memory measurement unsupported on this host (not a capacity failure)")
     elif memory < 32 << 30:

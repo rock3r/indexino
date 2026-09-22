@@ -28,7 +28,8 @@ class FakeJob:
 
     def run(self, argv, cwd, timeout=120):
         self.calls.append(argv)
-        if "dev.sebastiano.indexino.acceptance.RetrievalAcceptanceDriver" in argv:
+        if any(name in argv for name in ("dev.sebastiano.indexino.acceptance.RetrievalAcceptanceDriver",
+                                         "dev.sebastiano.indexino.acceptance.CallLifecycleAcceptanceDriver")):
             Path(argv[-1]).write_text(json.dumps({"status": "passed", "queries": []}))
         elif "dev.sebastiano.indexino.acceptance.PublicAcceptanceDriver" in argv:
             instrumented = argv[-1] == "instrumented"
@@ -37,11 +38,14 @@ class FakeJob:
             contract = json.loads(contract_path.read_text())
             report_path.write_text(json.dumps({"status": "passed", "generation": "same-input-generation",
                 "sources": contract["sources"], "coldApiNanos": 7, "warmRefreshApiNanos": [1, 2, 3, 4, 5],
-                "queryApiNanos": {"ComposeAutomator": list(range(100))}}))
+                "queryApiNanos": {"ComposeAutomator": list(range(100))},
+                "diagnostics": {"phaseEvents": []}}))
         return "fake JDK 25"
 
 
 def fake_clone(commands, corpus, workspace):
+    if commands is not None:
+        commands.calls.append(["clone-corpus"])
     for module in ("core", "input-coordinator", "input-coordinator-server"):
         source = workspace / module / "src/main/kotlin/Invented.kt"
         source.parent.mkdir(parents=True)
@@ -68,9 +72,10 @@ class OrchestrationTest(unittest.TestCase):
                     patch.object(run, "extract_driver"):
                 with self.assertRaises((AssertionError, subprocess.CalledProcessError)):
                     run.execute(args, report)
-            self.assertEqual(2, len(report["fixtures"]))
+            self.assertEqual(4, len(report["fixtures"]))
             self.assertTrue(report["cleanupVerified"])
-            self.assertEqual([1, 1], [f["exitCode"] for f in report["fixtures"]])
+            self.assertEqual([1, 1, 0, 0], [f["exitCode"] for f in report["fixtures"]])
+            self.assertNotIn(["clone-corpus"], FailedFixture.instances[-1].calls)
 
     def test_fake_commands_exercise_both_scopes_three_cold_and_separate_diagnostic(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -89,7 +94,7 @@ class OrchestrationTest(unittest.TestCase):
         self.assertEqual([1, 3], [len(s["repeats"][0]["sources"]) for s in report["scopes"]])
         self.assertTrue(all(len(s["repeats"]) == 3 for s in report["scopes"]))
         self.assertTrue(all("instrumentedDiagnostic" in s for s in report["scopes"]))
-        self.assertEqual(2, len(report["fixtures"]))
+        self.assertEqual(["manual", "watcher", "calls-manual", "calls-watcher"], [f["lane"] for f in report["fixtures"]])
         self.assertEqual(8, sum("dev.sebastiano.indexino.acceptance.PublicAcceptanceDriver" in c
                                 for c in FakeJob.instances[-1].calls))
 
