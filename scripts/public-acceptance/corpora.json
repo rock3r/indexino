@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "spectre": {
+    "url": "https://github.com/rock3r/spectre.git",
+    "commit": "9ccbcfc95f8173dc98278a8c11678e5a1eab8445",
+    "buildSystem": "gradle",
+    "target": ":core",
+    "includeDependencies": [false, true],
+    "topology": "gradle-parse",
+    "closureKind": "syntactic dependency whitelist, including testImplementation; not resolved production classpath",
+    "sourceRoots": {"target": ["core/src"], "dependencies": ["core/src", "input-coordinator/src", "input-coordinator-server/src"]},
+    "independentGitTreeEvidence": {
+      "target": {"count": 46, "sha256": "d41e3dc73b1473dd59e3cefa134ff67d1fb4c1f05cad8eec973d08cb3f957711"},
+      "dependencies": {"count": 65, "sha256": "e79ce6c8249667a1f9f3c4c2db7023d25496e7518cd1e8f5185d5c5d5259d6ff"}
+    },
+    "symbols": [
+      {"name": "ComposeAutomator", "fqn": "dev.sebastiano.spectre.core.ComposeAutomator", "path": "core/src/main/kotlin/dev/sebastiano/spectre/core/ComposeAutomator.kt", "line": 41},
+      {"name": "AutomatorNode", "fqn": "dev.sebastiano.spectre.core.AutomatorNode", "path": "core/src/main/kotlin/dev/sebastiano/spectre/core/AutomatorNode.kt", "line": 67}
+    ]
+  },
+  "intellij": {
+    "url": "https://github.com/JetBrains/intellij-community.git",
+    "commit": "9b85e0691870ce22856a4592e7dbcdc5d85b61d4",
+    "buildSystem": "bazel",
+    "target": "//:main",
+    "includeDependencies": [true],
+    "topology": "bazel-query",
+    "diagnosticTarget": "//platform/jewel/ui:ui",
+    "bazelisk": "1.29.0",
+    "bazel": "JetBrains/9.1.0-jb_20260505_126",
+    "symbols": [
+      {"name": "ApplicationManager", "fqn": "com.intellij.openapi.application.ApplicationManager", "path": "platform/core-api/src/com/intellij/openapi/application/ApplicationManager.java", "line": 19}
+    ]
+  }
+}
