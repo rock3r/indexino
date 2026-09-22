@@ -24,6 +24,7 @@ class ManifestFreshnessTest {
             ManifestFreshnessCriteria(
                 commit = "abc",
                 indexerVersion = "0.1.0",
+                basicFactSchemaVersion = 3,
                 scope = "//ui:ui",
                 includeDeps = true,
                 sourcesContentHash = "sha256:dead",
@@ -117,6 +118,7 @@ class ManifestFreshnessTest {
         ManifestFreshnessCriteria(
             commit = "abc",
             indexerVersion = "0.1.0",
+            basicFactSchemaVersion = 3,
             scope = scope,
             includeDeps = includeDeps,
             sourcesContentHash = sourcesContentHash,

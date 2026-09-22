@@ -108,6 +108,14 @@ Declaration and reference lines and columns are 1-based. Kotlin and Java symbols
 declaration's syntactic start; XML value resources point to the opening `<`, ID resources to the
 `@+id/…` token, and path-derived resources to line 1, column 1.
 
+Version 4 is a compatibility reset for incorrectly attributed Kotlin shadowed-receiver facts; the
+record shape is unchanged. The current engine has no separate core-analyzer revision coordinate:
+the indexer version invalidates incremental writers, but reopening a published generation checks
+only the basic-fact schema coordinate. This reset therefore rejects old published packs and forces
+unchanged sources through the writer again. A warm-cache regression seeds schema-3 wrong reference
+and call targets, checks that they cannot be reopened as current, and verifies corrected public
+queries after refresh. This is not a general requirement to bump fact schemas for bug fixes.
+
 ## Query path (product)
 
 1. Connect to the workspace runtime (or in-process engine in early slices).
