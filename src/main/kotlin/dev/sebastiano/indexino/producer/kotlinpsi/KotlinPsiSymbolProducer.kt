@@ -19,6 +19,7 @@ import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.KtBinaryExpression
 import org.jetbrains.kotlin.psi.KtBlockExpression
 import org.jetbrains.kotlin.psi.KtCallExpression
+import org.jetbrains.kotlin.psi.KtCallableDeclaration
 import org.jetbrains.kotlin.psi.KtCatchClause
 import org.jetbrains.kotlin.psi.KtClass
 import org.jetbrains.kotlin.psi.KtClassBody
@@ -781,12 +782,8 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         when (receiver) {
             is KtThisExpression -> names.classOwner(useSite)?.let(names::classFqn)
             is KtSuperExpression -> names.superClassFqn(useSite)
-            is KtNameReferenceExpression -> {
-                val name = receiver.getReferencedName()
-                val type =
-                    resolveVariableType(receiver, name) ?: names.resolveTypeOrObject(receiver, name)
-                type?.let { names.qualifyType(it, useSite) }
-            }
+            is KtNameReferenceExpression ->
+                resolveNamedReceiverOwner(receiver, receiver.getReferencedName(), names)
             else -> null
         }
 
@@ -844,9 +841,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                 receiver.superTypeQualifier?.text?.let { names.qualifyType(it, call) }
                     ?: names.superClassFqn(call)
             is KtNameReferenceExpression ->
-                resolveVariableType(receiver, receiver.getReferencedName())?.let {
-                    names.qualifyType(it, call)
-                } ?: names.resolveTypeOrObject(call, receiver.getReferencedName())
+                resolveNamedReceiverOwner(receiver, receiver.getReferencedName(), names)
             is KtCallExpression ->
                 (receiver.calleeExpression as? KtSimpleNameExpression)
                     ?.getReferencedName()
@@ -856,67 +851,64 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             else -> names.qualifyType(receiver.text, call)
         }
 
-    private fun resolveVariableType(useSite: KtElement, name: String): String? {
+    private fun resolveNamedReceiverOwner(
+        useSite: KtElement,
+        name: String,
+        names: KotlinSourceNames,
+    ): String? {
         var scope = useSite.parent
         var insideMemberFunction = false
         while (scope != null) {
             if (scope is KtNamedFunction && scope.parent is KtClassBody) {
                 insideMemberFunction = true
             }
-            val type = variableTypeInScope(scope, useSite, name, insideMemberFunction)
-            if (type != null) {
-                return type
+            val binding = variableInScope(scope, useSite, name, insideMemberFunction)
+            if (binding != null) {
+                // An unknown type still shadows outer variables, imports, and objects.
+                return binding.typeReference?.text?.let { names.qualifyType(it, binding) }
+                    ?: localInitializerType(binding, names)
             }
             scope = scope.parent
         }
-        return null
+        return names.resolveTypeOrObject(useSite, name)
     }
 
-    private fun variableTypeInScope(
+    private fun localInitializerType(
+        binding: KtCallableDeclaration,
+        names: KotlinSourceNames,
+    ): String? {
+        val property = (binding as? KtProperty)?.takeIf { it.isLocal } ?: return null
+        val call = property.initializer as? KtCallExpression ?: return null
+        val name =
+            (call.calleeExpression as? KtSimpleNameExpression)?.getReferencedName() ?: return null
+        // Use the declaration's scope, not a later use site's potentially shadowed type names.
+        return names.resolveCallReceiverType(call, name)?.let { names.qualifyType(it, call) }
+    }
+
+    private fun variableInScope(
         scope: PsiElement,
         useSite: KtElement,
         name: String,
         insideMemberFunction: Boolean,
-    ): String? =
+    ): KtCallableDeclaration? =
         when (scope) {
-            is KtNamedFunction ->
-                scope.valueParameters.firstOrNull { it.name == name }?.typeReference?.text
-            is KtFunctionLiteral ->
-                scope.valueParameters.firstOrNull { it.name == name }?.typeReference?.text
-            is KtCatchClause ->
-                scope.catchParameter?.takeIf { it.name == name }?.typeReference?.text
-            is KtForExpression ->
-                scope.loopParameter?.takeIf { it.name == name }?.typeReference?.text
+            is KtNamedFunction -> scope.valueParameters.firstOrNull { it.name == name }
+            is KtFunctionLiteral -> scope.valueParameters.firstOrNull { it.name == name }
+            is KtCatchClause -> scope.catchParameter?.takeIf { it.name == name }
+            is KtForExpression -> scope.loopParameter?.takeIf { it.name == name }
             is KtBlockExpression ->
-                scope.statements
-                    .filterIsInstance<KtProperty>()
-                    .lastOrNull { it.name == name && it.textOffset < useSite.textOffset }
-                    ?.typeReference
-                    ?.text
+                scope.statements.filterIsInstance<KtProperty>().lastOrNull {
+                    it.name == name && it.textOffset < useSite.textOffset
+                }
             is KtClass ->
-                scope.declarations
-                    .filterIsInstance<KtProperty>()
-                    .firstOrNull { it.name == name }
-                    ?.typeReference
-                    ?.text
-                    ?: scope.primaryConstructorParameters
-                        .firstOrNull {
-                            it.name == name && (it.hasValOrVar() || !insideMemberFunction)
-                        }
-                        ?.typeReference
-                        ?.text
+                scope.declarations.filterIsInstance<KtProperty>().firstOrNull { it.name == name }
+                    ?: scope.primaryConstructorParameters.firstOrNull {
+                        it.name == name && (it.hasValOrVar() || !insideMemberFunction)
+                    }
             is KtClassOrObject ->
-                scope.declarations
-                    .filterIsInstance<KtProperty>()
-                    .firstOrNull { it.name == name }
-                    ?.typeReference
-                    ?.text
+                scope.declarations.filterIsInstance<KtProperty>().firstOrNull { it.name == name }
             is KtFile ->
-                scope.declarations
-                    .filterIsInstance<KtProperty>()
-                    .firstOrNull { it.name == name }
-                    ?.typeReference
-                    ?.text
+                scope.declarations.filterIsInstance<KtProperty>().firstOrNull { it.name == name }
             else -> null
         }
 

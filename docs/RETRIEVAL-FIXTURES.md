@@ -16,6 +16,17 @@ distinguishes those contracts explicitly:
   may contain both overload candidates. Report those extra references as semantic false positives;
   do not rewrite the labels, suppress the case, or claim exact compiler accuracy.
 
+Kotlin receiver lookup respects the nearest lexical variable binding even when its type is unknown.
+It uses explicit types and, for local properties, simple constructor/call initializers resolved in
+the declaration's scope. A visible function wins over a same-named constructor candidate; a function
+without an explicit return type stays unknown. Unknown bindings do not fall back to outer variables,
+imports, or objects. This is bounded syntax analysis, not inference through arbitrary expressions,
+factory bodies, assignments, delegates, or classpaths. `KotlinReceiverBindingTest` and
+`KotlinShadowingQueryTest` exercise both rejected false positives and retained positive references.
+
+Git attributes preserve the fixture's LF bytes on Windows as well as Unix; Kotlin PSI requires
+normalized line separators. This does not claim general CRLF source support.
+
 Each `references` case selects a declaration by FQN, file, and declaration line, then queries its
 generation-local ID. `scopeFiles` plus `language` defines the **exhaustively labelled query scope**.
 Only rows in that scope enter that case's comparison. The result identity here is file + line
