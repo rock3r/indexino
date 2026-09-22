@@ -62,7 +62,7 @@ internal object CallLifecycleAcceptanceDriver {
         val timings =
             linkedMapOf("references" to mutableListOf<Long>(), "callers" to mutableListOf<Long>())
         var status = "incomplete"
-        var failure: String? = null
+        var failureType: String? = null
         try {
             Indexino.connect(configuration).use { index ->
                 try {
@@ -82,8 +82,7 @@ internal object CallLifecycleAcceptanceDriver {
                 }
             }
         } catch (error: Exception) {
-            failure =
-                "${error.javaClass.simpleName}: ${error.message?.lineSequence()?.firstOrNull()}"
+            failureType = error.javaClass.simpleName
             throw error
         } finally {
             Files.writeString(
@@ -92,7 +91,7 @@ internal object CallLifecycleAcceptanceDriver {
                         put("schema", 1)
                         put("status", status)
                         put("lane", "calls-${args[1]}")
-                        failure?.let { put("failure", it) }
+                        failureType?.let { put("failureType", it) }
                         put("stages", JsonArray(stages))
                         put(
                             "queries",
