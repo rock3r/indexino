@@ -882,6 +882,15 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         val call = property.initializer as? KtCallExpression ?: return null
         val name =
             (call.calleeExpression as? KtSimpleNameExpression)?.getReferencedName() ?: return null
+        var scope = call.parent
+        var insideMemberFunction = false
+        while (scope != null) {
+            if (scope is KtNamedFunction && scope.parent is KtClassBody) {
+                insideMemberFunction = true
+            }
+            if (variableInScope(scope, call, name, insideMemberFunction) != null) return null
+            scope = scope.parent
+        }
         // Use the declaration's scope, not a later use site's potentially shadowed type names.
         return names.resolveCallReceiverType(call, name)?.let { names.qualifyType(it, call) }
     }

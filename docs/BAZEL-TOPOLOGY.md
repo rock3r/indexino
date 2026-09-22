@@ -116,9 +116,11 @@ remaining open handle prevents immediate removal; deletion must not mask the cle
 The refresh coordinator retains the active refresh while its worker unwinds. Equal requests join
 that same stopping refresh; `RefreshStopped` and result cancellation occur only after the worker's
 cleanup returns. Cancelling an `await()` observer or event collector does not request stop.
-The internal `publishIfActive` boundary serializes explicit stop with publication: a stop that wins
-the boundary prevents publication; publication already inside it may finish before stop returns.
-Facade publication and completion must use that boundary, not a separate check followed by a write.
+The internal `commitIfActive` boundary serializes explicit stop with generation publication: a stop
+that wins prevents publication; successful publication records commitment before releasing the lock,
+making later stop calls no-ops. Result completion follows cleanup using `publishIfActive`, so a
+committed generation cannot later be reported as cancelled. Neither boundary is a separate check
+followed by an unguarded write.
 For a client cleanup failure, the facade instead maps the typed cause and calls
 `failAfterCleanup(IndexinoException)`. The coordinator stages this failure under its state lock and
 prefers it over stopped when completing both result and terminal event after the worker unwinds.

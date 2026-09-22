@@ -118,7 +118,7 @@ def execute(args, report):
             report["fixtures"] = []
             for lane in ("manual", "watcher", "calls-manual", "calls-watcher"):
                 output = root / f"fixture-{lane}.json"
-                exit_code = 0
+                runner_error = None
                 caller_lane = lane.startswith("calls-")
                 entry = ("CallLifecycleAcceptanceDriver" if caller_lane else "RetrievalAcceptanceDriver")
                 inputs = ([] if caller_lane else [str(driver / "test/fixtures/retrieval-v1")])
@@ -126,15 +126,40 @@ def execute(args, report):
                 try:
                     commands.run(["java", "-Xmx2g"] + java_isolation + ["--enable-native-access=ALL-UNNAMED", "-cp", classpath,
                                   "dev.sebastiano.indexino.acceptance." + entry] + inputs, root, timeout=600)
-                except subprocess.CalledProcessError as error:
-                    exit_code = error.returncode
-                fixture_result = (json.loads(output.read_text()) if output.exists() else
-                                  {"status": "failed", "queries": [], "reason": "driver produced no checkpoint"})
-                fixture_result.update(lane=lane, exitCode=exit_code)
-                for query in fixture_result["queries"]:
-                    query["apiNanos"] = (samples(query["apiNanos"]) if query["apiNanos"] else
-                                         {"raw": [], "p50": None, "p95": None, "reason": "query did not complete"})
-                report["fixtures"].append(fixture_result)
+                except BaseException as error:
+                    runner_error = error
+                finally:
+                    try:
+                        if not output.exists():
+                            fixture_result = {"status": "failed", "queries": [],
+                                              "reason": "driver produced no checkpoint"}
+                        elif output.stat().st_size > 16 << 20:
+                            fixture_result = {"status": "failed", "queries": [],
+                                              "checkpointError": "driver checkpoint exceeds 16 MiB"}
+                        else:
+                            fixture_result = json.loads(output.read_text())
+                    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+                        fixture_result = {"status": "failed", "queries": [],
+                                          "checkpointError": type(error).__name__}
+                    exit_code = (runner_error.returncode
+                                 if isinstance(runner_error, subprocess.CalledProcessError) else
+                                 (0 if runner_error is None else None))
+                    fixture_result.update(lane=lane, exitCode=exit_code)
+                    if runner_error is not None:
+                        # A checkpoint written before a runner failure is evidence, not success.
+                        fixture_result.update(status="failed", failureType=type(runner_error).__name__)
+                    for query in fixture_result.get("queries", []):
+                        query["apiNanos"] = (samples(query["apiNanos"]) if query["apiNanos"] else
+                                             {"raw": [], "p50": None, "p95": None,
+                                              "reason": "query did not complete"})
+                    report["fixtures"].append(fixture_result)
+                if runner_error is not None:
+                    if not isinstance(runner_error, Exception):
+                        raise runner_error
+                    resource_forbids_retry = (isinstance(runner_error, RuntimeError) and
+                                              str(runner_error).startswith("resource gate:"))
+                    if resource_forbids_retry or not commands.cleanup_verified:
+                        raise runner_error
             if any(f["exitCode"] or f["status"] != "passed" for f in report["fixtures"]):
                 raise AssertionError("invented fixture acceptance failed; retained all lane reports")
             acquisition = time.monotonic_ns()

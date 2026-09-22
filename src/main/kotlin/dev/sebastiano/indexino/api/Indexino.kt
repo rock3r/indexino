@@ -329,7 +329,7 @@ private constructor(
                 )
                 val revision = manifest.toWorkspaceRevision()
                 val generation = manifest.toGenerationId(revision)
-                operation.publishIfActive {
+                operation.commitIfActive {
                     publishGenerationOrAbortIfClosed(
                         manifest.commit,
                         generation,
@@ -341,12 +341,12 @@ private constructor(
                         execution.overlayDeltaPath,
                         execution.tombstonePrefixes,
                     )
-                    onRefreshSucceededForRuntime?.invoke(
-                        request,
-                        execution.sources,
-                        execution.topologyRoots,
-                    )
                 }
+                onRefreshSucceededForRuntime?.invoke(
+                    request,
+                    execution.sources,
+                    execution.topologyRoots,
+                )
                 val changedFileCount = execution.changes?.changedSources?.size ?: 0
                 val removedFileCount = execution.changes?.deletedSources?.size ?: 0
                 val result =

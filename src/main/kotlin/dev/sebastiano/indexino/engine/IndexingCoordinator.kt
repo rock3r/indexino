@@ -25,6 +25,7 @@ internal class InFlightRefresh(
     private val stateLock = Any()
     private var worker: Thread? = null
     private var finished = false
+    private var committed = false
     private var cleanupFailure: IndexinoException? = null
 
     internal fun bindWorker(thread: Thread) {
@@ -36,7 +37,7 @@ internal class InFlightRefresh(
 
     internal fun stop() {
         synchronized(stateLock) {
-            if (finished || result.isDone || terminalEvent.isDone) return
+            if (committed || finished || result.isDone || terminalEvent.isDone) return
             if (stopped.compareAndSet(false, true)) worker?.interrupt()
         }
     }
@@ -74,6 +75,11 @@ internal class InFlightRefresh(
             checkActive()
             action()
         }
+
+    internal fun commitIfActive(action: () -> Unit) = publishIfActive {
+        action()
+        committed = true
+    }
 
     internal fun isStopped(): Boolean = stopped.get()
 }

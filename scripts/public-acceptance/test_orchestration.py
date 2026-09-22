@@ -109,6 +109,7 @@ class OrchestrationTest(unittest.TestCase):
                 result = super().run(argv, cwd, timeout)
                 if "dev.sebastiano.indexino.acceptance.RetrievalAcceptanceDriver" in argv:
                     Path(argv[-1]).write_text(json.dumps({"status": "incomplete", "queries": []}))
+                    self.cleanup_verified = True
                     raise subprocess.CalledProcessError(1, argv)
                 return result
         with tempfile.TemporaryDirectory() as temporary:
@@ -126,6 +127,87 @@ class OrchestrationTest(unittest.TestCase):
             self.assertTrue(report["cleanupVerified"])
             self.assertEqual([1, 1, 0, 0], [f["exitCode"] for f in report["fixtures"]])
             self.assertNotIn(["clone-corpus"], FailedFixture.instances[-1].calls)
+
+    def test_timed_out_fixture_retains_checkpoint_after_cleanup_and_runs_independent_lanes(self):
+        class TimedOutFixture(FakeJob):
+            failed = False
+            def run(self, argv, cwd, timeout=120):
+                result = super().run(argv, cwd, timeout)
+                if (not self.failed and
+                        "dev.sebastiano.indexino.acceptance.RetrievalAcceptanceDriver" in argv):
+                    self.failed = True
+                    Path(argv[-1]).write_text(json.dumps(
+                        {"status": "passed", "queries": [], "evidence": "before-timeout"}))
+                    self.cleanup_verified = True
+                    raise subprocess.TimeoutExpired(argv, timeout)
+                return result
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifact = root / "driver.zip"
+            artifact.write_bytes(b"fake artifact")
+            args = SimpleNamespace(corpus="spectre", artifact=artifact,
+                sha256=hashlib.sha256(b"fake artifact").hexdigest(), scratch=root, cgroup_parent=root)
+            report = {}
+            with patch.object(run, "Commands", TimedOutFixture), patch.object(run, "clone", fake_clone), \
+                    patch.object(run, "extract_driver"):
+                with self.assertRaises(AssertionError):
+                    run.execute(args, report)
+            disposable_root = TimedOutFixture.instances[-1].root
+            self.assertFalse(disposable_root.exists())
+        self.assertEqual(4, len(report["fixtures"]))
+        self.assertEqual("failed", report["fixtures"][0]["status"])
+        self.assertEqual("before-timeout", report["fixtures"][0]["evidence"])
+        self.assertEqual("TimeoutExpired", report["fixtures"][0]["failureType"])
+        self.assertIsNone(report["fixtures"][0]["exitCode"])
+        self.assertNotIn(["clone-corpus"], TimedOutFixture.instances[-1].calls)
+
+    def test_bounded_output_failure_runs_independent_lanes_but_resource_gate_stops_them(self):
+        class GuardFailure(FakeJob):
+            failure = "command output exceeds 64 MiB limit"
+            exception = RuntimeError
+            failed = False
+            def run(self, argv, cwd, timeout=120):
+                result = super().run(argv, cwd, timeout)
+                if (not self.failed and
+                        "dev.sebastiano.indexino.acceptance.RetrievalAcceptanceDriver" in argv):
+                    self.failed = True
+                    self.cleanup_verified = True
+                    raise self.exception(self.failure)
+                return result
+
+        def execute_with(failure, exception=RuntimeError):
+            GuardFailure.failure = failure
+            GuardFailure.exception = exception
+            GuardFailure.instances = []
+            GuardFailure.failed = False
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                artifact = root / "driver.zip"
+                artifact.write_bytes(b"fake artifact")
+                args = SimpleNamespace(corpus="spectre", artifact=artifact,
+                    sha256=hashlib.sha256(b"fake artifact").hexdigest(), scratch=root, cgroup_parent=root)
+                report = {}
+                with patch.object(run, "Commands", GuardFailure), patch.object(run, "clone", fake_clone), \
+                        patch.object(run, "extract_driver"):
+                    with self.assertRaises((AssertionError, RuntimeError, KeyboardInterrupt)):
+                        run.execute(args, report)
+                self.assertFalse(GuardFailure.instances[-1].root.exists())
+            return report, GuardFailure.instances[-1]
+
+        output_report, output_job = execute_with("command output exceeds 64 MiB limit")
+        self.assertEqual(4, len(output_report["fixtures"]))
+        self.assertEqual("failed", output_report["fixtures"][0]["status"])
+        self.assertNotIn(["clone-corpus"], output_job.calls)
+
+        resource_report, resource_job = execute_with("resource gate: fewer than 10 GiB free disk")
+        self.assertEqual(1, len(resource_report["fixtures"]))
+        self.assertEqual("failed", resource_report["fixtures"][0]["status"])
+        self.assertNotIn(["clone-corpus"], resource_job.calls)
+
+        interrupted_report, interrupted_job = execute_with("interrupted", KeyboardInterrupt)
+        self.assertEqual(1, len(interrupted_report["fixtures"]))
+        self.assertEqual("KeyboardInterrupt", interrupted_report["fixtures"][0]["failureType"])
+        self.assertNotIn(["clone-corpus"], interrupted_job.calls)
 
     def test_fake_commands_exercise_both_scopes_three_cold_and_separate_diagnostic(self):
         with tempfile.TemporaryDirectory() as temporary:

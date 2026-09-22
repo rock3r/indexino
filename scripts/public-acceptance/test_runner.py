@@ -24,6 +24,19 @@ class FakeCommands:
 
 
 class RunnerTest(unittest.TestCase):
+    def test_new_command_invalidates_previous_cleanup_evidence_even_when_launch_fails(self):
+        commands = runner.Commands.__new__(runner.Commands)
+        commands.cleanup_verified = True
+        commands.metrics = []
+        commands.env = {}
+        commands._cpu_micros = lambda: 0
+        with tempfile.TemporaryDirectory() as temporary:
+            commands.root = Path(temporary)
+            with patch.object(runner.subprocess, "Popen", side_effect=OSError("launch failed")):
+                with self.assertRaises(OSError):
+                    commands.run(["invented-command"], commands.root)
+        self.assertFalse(commands.cleanup_verified)
+
     def test_failure_diagnostic_discards_paths_secrets_and_unbounded_messages(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "stderr"
@@ -88,6 +101,19 @@ class RunnerTest(unittest.TestCase):
         child.rmdir.assert_called_once()
         parent.rmdir.assert_not_called()
         self.assertTrue(parent.__truediv__.call_args.args[0].startswith("indexino-"))
+
+    @unittest.skipUnless(sys.platform == "linux" and os.environ.get("INDEXINO_TEST_CGROUP_PARENT"),
+                         "requires delegated Linux cgroup-v2; macOS cannot prove detached cleanup")
+    def test_nonzero_parent_exit_cleans_detached_child_before_reporting_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            code = ("import os,time; pid=os.fork(); "
+                    "os._exit(7) if pid else (os.setsid(),time.sleep(120))")
+            with runner.Commands(Path(os.environ["INDEXINO_TEST_CGROUP_PARENT"]), root) as commands:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    commands.run([sys.executable, "-c", code], root, timeout=5)
+                self.assertTrue(commands.cleanup_verified)
+                self.assertNotIn("populated 1", (commands.group / "cgroup.events").read_text())
 
     @unittest.skipUnless(sys.platform == "linux" and os.environ.get("INDEXINO_TEST_CGROUP_PARENT"),
                          "requires delegated Linux cgroup-v2; macOS cannot prove detached cleanup")

@@ -21,13 +21,23 @@ internal constructor(
     val endpoint: Path,
 ) : AutoCloseable {
     private val closed = AtomicBoolean()
+    private var serverClosed = false
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
+        var completed = false
         try {
-            handshakeServer.close()
+            try {
+                if (!serverClosed) {
+                    handshakeServer.close()
+                    serverClosed = true
+                }
+            } finally {
+                leaseStore.release(workspaceId, lease)
+            }
+            completed = true
         } finally {
-            leaseStore.release(workspaceId, lease)
+            if (!completed) closed.set(false)
         }
     }
 

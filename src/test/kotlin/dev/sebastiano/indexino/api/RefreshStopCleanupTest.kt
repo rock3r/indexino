@@ -1,5 +1,8 @@
 package dev.sebastiano.indexino.api
 
+import dev.sebastiano.indexino.engine.IndexingCoordinator
+import dev.sebastiano.indexino.model.QueryOptions
+import dev.sebastiano.indexino.model.SymbolQuery
 import dev.sebastiano.indexino.topology.bazel.BazelClientCleanupException
 import java.nio.file.Files
 import java.util.concurrent.CancellationException
@@ -15,6 +18,55 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 
 class RefreshStopCleanupTest {
+    @Test
+    fun `stop after publication cannot cancel the committed result`() = runBlocking {
+        val root = Files.createTempDirectory("indexino-committed-stop-")
+        val workspace = Files.createDirectory(root.resolve("workspace"))
+        Files.writeString(workspace.resolve("settings.gradle.kts"), "rootProject.name = \"stop\"")
+        val source = workspace.resolve("src/main/kotlin/Marker.kt")
+        Files.createDirectories(source.parent)
+        Files.writeString(source, "class Marker")
+        val previousCache = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", root.resolve("cache").toString())
+        try {
+            Indexino.connect(
+                    IndexinoConfiguration.forWorkspace(workspace)
+                        .withRuntimeAttach(RuntimeAttachMode.IN_PROCESS)
+                        .withAutoRefresh(AutoRefreshMode.DISABLED)
+                )
+                .use { index ->
+                    index.onRefreshSucceededForRuntime = { _, _, _ ->
+                        IndexingCoordinator.active(workspace).single().second.stop()
+                    }
+                    val handle =
+                        index.refresh(
+                            RefreshRequest.forScope(IndexScope.gradle(":").includingDependencies())
+                        )
+                    val completion = runCatching { withTimeout(5_000) { handle.await() } }
+                    assertTrue(
+                        completion.isSuccess,
+                        "Committed refresh was reported as ${completion.exceptionOrNull()}",
+                    )
+                    val result = completion.getOrThrow()
+                    assertIs<RefreshCompleted>(handle.events().toList().last())
+                    index.snapshot().use { snapshot ->
+                        assertEquals(result.generation, snapshot.generation)
+                        assertEquals(
+                            listOf("Marker"),
+                            snapshot
+                                .findSymbols(SymbolQuery.named("Marker"), QueryOptions.page(10))
+                                .items
+                                .map { it.name },
+                        )
+                    }
+                }
+        } finally {
+            if (previousCache == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCache)
+            root.toFile().deleteRecursively()
+        }
+    }
+
     @Test
     fun `stopped facade refresh retains its active handle until interruption cleanup finishes`() {
         exerciseStop(cleanupFails = false)

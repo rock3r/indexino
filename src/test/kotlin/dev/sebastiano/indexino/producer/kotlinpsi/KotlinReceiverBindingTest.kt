@@ -125,6 +125,62 @@ class KotlinReceiverBindingTest {
         }
     }
 
+    @Test
+    fun `callable parameter shadows imported constructor in local initializer`() {
+        val source =
+            """
+            package sample
+            import library.Ledger as Book
+            fun use(Book: () -> Any) {
+                val value = Book()
+                value.mark()
+            }
+            """
+                .trimIndent()
+        withIndexed(source) { store ->
+            assertEquals(emptyList(), receiverReferences(store))
+            assertEquals(listOf(5 to emptyList<String>()), markCalls(store))
+        }
+    }
+
+    @Test
+    fun `preceding local callable shadows imported constructor in local initializer`() {
+        val source =
+            """
+            package sample
+            import library.Ledger as Book
+            fun unknownCallable(): () -> Any = TODO()
+            fun use() {
+                val Book = unknownCallable()
+                val value = Book()
+                value.mark()
+            }
+            """
+                .trimIndent()
+        withIndexed(source) { store ->
+            assertEquals(emptyList(), receiverReferences(store))
+            assertEquals(listOf(7 to emptyList<String>()), markCalls(store))
+        }
+    }
+
+    @Test
+    fun `unshadowed imported constructor still types local initializer`() {
+        val source =
+            """
+            package sample
+            import library.Ledger as Book
+            fun use() {
+                val value = Book()
+                value.mark()
+            }
+            """
+                .trimIndent()
+        withIndexed(source) { store ->
+            assertEquals(listOf(5 to "library.Ledger#mark"), receiverReferences(store))
+            assertEquals(listOf(5 to listOf("library.Ledger#mark")), markCalls(store))
+        }
+    }
+
     private fun receiverReferences(store: XodusCodeIndexStore): List<Pair<Int, String>> =
         store
             .prefixScan("ref:")

@@ -102,6 +102,7 @@ class Commands:
     def run(self, argv, cwd, timeout=120):
         if not 0 < timeout <= 7200:
             raise ValueError("command timeout outside 0..7200 seconds")
+        self.cleanup_verified = False
         ordinal = len(self.metrics)
         stdout_path, stderr_path = (self.root / f"command-{ordinal}.{suffix}" for suffix in ("out", "err"))
         started = time.monotonic_ns()
@@ -135,8 +136,10 @@ class Commands:
                                      "exitCode": process.returncode,
                                      "stderrDiagnostic": stderr_diagnostic(stderr_path)})
         if stdout_path.stat().st_size > 64 << 20 or stderr_path.stat().st_size > 64 << 20:
+            self._kill_and_wait()
             raise RuntimeError("command output exceeds 64 MiB limit")
         if process.returncode:
+            self._kill_and_wait()
             raise subprocess.CalledProcessError(process.returncode, argv)
         return stdout_path.read_text(errors="replace")
 

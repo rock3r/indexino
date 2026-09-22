@@ -123,6 +123,9 @@ classloaders, and budgets. CLI and embedded clients attach over AF_UNIX. Early t
 run in-process with the same public types. This is **not** an IDE/MCP requirement — it is a local
 process for durable indexing.
 
+Daemon close excludes overlapping cleanup attempts. A failed lease release remains retryable without
+closing an already stopped handshake server again; identity checks still protect successor leases.
+
 Plugin file analyzers and shard/composite post-processors receive cancellation checks backed by
 their contribution coroutine and worker interruption. Cooperative code must call `ensureActive()`
 during long CPU work. This does not forcibly terminate trusted plugins that ignore cancellation;

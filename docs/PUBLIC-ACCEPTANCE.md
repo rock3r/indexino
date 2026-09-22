@@ -77,6 +77,8 @@ instrumentation-free production latency measurements. Compare the same harness b
 
 The invented `retrieval-v1` ground truth is owned by `docs/RETRIEVAL-FIXTURES.md`. It separates
 syntactic correctness gates from semantic precision/recall gaps and marks held-out labels.
+Producer regressions also cover callable values shadowing imported constructor names: local
+initializer inference stays unknown rather than attributing members to the shadowed type.
 The fixture driver compares exact row multisets after explicit language/file filtering. It never
 weakens semantic labels to match candidate resolution. Manual and watcher lanes use separate
 disposable copies, apply all edit/add/rename/delete stages five times, verify exact locations and
@@ -89,7 +91,12 @@ adding a second caller, renaming a caller file, deleting it, and deleting the la
 candidate IDs and enclosing caller IDs must match the current snapshot's independently selected
 declarations by FQN, file and line. Both query classes receive 100 measurements after ten warmups. All five
 mutation stages repeat five times with pinned-snapshot checks. Failed retrieval lanes do not skip
-these independent lanes; all four fixture reports are retained and any failure gates corpus work.
+these independent lanes when the runner has confirmed process cleanup and the resource budget still
+permits execution. Timeout and bounded-output failures retain any checkpoint but cannot be reported
+as passed. Nonzero root exit also requires cgroup cleanup, since detached children may remain.
+Cleanup evidence resets for every command. Unconfirmed quiescence, interruption, or a resource-budget
+failure stops further lanes. All safely run
+fixture reports are retained after disposable cleanup, and any failure gates corpus work.
 
 Reports retain raw samples and nearest-rank p50/p95 (`ceil(p*n)-1` in zero-based sorted samples),
 artifact digest, public pins, scope, cache assumptions, machine and Java information. Linux cgroup

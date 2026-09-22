@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.engine
 
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
@@ -8,11 +9,56 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class RuntimeDaemonTest {
+    @Test
+    fun `failed lease release can be retried without closing the server twice`() {
+        val cacheRoot = Files.createTempDirectory("indexino-daemon-close-retry-")
+        val workspaceId = "b".repeat(RuntimePaths.WORKSPACE_ID_LENGTH)
+        val endpoint = RuntimePaths.socketPath(cacheRoot, workspaceId)
+        val leasePath = RuntimePaths.leasePath(cacheRoot, workspaceId)
+        val leaseStore = RuntimeLeaseStore(cacheRoot)
+        val lease =
+            assertIs<RuntimeLeaseAcquisition.Owned>(
+                    leaseStore.acquire(workspaceId, endpoint, cacheRoot)
+                )
+                .lease
+        val closeCalls = AtomicInteger()
+        val daemon =
+            RuntimeDaemon(
+                cacheRoot,
+                workspaceId,
+                leaseStore,
+                lease,
+                AutoCloseable { closeCalls.incrementAndGet() },
+                endpoint,
+            )
+        val savedLease = leasePath.resolveSibling("saved-lease.json")
+        Files.move(leasePath, savedLease)
+        Files.write(leasePath, byteArrayOf(0x80.toByte()))
+        try {
+            assertFailsWith<IOException> { daemon.close() }
+            assertEquals(1, closeCalls.get())
+            Files.delete(leasePath)
+            Files.move(savedLease, leasePath)
+            daemon.close()
+
+            assertNull(RuntimeLeaseStore.read(leasePath))
+            assertEquals(1, closeCalls.get())
+        } finally {
+            if (Files.exists(savedLease)) {
+                Files.deleteIfExists(leasePath)
+                Files.move(savedLease, leasePath)
+            }
+            daemon.close()
+            cacheRoot.toFile().deleteRecursively()
+        }
+    }
+
     @Test
     fun `overlapping closes release once after server shutdown and preserve a successor lease`() {
         val cacheRoot = Files.createTempDirectory("indexino-daemon-close-")
