@@ -11,6 +11,32 @@ import kotlinx.coroutines.runBlocking
 
 class PublicAcceptanceDriverTest {
     @Test
+    fun `call mutations reject stale references and stale callers independently`() {
+        assertCallMutationRows(
+            listOf("Moved.kt:8", "Second.kt:3"),
+            listOf("Second.kt:3", "Moved.kt:8"),
+            listOf("Moved.kt:8", "Second.kt:3"),
+        )
+        assertFailsWith<IllegalStateException> {
+            assertCallMutationRows(
+                listOf("Moved.kt:8"),
+                listOf("Original.kt:3"),
+                listOf("Moved.kt:8"),
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            assertCallMutationRows(emptyList(), emptyList(), listOf("Deleted.kt:3"))
+        }
+        assertFailsWith<IllegalStateException> {
+            assertCallMutationRows(
+                listOf("Moved.kt:8"),
+                listOf("Moved.kt:8", "Moved.kt:8"),
+                listOf("Moved.kt:8"),
+            )
+        }
+    }
+
+    @Test
     fun `pagination rejects a server returning the wrong offset`(): Unit = runBlocking {
         assertFailsWith<IllegalStateException> {
             collectPages { QueryPage(listOf("a"), 9, 2, false, null, 1) }

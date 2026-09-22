@@ -8,6 +8,32 @@ import harness
 
 
 class HarnessTest(unittest.TestCase):
+    def test_personal_repository_workflow_uses_unique_ephemeral_labels_not_organization_group(self):
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/public-acceptance.yml").read_text()
+        self.assertNotIn("group: public-acceptance-ephemeral", workflow)
+        self.assertIn("indexino-public-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.corpus }}", workflow)
+        self.assertIn('INDEXINO_PUBLIC_CGROUP_PARENT', workflow)
+
+    def test_phase_metrics_separate_combined_discovery_from_producer_work(self):
+        events = [
+            {"event": "refresh_started", "observedNanoTime": 10},
+            {"event": "discovery_completed", "observedNanoTime": 37},
+            {"event": "phase_started", "phase": "source-hash-preview", "observedNanoTime": 40},
+            {"event": "phase_completed", "phase": "source-hash-preview", "observedNanoTime": 44},
+            {"event": "phase_started", "phase": "kotlin-psi-symbols", "observedNanoTime": 46},
+            {"event": "phase_completed", "phase": "kotlin-psi-symbols", "observedNanoTime": 61},
+            {"event": "refresh_finished", "observedNanoTime": 70},
+        ]
+        result = harness.phase_metrics(events)
+        self.assertEqual([27], result.get("preDiscoveryCompletedNanos"))
+        self.assertEqual({"source-hash-preview": [4], "kotlin-psi-symbols": [15]}, result.get("phases"))
+        self.assertIsNone(result.get("topologyOnlyNanos"))
+        self.assertIsNone(result.get("captureAndHashNanos"))
+
+    def test_phase_metrics_reject_incomplete_phase_instead_of_zero(self):
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            harness.phase_metrics([{"event": "phase_started", "phase": "java-source", "observedNanoTime": 1}])
+
     def test_inventory_rejects_equal_size_wrong_closure(self):
         with self.assertRaisesRegex(AssertionError, "missing.*Coordinator.kt"):
             harness.compare_inventory(["core/A.kt", "input/Coordinator.kt"],
@@ -47,6 +73,15 @@ class HarnessTest(unittest.TestCase):
         reasons = harness.readiness("Linux", 12 << 30, 10 << 30, None)
         self.assertTrue(any("memory" in x for x in reasons))
         self.assertTrue(any("disk" in x for x in reasons))
+
+    def test_parent_cgroup_limit_cannot_be_hidden_by_host_memory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            group = Path(temporary)
+            for name, value in {"cgroup.kill": "", "pids.max": "max",
+                                "memory.max": str(16 << 30), "memory.current": str(4 << 30)}.items():
+                (group / name).write_text(value)
+            reasons = harness.readiness("Linux", 64 << 30, 200 << 30, group)
+            self.assertTrue(any("memory" in x for x in reasons), reasons)
 
     def test_artifact_digest_mismatch_prevents_command(self):
         with tempfile.TemporaryDirectory() as tmp:

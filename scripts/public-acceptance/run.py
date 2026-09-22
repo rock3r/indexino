@@ -12,7 +12,7 @@ import tempfile
 import time
 import zipfile
 
-from harness import bazel_inventory, compare_inventory, readiness, samples, verify_artifact
+from harness import bazel_inventory, compare_inventory, phase_metrics, readiness, samples, verify_artifact
 from runner import Commands, clone
 
 HERE = Path(__file__).resolve().parent
@@ -108,34 +108,39 @@ def execute(args, report):
         with tracked_commands(args.cgroup_parent, root, report) as commands:
             bootstrap = time.monotonic_ns()
             workspace = root / "corpus"
-            clone(commands, corpus, workspace)
             driver = root / "driver"
             extract_driver(args.artifact, driver)
             report["java"] = commands.run(["java", "--version"], root)
-            startup = bazel_setup(commands, workspace, root, corpus) if args.corpus == "intellij" else None
             report["bootstrapWallNanos"] = time.monotonic_ns() - bootstrap
             report["scopes"] = []
             classpath = os.pathsep.join(str(driver / p) for p in ("test", "main", "lib/*"))
             java_isolation = [f"-Duser.home={root / 'home'}", f"-Djava.io.tmpdir={root / 'tmp'}"]
             report["fixtures"] = []
-            for lane in ("manual", "watcher"):
+            for lane in ("manual", "watcher", "calls-manual", "calls-watcher"):
                 output = root / f"fixture-{lane}.json"
                 exit_code = 0
+                caller_lane = lane.startswith("calls-")
+                entry = ("CallLifecycleAcceptanceDriver" if caller_lane else "RetrievalAcceptanceDriver")
+                inputs = ([] if caller_lane else [str(driver / "test/fixtures/retrieval-v1")])
+                inputs += [str(root / f"fixture-{lane}"), lane.removeprefix("calls-"), str(output)]
                 try:
                     commands.run(["java", "-Xmx2g"] + java_isolation + ["--enable-native-access=ALL-UNNAMED", "-cp", classpath,
-                                  "dev.sebastiano.indexino.acceptance.RetrievalAcceptanceDriver",
-                                  str(driver / "test/fixtures/retrieval-v1"), str(root / f"fixture-{lane}"),
-                                  lane, str(output)], root, timeout=600)
+                                  "dev.sebastiano.indexino.acceptance." + entry] + inputs, root, timeout=600)
                 except subprocess.CalledProcessError as error:
                     exit_code = error.returncode
                 fixture_result = (json.loads(output.read_text()) if output.exists() else
                                   {"status": "failed", "queries": [], "reason": "driver produced no checkpoint"})
                 fixture_result.update(lane=lane, exitCode=exit_code)
                 for query in fixture_result["queries"]:
-                    query["apiNanos"] = samples(query["apiNanos"])
+                    query["apiNanos"] = (samples(query["apiNanos"]) if query["apiNanos"] else
+                                         {"raw": [], "p50": None, "p95": None, "reason": "query did not complete"})
                 report["fixtures"].append(fixture_result)
             if any(f["exitCode"] or f["status"] != "passed" for f in report["fixtures"]):
-                raise AssertionError("invented fixture acceptance failed; retained both lane reports")
+                raise AssertionError("invented fixture acceptance failed; retained all lane reports")
+            acquisition = time.monotonic_ns()
+            clone(commands, corpus, workspace)
+            startup = bazel_setup(commands, workspace, root, corpus) if args.corpus == "intellij" else None
+            report["corpusBootstrapWallNanos"] = time.monotonic_ns() - acquisition
             for include_deps in corpus["includeDependencies"]:
                 scope_report = {"includeDependencies": include_deps, "repeats": []}
                 enumeration = time.monotonic_ns()
@@ -166,6 +171,7 @@ def execute(args, report):
                     result["warmRefreshApiNanos"] = samples(result["warmRefreshApiNanos"])
                     result["queryApiNanos"] = {k: samples(v) for k, v in result["queryApiNanos"].items()}
                     if instrumented:
+                        result["phaseMetrics"] = phase_metrics(result["diagnostics"]["phaseEvents"])
                         if result["generation"] != scope_report["repeats"][0]["generation"]:
                             raise AssertionError("instrumented/public generation mismatch")
                         scope_report["instrumentedDiagnostic"] = result

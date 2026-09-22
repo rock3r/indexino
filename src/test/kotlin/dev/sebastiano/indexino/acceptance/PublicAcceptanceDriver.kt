@@ -2,6 +2,7 @@
 package dev.sebastiano.indexino.acceptance
 
 import dev.sebastiano.indexino.api.AutoRefreshMode
+import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.api.IndexScope
 import dev.sebastiano.indexino.api.IndexSnapshot
 import dev.sebastiano.indexino.api.Indexino
@@ -9,6 +10,7 @@ import dev.sebastiano.indexino.api.IndexinoConfiguration
 import dev.sebastiano.indexino.api.RefreshOutcome
 import dev.sebastiano.indexino.api.RefreshRequest
 import dev.sebastiano.indexino.api.RuntimeAttachMode
+import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.model.NameMatchMode
 import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.QueryPage
@@ -38,13 +40,6 @@ internal object PublicAcceptanceDriver {
         }
         val instrumented = args.getOrNull(7)?.also { require(it == "instrumented") } != null
         val phaseEvents = mutableListOf<JsonObject>()
-        val reporter = JsonlIndexBuildProgressReporter { line ->
-            phaseEvents +=
-                JsonObject(
-                    Json.parseToJsonElement(line).jsonObject +
-                        ("observedNanoTime" to JsonPrimitive(System.nanoTime()))
-                )
-        }
         val workspace = Path.of(args[0]).toRealPath()
         configureColdCache(workspace, Path.of(args[1]).toAbsolutePath())
         val scope = scope(args[2], args[3], args[4].toBooleanStrict())
@@ -67,9 +62,10 @@ internal object PublicAcceptanceDriver {
         var generation = ""
         var coldNanos = 0L
         var observedInventory: List<String>? = null
+        var sourceProvenance: JsonObject? = null
         Indexino.connect(configuration).use { index ->
             suspend fun refresh() =
-                if (instrumented) index.refresh(request, {}, reporter).await()
+                if (instrumented) instrumentedRefresh(index, request, phaseEvents)
                 else index.refresh(request).await()
             // Inventory instrumentation only; semantic/lifecycle calls below use public APIs.
             observeInventory(index, workspace, expectedInventory) { observedInventory = it }
@@ -78,7 +74,26 @@ internal object PublicAcceptanceDriver {
                 check(result.outcome == RefreshOutcome.UPDATED)
                 check(result.changes.changedFileCount == expectedInventory.size)
                 check(result.changes.removedFileCount == 0)
+                check(result.scope == scope)
                 generation = result.generation.value
+            }
+            // Inventory provenance only; no semantic facts are read from storage.
+            val manifest =
+                checkNotNull(
+                    WorkspaceGenerationManifestStore(
+                            InProcessCacheLayout.cacheRoot(),
+                            InProcessCacheLayout.workspaceId(workspace),
+                        )
+                        .readGeneration(generation)
+                        ?.compatibilityManifest
+                )
+            check(manifest.topology == if (args[2] == "bazel") "bazel-query" else "gradle-parse")
+            check(manifest.includeDeps == scope.includesDependencies)
+            check(manifest.scope == scope.value)
+            sourceProvenance = buildJsonObject {
+                put("topology", manifest.topology)
+                put("includeDependencies", manifest.includeDeps)
+                put("scope", manifest.scope)
             }
             check(observedInventory != null) { "Disconnected source-inventory instrumentation" }
             if (instrumented) {
@@ -127,9 +142,36 @@ internal object PublicAcceptanceDriver {
                 JsonObject(queries.mapValues { JsonArray(it.value.map(::JsonPrimitive)) }),
             )
             put("sources", JsonArray(checkNotNull(observedInventory).map(::JsonPrimitive)))
+            put("sourceProvenance", checkNotNull(sourceProvenance))
             put("diagnostics", diagnostics(instrumented, phaseEvents))
         }
         Files.writeString(Path.of(args[6]), report.toString() + "\n")
+    }
+
+    private suspend fun instrumentedRefresh(
+        index: Indexino,
+        request: RefreshRequest,
+        events: MutableList<JsonObject>,
+    ) = run {
+        val reporter = JsonlIndexBuildProgressReporter { line ->
+            events +=
+                JsonObject(
+                    Json.parseToJsonElement(line).jsonObject +
+                        ("observedNanoTime" to JsonPrimitive(System.nanoTime()))
+                )
+        }
+        fun boundary(name: String) {
+            events += buildJsonObject {
+                put("event", name)
+                put("observedNanoTime", System.nanoTime())
+            }
+        }
+        boundary("refresh_started")
+        try {
+            index.refresh(request, {}, reporter).await()
+        } finally {
+            boundary("refresh_finished")
+        }
     }
 
     private fun scope(system: String, target: String, dependencies: Boolean): IndexScope {
