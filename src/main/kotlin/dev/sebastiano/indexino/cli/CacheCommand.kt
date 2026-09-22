@@ -6,6 +6,7 @@ import com.github.ajalt.clikt.core.subcommands
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import dev.sebastiano.indexino.api.InProcessCacheLayout
+import dev.sebastiano.indexino.core.cache.CacheActivityLock
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifest
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.cache.WorkspaceRegistryStore
@@ -58,7 +59,11 @@ internal object CacheMaintenance {
             workspaceId?.let { " workspaceId=$it" }.orEmpty()
     }
 
-    fun gc(cacheRoot: Path): String {
+    fun gc(cacheRoot: Path): String =
+        CacheActivityLock.withExclusiveLock(cacheRoot) { collectGarbage(cacheRoot) }
+            ?: "reclaimedPacks=0 reclaimedBytes=0 activeRuntime=true"
+
+    private fun collectGarbage(cacheRoot: Path): String {
         if (hasLiveRuntime(cacheRoot)) return "reclaimedPacks=0 reclaimedBytes=0 activeRuntime=true"
         val referenced = referencedPackKeys(cacheRoot)
         val chunksRoot = cacheRoot.resolve("chunks")

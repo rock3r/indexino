@@ -6,6 +6,7 @@ import dev.sebastiano.indexino.cli.CliExitCodes
 import dev.sebastiano.indexino.cli.IndexBuildExecution
 import dev.sebastiano.indexino.cli.IndexBuildRunner
 import dev.sebastiano.indexino.core.BASIC_FACT_SCHEMA_VERSION
+import dev.sebastiano.indexino.core.cache.CacheActivityLock
 import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
 import dev.sebastiano.indexino.core.cache.GitWorktreeLayout
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifest
@@ -62,6 +63,9 @@ private constructor(
     private val closed = AtomicBoolean()
     private val clientId = UUID.randomUUID().toString()
     private val storeRoot = InProcessCacheLayout.writerRoot(workspace)
+    private val cacheActivity =
+        if (runtimeConnection == null) CacheActivityLock.acquire(InProcessCacheLayout.cacheRoot())
+        else null
     private val generationLock = Any()
     private val generationStores = mutableMapOf<WorkspaceGenerationId, Path>()
     private val snapshotPins = mutableMapOf<WorkspaceGenerationId, Int>()
@@ -147,7 +151,18 @@ private constructor(
                             cause = thrown,
                         )
                     }
-                RuntimeAttachMode.IN_PROCESS -> Indexino(canonical)
+                RuntimeAttachMode.IN_PROCESS ->
+                    try {
+                        Indexino(canonical)
+                    } catch (thrown: IOException) {
+                        throw indexinoFailure(
+                            category = IndexFailureCategory.IO,
+                            code = "cache_open_failed",
+                            message = "Unable to acquire the cache activity lease",
+                            retryable = true,
+                            cause = thrown,
+                        )
+                    }
             }
         }
 
@@ -198,14 +213,16 @@ private constructor(
             IndexingCoordinator.start(workspace, request) { created ->
                 try {
                     val result =
-                        runRefresh(
-                            request,
-                            created.id,
-                            applications,
-                            created,
-                            progress,
-                            machineProgress,
-                        )
+                        CacheActivityLock.acquire(InProcessCacheLayout.cacheRoot()).use {
+                            runRefresh(
+                                request,
+                                created.id,
+                                applications,
+                                created,
+                                progress,
+                                machineProgress,
+                            )
+                        }
                     if (!created.isStopped()) {
                         created.result.complete(result)
                         created.terminalEvent.complete(RefreshCompleted(created.id, result))
@@ -588,6 +605,7 @@ private constructor(
         synchronized(generationLock) {
             published = null
             reclaimUnpinnedGenerations()
+            if (snapshotPins.isEmpty()) cacheActivity?.close()
         }
     }
 
@@ -971,6 +989,7 @@ private constructor(
                 snapshotPins.remove(generation)
             }
             reclaimUnpinnedGenerations()
+            if (closed.get() && snapshotPins.isEmpty()) cacheActivity?.close()
         }
     }
 
