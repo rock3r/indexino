@@ -140,6 +140,16 @@ different read of the file.
 CLI-only operators: `indexino cache status|gc|forget` and `daemon stop --purge`. Explicit
 last-used in the registry (not filesystem `atime`). GC grace window + re-verify before unlink.
 
+Current `cache gc` implements conservative activity exclusion and current-generation/overlay
+reachability. In-process clients hold a shared OS lock on `activity.lock`; snapshots that outlive
+client close retain that lease, and refreshes retain independent leases until their work ends.
+GC takes the exclusive lock for its entire reachability scan and deletion, or reports
+`activeRuntime=true` without deleting packs. This prevents publication and pinned-generation races
+across cooperating processes. It intentionally defers all reclamation while any client is live.
+Age/quota policy, a persisted grace window, and `daemon stop --purge` remain follow-up work rather
+than guarantees of the current collector. All participating processes must use the updated locking
+protocol; stop older in-process clients before running this collector against their cache.
+
 ## S2 implementation layout
 
 Refresh writes mutable incremental output only beneath
