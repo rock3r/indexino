@@ -9,13 +9,30 @@ import kotlin.io.path.walk
 internal object ModuleSourceRoots {
     private val sourceExtensions = setOf("kt", "java")
 
-    fun moduleDirectory(workspace: Path, modulePath: String): Path {
+    fun moduleDirectory(
+        workspace: Path,
+        modulePath: String,
+        projectDirectories: Map<String, String> = emptyMap(),
+    ): Path {
         val segments = modulePath.removePrefix(":").split(":").filter { it.isNotBlank() }
         // Topology discovery must never return paths that escape a root via ".." (contract).
         // This check is load-bearing for the CLI, which never constructs IndexScope. Also reject
         // '/' and '\\' inside a colon-segment so values like ":../../outside" cannot slip through.
         require(segments.all(::isSafeModuleSegment)) {
             "Gradle module path must not contain '.', '..', or path-separator segments: $modulePath"
+        }
+        projectDirectories[modulePath]?.let { remap ->
+            val root = workspace.toAbsolutePath().normalize()
+            val directory = root.resolve(remap).normalize()
+            require(directory.startsWith(root)) {
+                "Gradle projectDir is outside the build root: $remap"
+            }
+            if (directory.exists()) {
+                require(directory.toRealPath().startsWith(root.toRealPath())) {
+                    "Gradle projectDir is outside the build root: $remap"
+                }
+            }
+            return workspace.resolve(root.relativize(directory))
         }
         return if (segments.isEmpty()) {
             workspace

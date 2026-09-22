@@ -346,6 +346,63 @@ class IndexSnapshotStorageFailureTest {
 
     @OptIn(IndexinoInternalApi::class)
     @Test
+    fun `exactly ten thousand results remain pageable through the final item`() {
+        val records =
+            (9_999 downTo 0).map { index ->
+                val name = "demo.%05d".format(Locale.ROOT, index)
+                CodeIndexKey.symbolDefinition(name, "$index.kt", 1, 1) to
+                    SymbolRecord(
+                        fqn = name,
+                        relativeFile = "$index.kt",
+                        line = 1,
+                        kind = "class",
+                        name = name,
+                    )
+            }
+        snapshotWithRecords(*records.toTypedArray()).use { snapshot ->
+            val query = SymbolQuery.named("demo.").withMatch(NameMatchMode.PREFIX)
+            val penultimate = runSuspend {
+                snapshot.findSymbols(query, QueryOptions.page(limit = 1, offset = 9_998))
+            }
+            assertEquals(listOf("demo.09998"), penultimate.items.map { it.name })
+            assertTrue(penultimate.hasMore)
+            val last = runSuspend {
+                snapshot.findSymbols(
+                    query,
+                    QueryOptions.after(1, requireNotNull(penultimate.nextCursor)),
+                )
+            }
+            assertEquals(listOf("demo.09999"), last.items.map { it.name })
+            assertEquals(false, last.hasMore)
+            assertEquals(null, last.nextCursor)
+            val tail = runSuspend {
+                snapshot.findSymbols(query, QueryOptions.page(limit = 2, offset = 9_998))
+            }
+            assertEquals(listOf("demo.09998", "demo.09999"), tail.items.map { it.name })
+            assertEquals(false, tail.hasMore)
+        }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    @Test
+    fun `offset plus limit one beyond window fails before storage is read`() {
+        snapshotWithThrowingStore().use { snapshot ->
+            val failure =
+                assertFailsWith<IndexinoException> {
+                    runSuspend {
+                        snapshot.findSymbols(
+                            SymbolQuery.named("demo"),
+                            QueryOptions.page(limit = 2, offset = 9_999),
+                        )
+                    }
+                }
+            assertEquals("INVALID_REQUEST", failure.failure.category.value)
+            assertEquals("page_window_exceeds_maximum", failure.failure.code)
+        }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    @Test
     fun `queries fail rather than expose an unusable cursor beyond the host window`() {
         val records =
             (0..10_000).map { index ->

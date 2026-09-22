@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "queryFqn": "fixture.lifecycle.Marker",
+  "initial": {"file": "src/main/kotlin/fixture/lifecycle/Marker.kt", "line": 3},
+  "steps": [
+    {
+      "id": "edit-moves-declaration", "operation": "edit", "path": "src/main/kotlin/fixture/lifecycle/Marker.kt",
+      "content": "package fixture.lifecycle\n\n// Declaration moves; old line must disappear.\nclass Marker\n",
+      "expected": [{"file": "src/main/kotlin/fixture/lifecycle/Marker.kt", "line": 4}]
+    },
+    {
+      "id": "add-duplicate-fqn", "operation": "add", "path": "src/main/kotlin/fixture/lifecycle/Second.kt",
+      "content": "package fixture.lifecycle\nclass Marker\n",
+      "expected": [{"file": "src/main/kotlin/fixture/lifecycle/Marker.kt", "line": 4}, {"file": "src/main/kotlin/fixture/lifecycle/Second.kt", "line": 2}]
+    },
+    {
+      "id": "rename-removes-old-path", "operation": "rename", "path": "src/main/kotlin/fixture/lifecycle/Marker.kt",
+      "destination": "src/main/kotlin/fixture/lifecycle/Renamed.kt",
+      "expected": [{"file": "src/main/kotlin/fixture/lifecycle/Renamed.kt", "line": 4}, {"file": "src/main/kotlin/fixture/lifecycle/Second.kt", "line": 2}]
+    },
+    {
+      "id": "delete-renamed", "operation": "delete", "path": "src/main/kotlin/fixture/lifecycle/Renamed.kt",
+      "expected": [{"file": "src/main/kotlin/fixture/lifecycle/Second.kt", "line": 2}]
+    },
+    {
+      "id": "delete-last", "operation": "delete", "path": "src/main/kotlin/fixture/lifecycle/Second.kt",
+      "expected": []
+    }
+  ]
+}

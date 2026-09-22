@@ -20,6 +20,7 @@ internal object GradleTopology {
 
         val settingsContent = settingsFile.readText()
         val includes = SettingsParser.parseIncludes(settingsContent)
+        val projectDirectories = SettingsParser.parseProjectDirectories(settingsContent)
         val externalMounts =
             resolveExternalMounts(workspace, settingsFile, settingsContent, onStderr)
         if (includes.isEmpty()) {
@@ -31,7 +32,7 @@ internal object GradleTopology {
             onStderr("gradle-parse: module $normalizedModule not in settings includes")
         }
 
-        val graph = GradleModuleGraph(workspace, includes)
+        val graph = GradleModuleGraph(workspace, includes, projectDirectories)
         val rootScope = normalizedModule == ":"
         val modules =
             if (rootScope) {
@@ -48,7 +49,7 @@ internal object GradleTopology {
             modules
                 .flatMap { module ->
                     ModuleSourceRoots.collectKotlinSources(
-                        ModuleSourceRoots.moduleDirectory(workspace, module),
+                        ModuleSourceRoots.moduleDirectory(workspace, module, projectDirectories),
                         workspace,
                     )
                 }
@@ -77,12 +78,13 @@ internal object GradleTopology {
             listOf("settings.gradle.kts", "settings.gradle").map(buildRoot::resolve).firstOrNull {
                 it.exists()
             }
-        val modules =
-            listOf(":") + settings?.let { SettingsParser.parseIncludes(it.readText()) }.orEmpty()
+        val content = settings?.readText().orEmpty()
+        val modules = listOf(":") + SettingsParser.parseIncludes(content)
+        val projectDirectories = SettingsParser.parseProjectDirectories(content)
         return modules
             .flatMap { module ->
                 ModuleSourceRoots.collectKotlinSources(
-                    ModuleSourceRoots.moduleDirectory(buildRoot, module),
+                    ModuleSourceRoots.moduleDirectory(buildRoot, module, projectDirectories),
                     buildRoot,
                 )
             }
