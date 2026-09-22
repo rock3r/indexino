@@ -2,8 +2,8 @@ package dev.sebastiano.indexino.core.cache
 
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.core.store.CodeIndexStore
+import dev.sebastiano.indexino.core.store.SharedReadOnlyStore
 import dev.sebastiano.indexino.core.store.WorktreeOverlayIndexStore
-import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -29,8 +29,16 @@ internal object WorktreeOverlayStoreOpener {
     ): CodeIndexStore {
         if (manifest.representation != WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) {
             val storePath =
-                InProcessCacheLayout.sharedGenerationStore(workspace, manifest.generation)
-            return XodusCodeIndexStore.open(storePath, readOnly = true)
+                if (clientId == null) {
+                    InProcessCacheLayout.sharedGenerationStore(workspace, manifest.generation)
+                } else {
+                    InProcessCacheLayout.generationStore(workspace, clientId, manifest.generation)
+                }
+            if (!Files.isDirectory(storePath)) {
+                ContentAddressedPackCache(cacheRoot)
+                    .materializeDirectory(manifest.packKeys.single(), storePath)
+            }
+            return SharedReadOnlyStore.open(storePath)
         }
         require(manifest.baseWorkspaceId != null && manifest.baseGeneration != null) {
             "Overlay manifest missing base generation reference"
@@ -99,8 +107,9 @@ internal object WorktreeOverlayStoreOpener {
             if (!Files.isDirectory(clientPath)) {
                 materializeOverlayPack(cacheRoot, manifest.overlayPackKeys.single(), clientPath)
             }
+            return SharedReadOnlyStore.open(clientPath)
         }
-        return XodusCodeIndexStore.open(sharedPath, readOnly = true)
+        return SharedReadOnlyStore.open(sharedPath)
     }
 
     private fun materializeOverlayPack(cacheRoot: Path, overlayKey: String, destination: Path) {
