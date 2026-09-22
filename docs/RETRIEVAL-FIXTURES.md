@@ -29,6 +29,8 @@ normalized line separators. This does not claim general CRLF source support.
 
 Each `references` case selects a declaration by FQN, file, and declaration line, then queries its
 generation-local ID. `scopeFiles` plus `language` defines the **exhaustively labelled query scope**.
+Kotlin declaration locations exclude leading comments and KDoc; explicit modifiers and annotations
+remain part of the declaration start. Columns do not shift to the identifier alone.
 Only rows in that scope enter that case's comparison. The result identity here is file + line
 (plus qualifiers for resources); the authored corpus has at most one matching occurrence per line.
 Do not generalize this identity to corpora with multiple same-line occurrences.

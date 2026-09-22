@@ -148,7 +148,7 @@ internal object RetrievalAcceptanceDriver {
         val fqn = lifecycle.string("queryFqn")
         check(markerRows(index.snapshot(), fqn) == listOf(lifecycle.getValue("initial").jsonObject))
         repeat(5) {
-            for (step in lifecycle.getValue("steps").jsonArray.map { it.jsonObject }) {
+            for (step in lifecycle.getValue("steps").jsonArray.map { value -> value.jsonObject }) {
                 index.snapshot().use { previous ->
                     val oldRows = symbolRows(previous, fqn)
                     val oldGeneration = previous.generation
@@ -173,7 +173,10 @@ internal object RetrievalAcceptanceDriver {
                             }
                             val refreshed = index.refresh(request).await()
                             check(refreshed.generation != oldGeneration)
-                            check(markerRows(index.snapshot(), fqn) == expected)
+                            val actual = markerRows(index.snapshot(), fqn)
+                            check(actual == expected) {
+                                "Mutation ${step.string("id")}: expected $expected, got $actual"
+                            }
                         }
                     }
                     check(symbolRows(previous, fqn) == oldRows) { "Pinned snapshot changed" }

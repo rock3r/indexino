@@ -41,6 +41,7 @@ import org.jetbrains.kotlin.psi.KtSuperExpression
 import org.jetbrains.kotlin.psi.KtSuperTypeCallEntry
 import org.jetbrains.kotlin.psi.KtThisExpression
 import org.jetbrains.kotlin.psi.KtUnaryExpression
+import org.jetbrains.kotlin.psi.psiUtil.startOffsetSkippingComments
 
 @Suppress("TooManyFunctions", "LargeClass")
 internal class KotlinPsiSymbolProducer : IndexProducer {
@@ -914,13 +915,14 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
 
     private fun KtElement.lineNumber(): Int {
         val document = containingFile.viewProvider.document ?: return 1
-        return document.getLineNumber(textRange.startOffset) + 1
+        return document.getLineNumber(startOffsetSkippingComments) + 1
     }
 
     private fun KtElement.columnNumber(): Int {
         val document = containingFile.viewProvider.document ?: return 1
-        val line = document.getLineNumber(textRange.startOffset)
-        return textRange.startOffset - document.getLineStartOffset(line) + 1
+        val offset = startOffsetSkippingComments
+        val line = document.getLineNumber(offset)
+        return offset - document.getLineStartOffset(line) + 1
     }
 
     private fun KtElement.inclusiveEndOffset(): Int =
