@@ -69,6 +69,7 @@ private constructor(
     private val generationLock = Any()
     private val generationStores = mutableMapOf<WorkspaceGenerationId, Path>()
     private val snapshotPins = mutableMapOf<WorkspaceGenerationId, Int>()
+    private val baseGenerationRefs = mutableSetOf<Path>()
     private var published: PublishedGeneration? = null
     private val remoteSnapshots = mutableMapOf<String, IndexSnapshot>()
 
@@ -888,7 +889,10 @@ private constructor(
             WorkspaceGenerationManifestStore(cacheRoot, InProcessCacheLayout.workspaceId(workspace))
                 .readGeneration(generation.value)
                 ?: error("Missing generation manifest ${generation.value}")
-        return WorktreeOverlayStoreOpener.openForQuery(cacheRoot, workspace, clientId, manifest)
+        return WorktreeOverlayStoreOpener.openForQuery(cacheRoot, workspace, clientId, manifest) {
+            path ->
+            synchronized(generationLock) { baseGenerationRefs.add(path) }
+        }
     }
 
     @OptIn(IndexinoInternalApi::class)
@@ -994,6 +998,9 @@ private constructor(
     }
 
     private fun reclaimUnpinnedGenerations() {
+        if (snapshotPins.isEmpty()) {
+            baseGenerationRefs.removeAll { it.toFile().deleteRecursively() }
+        }
         val current = published?.generation
         val reclaimable = generationStores.filterKeys { generation ->
             generation != current && snapshotPins.getOrDefault(generation, 0) == 0

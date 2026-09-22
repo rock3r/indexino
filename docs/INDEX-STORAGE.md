@@ -170,7 +170,8 @@ Each client materializes a referenced immutable pack atomically into its own
 snapshot. Simultaneous snapshots in one client share a reference-counted read-only Xodus environment;
 different clients open their own copies because Xodus locks even read-only environments exclusively.
 Closing one snapshot does not close another snapshot's environment. Snapshot pins retain those
-caller-owned refs until close; shared packs remain immutable and
+caller-owned refs until close. Client-owned overlay base copies are tracked alongside the snapshot
+pins and reclaimed after the last pin closes; shared packs remain immutable and
 are reclaimed only by reachability/age/quota GC. There is no runtime `legacy-store` layout. Do **not**
 extend `<project>/.indexino/index/<commit>/`; new features must assume user-local composite storage.
 
