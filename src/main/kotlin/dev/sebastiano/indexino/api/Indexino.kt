@@ -44,6 +44,7 @@ import dev.sebastiano.indexino.producer.IndexBuildProgressReporter
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.topology.BuildSystem as InternalBuildSystem
 import dev.sebastiano.indexino.topology.TopologyRequest
+import dev.sebastiano.indexino.topology.bazel.BazelClientCleanupException
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -224,27 +225,12 @@ private constructor(
                                 machineProgress,
                             )
                         }
-                    if (!created.isStopped()) {
+                    created.publishIfActive {
                         created.result.complete(result)
                         created.terminalEvent.complete(RefreshCompleted(created.id, result))
                     }
-                } catch (cancelled: CancellationException) {
-                    if (!created.isStopped()) {
-                        val failure = mapRefreshFailure(cancelled)
-                        created.result.completeExceptionally(failure)
-                        created.terminalEvent.complete(
-                            RefreshHandle.failed(created.id, failure.failure)
-                        )
-                    }
-                } catch (thrown: IndexinoException) {
-                    created.result.completeExceptionally(thrown)
-                    created.terminalEvent.complete(RefreshHandle.failed(created.id, thrown.failure))
                 } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
-                    val failure = mapRefreshFailure(thrown)
-                    created.result.completeExceptionally(failure)
-                    created.terminalEvent.complete(
-                        RefreshHandle.failed(created.id, failure.failure)
-                    )
+                    completeRefreshFailure(created, thrown)
                 }
             }
         return RefreshHandle.inFlight(
@@ -253,6 +239,28 @@ private constructor(
             operation.terminalEvent,
             operation::stop,
         )
+    }
+
+    private fun completeRefreshFailure(operation: InFlightRefresh, thrown: Throwable) {
+        val failure = mapRefreshFailure(thrown)
+        if (
+            generateSequence(thrown) { it.cause }
+                .filterIsInstance<BazelClientCleanupException>()
+                .any()
+        ) {
+            operation.failAfterCleanup(failure)
+            return
+        }
+        try {
+            operation.publishIfActive {
+                operation.result.completeExceptionally(failure)
+                operation.terminalEvent.complete(
+                    RefreshHandle.failed(operation.id, failure.failure)
+                )
+            }
+        } catch (_: CancellationException) {
+            // Stop won the completion boundary. Worker-finally reports it after cleanup returns.
+        }
     }
 
     internal fun refreshProgress(
@@ -321,23 +329,24 @@ private constructor(
                 )
                 val revision = manifest.toWorkspaceRevision()
                 val generation = manifest.toGenerationId(revision)
-                operation.checkActive()
-                publishGenerationOrAbortIfClosed(
-                    manifest.commit,
-                    generation,
-                    revision,
-                    request.scope,
-                    applications,
-                    manifest,
-                    execution.forkBase,
-                    execution.overlayDeltaPath,
-                    execution.tombstonePrefixes,
-                )
-                onRefreshSucceededForRuntime?.invoke(
-                    request,
-                    execution.sources,
-                    execution.topologyRoots,
-                )
+                operation.publishIfActive {
+                    publishGenerationOrAbortIfClosed(
+                        manifest.commit,
+                        generation,
+                        revision,
+                        request.scope,
+                        applications,
+                        manifest,
+                        execution.forkBase,
+                        execution.overlayDeltaPath,
+                        execution.tombstonePrefixes,
+                    )
+                    onRefreshSucceededForRuntime?.invoke(
+                        request,
+                        execution.sources,
+                        execution.topologyRoots,
+                    )
+                }
                 val changedFileCount = execution.changes?.changedSources?.size ?: 0
                 val removedFileCount = execution.changes?.deletedSources?.size ?: 0
                 val result =
