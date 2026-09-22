@@ -2,6 +2,7 @@ package dev.sebastiano.indexino.core.cache
 
 import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.zip.ZipFile
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.writeText
@@ -9,6 +10,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class ContentAddressedPackCacheTest {
@@ -17,6 +19,62 @@ class ContentAddressedPackCacheTest {
     @AfterTest
     fun tearDown() {
         tempDirs.forEach { it.toFile().deleteRecursively() }
+    }
+
+    @Test
+    fun `materialization accepts a competing directory installed before atomic rename`() {
+        val root = createTempDirectory("indexino-pack-race-").also(tempDirs::add)
+        val source = Files.createDirectory(root.resolve("source"))
+        source.resolve("facts.json").writeText("immutable facts")
+        val winner = ContentAddressedPackCache(root)
+        val contentKey = winner.installDirectory(source)
+        val destination = root.resolve("restored")
+        val contender =
+            ContentAddressedPackCache(root) { from, to ->
+                winner.materializeDirectory(contentKey, to)
+                Files.move(from, to, StandardCopyOption.ATOMIC_MOVE)
+            }
+
+        val outcome = runCatching { contender.materializeDirectory(contentKey, destination) }
+
+        assertTrue(
+            outcome.isSuccess,
+            "A complete competing copy must win: ${outcome.exceptionOrNull()}",
+        )
+        assertEquals("immutable facts", Files.readString(destination.resolve("facts.json")))
+        Files.list(root).use { paths ->
+            assertTrue(paths.noneMatch { it.fileName.toString().startsWith("restored.tmp-") })
+        }
+    }
+
+    @Test
+    fun `materialization propagates move failures without a winning directory`() {
+        val root = createTempDirectory("indexino-pack-move-failure-").also(tempDirs::add)
+        val source = Files.createDirectory(root.resolve("source"))
+        source.resolve("facts.json").writeText("facts")
+        val contentKey = ContentAddressedPackCache(root).installDirectory(source)
+        for (existingFile in listOf(false, true)) {
+            val destination = root.resolve("restored-$existingFile")
+            val failure = java.nio.file.AccessDeniedException(destination.toString())
+            val cache =
+                ContentAddressedPackCache(root) { _, to ->
+                    if (existingFile) Files.writeString(to, "not a materialized directory")
+                    throw failure
+                }
+
+            assertSame(
+                failure,
+                assertFailsWith<java.nio.file.AccessDeniedException> {
+                    cache.materializeDirectory(contentKey, destination)
+                },
+            )
+            if (existingFile) {
+                assertEquals("not a materialized directory", Files.readString(destination))
+            }
+        }
+        Files.list(root).use { paths ->
+            assertTrue(paths.noneMatch { it.fileName.toString().contains(".tmp-") })
+        }
     }
 
     @Test
@@ -75,7 +133,7 @@ class ContentAddressedPackCacheTest {
         val cache =
             ContentAddressedPackCache(root) { from, to ->
                 moveCount += 1
-                if (moveCount in 2..3) throw IOException("simulated replacement failure")
+                if (moveCount in 3..4) throw IOException("simulated replacement failure")
                 Files.move(from, to)
             }
 
@@ -99,7 +157,7 @@ class ContentAddressedPackCacheTest {
         val cache =
             ContentAddressedPackCache(root) { from, to ->
                 moveCount += 1
-                if (moveCount == 2) throw IOException("simulated replacement failure")
+                if (moveCount == 3) throw IOException("simulated replacement failure")
                 Files.move(from, to)
             }
 
