@@ -1,94 +1,48 @@
 package dev.sebastiano.indexino.topology.gradle
 
 internal object SettingsParser {
-    private val includePattern = Regex("""include\s*\(([^)]+)\)""")
-
-    fun parseIncludes(content: String): List<String> {
-        val modules = mutableListOf<String>()
-        for (match in includePattern.findAll(content)) {
-            val args = match.groupValues[1]
-            projectPattern.findAll(args).forEach { projectMatch ->
-                modules += projectMatch.groupValues[1]
-            }
-            quotedModulePattern.findAll(args).forEach { quotedMatch ->
-                modules += quotedMatch.groupValues[1]
-            }
-        }
-        return modules.distinct()
-    }
+    fun parseIncludes(content: String): List<String> = parseDeclarations(content, "include")
 
     fun parseIncludedBuilds(content: String): List<String> =
-        includeBuildPattern
-            .findAll(withoutComments(content))
-            .map { it.groupValues[1] }
+        parseDeclarations(content, "includeBuild")
+
+    private fun parseDeclarations(content: String, name: String): List<String> {
+        val tokens = GradleScriptTokens.parse(content)
+        return tokens.indices
+            .filter { tokens[it] == name && tokens.getOrNull(it - 1) != "." }
+            .flatMap { arguments(GradleScriptTokens.Cursor(tokens, it + 1)) }
             .distinct()
-            .toList()
-
-    private fun withoutComments(content: String): String {
-        val result = StringBuilder(content.length)
-        var index = 0
-        var quote: Char? = null
-        while (index < content.length) {
-            if (quote != null) {
-                val quoted = appendQuotedCharacter(content, result, index, quote)
-                index = quoted.first
-                quote = quoted.second
-                continue
-            }
-            when (val current = content[index]) {
-                '\'',
-                '"' -> {
-                    quote = current
-                    result.append(current)
-                    index++
-                }
-                '/' -> {
-                    index =
-                        skipComment(content, index)
-                            ?: run {
-                                result.append(current)
-                                index + 1
-                            }
-                }
-                else -> {
-                    result.append(current)
-                    index++
-                }
-            }
-        }
-        return result.toString()
     }
 
-    private fun appendQuotedCharacter(
-        content: String,
-        result: StringBuilder,
-        index: Int,
-        quote: Char,
-    ): Pair<Int, Char?> {
-        val current = content[index]
-        result.append(current)
-        if (current == '\\' && index + 1 < content.length) {
-            result.append(content[index + 1])
-            return index + 2 to quote
-        }
-        return index + 1 to quote.takeUnless { current == it }
+    private fun arguments(cursor: GradleScriptTokens.Cursor): List<String> {
+        val parenthesized = cursor.consume("(")
+        val arguments = mutableListOf<String>()
+        do {
+            val project = cursor.consume("project", "(")
+            val argument = cursor.readLiteral() ?: return emptyList()
+            if (project && !cursor.consume(")")) return emptyList()
+            arguments += argument
+        } while (cursor.consume(",") && cursor.peek() != ")")
+        if (parenthesized && !cursor.consume(")")) return emptyList()
+        if (!parenthesized && cursor.peek() in setOf("+", ".", "?")) return emptyList()
+        return arguments
     }
 
-    private fun skipComment(content: String, index: Int): Int? =
-        when (content.getOrNull(index + 1)) {
-            '/' ->
-                content.indexOf('\n', index).let { newline ->
-                    if (newline == -1) content.length else newline
-                }
-            '*' ->
-                content.indexOf("*/", index + 2).let { end ->
-                    if (end == -1) content.length else end + 2
-                }
-            else -> null
-        }
+    /** Only literal file(...) mappings; Gradle expressions are never evaluated. */
+    fun parseProjectDirectories(content: String): Map<String, String> {
+        val tokens = GradleScriptTokens.parse(content)
+        return tokens.indices
+            .mapNotNull { projectDirectory(GradleScriptTokens.Cursor(tokens, it)) }
+            .toMap()
+    }
 
-    private val includeBuildPattern =
-        Regex("""includeBuild\s*(?:\(\s*)?['\"]([^'\"]+)['\"]\s*\)?""")
-    private val projectPattern = Regex("""project\s*\(\s*"([^"]+)"\s*\)""")
-    private val quotedModulePattern = Regex(""""([^"]+)"""")
+    private fun projectDirectory(cursor: GradleScriptTokens.Cursor): Pair<String, String>? {
+        if (!cursor.consume("project", "(")) return null
+        val module = cursor.readLiteral() ?: return null
+        if (!cursor.consume(")", ".", "projectDir", "=", "file", "(")) return null
+        val directory = cursor.readLiteral() ?: return null
+        if (!cursor.consume(")")) return null
+        if (cursor.peek() in setOf("+", ".", "?")) return null
+        return module to directory
+    }
 }
