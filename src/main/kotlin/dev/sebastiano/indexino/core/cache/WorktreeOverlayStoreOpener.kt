@@ -13,7 +13,8 @@ internal object WorktreeOverlayStoreOpener {
         workspace: Path,
         clientId: String,
         manifest: WorkspaceGenerationManifest,
-    ): CodeIndexStore = openResolvedStore(cacheRoot, workspace, manifest, clientId)
+        onBaseRef: (Path) -> Unit = {},
+    ): CodeIndexStore = openResolvedStore(cacheRoot, workspace, manifest, clientId, onBaseRef)
 
     fun openForBuildBase(
         cacheRoot: Path,
@@ -26,6 +27,8 @@ internal object WorktreeOverlayStoreOpener {
         workspace: Path,
         manifest: WorkspaceGenerationManifest,
         clientId: String?,
+        onBaseRef: (Path) -> Unit = {},
+        isBase: Boolean = false,
     ): CodeIndexStore {
         if (manifest.representation != WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) {
             val storePath =
@@ -34,6 +37,7 @@ internal object WorktreeOverlayStoreOpener {
                 } else {
                     InProcessCacheLayout.generationStore(workspace, clientId, manifest.generation)
                 }
+            if (isBase && clientId != null) onBaseRef(storePath.parent)
             if (!Files.isDirectory(storePath)) {
                 ContentAddressedPackCache(cacheRoot)
                     .materializeDirectory(manifest.packKeys.single(), storePath)
@@ -50,9 +54,26 @@ internal object WorktreeOverlayStoreOpener {
         val baseWorkspace =
             WorkspaceRegistryStore(cacheRoot).entry(manifest.baseWorkspaceId)?.path?.let(Path::of)
                 ?: error("Base workspace ${manifest.baseWorkspaceId} is unknown")
-        val baseStore = openResolvedStore(cacheRoot, baseWorkspace, baseManifest, clientId)
-        val overlayStore = openOverlayDeltaStore(cacheRoot, workspace, manifest, clientId)
-        return WorktreeOverlayIndexStore(baseStore, overlayStore, manifest.tombstonePrefixes)
+        val baseStore =
+            openResolvedStore(
+                cacheRoot,
+                baseWorkspace,
+                baseManifest,
+                clientId,
+                onBaseRef,
+                isBase = true,
+            )
+        var completed = false
+        try {
+            if (isBase && clientId != null) {
+                onBaseRef(overlayDeltaStorePath(workspace, clientId, manifest.generation).parent)
+            }
+            val overlayStore = openOverlayDeltaStore(cacheRoot, workspace, manifest, clientId)
+            return WorktreeOverlayIndexStore(baseStore, overlayStore, manifest.tombstonePrefixes)
+                .also { completed = true }
+        } finally {
+            if (!completed) baseStore.close()
+        }
     }
 
     fun materializedGenerationStore(
