@@ -75,6 +75,7 @@ class OrchestrationTest(unittest.TestCase):
                 result = super().run(argv, cwd, timeout)
                 if "dev.sebastiano.indexino.acceptance.PublicAcceptanceDriver" in argv:
                     Path(argv[-1]).write_text(json.dumps({"status": "incomplete", "generation": "g-failed",
+                        "sources": ["unexpected/Invented.kt"],
                         "diagnostics": {"phaseEvents": [{"event": "refresh_started", "observedNanoTime": 3}]}}))
                     self.metrics.append({"exitCode": 7, "stderrDiagnostic": {
                         "exceptionClasses": ["java.lang.IllegalStateException"], "signals": ["coverage-mismatch"]}})
@@ -96,6 +97,7 @@ class OrchestrationTest(unittest.TestCase):
         self.assertEqual(1, len(report["scopes"]))
         repeat = report["scopes"][0]["repeats"][0]
         self.assertEqual("g-failed", repeat["generation"])
+        self.assertEqual(["unexpected/Invented.kt"], repeat["sources"])
         self.assertEqual("failed", repeat["status"])
         self.assertEqual(7, repeat["exitCode"])
         self.assertEqual("refresh_started", repeat["diagnostics"]["phaseEvents"][0]["event"])
@@ -139,7 +141,12 @@ class OrchestrationTest(unittest.TestCase):
         self.assertEqual("passed", report["status"])
         self.assertTrue(report["cleanupVerified"])
         self.assertEqual([False, True], [s["includeDependencies"] for s in report["scopes"]])
-        self.assertEqual([1, 3], [len(s["repeats"][0]["sources"]) for s in report["scopes"]])
+        self.assertEqual([1, 3], [s.get("sourceCount") for s in report["scopes"]])
+        for scope in report["scopes"]:
+            for repeat in scope["repeats"] + [scope["instrumentedDiagnostic"]]:
+                self.assertNotIn("sources", repeat, "successful large inventories must not be duplicated in report")
+                self.assertEqual(scope["sourceCount"], repeat["sourceCount"])
+                self.assertEqual(scope["inventorySha256"], repeat["inventorySha256"])
         self.assertTrue(all(len(s["repeats"]) == 3 for s in report["scopes"]))
         self.assertTrue(all("instrumentedDiagnostic" in s for s in report["scopes"]))
         self.assertEqual(["manual", "watcher", "calls-manual", "calls-watcher"], [f["lane"] for f in report["fixtures"]])
