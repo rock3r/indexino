@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import subprocess
+import sys
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -53,6 +54,53 @@ def fake_clone(commands, corpus, workspace):
 
 
 class OrchestrationTest(unittest.TestCase):
+    def test_controller_failure_stays_actionable_without_exporting_exception_text(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report = Path(temporary) / "report.json"
+            argv = ["run.py", "--execute", "--corpus", "spectre", "--artifact", "driver.zip",
+                    "--sha256", "digest", "--report", str(report)]
+            with patch.object(sys, "argv", argv), patch.object(run, "readiness", return_value=[]), \
+                    patch.object(run, "execute", side_effect=RuntimeError(
+                        "not-ready: child cgroup delegation missing: /private/path SECRET")):
+                self.assertEqual(2, run.main())
+            result = json.loads(report.read_text())
+        self.assertEqual("not-ready", result["status"])
+        self.assertIn("delegated", " ".join(result["reasons"]))
+        self.assertNotIn("SECRET", json.dumps(result))
+        self.assertNotIn("/private/path", json.dumps(result))
+
+    def test_failed_corpus_repeat_retains_checkpoint_after_disposable_cleanup(self):
+        class FailedCorpus(FakeJob):
+            def run(self, argv, cwd, timeout=120):
+                result = super().run(argv, cwd, timeout)
+                if "dev.sebastiano.indexino.acceptance.PublicAcceptanceDriver" in argv:
+                    Path(argv[-1]).write_text(json.dumps({"status": "incomplete", "generation": "g-failed",
+                        "diagnostics": {"phaseEvents": [{"event": "refresh_started", "observedNanoTime": 3}]}}))
+                    self.metrics.append({"exitCode": 7, "stderrDiagnostic": {
+                        "exceptionClasses": ["java.lang.IllegalStateException"], "signals": ["coverage-mismatch"]}})
+                    raise subprocess.CalledProcessError(7, argv)
+                return result
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifact = root / "driver.zip"
+            artifact.write_bytes(b"fake artifact")
+            args = SimpleNamespace(corpus="spectre", artifact=artifact,
+                sha256=hashlib.sha256(b"fake artifact").hexdigest(), scratch=root, cgroup_parent=root)
+            report = {}
+            with patch.object(run, "Commands", FailedCorpus), patch.object(run, "clone", fake_clone), \
+                    patch.object(run, "extract_driver"):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    run.execute(args, report)
+            self.assertFalse(FailedCorpus.instances[-1].root.exists())
+        self.assertTrue(report["cleanupVerified"])
+        self.assertEqual(1, len(report["scopes"]))
+        repeat = report["scopes"][0]["repeats"][0]
+        self.assertEqual("g-failed", repeat["generation"])
+        self.assertEqual("failed", repeat["status"])
+        self.assertEqual(7, repeat["exitCode"])
+        self.assertEqual("refresh_started", repeat["diagnostics"]["phaseEvents"][0]["event"])
+        self.assertEqual(["coverage-mismatch"], report["commands"][-1]["stderrDiagnostic"]["signals"])
+
     def test_failed_fixture_retains_checkpoint_and_runs_other_lane(self):
         class FailedFixture(FakeJob):
             def run(self, argv, cwd, timeout=120):

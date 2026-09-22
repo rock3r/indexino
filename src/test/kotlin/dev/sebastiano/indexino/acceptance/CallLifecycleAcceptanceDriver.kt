@@ -89,23 +89,23 @@ internal object CallLifecycleAcceptanceDriver {
             Files.writeString(
                 Path.of(args[2]),
                 buildJsonObject {
-                    put("schema", 1)
-                    put("status", status)
-                    put("lane", "calls-${args[1]}")
-                    failure?.let { put("failure", it) }
-                    put("stages", JsonArray(stages))
-                    put(
-                        "queries",
-                        JsonArray(
-                            timings.map { (kind, values) ->
-                                buildJsonObject {
-                                    put("id", kind)
-                                    put("apiNanos", JsonArray(values.map(::JsonPrimitive)))
+                        put("schema", 1)
+                        put("status", status)
+                        put("lane", "calls-${args[1]}")
+                        failure?.let { put("failure", it) }
+                        put("stages", JsonArray(stages))
+                        put(
+                            "queries",
+                            JsonArray(
+                                timings.map { (kind, values) ->
+                                    buildJsonObject {
+                                        put("id", kind)
+                                        put("apiNanos", JsonArray(values.map(::JsonPrimitive)))
+                                    }
                                 }
-                            }
-                        ),
-                    )
-                }
+                            ),
+                        )
+                    }
                     .toString() + "\n",
             )
         }
@@ -178,24 +178,26 @@ internal object CallLifecycleAcceptanceDriver {
         expected: List<String>,
         timings: Map<String, MutableList<Long>>? = null,
     ) {
-        val target = collectPages {
-            snapshot.findSymbols(
-                SymbolQuery.named("fixture.calls.ping").withMatch(NameMatchMode.FQN),
-                it,
-            )
-        }
-            .single()
+        val target =
+            collectPages {
+                    snapshot.findSymbols(
+                        SymbolQuery.named("fixture.calls.ping").withMatch(NameMatchMode.FQN),
+                        it,
+                    )
+                }
+                .single()
         check(target.location.file.path == SOURCE + "Target.kt" && target.location.line == 2)
         val callerIds = expected.associate { row ->
             val file = row.substringBeforeLast(':')
             val name = if (file == SOURCE + "Another.kt") "another" else "caller"
-            val caller = collectPages {
-                snapshot.findSymbols(
-                    SymbolQuery.named("fixture.calls.$name").withMatch(NameMatchMode.FQN),
-                    it,
-                )
-            }
-                .single()
+            val caller =
+                collectPages {
+                        snapshot.findSymbols(
+                            SymbolQuery.named("fixture.calls.$name").withMatch(NameMatchMode.FQN),
+                            it,
+                        )
+                    }
+                    .single()
             check(caller.location.file.path == file && caller.location.line == 2)
             file to caller.id
         }
