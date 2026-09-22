@@ -618,7 +618,10 @@ class InProcessIndexinoTest {
                             .toList()
                     }
                 assertTrue(storeDirs.isNotEmpty())
-                storeDirs.forEach { it.toFile().deleteRecursively() }
+                storeDirs.forEach {
+                    it.toFile().deleteRecursively()
+                    Files.writeString(it, "not a store directory")
+                }
                 val failure =
                     assertFailsWith<IndexinoException> { runSuspend { indexino.snapshot() } }
                 assertEquals("INTERNAL", failure.failure.category.value)
