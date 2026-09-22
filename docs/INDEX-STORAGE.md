@@ -108,6 +108,15 @@ Declaration and reference lines and columns are 1-based. Kotlin and Java symbols
 declaration's syntactic start; XML value resources point to the opening `<`, ID resources to the
 `@+id/…` token, and path-derived resources to line 1, column 1.
 
+Version 4 is a compatibility reset for incorrectly attributed Kotlin shadowed-receiver facts; the
+record shape is unchanged. The current engine has no separate core-analyzer revision coordinate:
+the indexer version invalidates incremental writers, but reopening a published generation checks
+only the basic-fact schema coordinate. This reset therefore rejects old published packs and forces
+unchanged sources through the writer again. A warm-cache regression seeds schema-3 wrong reference
+and call targets, checks that they cannot be reopened as current, and verifies corrected public
+queries after refresh. Local and remote snapshots report this same core schema coordinate, not a
+separate facade version. This is not a general requirement to bump fact schemas for bug fixes.
+
 ## Query path (product)
 
 1. Connect to the workspace runtime (or in-process engine in early slices).
@@ -140,6 +149,16 @@ different read of the file.
 CLI-only operators: `indexino cache status|gc|forget` and `daemon stop --purge`. Explicit
 last-used in the registry (not filesystem `atime`). GC grace window + re-verify before unlink.
 
+Current `cache gc` implements conservative activity exclusion and current-generation/overlay
+reachability. In-process clients hold a shared OS lock on `activity.lock`; snapshots that outlive
+client close retain that lease, and refreshes retain independent leases until their work ends.
+GC takes the exclusive lock for its entire reachability scan and deletion, or reports
+`activeRuntime=true` without deleting packs. This prevents publication and pinned-generation races
+across cooperating processes. It intentionally defers all reclamation while any client is live.
+Age/quota policy, a persisted grace window, and `daemon stop --purge` remain follow-up work rather
+than guarantees of the current collector. All participating processes must use the updated locking
+protocol; stop older in-process clients before running this collector against their cache.
+
 ## S2 implementation layout
 
 Refresh writes mutable incremental output only beneath
@@ -157,7 +176,14 @@ when the checkout changes while analysis is running.
 
 Each client materializes a referenced immutable pack atomically into its own
 `workspaces/<workspace-id>/refs/<client-id>/<generation-id>/store/` directory before opening a
-snapshot. Snapshot pins retain those caller-owned refs until close; shared packs remain immutable and
+snapshot. Simultaneous snapshots in one client share a reference-counted read-only Xodus environment;
+different clients open their own copies because Xodus locks even read-only environments exclusively.
+Publication and snapshot restoration may compete to materialize the same immutable destination.
+If another complete directory wins the rename, its copy is reused and the losing staging directory
+is removed. A move failure without a directory at the destination still propagates.
+Closing one snapshot does not close another snapshot's environment. Snapshot pins retain those
+caller-owned refs until close. Client-owned overlay base copies are tracked alongside the snapshot
+pins and reclaimed after the last pin closes; shared packs remain immutable and
 are reclaimed only by reachability/age/quota GC. There is no runtime `legacy-store` layout. Do **not**
 extend `<project>/.indexino/index/<commit>/`; new features must assume user-local composite storage.
 

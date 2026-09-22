@@ -20,6 +20,32 @@ import kotlin.test.assertTrue
 
 class KotlinPsiSymbolProducerTest {
     @Test
+    fun `symbol locations exclude leading comments but retain declaration modifiers`() {
+        val source =
+            "package sample\n// Class documentation\n    class Marker\n" +
+                "/** Function documentation */\n  private fun helper() = Unit\n" +
+                "// Property documentation\n val value = 1\n"
+        val context =
+            IndexBuildContext.forInlineSources(
+                store = store,
+                commitHash = "comment-locations",
+                sourceFiles = mapOf("Comments.kt" to source),
+            )
+        checkNotNull(ProducerRegistry.get("kotlin-psi-symbols")).produce(context, store)
+
+        val locations =
+            store
+                .prefixScan("sym:")
+                .map { it.second }
+                .filterIsInstance<SymbolRecord>()
+                .associate { it.name to (it.line to it.column) }
+        assertEquals(
+            mapOf("Marker" to (3 to 5), "helper" to (5 to 3), "value" to (7 to 2)),
+            locations,
+        )
+    }
+
+    @Test
     fun `preserves one based declaration columns for Kotlin symbols`() {
         val source =
             """

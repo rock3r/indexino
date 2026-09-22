@@ -1,0 +1,88 @@
+name: Public acceptance (manual, isolated runners)
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_profile:
+        description: Confirm operator-provisioned ephemeral Linux x64, 64 GiB RAM, 200 GiB scratch, delegated cgroup-v2
+        required: true
+        type: choice
+        default: disabled
+        options:
+          - disabled
+          - ephemeral-linux-x64-64g
+
+permissions:
+  contents: read
+
+jobs:
+  build-driver:
+    if: inputs.runner_profile == 'ephemeral-linux-x64-64g' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - run: bash scripts/public-acceptance/bootstrap-jdk.sh "$RUNNER_TEMP/verified-jdk"
+      - run: python3 -m unittest discover -s scripts/public-acceptance -v
+      - name: Build exact test-only artifact once
+        env:
+          GRADLE_USER_HOME: ${{ runner.temp }}/gradle-build
+        run: ./gradlew publicAcceptanceDriverChecksum --no-daemon --console=plain
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: public-driver-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/public-acceptance/public-acceptance-driver.zip
+            build/public-acceptance/public-acceptance-driver.zip.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  corpus:
+    needs: build-driver
+    # Personal repository: repository-scoped, one-job ephemeral VMs, not organization groups.
+    # There is deliberately no pull_request or pull_request_target entry point.
+    runs-on: [self-hosted, linux, x64, "indexino-public-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.corpus }}"]
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        corpus: [spectre, intellij]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - run: bash scripts/public-acceptance/bootstrap-jdk.sh "$RUNNER_TEMP/verified-jdk"
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: public-driver-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/public-acceptance
+      - name: Verify detached-child cleanup before acquiring a corpus
+        run: |
+          # Supplied by the operator's delegated runner service, never inferred from a writable ancestor.
+          export INDEXINO_TEST_CGROUP_PARENT="${INDEXINO_PUBLIC_CGROUP_PARENT:?delegated runner service required}"
+          test -w "$INDEXINO_TEST_CGROUP_PARENT/cgroup.procs"
+          python3 -m unittest discover -s scripts/public-acceptance -v
+      - name: Run pinned public corpus with disposable caches
+        env:
+          CORPUS: ${{ matrix.corpus }}
+        run: |
+          digest="$(cut -d ' ' -f1 build/public-acceptance/public-acceptance-driver.zip.sha256)"
+          python3 scripts/public-acceptance/run.py --execute --corpus "$CORPUS" \
+            --artifact build/public-acceptance/public-acceptance-driver.zip --sha256 "$digest" \
+            --cgroup-parent "$INDEXINO_PUBLIC_CGROUP_PARENT" --scratch "$RUNNER_TEMP" \
+            --report "build/reports/public-acceptance/$CORPUS.json"
+      - name: Check bounded report artifact
+        id: bounded-report
+        if: always()
+        env:
+          CORPUS: ${{ matrix.corpus }}
+        run: test "$(wc -c < "build/reports/public-acceptance/$CORPUS.json")" -le 16777216
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always() && steps.bounded-report.outcome == 'success'
+        with:
+          name: public-${{ matrix.corpus }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/reports/public-acceptance/${{ matrix.corpus }}.json
+          if-no-files-found: error
+          retention-days: 7

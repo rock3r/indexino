@@ -7,6 +7,28 @@ import kotlin.test.assertTrue
 
 class BazelQueryFallbackTest {
     @Test
+    fun `failed role query preserves unknown classification`() {
+        val result =
+            BazelTopology.resolveSources(
+                target = "//pkg:lib",
+                workspace = Path("."),
+                includeDeps = true,
+                processRunner =
+                    BazelProcessRunner { query, _ ->
+                        if (query.startsWith("kind('source file', deps(")) {
+                            BazelQueryOutcome(0, listOf("//pkg:Main.java"))
+                        } else {
+                            BazelQueryOutcome(1, listOf("ERROR"))
+                        }
+                    },
+                onStderr = {},
+            )
+
+        assertEquals(listOf("pkg/Main.java"), result.sourceFiles)
+        assertEquals(null, result.codeSourceFiles)
+    }
+
+    @Test
     fun `falls back to labels srcs when deps query fails`() {
         val warnings = mutableListOf<String>()
         val lines =
@@ -56,7 +78,14 @@ class BazelQueryFallbackTest {
                 runner =
                     BazelProcessRunner { query, _ ->
                         check(query.contains("deps("))
-                        BazelQueryOutcome(0, listOf("//plugins/foo/ui:src/main/kotlin/Panel.kt"))
+                        BazelQueryOutcome(
+                            0,
+                            if (query.startsWith("kind('source file'")) {
+                                listOf("//plugins/foo/ui:src/main/kotlin/Panel.kt")
+                            } else {
+                                emptyList()
+                            },
+                        )
                     },
                 onStderr = warnings::add,
             )

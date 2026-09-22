@@ -44,6 +44,41 @@ class WorktreeOverlayIntegrationTest {
     }
 
     @Test
+    fun `overlay snapshot base copies are reclaimed after their last pin closes`() {
+        val cacheDirectory = createTempDirectory("indexino-overlay-pins-cache-")
+        tempDirs.add(cacheDirectory)
+        val (mainWorkspace, forkWorkspace) = createLinkedWorktrees()
+        val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+        withCache(cacheDirectory) {
+            indexMainAndFork(mainWorkspace, forkWorkspace, request)
+            Indexino.connectBlocking(forkWorkspace).use { fork ->
+                runBlocking {
+                    val first = fork.snapshot()
+                    fork.snapshot().use { second ->
+                        first.close()
+                        assertTrue(
+                            second
+                                .findSymbols(SymbolQuery.named("Panel"), QueryOptions.page(10))
+                                .items
+                                .isNotEmpty()
+                        )
+                    }
+                }
+            }
+            val workspaces = canonicalCacheRoot(cacheDirectory).resolve("workspaces")
+            val remaining =
+                Files.walk(workspaces).use { paths ->
+                    paths
+                        .filter {
+                            Files.isRegularFile(it) && it.any { part -> part.toString() == "refs" }
+                        }
+                        .toList()
+                }
+            assertTrue(remaining.isEmpty(), "Unclosed client base copies: $remaining")
+        }
+    }
+
+    @Test
     fun `compatible sibling worktree with no changes runs zero analyzers and bounded metadata`() {
         val cacheDirectory = createTempDirectory("indexino-overlay-cache-")
         tempDirs.add(cacheDirectory)

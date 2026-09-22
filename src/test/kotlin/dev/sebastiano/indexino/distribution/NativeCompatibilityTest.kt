@@ -388,7 +388,7 @@ class NativeCompatibilityTest {
             requiredProperty("indexino.version"),
             json.getValue("indexerVersion").jsonPrimitive.content,
         )
-        assertEquals(3, json.getValue("basicFactSchemaVersion").jsonPrimitive.int)
+        assertEquals(4, json.getValue("basicFactSchemaVersion").jsonPrimitive.int)
     }
 
     private fun releaseCompatibilityResources(

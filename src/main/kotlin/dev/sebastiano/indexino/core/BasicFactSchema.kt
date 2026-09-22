@@ -1,3 +1,4 @@
 package dev.sebastiano.indexino.core
 
-internal const val BASIC_FACT_SCHEMA_VERSION = 3
+// Compatibility reset for persisted Kotlin receiver facts, including already published packs.
+internal const val BASIC_FACT_SCHEMA_VERSION = 4

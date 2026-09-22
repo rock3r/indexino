@@ -2,3 +2,4 @@ gradle/aot-training/fixture/**/*.java text eol=lf
 gradle/aot-training/fixture/**/*.kt text eol=lf
 gradle/aot-training/fixture/**/*.kts text eol=lf
 gradle/aot-training/fixture/**/*.xml text eol=lf
+src/test/resources/fixtures/retrieval-v1/** text eol=lf

@@ -867,7 +867,6 @@ private constructor(
 
     internal companion object {
         private const val CURSOR_PREFIX: String = "indexino:v1:"
-        private const val BASIC_FACT_SCHEMA_VERSION: Int = 3
         // Host policy for this in-process facade. Not a public ABI constant until the owner
         // settles exact default page limits in docs/PUBLIC-API-DESIGN.html.
         private const val HOST_QUERY_LIMIT_MAXIMUM: Int = 10_000

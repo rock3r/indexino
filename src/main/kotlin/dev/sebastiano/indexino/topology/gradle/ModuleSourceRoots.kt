@@ -9,13 +9,30 @@ import kotlin.io.path.walk
 internal object ModuleSourceRoots {
     private val sourceExtensions = setOf("kt", "java")
 
-    fun moduleDirectory(workspace: Path, modulePath: String): Path {
+    fun moduleDirectory(
+        workspace: Path,
+        modulePath: String,
+        projectDirectories: Map<String, String> = emptyMap(),
+    ): Path {
         val segments = modulePath.removePrefix(":").split(":").filter { it.isNotBlank() }
         // Topology discovery must never return paths that escape a root via ".." (contract).
         // This check is load-bearing for the CLI, which never constructs IndexScope. Also reject
         // '/' and '\\' inside a colon-segment so values like ":../../outside" cannot slip through.
         require(segments.all(::isSafeModuleSegment)) {
             "Gradle module path must not contain '.', '..', or path-separator segments: $modulePath"
+        }
+        projectDirectories[modulePath]?.let { remap ->
+            val root = workspace.toAbsolutePath().normalize()
+            val directory = root.resolve(remap).normalize()
+            require(directory.startsWith(root)) {
+                "Gradle projectDir is outside the build root: $remap"
+            }
+            if (directory.exists()) {
+                require(directory.toRealPath().startsWith(root.toRealPath())) {
+                    "Gradle projectDir is outside the build root: $remap"
+                }
+            }
+            return workspace.resolve(root.relativize(directory))
         }
         return if (segments.isEmpty()) {
             workspace
@@ -28,6 +45,14 @@ internal object ModuleSourceRoots {
         segment != "." && segment != ".." && '/' !in segment && '\\' !in segment
 
     fun collectKotlinSources(moduleDir: Path, workspace: Path): List<String> {
+        return collectSources(moduleDir, workspace, codeOnly = false)
+    }
+
+    fun collectCodeSources(moduleDir: Path, workspace: Path): List<String> {
+        return collectSources(moduleDir, workspace, codeOnly = true)
+    }
+
+    private fun collectSources(moduleDir: Path, workspace: Path, codeOnly: Boolean): List<String> {
         if (!moduleDir.exists()) {
             return emptyList()
         }
@@ -37,14 +62,14 @@ internal object ModuleSourceRoots {
         }
         return sourceRoot
             .walk()
-            .filter { it.isRegularFile() && isIndexable(it, sourceRoot) }
+            .filter { it.isRegularFile() && isIndexable(it, sourceRoot, codeOnly) }
             .map { it.relativeTo(workspace).toString().replace('\\', '/') }
             .distinct()
             .sorted()
             .toList()
     }
 
-    private fun isIndexable(path: Path, sourceRoot: Path): Boolean {
+    private fun isIndexable(path: Path, sourceRoot: Path, codeOnly: Boolean): Boolean {
         val relative = path.relativeTo(sourceRoot).toString().replace('\\', '/')
         val segments = relative.split('/')
         if (segments.size < MIN_SOURCE_PATH_SEGMENTS) {
@@ -57,7 +82,7 @@ internal object ModuleSourceRoots {
         val sourceKind = segments[1]
         val extension = path.fileName.toString().substringAfterLast('.', "")
         return (sourceKind in CODE_SOURCE_DIRS && extension in sourceExtensions) ||
-            (sourceKind in RESOURCE_SOURCE_DIRS && extension.isNotBlank())
+            (!codeOnly && (sourceKind in RESOURCE_SOURCE_DIRS && extension.isNotBlank()))
     }
 
     private val CODE_SOURCE_DIRS = setOf("kotlin", "java")

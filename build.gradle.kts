@@ -715,6 +715,8 @@ val ideaHomeDir =
 
 tasks.test {
     dependsOn(":indexino-compose-decoration:jar", ":indexino-selection-context:jar")
+    val cliRuntimeClasspath = sourceSets.main.get().runtimeClasspath
+    inputs.files(cliRuntimeClasspath).withPropertyName("cliRuntimeClasspath")
     useJUnitPlatform {
         val excludedTags =
             mutableListOf(
@@ -735,6 +737,7 @@ tasks.test {
         ideaHomeDir.resolve("config").mkdirs()
         ideaHomeDir.resolve("system").mkdirs()
         ideaHomeDir.resolve("plugins").mkdirs()
+        systemProperty("indexino.cliRuntimeClasspath", cliRuntimeClasspath.asPath)
     }
     systemProperty("idea.home.path", ideaHomeDir.absolutePath)
     systemProperty("idea.config.path", ideaHomeDir.resolve("config").absolutePath)
@@ -1047,3 +1050,33 @@ val generateBundledDependencyInventory by tasks.registering {
         )
     }
 }
+
+// Test-only acceptance runtime: built once, checksummed, and copied to isolated corpus jobs.
+// It is neither a publication nor part of the CLI/native distribution.
+val publicAcceptanceDriverArchive by
+    tasks.registering(org.gradle.api.tasks.bundling.Zip::class) {
+        group = "verification"
+        description = "Package the typed test-only public acceptance driver and its exact runtime"
+        dependsOn(tasks.testClasses)
+        from(sourceSets.test.map { it.output }) { into("test") }
+        from(sourceSets.main.map { it.output }) { into("main") }
+        // Drivers use production APIs, not JUnit/TestKit; their daemon must not inherit
+        // Gradle's competing logging backend from the test runtime.
+        from(sourceSets.main.map { it.runtimeClasspath.filter { file -> file.isFile } }) {
+            into("lib")
+        }
+        archiveFileName.set("public-acceptance-driver.zip")
+        destinationDirectory.set(layout.buildDirectory.dir("public-acceptance"))
+        isReproducibleFileOrder = true
+        isPreserveFileTimestamps = false
+        duplicatesStrategy = DuplicatesStrategy.FAIL
+    }
+
+val publicAcceptanceDriverChecksum by
+    tasks.registering(Sha256File::class) {
+        group = "verification"
+        inputFile.set(publicAcceptanceDriverArchive.flatMap { it.archiveFile })
+        outputFile.set(
+            layout.buildDirectory.file("public-acceptance/public-acceptance-driver.zip.sha256")
+        )
+    }

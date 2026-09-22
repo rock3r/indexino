@@ -20,6 +20,7 @@ internal object GradleTopology {
 
         val settingsContent = settingsFile.readText()
         val includes = SettingsParser.parseIncludes(settingsContent)
+        val projectDirectories = SettingsParser.parseProjectDirectories(settingsContent)
         val externalMounts =
             resolveExternalMounts(workspace, settingsFile, settingsContent, onStderr)
         if (includes.isEmpty()) {
@@ -31,7 +32,7 @@ internal object GradleTopology {
             onStderr("gradle-parse: module $normalizedModule not in settings includes")
         }
 
-        val graph = GradleModuleGraph(workspace, includes)
+        val graph = GradleModuleGraph(workspace, includes, projectDirectories)
         val rootScope = normalizedModule == ":"
         val modules =
             if (rootScope) {
@@ -48,15 +49,25 @@ internal object GradleTopology {
             modules
                 .flatMap { module ->
                     ModuleSourceRoots.collectKotlinSources(
-                        ModuleSourceRoots.moduleDirectory(workspace, module),
+                        ModuleSourceRoots.moduleDirectory(workspace, module, projectDirectories),
                         workspace,
                     )
                 }
                 .distinct()
                 .sorted()
+        val codeSourceFiles =
+            modules
+                .flatMap { module ->
+                    ModuleSourceRoots.collectCodeSources(
+                        ModuleSourceRoots.moduleDirectory(workspace, module, projectDirectories),
+                        workspace,
+                    )
+                }
+                .toSet()
 
         return TopologyResult(
             sourceFiles = sourceFiles,
+            codeSourceFiles = codeSourceFiles,
             topology = "gradle-parse",
             // Root selection is a superset of the root project's dependency closure, so report
             // includeDeps=true even when the request asked for false. Over-reporting inclusion is
@@ -67,24 +78,32 @@ internal object GradleTopology {
             externalMounts = externalMounts,
             externalSources =
                 scopedExternalMounts.map { mount ->
-                    ExternalSourceMount(root = mount, sourceFiles = collectBuildSources(mount))
+                    ExternalSourceMount(
+                        root = mount,
+                        sourceFiles = collectBuildSources(mount, codeOnly = false),
+                        codeSourceFiles = collectBuildSources(mount, codeOnly = true).toSet(),
+                    )
                 },
         )
     }
 
-    private fun collectBuildSources(buildRoot: Path): List<String> {
+    private fun collectBuildSources(buildRoot: Path, codeOnly: Boolean): List<String> {
         val settings =
             listOf("settings.gradle.kts", "settings.gradle").map(buildRoot::resolve).firstOrNull {
                 it.exists()
             }
-        val modules =
-            listOf(":") + settings?.let { SettingsParser.parseIncludes(it.readText()) }.orEmpty()
+        val content = settings?.readText().orEmpty()
+        val modules = listOf(":") + SettingsParser.parseIncludes(content)
+        val projectDirectories = SettingsParser.parseProjectDirectories(content)
         return modules
             .flatMap { module ->
-                ModuleSourceRoots.collectKotlinSources(
-                    ModuleSourceRoots.moduleDirectory(buildRoot, module),
-                    buildRoot,
-                )
+                val moduleDirectory =
+                    ModuleSourceRoots.moduleDirectory(buildRoot, module, projectDirectories)
+                if (codeOnly) {
+                    ModuleSourceRoots.collectCodeSources(moduleDirectory, buildRoot)
+                } else {
+                    ModuleSourceRoots.collectKotlinSources(moduleDirectory, buildRoot)
+                }
             }
             .distinct()
             .sorted()

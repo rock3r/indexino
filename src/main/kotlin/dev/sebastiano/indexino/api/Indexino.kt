@@ -6,6 +6,7 @@ import dev.sebastiano.indexino.cli.CliExitCodes
 import dev.sebastiano.indexino.cli.IndexBuildExecution
 import dev.sebastiano.indexino.cli.IndexBuildRunner
 import dev.sebastiano.indexino.core.BASIC_FACT_SCHEMA_VERSION
+import dev.sebastiano.indexino.core.cache.CacheActivityLock
 import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
 import dev.sebastiano.indexino.core.cache.GitWorktreeLayout
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifest
@@ -43,6 +44,7 @@ import dev.sebastiano.indexino.producer.IndexBuildProgressReporter
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.topology.BuildSystem as InternalBuildSystem
 import dev.sebastiano.indexino.topology.TopologyRequest
+import dev.sebastiano.indexino.topology.bazel.BazelClientCleanupException
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -62,9 +64,13 @@ private constructor(
     private val closed = AtomicBoolean()
     private val clientId = UUID.randomUUID().toString()
     private val storeRoot = InProcessCacheLayout.writerRoot(workspace)
+    private val cacheActivity =
+        if (runtimeConnection == null) CacheActivityLock.acquire(InProcessCacheLayout.cacheRoot())
+        else null
     private val generationLock = Any()
     private val generationStores = mutableMapOf<WorkspaceGenerationId, Path>()
     private val snapshotPins = mutableMapOf<WorkspaceGenerationId, Int>()
+    private val baseGenerationRefs = mutableSetOf<Path>()
     private var published: PublishedGeneration? = null
     private val remoteSnapshots = mutableMapOf<String, IndexSnapshot>()
 
@@ -147,7 +153,18 @@ private constructor(
                             cause = thrown,
                         )
                     }
-                RuntimeAttachMode.IN_PROCESS -> Indexino(canonical)
+                RuntimeAttachMode.IN_PROCESS ->
+                    try {
+                        Indexino(canonical)
+                    } catch (thrown: IOException) {
+                        throw indexinoFailure(
+                            category = IndexFailureCategory.IO,
+                            code = "cache_open_failed",
+                            message = "Unable to acquire the cache activity lease",
+                            retryable = true,
+                            cause = thrown,
+                        )
+                    }
             }
         }
 
@@ -198,35 +215,22 @@ private constructor(
             IndexingCoordinator.start(workspace, request) { created ->
                 try {
                     val result =
-                        runRefresh(
-                            request,
-                            created.id,
-                            applications,
-                            created,
-                            progress,
-                            machineProgress,
-                        )
-                    if (!created.isStopped()) {
+                        CacheActivityLock.acquire(InProcessCacheLayout.cacheRoot()).use {
+                            runRefresh(
+                                request,
+                                created.id,
+                                applications,
+                                created,
+                                progress,
+                                machineProgress,
+                            )
+                        }
+                    created.publishIfActive {
                         created.result.complete(result)
                         created.terminalEvent.complete(RefreshCompleted(created.id, result))
                     }
-                } catch (cancelled: CancellationException) {
-                    if (!created.isStopped()) {
-                        val failure = mapRefreshFailure(cancelled)
-                        created.result.completeExceptionally(failure)
-                        created.terminalEvent.complete(
-                            RefreshHandle.failed(created.id, failure.failure)
-                        )
-                    }
-                } catch (thrown: IndexinoException) {
-                    created.result.completeExceptionally(thrown)
-                    created.terminalEvent.complete(RefreshHandle.failed(created.id, thrown.failure))
                 } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
-                    val failure = mapRefreshFailure(thrown)
-                    created.result.completeExceptionally(failure)
-                    created.terminalEvent.complete(
-                        RefreshHandle.failed(created.id, failure.failure)
-                    )
+                    completeRefreshFailure(created, thrown)
                 }
             }
         return RefreshHandle.inFlight(
@@ -235,6 +239,28 @@ private constructor(
             operation.terminalEvent,
             operation::stop,
         )
+    }
+
+    private fun completeRefreshFailure(operation: InFlightRefresh, thrown: Throwable) {
+        val failure = mapRefreshFailure(thrown)
+        if (
+            generateSequence(thrown) { it.cause }
+                .filterIsInstance<BazelClientCleanupException>()
+                .any()
+        ) {
+            operation.failAfterCleanup(failure)
+            return
+        }
+        try {
+            operation.publishIfActive {
+                operation.result.completeExceptionally(failure)
+                operation.terminalEvent.complete(
+                    RefreshHandle.failed(operation.id, failure.failure)
+                )
+            }
+        } catch (_: CancellationException) {
+            // Stop won the completion boundary. Worker-finally reports it after cleanup returns.
+        }
     }
 
     internal fun refreshProgress(
@@ -303,18 +329,19 @@ private constructor(
                 )
                 val revision = manifest.toWorkspaceRevision()
                 val generation = manifest.toGenerationId(revision)
-                operation.checkActive()
-                publishGenerationOrAbortIfClosed(
-                    manifest.commit,
-                    generation,
-                    revision,
-                    request.scope,
-                    applications,
-                    manifest,
-                    execution.forkBase,
-                    execution.overlayDeltaPath,
-                    execution.tombstonePrefixes,
-                )
+                operation.commitIfActive {
+                    publishGenerationOrAbortIfClosed(
+                        manifest.commit,
+                        generation,
+                        revision,
+                        request.scope,
+                        applications,
+                        manifest,
+                        execution.forkBase,
+                        execution.overlayDeltaPath,
+                        execution.tombstonePrefixes,
+                    )
+                }
                 onRefreshSucceededForRuntime?.invoke(
                     request,
                     execution.sources,
@@ -588,6 +615,7 @@ private constructor(
         synchronized(generationLock) {
             published = null
             reclaimUnpinnedGenerations()
+            if (snapshotPins.isEmpty()) cacheActivity?.close()
         }
     }
 
@@ -870,7 +898,10 @@ private constructor(
             WorkspaceGenerationManifestStore(cacheRoot, InProcessCacheLayout.workspaceId(workspace))
                 .readGeneration(generation.value)
                 ?: error("Missing generation manifest ${generation.value}")
-        return WorktreeOverlayStoreOpener.openForQuery(cacheRoot, workspace, clientId, manifest)
+        return WorktreeOverlayStoreOpener.openForQuery(cacheRoot, workspace, clientId, manifest) {
+            path ->
+            synchronized(generationLock) { baseGenerationRefs.add(path) }
+        }
     }
 
     @OptIn(IndexinoInternalApi::class)
@@ -971,10 +1002,14 @@ private constructor(
                 snapshotPins.remove(generation)
             }
             reclaimUnpinnedGenerations()
+            if (closed.get() && snapshotPins.isEmpty()) cacheActivity?.close()
         }
     }
 
     private fun reclaimUnpinnedGenerations() {
+        if (snapshotPins.isEmpty()) {
+            baseGenerationRefs.removeAll { it.toFile().deleteRecursively() }
+        }
         val current = published?.generation
         val reclaimable = generationStores.filterKeys { generation ->
             generation != current && snapshotPins.getOrDefault(generation, 0) == 0

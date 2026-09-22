@@ -124,6 +124,8 @@ internal class AutoRefreshController(
 
     internal fun onPathChangedForTests(path: Path) = onMacPathChanged(path)
 
+    internal fun onWatcherOverflowForTests() = onWatcherOverflow()
+
     fun onRefreshStarted(request: RefreshRequest, handle: RefreshHandle) {
         active[request] = handle.id.value
         val epochAtStart = dirtyEpoch[request]?.get() ?: 0L

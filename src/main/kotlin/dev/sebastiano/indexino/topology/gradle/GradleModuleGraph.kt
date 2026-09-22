@@ -7,6 +7,7 @@ import kotlin.io.path.readText
 internal class GradleModuleGraph(
     private val workspace: Path,
     private val includedModules: List<String>,
+    private val projectDirectories: Map<String, String> = emptyMap(),
 ) {
     private val dependencyMap: Map<String, List<String>> by lazy { buildDependencyMap() }
 
@@ -34,7 +35,7 @@ internal class GradleModuleGraph(
     private fun buildDependencyMap(): Map<String, List<String>> {
         val map = mutableMapOf<String, List<String>>()
         for (module in includedModules) {
-            val moduleDir = ModuleSourceRoots.moduleDirectory(workspace, module)
+            val moduleDir = ModuleSourceRoots.moduleDirectory(workspace, module, projectDirectories)
             val buildFile =
                 listOf("build.gradle.kts", "build.gradle")
                     .map { moduleDir.resolve(it) }
@@ -42,7 +43,7 @@ internal class GradleModuleGraph(
             val deps =
                 buildFile
                     ?.readText()
-                    ?.let { BuildGradleParser.parseProjectDependencies(it) }
+                    ?.let { BuildGradleParser.parseProjectDependencies(it, includedModules) }
                     .orEmpty()
             map[module] = deps
         }
