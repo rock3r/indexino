@@ -142,7 +142,8 @@ def execute(args, report):
             startup = bazel_setup(commands, workspace, root, corpus) if args.corpus == "intellij" else None
             report["corpusBootstrapWallNanos"] = time.monotonic_ns() - acquisition
             for include_deps in corpus["includeDependencies"]:
-                scope_report = {"includeDependencies": include_deps, "repeats": []}
+                scope_report = {"includeDependencies": include_deps, "repeats": [], "status": "incomplete"}
+                report["scopes"].append(scope_report)
                 enumeration = time.monotonic_ns()
                 if startup:
                     # label_kind independently distinguishes generated outputs.
@@ -158,27 +159,43 @@ def execute(args, report):
                 contract = root / "contract.json"
                 contract.write_text(json.dumps({"sources": expected, "symbols": corpus["symbols"]}))
                 for repeat in range(4):
-                    output = root / "driver-report.json"
+                    output = root / f"driver-{include_deps}-{repeat}.json"
                     instrumented = repeat == 3
-                    commands.run(["java", "-Xmx12g"] + java_isolation + ["--enable-native-access=ALL-UNNAMED", "-cp", classpath,
-                                  "dev.sebastiano.indexino.acceptance.PublicAcceptanceDriver", str(workspace),
-                                  str(root / f"index-{include_deps}-{repeat}"), corpus["buildSystem"],
-                                  corpus["target"], str(include_deps).lower(), str(contract), str(output)] +
-                                 (["instrumented"] if instrumented else []),
-                                 root, timeout=7200)
-                    result = json.loads(output.read_text())
-                    compare_inventory(expected, result["sources"])
-                    result["warmRefreshApiNanos"] = samples(result["warmRefreshApiNanos"])
-                    result["queryApiNanos"] = {k: samples(v) for k, v in result["queryApiNanos"].items()}
+                    result = {"repeat": repeat, "status": "incomplete", "exitCode": None}
                     if instrumented:
-                        result["phaseMetrics"] = phase_metrics(result["diagnostics"]["phaseEvents"])
-                        if result["generation"] != scope_report["repeats"][0]["generation"]:
-                            raise AssertionError("instrumented/public generation mismatch")
                         scope_report["instrumentedDiagnostic"] = result
                     else:
                         scope_report["repeats"].append(result)
+                    try:
+                        try:
+                            commands.run(["java", "-Xmx12g"] + java_isolation + ["--enable-native-access=ALL-UNNAMED", "-cp", classpath,
+                                          "dev.sebastiano.indexino.acceptance.PublicAcceptanceDriver", str(workspace),
+                                          str(root / f"index-{include_deps}-{repeat}"), corpus["buildSystem"],
+                                          corpus["target"], str(include_deps).lower(), str(contract), str(output)] +
+                                         (["instrumented"] if instrumented else []), root, timeout=7200)
+                            result["exitCode"] = 0
+                        finally:
+                            if output.exists():
+                                if output.stat().st_size > 16 << 20:
+                                    result["checkpointError"] = "driver checkpoint exceeds 16 MiB"
+                                else:
+                                    result.update(json.loads(output.read_text()))
+                        compare_inventory(expected, result["sources"])
+                        result["warmRefreshApiNanos"] = samples(result["warmRefreshApiNanos"])
+                        result["queryApiNanos"] = {k: samples(v) for k, v in result["queryApiNanos"].items()}
+                        if instrumented:
+                            result["phaseMetrics"] = phase_metrics(result["diagnostics"]["phaseEvents"])
+                            if result["generation"] != scope_report["repeats"][0]["generation"]:
+                                raise AssertionError("instrumented/public generation mismatch")
+                        result["status"] = "passed"
+                    except BaseException as error:
+                        scope_report["status"] = result["status"] = "failed"
+                        result["failureType"] = type(error).__name__
+                        if isinstance(error, subprocess.CalledProcessError):
+                            result["exitCode"] = error.returncode
+                        raise
                 scope_report["coldApiNanos"] = samples([r["coldApiNanos"] for r in scope_report["repeats"]])
-                report["scopes"].append(scope_report)
+                scope_report["status"] = "passed"
     report["status"] = "passed"
 
 
@@ -211,7 +228,14 @@ def main():
             report["status"] = "preflight-only"
     except (Exception, KeyboardInterrupt) as error:
         report["status"] = "failed"
-        report["reasons"].append(f"{type(error).__name__}: {error}")
+        # Exception strings may include command arguments and host paths. Keep only category;
+        # allowlisted stderr diagnostics and structured driver checkpoints carry safe evidence.
+        if isinstance(error, RuntimeError) and str(error).startswith("not-ready:"):
+            report["status"] = "not-ready"
+            report["reasons"].append("containment: job child unavailable; operator must verify delegated "
+                                     "Linux cgroup controllers and run the detached-child cleanup test")
+        else:
+            report["reasons"].append(f"{type(error).__name__}: see command diagnostics and lane checkpoints")
     finally:
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps(report, indent=2) + "\n")

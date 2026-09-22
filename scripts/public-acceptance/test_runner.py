@@ -24,6 +24,21 @@ class FakeCommands:
 
 
 class RunnerTest(unittest.TestCase):
+    def test_failure_diagnostic_discards_paths_secrets_and_unbounded_messages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "stderr"
+            path.write_text('Exception in thread "main" java.lang.IllegalStateException: Coverage mismatch: '
+                            '/private/host/repo token=SECRET\n'
+                            'Caused by: dev.sebastiano.indexino.engine.RuntimeProtocolException: '
+                            '/private/source -> /private/store: Directory not empty\n' + 'untrusted SECRET\n' * 10000)
+            diagnostic = runner.stderr_diagnostic(path)
+        self.assertEqual(["java.lang.IllegalStateException", "dev.sebastiano.indexino.engine.RuntimeProtocolException"],
+                         diagnostic["exceptionClasses"])
+        self.assertEqual(["coverage-mismatch", "directory-not-empty"], diagnostic["signals"])
+        self.assertNotIn("SECRET", json.dumps(diagnostic))
+        self.assertNotIn("/private", json.dumps(diagnostic))
+        self.assertLess(len(json.dumps(diagnostic)), 2048)
+
     def test_clone_verifies_pin_before_analysis(self):
         pin = "1" * 40
         commands = FakeCommands("2" * 40)

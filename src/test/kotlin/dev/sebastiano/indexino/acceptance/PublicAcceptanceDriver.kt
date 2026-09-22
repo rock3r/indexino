@@ -2,6 +2,7 @@
 package dev.sebastiano.indexino.acceptance
 
 import dev.sebastiano.indexino.api.AutoRefreshMode
+import dev.sebastiano.indexino.api.BuildSystem
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.api.IndexScope
 import dev.sebastiano.indexino.api.IndexSnapshot
@@ -22,6 +23,7 @@ import kotlin.system.measureNanoTime
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -60,92 +62,120 @@ internal object PublicAcceptanceDriver {
         val refreshSamples = mutableListOf<Long>()
         val queries = linkedMapOf<String, List<Long>>()
         var generation = ""
-        var coldNanos = 0L
+        var coldNanos: Long? = null
+        var reopenNanos: Long? = null
+        var completed = false
+        var failureType: String? = null
         var observedInventory: List<String>? = null
         var sourceProvenance: JsonObject? = null
-        Indexino.connect(configuration).use { index ->
-            suspend fun refresh() =
-                if (instrumented) instrumentedRefresh(index, request, phaseEvents)
-                else index.refresh(request).await()
-            // Inventory instrumentation only; semantic/lifecycle calls below use public APIs.
-            observeInventory(index, workspace, expectedInventory) { observedInventory = it }
-            coldNanos = measureNanoTime {
-                val result = refresh()
-                check(result.outcome == RefreshOutcome.UPDATED)
-                check(result.changes.changedFileCount == expectedInventory.size)
-                check(result.changes.removedFileCount == 0)
-                check(result.scope == scope)
-                generation = result.generation.value
-            }
-            // Inventory provenance only; no semantic facts are read from storage.
-            val manifest =
-                checkNotNull(
-                    WorkspaceGenerationManifestStore(
-                            InProcessCacheLayout.cacheRoot(),
-                            InProcessCacheLayout.workspaceId(workspace),
-                        )
-                        .readGeneration(generation)
-                        ?.compatibilityManifest
-                )
-            check(manifest.topology == if (args[2] == "bazel") "bazel-query" else "gradle-parse")
-            check(manifest.includeDeps == scope.includesDependencies)
-            check(manifest.scope == scope.value)
-            sourceProvenance = buildJsonObject {
-                put("topology", manifest.topology)
-                put("includeDependencies", manifest.includeDeps)
-                put("scope", manifest.scope)
-            }
-            check(observedInventory != null) { "Disconnected source-inventory instrumentation" }
-            if (instrumented) {
-                check(phaseEvents.any(::isProducerEvent)) {
-                    "Disconnected instrumentation: cold positive control observed no producer"
-                }
-            }
-            repeat(WARM_REPEATS) {
-                val eventOffset = phaseEvents.size
-                refreshSamples += measureNanoTime {
+        try {
+            Indexino.connect(configuration).use { index ->
+                suspend fun refresh() =
+                    if (instrumented) instrumentedRefresh(index, request, phaseEvents)
+                    else index.refresh(request).await()
+                // Inventory instrumentation only; semantic/lifecycle calls below use public APIs.
+                observeInventory(index, workspace, expectedInventory) { observedInventory = it }
+                coldNanos = measureNanoTime {
                     val result = refresh()
-                    check(result.outcome == RefreshOutcome.UNCHANGED)
-                    check(result.generation.value == generation)
-                    check(result.changes.changedFileCount == 0)
+                    check(result.outcome == RefreshOutcome.UPDATED)
+                    check(result.changes.changedFileCount == expectedInventory.size)
                     check(result.changes.removedFileCount == 0)
+                    check(result.scope == scope)
+                    generation = result.generation.value
                 }
+                sourceProvenance = readSourceProvenance(workspace, generation, scope)
+                checkNotNull(observedInventory) { "Disconnected source-inventory instrumentation" }
                 if (instrumented) {
-                    check(phaseEvents.drop(eventOffset).none(::isProducerEvent)) {
-                        "Unchanged refresh invoked a core producer"
+                    check(phaseEvents.any(::isProducerEvent)) {
+                        "Disconnected instrumentation: cold positive control observed no producer"
                     }
                 }
-            }
-            index.snapshot().use { snapshot ->
-                check(snapshot.generation.value == generation)
-                queries.putAll(measureQueries(snapshot, expectedSymbols))
-            }
-        }
-        val reopenNanos = measureNanoTime {
-            Indexino.connect(configuration).use { index ->
+                repeat(WARM_REPEATS) {
+                    val eventOffset = phaseEvents.size
+                    refreshSamples += measureNanoTime {
+                        val result = refresh()
+                        check(result.outcome == RefreshOutcome.UNCHANGED)
+                        check(result.generation.value == generation)
+                        check(result.changes.changedFileCount == 0)
+                        check(result.changes.removedFileCount == 0)
+                    }
+                    if (instrumented) {
+                        check(phaseEvents.drop(eventOffset).none(::isProducerEvent)) {
+                            "Unchanged refresh invoked a core producer"
+                        }
+                    }
+                }
                 index.snapshot().use { snapshot ->
                     check(snapshot.generation.value == generation)
-                    expectedSymbols.forEach { assertSymbol(snapshot, it) }
+                    queries.putAll(measureQueries(snapshot, expectedSymbols))
                 }
             }
+            reopenNanos = verifyReopen(configuration, generation, expectedSymbols)
+            completed = true
+        } catch (error: Exception) {
+            failureType = error.javaClass.simpleName
+            throw error
+        } finally {
+            val report = buildJsonObject {
+                put("schema", 1)
+                put("status", if (completed) "passed" else "failed")
+                failureType?.let { put("failureType", it) }
+                put("lane", if (instrumented) "instrumented-diagnostic" else "public-api")
+                put("generation", generation.takeIf { it.isNotEmpty() })
+                put("coldApiNanos", coldNanos)
+                put("warmRefreshApiNanos", JsonArray(refreshSamples.map(::JsonPrimitive)))
+                put("reopenApiNanos", reopenNanos)
+                put(
+                    "queryApiNanos",
+                    JsonObject(queries.mapValues { JsonArray(it.value.map(::JsonPrimitive)) }),
+                )
+                put("inventoryObserved", observedInventory != null)
+                put("sources", JsonArray(observedInventory.orEmpty().map(::JsonPrimitive)))
+                put("sourceProvenance", sourceProvenance ?: JsonNull)
+                put("diagnostics", diagnostics(instrumented, phaseEvents))
+            }
+            Files.writeString(Path.of(args[6]), report.toString() + "\n")
         }
-        val report = buildJsonObject {
-            put("schema", 1)
-            put("status", "passed")
-            put("lane", if (instrumented) "instrumented-diagnostic" else "public-api")
-            put("generation", generation)
-            put("coldApiNanos", coldNanos)
-            put("warmRefreshApiNanos", JsonArray(refreshSamples.map(::JsonPrimitive)))
-            put("reopenApiNanos", reopenNanos)
-            put(
-                "queryApiNanos",
-                JsonObject(queries.mapValues { JsonArray(it.value.map(::JsonPrimitive)) }),
+    }
+
+    private fun readSourceProvenance(
+        workspace: Path,
+        generation: String,
+        scope: IndexScope,
+    ): JsonObject {
+        // Inventory provenance only; no semantic facts are read from storage.
+        val manifest =
+            checkNotNull(
+                WorkspaceGenerationManifestStore(
+                        InProcessCacheLayout.cacheRoot(),
+                        InProcessCacheLayout.workspaceId(workspace),
+                    )
+                    .readGeneration(generation)
+                    ?.compatibilityManifest
             )
-            put("sources", JsonArray(checkNotNull(observedInventory).map(::JsonPrimitive)))
-            put("sourceProvenance", checkNotNull(sourceProvenance))
-            put("diagnostics", diagnostics(instrumented, phaseEvents))
+        val expectedTopology =
+            if (scope.buildSystem == BuildSystem.BAZEL) "bazel-query" else "gradle-parse"
+        check(manifest.topology == expectedTopology)
+        check(manifest.includeDeps == scope.includesDependencies)
+        check(manifest.scope == scope.value)
+        return buildJsonObject {
+            put("topology", manifest.topology)
+            put("includeDependencies", manifest.includeDeps)
+            put("scope", manifest.scope)
         }
-        Files.writeString(Path.of(args[6]), report.toString() + "\n")
+    }
+
+    private suspend fun verifyReopen(
+        configuration: IndexinoConfiguration,
+        generation: String,
+        expectedSymbols: List<JsonObject>,
+    ): Long = measureNanoTime {
+        Indexino.connect(configuration).use { index ->
+            index.snapshot().use { snapshot ->
+                check(snapshot.generation.value == generation)
+                expectedSymbols.forEach { assertSymbol(snapshot, it) }
+            }
+        }
     }
 
     private suspend fun instrumentedRefresh(
@@ -216,12 +246,12 @@ internal object PublicAcceptanceDriver {
                 check(source.originRoot.toRealPath() == workspace) { "Unexpected external origin" }
                 source.path
             }
+            observed(actual.sorted())
             check(actual.size == actual.toSet().size) { "Duplicate discovered source" }
             check(actual.toSet() == expected.toSet()) {
                 "Coverage mismatch: missing=${expected.toSet() - actual.toSet()}; " +
                     "extra=${actual.toSet() - expected.toSet()}"
             }
-            observed(actual.sorted())
         }
     }
 
@@ -273,7 +303,9 @@ internal suspend fun <T> collectPages(query: suspend (QueryOptions) -> QueryPage
         check(page.items.all(seen::add)) { "Duplicate paginated record" }
         result.addAll(page.items)
         if (!page.hasMore) {
-            page.totalCount?.let { check(it == result.size) { "Omitted paginated records" } }
+            page.totalCount?.let { totalCount ->
+                check(totalCount == result.size) { "Omitted paginated records" }
+            }
             return result
         }
         check(page.items.isNotEmpty()) { "Non-advancing pagination" }

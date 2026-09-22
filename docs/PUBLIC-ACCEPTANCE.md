@@ -95,6 +95,12 @@ CPU deltas include all job-owned descendants; `memory.peak` is accounted memory 
 Unsupported per-phase RSS and disk-peak measurements are null with reasons. Performance is
 initially report-only. Correctness, exact source coverage, resource limits and cleanup gate success.
 
+Scope and repeat checkpoints are registered before execution and survive disposable-directory
+cleanup even when a command fails. Existing driver JSON is retained on nonzero exit, with unique
+per-repeat filenames so an earlier success cannot stand in for a missing checkpoint. Stderr evidence
+is limited to fixed allowlisted exception classes and diagnostic signals from the first 64 KiB;
+raw messages, command arguments, absolute host paths and possible secrets are not exported.
+
 ## Containment is a prerequisite, including detached servers
 
 macOS and Windows full corpus lanes are **not ready** in this implementation. A process group or
@@ -182,19 +188,21 @@ checksummed JVM artifact in both runs; no runner registration is needed for dire
 Never mount private host repositories or credentials into the guest. Creating, starting, configuring
 or deleting a VM requires separate authorization; the existing profile remains untouched.
 
-## Initial validation and unresolved readiness
+## Local validation and unresolved readiness
 
-The initial Mac run used the invented fixture in-process only. All 13 query cases were measured
-100 times after warmup. Nine of eleven syntactic cases matched exactly; `kotlin-alias-zero-arity`
-returned `Use.kt:14` in addition to `Use.kt:7`, while `shadowed-receiver` omitted `Use.kt:14`.
-Both independently labelled same-arity semantic cases reported precision 0.5 and recall 1.0.
-These semantic gaps are separate from the two syntactic failures; labels remain unchanged.
+The initial fixture run exposed syntactic receiver-resolution and simultaneous-snapshot failures.
+After the corresponding production repairs, the integrated Mac run matches all eleven syntactic
+cases exactly and measures all thirteen cases 100 times after warmup. The two independently
+labelled same-arity semantic cases still report precision 0.5 and recall 1.0; they remain explicit
+compiler-resolution gaps, not syntactic failures. No fixture labels were weakened.
 
-Lifecycle execution then failed while opening a second same-generation snapshot with the first
-still pinned (Xodus environment lock timeout). The driver preserves a query checkpoint marked
-`incomplete` and exits nonzero. It does not serialize or discard the required pins to hide this
-failure. Production retrieval and lifecycle repairs are separate workstreams. Watcher and public
-corpus lanes have not passed, and no corpus performance result is claimed.
+Both manual lanes pass all 25 mutation stages, including pinned snapshots. The caller lane also
+passes 100 exact reference and 100 caller measurements. The Mac watcher lanes expose a separate
+snapshot-materialization move failure (`Directory not empty`); their nonzero exit/checkpoints
+remain failures. The caller watcher completed edit/add/rename before failing during deletion.
+Do not serialize pins, retry away the failure, or infer success from the independently passing
+Linux watcher runs. These contended local timings are correctness evidence, not performance
+baselines. Public corpus lanes have not run, and no corpus performance result is claimed.
 
 The real detached-child containment test remains unverified. A Linux runner with a writable
 cgroup directory but no delegated child controllers failed before spawning; partial initialization

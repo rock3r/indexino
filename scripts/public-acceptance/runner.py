@@ -44,6 +44,25 @@ def containment_supported(system):
     return system == "Linux"
 
 
+def stderr_diagnostic(path):
+    # Preserve only fixed vocabulary, never exception messages, arguments, paths or tokens.
+    with path.open("rb") as stream:
+        prefix = stream.read(65536).decode("utf-8", errors="replace")
+    classes = ("java.lang.IllegalStateException", "java.lang.IllegalArgumentException",
+               "java.lang.OutOfMemoryError", "java.lang.AssertionError", "java.io.IOException",
+               "java.nio.file.NoSuchFileException", "kotlinx.coroutines.TimeoutCancellationException",
+               "dev.sebastiano.indexino.api.IndexinoException",
+               "dev.sebastiano.indexino.engine.RuntimeProtocolException")
+    signals = {"Coverage mismatch": "coverage-mismatch", "scope_include_deps_mismatch": "scope-mismatch",
+               "Unchanged refresh invoked": "unexpected-producer-work", "OutOfMemoryError": "out-of-memory",
+               "environment is locked": "store-lock", "TimeoutCancellationException": "api-timeout",
+               "Directory not empty": "directory-not-empty"}
+    return {"exceptionClasses": [name for name in classes if name in prefix],
+            "signals": [code for text, code in signals.items() if text in prefix],
+            "prefixTruncated": path.stat().st_size > 65536,
+            "policy": "fixed allowlist from first 64 KiB; raw messages discarded"}
+
+
 class Commands:
     """One cgroup per job. setsid/double-fork cannot escape cgroup membership.
 
@@ -113,7 +132,8 @@ class Commands:
                                      "jobCpuMicros": self._cpu_micros() - cpu_before,
                                      "jobMemoryPeakBytes": int((self.group / "memory.peak").read_text()),
                                      "rssBytes": None, "rssReason": "cgroup memory.peak includes cache, not RSS",
-                                     "exitCode": process.returncode})
+                                     "exitCode": process.returncode,
+                                     "stderrDiagnostic": stderr_diagnostic(stderr_path)})
         if stdout_path.stat().st_size > 64 << 20 or stderr_path.stat().st_size > 64 << 20:
             raise RuntimeError("command output exceeds 64 MiB limit")
         if process.returncode:
