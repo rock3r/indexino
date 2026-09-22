@@ -156,6 +156,7 @@ def execute(args, report):
                     expected = gradle_inventory(workspace, roots)
                 scope_report["enumerationWallNanos"] = time.monotonic_ns() - enumeration
                 scope_report["inventorySha256"] = compare_inventory(expected, expected)
+                scope_report["sourceCount"] = len(expected)
                 contract = root / "contract.json"
                 contract.write_text(json.dumps({"sources": expected, "symbols": corpus["symbols"]}))
                 for repeat in range(4):
@@ -180,13 +181,16 @@ def execute(args, report):
                                     result["checkpointError"] = "driver checkpoint exceeds 16 MiB"
                                 else:
                                     result.update(json.loads(output.read_text()))
-                        compare_inventory(expected, result["sources"])
+                        result["inventorySha256"] = compare_inventory(expected, result["sources"])
                         result["warmRefreshApiNanos"] = samples(result["warmRefreshApiNanos"])
                         result["queryApiNanos"] = {k: samples(v) for k, v in result["queryApiNanos"].items()}
                         if instrumented:
                             result["phaseMetrics"] = phase_metrics(result["diagnostics"]["phaseEvents"])
                             if result["generation"] != scope_report["repeats"][0]["generation"]:
                                 raise AssertionError("instrumented/public generation mismatch")
+                        # Exact set comparison has passed. Avoid four copies of a large corpus
+                        # inventory in the bounded artifact; failed checkpoints retain their rows.
+                        result["sourceCount"] = len(result.pop("sources"))
                         result["status"] = "passed"
                     except BaseException as error:
                         scope_report["status"] = result["status"] = "failed"

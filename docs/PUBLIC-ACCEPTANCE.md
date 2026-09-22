@@ -72,6 +72,8 @@ than becoming zero-duration samples. Topology-only and total capture/hash fields
 Unavailable metrics remain null or explicitly labelled unavailable, never zero. Instrumented
 timings are not mixed with public API latency. Query timings include typed pagination and assertion
 overhead, but exclude CLI/JVM launch; command wall timings include launch and the complete driver.
+Refresh timings include the test-only inventory callback's validation overhead; they are not
+instrumentation-free production latency measurements. Compare the same harness build and scope.
 
 The invented `retrieval-v1` ground truth is owned by `docs/RETRIEVAL-FIXTURES.md`. It separates
 syntactic correctness gates from semantic precision/recall gaps and marks held-out labels.
@@ -100,6 +102,9 @@ cleanup even when a command fails. Existing driver JSON is retained on nonzero e
 per-repeat filenames so an earlier success cannot stand in for a missing checkpoint. Stderr evidence
 is limited to fixed allowlisted exception classes and diagnostic signals from the first 64 KiB;
 raw messages, command arguments, absolute host paths and possible secrets are not exported.
+After exact set comparison succeeds, each repeat retains the inventory count and SHA-256 rather
+than duplicating the entire large source list. Failed checkpoints retain available source rows.
+This compaction does not replace set equality with a count or digest-only correctness check.
 
 ## Containment is a prerequisite, including detached servers
 
@@ -197,11 +202,12 @@ labelled same-arity semantic cases still report precision 0.5 and recall 1.0; th
 compiler-resolution gaps, not syntactic failures. No fixture labels were weakened.
 
 Both manual lanes pass all 25 mutation stages, including pinned snapshots. The caller lane also
-passes 100 exact reference and 100 caller measurements. The Mac watcher lanes expose a separate
-snapshot-materialization move failure (`Directory not empty`); their nonzero exit/checkpoints
-remain failures. The caller watcher completed edit/add/rename before failing during deletion.
-Do not serialize pins, retry away the failure, or infer success from the independently passing
-Linux watcher runs. These contended local timings are correctness evidence, not performance
+passes 100 exact reference and 100 caller measurements. The initial Mac watcher lanes exposed a
+snapshot-materialization move failure (`Directory not empty`); those red roots and checkpoints
+remain preserved. After the separately regression-tested atomic-rename repair, both rebuilt Mac
+watcher lanes pass all 25 stages in new disposable roots, with unchanged assertions and labels.
+The retrieval watcher has no syntactic failures; the caller watcher passes 100 exact reference and
+100 caller measurements. These contended local timings are correctness evidence, not performance
 baselines. Public corpus lanes have not run, and no corpus performance result is claimed.
 
 The real detached-child containment test remains unverified. A Linux runner with a writable
