@@ -222,3 +222,41 @@ Age/quota/grace-period and daemon-purge cache policies are **not implemented** a
 probes in this harness. The separately developed collector protects live activity conservatively
 and follows current/overlay reachability; those safety checks do not establish retention-policy
 coverage. Public corpus readiness remains blocked until real infrastructure and containment pass.
+
+### Opt-in sibling-worktree lifecycle soak
+
+`LifecycleSoakAcceptanceDriver` uses only a freshly invented repository, two detached sibling Git
+worktrees, and a private cache under a new disposable root. It disables Git signing per invocation,
+ignores global/system Git configuration for fixture creation, and uses empty hooks/templates.
+It neither reads a corpus nor modifies the caller's Git configuration. The existing test-output
+archive includes the driver without additional build or workflow wiring.
+
+With an extracted checksummed driver and an existing report parent directory, run:
+
+    java -Xmx2g --enable-native-access=ALL-UNNAMED \
+      -cp "$DRIVER/test:$DRIVER/main:$DRIVER/lib/*" \
+      dev.sebastiano.indexino.acceptance.LifecycleSoakAcceptanceDriver \
+      "$SCRATCH/new-soak-root" 50 "$REPORT"
+
+The root must not exist and the report must be outside it. The cycle count is bounded to 2–200;
+the focused smoke uses two cycles, while an acceptance soak uses at least 50. Each cycle edits and
+refreshes **both** worktrees through fresh in-process clients: 50 cycles means 100 mutations.
+Public symbol queries use page size one and assert the exact symbol, relative file and line.
+Short-lived pins must still return their previous generation after refresh; two seed pins survive
+their original clients and remain readable across the entire run. Existing maintenance GC must
+leave packs unchanged while those pins are active. After every client/pin closes, materialized
+reference files must be absent, GC must reclaim obsolete packs, and reopened public snapshots must
+still return both current symbols. The owned repository, worktrees and cache are then deleted.
+
+Each completed cycle records reference-file/materialization counts, logical cache bytes, JMX live
+platform threads, JVM heap/non-heap usage, open FDs where supported, and observed descendant process
+counts. Baseline, post-close and post-GC snapshots support resource-trend comparison. These are
+boundary samples, not peaks or leak thresholds. RSS and allocated disk bytes remain null with
+explicit reasons; logical file sizes are not allocated blocks. Descendant observations **do not
+prove containment**, and this in-process soak does not exercise daemon teardown. Age, quota, grace
+and daemon-purge policy statuses remain explicitly `not-implemented`.
+
+The driver has a ten-minute cooperative coroutine deadline and thirty-second Git command bounds.
+Failures remain nonzero, retain completed-cycle JSON with only the exception class, restore the
+cache property, and attempt cleanup of only the newly created root. No resource trend substitutes
+for the separate isolated-runner/containment gates, and no corpus readiness is implied.
