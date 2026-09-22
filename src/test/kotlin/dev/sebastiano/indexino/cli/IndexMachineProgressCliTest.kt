@@ -3,6 +3,7 @@ package dev.sebastiano.indexino.cli
 import dev.sebastiano.indexino.producer.normalizeWorkspaceRelativePath
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
@@ -232,12 +233,31 @@ class IndexMachineProgressCliTest {
                 .start()
         var stdout = ""
         var stderr = ""
-        val stdoutReader = thread { stdout = process.inputStream.bufferedReader().readText() }
-        val stderrReader = thread { stderr = process.errorStream.bufferedReader().readText() }
-        val exitCode = process.waitFor()
-        stdoutReader.join()
-        stderrReader.join()
-        return CliResult(exitCode, stdout, stderr)
+        val stdoutReader =
+            thread(isDaemon = true) { stdout = process.inputStream.bufferedReader().readText() }
+        val stderrReader =
+            thread(isDaemon = true) { stderr = process.errorStream.bufferedReader().readText() }
+        try {
+            assertTrue(process.waitFor(60, TimeUnit.SECONDS), "CLI did not exit within 60 seconds")
+            stdoutReader.join(5_000)
+            stderrReader.join(5_000)
+            assertFalse(stdoutReader.isAlive, "CLI stdout reader did not finish")
+            assertFalse(stderrReader.isAlive, "CLI stderr reader did not finish")
+            return CliResult(process.exitValue(), stdout, stderr)
+        } finally {
+            if (process.isAlive) {
+                process.descendants().use { descendants ->
+                    descendants.forEach { it.destroyForcibly() }
+                }
+                process.destroyForcibly()
+                assertTrue(
+                    process.waitFor(5, TimeUnit.SECONDS),
+                    "Timed-out CLI could not be terminated",
+                )
+            }
+            stdoutReader.join(5_000)
+            stderrReader.join(5_000)
+        }
     }
 
     private fun runGit(workspace: Path, vararg args: String) {
