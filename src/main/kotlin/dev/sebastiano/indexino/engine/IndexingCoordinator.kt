@@ -1,6 +1,8 @@
 package dev.sebastiano.indexino.engine
 
+import dev.sebastiano.indexino.api.IndexinoException
 import dev.sebastiano.indexino.api.RefreshEvent
+import dev.sebastiano.indexino.api.RefreshFailed
 import dev.sebastiano.indexino.api.RefreshRequest
 import dev.sebastiano.indexino.api.RefreshResult
 import dev.sebastiano.indexino.api.RefreshStopped
@@ -12,28 +14,52 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 
 internal class InFlightRefresh(
     internal val id: RefreshId,
-    private val onStop: (InFlightRefresh) -> Unit,
+    private val onFinished: (InFlightRefresh) -> Unit,
 ) {
     internal val result: CompletableFuture<RefreshResult> = CompletableFuture()
     internal val terminalEvent: CompletableFuture<RefreshEvent> = CompletableFuture()
     private val stopped = AtomicBoolean()
-    private val worker = AtomicReference<Thread?>()
+    private val stateLock = Any()
+    private var worker: Thread? = null
+    private var finished = false
+    private var cleanupFailure: IndexinoException? = null
 
     internal fun bindWorker(thread: Thread) {
-        worker.set(thread)
+        synchronized(stateLock) {
+            worker = thread
+            if (stopped.get()) thread.interrupt()
+        }
+    }
+
+    internal fun stop() {
+        synchronized(stateLock) {
+            if (finished || result.isDone || terminalEvent.isDone) return
+            if (stopped.compareAndSet(false, true)) worker?.interrupt()
+        }
+    }
+
+    internal fun failAfterCleanup(failure: IndexinoException) {
+        synchronized(stateLock) { cleanupFailure = failure }
     }
 
     @OptIn(IndexinoInternalApi::class)
-    internal fun stop() {
-        if (stopped.compareAndSet(false, true)) {
-            terminalEvent.complete(RefreshStopped(id, resumable = true))
+    internal fun workerFinished() {
+        val failure =
+            synchronized(stateLock) {
+                worker = null
+                finished = true
+                cleanupFailure
+            }
+        onFinished(this)
+        if (failure != null) {
+            result.completeExceptionally(failure)
+            terminalEvent.complete(RefreshFailed(id, failure.failure))
+        } else if (stopped.get()) {
             result.cancel(false)
-            onStop(this)
-            worker.get()?.interrupt()
+            terminalEvent.complete(RefreshStopped(id, resumable = true))
         }
     }
 
@@ -42,6 +68,12 @@ internal class InFlightRefresh(
             throw CancellationException("Refresh was stopped")
         }
     }
+
+    internal fun <T> publishIfActive(action: () -> T): T =
+        synchronized(stateLock) {
+            checkActive()
+            action()
+        }
 
     internal fun isStopped(): Boolean = stopped.get()
 }
@@ -71,9 +103,9 @@ internal object IndexingCoordinator {
             refreshExecutor.execute {
                 operation.bindWorker(Thread.currentThread())
                 try {
-                    task(operation)
+                    if (!operation.isStopped()) task(operation)
                 } finally {
-                    activeRefreshes.remove(key, operation)
+                    operation.workerFinished()
                 }
             }
             operation

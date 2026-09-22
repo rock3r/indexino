@@ -98,6 +98,41 @@ the same target-only source/resource query. When that query itself fails, Indexi
 BUILD parsing. Progress and BUILD-parse warnings go to stderr. Manifest `includeDeps` is `false`
 for either target-only fallback and for `build-parse` degraded mode.
 
+## Explicit refresh stop and process ownership
+
+The availability probe runs `bazel version` in the requested workspace with a ten-second wait
+deadline. A missing executable, nonzero exit, or expired probe permits degraded discovery.
+Interruption does not: it propagates and prevents another query or BUILD-parse fallback.
+Queries have no new wall-clock limit; explicit refresh stop interrupts their wait.
+
+Query and probe output is captured in a temporary file rather than drained synchronously from a
+pipe. On interruption or timeout, Indexino terminates only the directly launched client, waits up
+to two seconds, then forcibly terminates it and waits up to two more seconds. Interrupt status is
+preserved. Failure to confirm exit throws the internal `BazelClientCleanupException`, retaining
+the original command failure as its cause when present. It is neither unavailability nor ordinary
+cancellation. Capture files are removed after cleanup, or scheduled for deletion at JVM exit if a
+remaining open handle prevents immediate removal; deletion must not mask the cleanup failure.
+
+The refresh coordinator retains the active refresh while its worker unwinds. Equal requests join
+that same stopping refresh; `RefreshStopped` and result cancellation occur only after the worker's
+cleanup returns. Cancelling an `await()` observer or event collector does not request stop.
+The internal `publishIfActive` boundary serializes explicit stop with publication: a stop that wins
+the boundary prevents publication; publication already inside it may finish before stop returns.
+Facade publication and completion must use that boundary, not a separate check followed by a write.
+For a client cleanup failure, the facade instead maps the typed cause and calls
+`failAfterCleanup(IndexinoException)`. The coordinator stages this failure under its state lock and
+prefers it over stopped when completing both result and terminal event after the worker unwinds.
+An unsuccessful termination attempt is never evidence of process quiescence.
+
+**This is direct-client cleanup, not complete process-tree cancellation.** Normal Bazel servers are
+shared and intentionally remain running. Indexino does not traverse descendants, kill a global
+Bazel server, or silently switch to `--batch`. In particular, Windows Bazelisk launches a separate
+Bazel client which can survive termination of its wrapper. Wrapper-specific containment and the
+public acceptance supervisor's independent process-containment gate remain required; these unit
+tests do not establish either. The synthetic JVM fixtures launch no Bazel server and verify direct
+client exit before the stopped terminal, preservation of an unrelated process, deadline cleanup,
+interruption propagation, and stop/publication ordering.
+
 ## Test fixtures
 
 CI tests under `src/test/resources/fixtures/bazel/` provide:

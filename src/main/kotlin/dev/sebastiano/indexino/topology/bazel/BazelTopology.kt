@@ -1,7 +1,9 @@
 package dev.sebastiano.indexino.topology.bazel
 
 import dev.sebastiano.indexino.topology.TopologyResult
+import java.io.IOException
 import java.nio.file.Path
+import java.util.concurrent.TimeoutException
 import kotlin.io.path.exists
 import kotlin.io.path.isDirectory
 
@@ -27,17 +29,19 @@ internal object BazelTopology {
         processRunner: BazelProcessRunner? = null,
         onStderr: (String) -> Unit = { System.err.println(it) },
     ): TopologyResult {
+        checkBazelInterrupted()
         if (executor != null) {
             val lines = executor.query(target, workspace)
+            checkBazelInterrupted()
             return TopologyResult(
                 sourceFiles = BazelQueryResultParser.parseKotlinSourcePaths(lines),
-                topology = resolveTopology(executor),
+                topology = resolveTopology(executor, workspace),
                 includeDeps = includeDeps,
                 scope = target,
             )
         }
 
-        if (processRunner != null || isBazelAvailable()) {
+        if (processRunner != null || isBazelAvailable(workspace)) {
             val runner = processRunner ?: LiveBazelProcessRunner
             val queryResult = queryWithFallback(target, workspace, includeDeps, runner, onStderr)
             return TopologyResult(
@@ -66,7 +70,7 @@ internal object BazelTopology {
     ): BazelQueryResult {
         if (includeDeps) {
             val dependencyQuery = "kind('source file', deps($target))"
-            val primary = runner.run(dependencyQuery, workspace)
+            val primary = runner.runActive(dependencyQuery, workspace)
             if (primary.exitCode == 0) return BazelQueryResult(primary.lines, includeDeps = true)
 
             onStderr("bazel query failed ($dependencyQuery); retrying with labels(srcs, $target)")
@@ -105,13 +109,14 @@ internal object BazelTopology {
         while (pending.isNotEmpty()) {
             val current = pending.removeFirst()
             if (!visited.add(current)) continue
-            val aliasResult = runner.run(aliasClassificationQuery(current), workspace)
+            val aliasResult = runner.runActive(aliasClassificationQuery(current), workspace)
             if (aliasResult.exitCode != 0) return aliasResult
             val isAlias = aliasResult.lines.any(::isBazelLabel)
-            val sourceResult = runner.run(targetSourceQuery(current, isAlias), workspace)
+            val sourceResult = runner.runActive(targetSourceQuery(current, isAlias), workspace)
             if (sourceResult.exitCode != 0) return sourceResult
             sources += sourceResult.lines
-            val filegroupResult = runner.run(targetFilegroupQuery(current, isAlias), workspace)
+            val filegroupResult =
+                runner.runActive(targetFilegroupQuery(current, isAlias), workspace)
             if (filegroupResult.exitCode != 0) return filegroupResult
             pending += filegroupResult.lines.filter(::isBazelLabel)
         }
@@ -139,18 +144,34 @@ internal object BazelTopology {
 
     private fun isBazelLabel(line: String): Boolean = line.startsWith("//") || line.startsWith("@")
 
-    private fun resolveTopology(executor: BazelQueryExecutor): String =
+    private fun resolveTopology(executor: BazelQueryExecutor, workspace: Path): String =
         when {
             executor is MockBazelQueryExecutor -> "bazel-query"
-            isBazelAvailable() -> "bazel-query"
+            isBazelAvailable(workspace) -> "bazel-query"
             else -> "build-parse"
         }
 
-    private fun isBazelAvailable(): Boolean =
-        runCatching {
-                ProcessBuilder("bazel", "version").redirectErrorStream(true).start().waitFor() == 0
-            }
-            .getOrDefault(false)
+    internal fun isBazelAvailable(
+        workspace: Path,
+        command: List<String> = listOf("bazel", "version"),
+    ): Boolean =
+        try {
+            LiveBazelProcessRunner.runCommand(command, workspace, timeoutMillis = 10_000)
+                .exitCode == 0
+        } catch (_: IOException) {
+            checkBazelInterrupted()
+            false
+        } catch (_: TimeoutException) {
+            checkBazelInterrupted()
+            false
+        }
+
+    private fun BazelProcessRunner.runActive(query: String, workspace: Path): BazelQueryOutcome {
+        checkBazelInterrupted()
+        val outcome = run(query, workspace)
+        checkBazelInterrupted()
+        return outcome
+    }
 
     private fun degradedQuery(
         target: String,
@@ -163,6 +184,7 @@ internal object BazelTopology {
         workspace: Path,
         onStderr: (String) -> Unit = { System.err.println(it) },
     ): List<String> {
+        checkBazelInterrupted()
         val packagePath = target.removePrefix("//").substringBefore(':')
         val packageDir = workspace.resolve(packagePath)
         check(packageDir.isDirectory()) {
