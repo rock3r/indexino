@@ -3,7 +3,6 @@ package dev.sebastiano.indexino.engine
 import dev.sebastiano.indexino.api.AutoRefreshMode
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import java.io.IOException
-import java.io.PrintStream
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap

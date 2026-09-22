@@ -181,9 +181,18 @@ class NativeReleaseReadinessContractTest {
         assertContains(workflow, "timeout-minutes: 300")
         assertContains(workflow, "test -n \"\$INDEXINO_RELEASE_VERSION\"")
         assertContains(build, "excludeTags(\"native-performance\")")
-        assertFalse(
-            workflow.substringBefore("workflow_call:").contains("release:"),
-            "Manual dispatch must not expose release signing",
+        assertContains(
+            workflow
+                .substringBefore("workflow_call:")
+                .substringAfter("      release:", missingDelimiterValue = "")
+                .trimIndent(),
+            """
+            description: Sign and notarize macOS release bytes
+            required: false
+            type: boolean
+            default: false
+            """
+                .trimIndent(),
         )
         assertContains(workflow, "MACOS_CERTIFICATE_P12")
         assertContains(workflow, "APPLE_APP_SPECIFIC_PASSWORD")
