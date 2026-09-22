@@ -314,7 +314,8 @@ class NativeCompatibilityTest {
             linkedMapOf(
                 "help" to run(entryPoint, caller, "--help"),
                 "invalid" to run(entryPoint, caller, "not-a-command"),
-                "fresh-index" to run(entryPoint, caller, *NativeCompatibilityFixtures.indexArguments(workspace)),
+                "fresh-index" to
+                    run(entryPoint, caller, *NativeCompatibilityFixtures.indexArguments(workspace)),
                 "status" to run(entryPoint, caller, "status", "--project", workspace.toString()),
                 "symbol-jsonl" to
                     run(
