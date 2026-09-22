@@ -14,6 +14,7 @@ import dev.sebastiano.indexino.plugin.api.FileAnalysisContextV1
 import dev.sebastiano.indexino.plugin.api.PostProcessContextV1
 import dev.sebastiano.indexino.plugin.api.PostProcessLevelV1
 import dev.sebastiano.indexino.producer.IndexBuildContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runBlocking
 
 @OptIn(dev.sebastiano.indexino.model.IndexinoInternalApi::class)
@@ -87,7 +88,10 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                                             source.path,
                                             source.originId,
                                         ),
-                                    active = { true },
+                                    active = {
+                                        coroutineContext.ensureActive()
+                                        !Thread.currentThread().isInterrupted
+                                    },
                                 )
                             )
                         }
@@ -119,7 +123,10 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                                                 originId,
                                             ),
                                         originId = SourceOriginId.of(originId),
-                                        active = { true },
+                                        active = {
+                                            coroutineContext.ensureActive()
+                                            !Thread.currentThread().isInterrupted
+                                        },
                                     )
                                 )
                             }
@@ -142,7 +149,10 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                                         pluginId,
                                         POST_PROCESSOR_FILE,
                                     ),
-                                active = { true },
+                                active = {
+                                    coroutineContext.ensureActive()
+                                    !Thread.currentThread().isInterrupted
+                                },
                             )
                         )
                     }

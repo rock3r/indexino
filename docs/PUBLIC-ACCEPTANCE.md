@@ -149,9 +149,12 @@ trees, user homes, caches, or raw process logs. Workflow dispatch is a separate 
 
 ## Smallest supported path to two real corpus results
 
-Read-only inspection on 2026-09-22 found **zero registered repository runners**. Neither the Mac
-(no cgroup containment) nor the existing non-delegated Linux service is ready. Local fixture or
-fake-command success cannot substitute for provisioning and exercising the following path:
+Inspection on 2026-09-22 found **zero registered repository runners**. The existing Linux user's
+delegated cgroup passed the real detached-child timeout test, including empty-child cleanup,
+without changing parent controllers or existing processes. That shared host still lacks the
+required available memory and single-use isolation; the Mac lacks cgroup containment. Neither is
+ready for full corpus runs. Local containment and fixture success cannot substitute for
+provisioning and exercising the following path:
 
 1. An authorized operator provisions two independent disposable Linux x64 VMs, each with 64 GiB
    RAM and at least 200 GiB scratch. Do not place both on an oversubscribed shared host. Use an

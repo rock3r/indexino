@@ -3,6 +3,8 @@ package dev.sebastiano.indexino.api
 import dev.sebastiano.indexino.cli.CacheMaintenance
 import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
+import dev.sebastiano.indexino.model.QueryOptions
+import dev.sebastiano.indexino.model.SymbolQuery
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
@@ -54,6 +56,13 @@ internal class CacheActivityIntegrationTest {
                     index.close()
                     CacheMaintenance.gc(cache)
                     assertTrue(Files.exists(oldPack), "GC removed a superseded but pinned pack")
+                    assertEquals(
+                        listOf("Marker"),
+                        pinned
+                            .findSymbols(SymbolQuery.named("Marker"), QueryOptions.page(10))
+                            .items
+                            .map { it.name },
+                    )
                 } finally {
                     pinned.close()
                 }
@@ -64,28 +73,46 @@ internal class CacheActivityIntegrationTest {
 
     @Test
     fun `gc excludes refresh work after its initiating client closes`() = runBlocking {
-        withIndex { index, _, cache ->
+        withIndex { index, workspace, cache ->
+            val request = RefreshRequest.forScope(IndexScope.gradle(":").includingDependencies())
+            index.refresh(request).await()
             val entered = CountDownLatch(1)
             val release = CountDownLatch(1)
             val orphan = ContentAddressedPackCache(cache).packPath("d".repeat(64))
             Files.createDirectories(orphan.parent)
             Files.writeString(orphan, "unpublished work")
+            Files.writeString(workspace.resolve("src/main/kotlin/Marker.kt"), "class Replacement")
             index.afterPublishGenerationStoreForTests = {
                 entered.countDown()
                 check(release.await(10, TimeUnit.SECONDS))
             }
-            val refresh =
-                index.refresh(
-                    RefreshRequest.forScope(IndexScope.gradle(":").includingDependencies())
-                )
-            try {
-                assertTrue(entered.await(10, TimeUnit.SECONDS), "Refresh did not reach publication")
-                index.close()
-                CacheMaintenance.gc(cache)
-                assertTrue(Files.exists(orphan), "GC raced an active refresh after client close")
-            } finally {
-                release.countDown()
-                refresh.await()
+            index.snapshot().use { pinned ->
+                val refresh = index.refresh(request)
+                try {
+                    assertTrue(
+                        entered.await(10, TimeUnit.SECONDS),
+                        "Refresh did not reach publication",
+                    )
+                    index.close()
+                    CacheMaintenance.gc(cache)
+                    assertTrue(
+                        Files.exists(orphan),
+                        "GC raced an active refresh after client close",
+                    )
+                    assertEquals(
+                        listOf("Marker"),
+                        pinned
+                            .findSymbols(SymbolQuery.named("Marker"), QueryOptions.page(10))
+                            .items
+                            .map { it.name },
+                    )
+                    pinned.close()
+                    CacheMaintenance.gc(cache)
+                    assertTrue(Files.exists(orphan), "Refresh must protect work without a live pin")
+                } finally {
+                    release.countDown()
+                    refresh.await()
+                }
             }
             CacheMaintenance.gc(cache)
             assertFalse(Files.exists(orphan), "Completed refresh must release GC exclusion")

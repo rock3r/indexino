@@ -114,7 +114,8 @@ the indexer version invalidates incremental writers, but reopening a published g
 only the basic-fact schema coordinate. This reset therefore rejects old published packs and forces
 unchanged sources through the writer again. A warm-cache regression seeds schema-3 wrong reference
 and call targets, checks that they cannot be reopened as current, and verifies corrected public
-queries after refresh. This is not a general requirement to bump fact schemas for bug fixes.
+queries after refresh. Local and remote snapshots report this same core schema coordinate, not a
+separate facade version. This is not a general requirement to bump fact schemas for bug fixes.
 
 ## Query path (product)
 

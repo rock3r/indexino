@@ -1162,7 +1162,7 @@ class InProcessIndexinoTest {
     ) {
         assertEquals(result.generation, snapshot.generation)
         assertEquals(result.revision, snapshot.revision)
-        assertEquals(3, snapshot.basicFactSchemaVersion.value)
+        assertEquals(4, snapshot.basicFactSchemaVersion.value)
 
         val sourceFile =
             SourceFile.of(
