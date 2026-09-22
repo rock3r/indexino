@@ -65,6 +65,12 @@ locations are not discovered. Indexino does not generate missing sources. Conseq
 smaller inventory is **incomplete**, not proof that a build has no source there. Acceptance callers
 must compare independent expected inventory and report missing/generated inputs separately.
 
+`TopologyResult.codeSourceFiles` is a non-null exact subset of the captured inventory for this
+bounded parser: files under supported `kotlin` and `java` source roots. Files under `res` and
+`composeResources` remain captured but are not code, regardless of filename extension. Included
+build mounts carry the same origin-relative classification in
+`ExternalSourceMount.codeSourceFiles`; `null` is reserved for legacy or unknown role evidence.
+
 ## Included builds already participate
 
 Literal `includeBuild("tools")`, `includeBuild('../shared')`, and Groovy command forms are supported.

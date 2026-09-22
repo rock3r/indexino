@@ -45,6 +45,14 @@ internal object ModuleSourceRoots {
         segment != "." && segment != ".." && '/' !in segment && '\\' !in segment
 
     fun collectKotlinSources(moduleDir: Path, workspace: Path): List<String> {
+        return collectSources(moduleDir, workspace, codeOnly = false)
+    }
+
+    fun collectCodeSources(moduleDir: Path, workspace: Path): List<String> {
+        return collectSources(moduleDir, workspace, codeOnly = true)
+    }
+
+    private fun collectSources(moduleDir: Path, workspace: Path, codeOnly: Boolean): List<String> {
         if (!moduleDir.exists()) {
             return emptyList()
         }
@@ -54,14 +62,14 @@ internal object ModuleSourceRoots {
         }
         return sourceRoot
             .walk()
-            .filter { it.isRegularFile() && isIndexable(it, sourceRoot) }
+            .filter { it.isRegularFile() && isIndexable(it, sourceRoot, codeOnly) }
             .map { it.relativeTo(workspace).toString().replace('\\', '/') }
             .distinct()
             .sorted()
             .toList()
     }
 
-    private fun isIndexable(path: Path, sourceRoot: Path): Boolean {
+    private fun isIndexable(path: Path, sourceRoot: Path, codeOnly: Boolean): Boolean {
         val relative = path.relativeTo(sourceRoot).toString().replace('\\', '/')
         val segments = relative.split('/')
         if (segments.size < MIN_SOURCE_PATH_SEGMENTS) {
@@ -74,7 +82,7 @@ internal object ModuleSourceRoots {
         val sourceKind = segments[1]
         val extension = path.fileName.toString().substringAfterLast('.', "")
         return (sourceKind in CODE_SOURCE_DIRS && extension in sourceExtensions) ||
-            (sourceKind in RESOURCE_SOURCE_DIRS && extension.isNotBlank())
+            (!codeOnly && (sourceKind in RESOURCE_SOURCE_DIRS && extension.isNotBlank()))
     }
 
     private val CODE_SOURCE_DIRS = setOf("kotlin", "java")

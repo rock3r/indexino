@@ -46,7 +46,9 @@ class RepoTopologyTest {
                 TopologyRequest(buildSystem = BuildSystem.REPO, repoManifest = manifest),
             )
 
-        assertEquals(listOf("src/main/kotlin/Base.kt"), result.externalSources.single().sourceFiles)
+        val mount = result.externalSources.single()
+        assertEquals(listOf("src/main/kotlin/Base.kt"), mount.sourceFiles)
+        assertEquals(setOf("src/main/kotlin/Base.kt"), mount.codeSourceFiles)
     }
 
     @Test

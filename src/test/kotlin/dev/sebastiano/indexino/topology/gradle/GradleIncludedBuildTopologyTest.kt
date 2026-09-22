@@ -155,6 +155,7 @@ class GradleIncludedBuildTopologyTest {
                 ExternalSourceMount(
                     includedBuild.toRealPath(),
                     listOf("src/main/kotlin/Convention.kt"),
+                    setOf("src/main/kotlin/Convention.kt"),
                 )
             ),
             result.externalSources,

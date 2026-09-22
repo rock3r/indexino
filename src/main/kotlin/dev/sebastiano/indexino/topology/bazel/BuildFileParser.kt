@@ -3,7 +3,11 @@ package dev.sebastiano.indexino.topology.bazel
 import java.nio.file.Path
 import kotlin.io.path.readText
 
-internal data class BuildParseResult(val paths: List<String>, val warnings: List<String>)
+internal data class BuildParseResult(
+    val paths: List<String>,
+    val warnings: List<String>,
+    val codePaths: Set<String>,
+)
 
 internal object BuildFileParser {
     private val GLOB_CALL = Regex("""glob\s*\(""")
@@ -18,7 +22,7 @@ internal object BuildFileParser {
     private val INCLUDE_LIST = Regex("""\[\s*([\s\S]*?)]""")
     private val EXCLUDE_LIST = Regex("""exclude\s*=\s*\[([\s\S]*?)]""")
     private val SRCS_LIST_START = Regex("""srcs\s*=\s*\[""")
-    private val RESOURCE_FILES_ASSIGNMENT = Regex("""resource_files\s*=""")
+    private val NON_CODE_ASSIGNMENT = Regex("""(?:resources|resource_files|data)\s*=""")
     private val INDEXABLE_EXTENSIONS = setOf("kt", "java", "xml")
 
     fun parseKotlinSources(
@@ -34,6 +38,7 @@ internal object BuildFileParser {
                 BuildTargetSelector.select(buildFile.readText(), it, packageRelative)
             } ?: buildFile.readText()
         val paths = linkedSetOf<String>()
+        val codePaths = linkedSetOf<String>()
         val warnings = mutableListOf<String>()
 
         for (spec in extractGlobSpecs(content)) {
@@ -60,13 +65,17 @@ internal object BuildFileParser {
             }
 
             included.filter(::isIndexablePath).forEach { relative ->
-                paths += "$packagePrefix$relative"
+                val path = "$packagePrefix$relative"
+                paths += path
+                codePaths += path
             }
         }
 
         for (literal in extractLiteralSrcs(content)) {
             if (isIndexablePath(literal) && !literal.contains('*')) {
-                paths += workspaceRelativeLiteral(literal, packagePrefix)
+                val path = workspaceRelativeLiteral(literal, packagePrefix)
+                paths += path
+                codePaths += path
             }
         }
 
@@ -74,7 +83,7 @@ internal object BuildFileParser {
             paths += workspaceRelativeLiteral(relative, packagePrefix)
         }
 
-        return BuildParseResult(paths.toList(), warnings)
+        return BuildParseResult(paths.toList(), warnings, codePaths)
     }
 
     private data class GlobSpec(val includes: List<String>, val excludes: List<String>)
@@ -225,7 +234,7 @@ internal object BuildFileParser {
             .toList()
 
     private fun extractResourceFiles(content: String, packageDir: Path): List<String> = buildList {
-        RESOURCE_FILES_ASSIGNMENT.findAll(content)
+        NON_CODE_ASSIGNMENT.findAll(content)
             .filterNot { BuildFileComments.isCommentedOutInBlock(content, it.range.first) }
             .forEach { match ->
                 val valueStart = match.range.last + 1

@@ -12,6 +12,23 @@ import kotlin.test.assertNotEquals
 class SourceOriginResolverTest {
     private val temporaryDirectories = mutableListOf<Path>()
 
+    @Test
+    fun `directory labels are excluded but missing source paths remain required`() {
+        val workspace = temporaryDirectory("indexino-directory-labels-")
+        workspace.resolve("resources/nested").createDirectories()
+        workspace.resolve("resources/icon.svg").writeText("<svg/>")
+        val paths = listOf("resources/nested", "resources/icon.svg", "Missing.kt")
+        val expected = listOf("Missing.kt", "resources/icon.svg")
+
+        assertEquals(expected, SourceOriginResolver.resolve(workspace, paths).single().sourceFiles)
+        assertEquals(
+            expected,
+            SourceOriginResolver.resolveExternal(workspace, paths, "external:test")
+                .single()
+                .sourceFiles,
+        )
+    }
+
     @AfterTest
     fun tearDown() {
         temporaryDirectories.forEach { it.toFile().deleteRecursively() }

@@ -43,6 +43,12 @@ internal object RepoTopology {
                         }
                         .distinct()
                         .sorted(),
+                codeSourceFiles =
+                    moduleRoots
+                        .flatMap { moduleRoot ->
+                            ModuleSourceRoots.collectCodeSources(moduleRoot, root)
+                        }
+                        .toSet(),
                 originId =
                     if (project.name in duplicateProjectNames) {
                         "repo:${project.name}:${project.path}"
