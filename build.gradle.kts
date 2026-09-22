@@ -715,6 +715,8 @@ val ideaHomeDir =
 
 tasks.test {
     dependsOn(":indexino-compose-decoration:jar", ":indexino-selection-context:jar")
+    val cliRuntimeClasspath = sourceSets.main.get().runtimeClasspath
+    inputs.files(cliRuntimeClasspath).withPropertyName("cliRuntimeClasspath")
     useJUnitPlatform {
         val excludedTags =
             mutableListOf(
@@ -735,6 +737,7 @@ tasks.test {
         ideaHomeDir.resolve("config").mkdirs()
         ideaHomeDir.resolve("system").mkdirs()
         ideaHomeDir.resolve("plugins").mkdirs()
+        systemProperty("indexino.cliRuntimeClasspath", cliRuntimeClasspath.asPath)
     }
     systemProperty("idea.home.path", ideaHomeDir.absolutePath)
     systemProperty("idea.config.path", ideaHomeDir.resolve("config").absolutePath)

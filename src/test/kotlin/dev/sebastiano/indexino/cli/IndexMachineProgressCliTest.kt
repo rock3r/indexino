@@ -222,11 +222,17 @@ class IndexMachineProgressCliTest {
 
     private fun runCli(vararg args: String): CliResult {
         val javaExecutable = Path.of(System.getProperty("java.home"), "bin", "java").toString()
+        // Gradle TestKit's logging backend must not leak into the application subprocess.
+        val cliClasspath =
+            System.getProperty(
+                "indexino.cliRuntimeClasspath",
+                System.getProperty("java.class.path"),
+            )
         val process =
             ProcessBuilder(
                     javaExecutable,
                     "-cp",
-                    System.getProperty("java.class.path"),
+                    cliClasspath,
                     "dev.sebastiano.indexino.cli.MainCommandKt",
                     *args,
                 )
