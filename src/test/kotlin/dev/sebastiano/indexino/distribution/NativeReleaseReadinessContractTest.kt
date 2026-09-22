@@ -184,7 +184,7 @@ class NativeReleaseReadinessContractTest {
         assertContains(
             workflow
                 .substringBefore("workflow_call:")
-                .substringAfter("      release:")
+                .substringAfter("      release:", missingDelimiterValue = "")
                 .trimIndent(),
             """
             description: Sign and notarize macOS release bytes
