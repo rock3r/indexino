@@ -1,0 +1,12 @@
+{
+  "linux-x86_64": {
+    "bazeliskUrl": "https://github.com/bazelbuild/bazelisk/releases/download/v1.29.0/bazelisk-linux-amd64",
+    "bazeliskSha256": "5a408715e932c0250d28bd84555f12edbf70117de42f9181691c736eacc4a992",
+    "bazelSha256": "f56d370e050010239fb01c70cc78e33986b537dc2a5adb1aec535b8e81e07bd8"
+  },
+  "linux-aarch64": {
+    "bazeliskUrl": "https://github.com/bazelbuild/bazelisk/releases/download/v1.29.0/bazelisk-linux-arm64",
+    "bazeliskSha256": "e20e8b0f4f240091b7a55bf17b9398bd4f40ee70ae0208dff95dd4c445fb4010",
+    "bazelSha256": "f8c01f3a711fabac2ae48d7c3aab6449f0ada5710b380020a62cb774460d0df2"
+  }
+}

@@ -1050,3 +1050,31 @@ val generateBundledDependencyInventory by tasks.registering {
         )
     }
 }
+
+// Test-only acceptance runtime: built once, checksummed, and copied to isolated corpus jobs.
+// It is neither a publication nor part of the CLI/native distribution.
+val publicAcceptanceDriverArchive by
+    tasks.registering(org.gradle.api.tasks.bundling.Zip::class) {
+        group = "verification"
+        description = "Package the typed test-only public acceptance driver and its exact runtime"
+        dependsOn(tasks.testClasses)
+        from(sourceSets.test.map { it.output }) { into("test") }
+        from(sourceSets.main.map { it.output }) { into("main") }
+        from(sourceSets.test.map { it.runtimeClasspath.filter { file -> file.isFile } }) {
+            into("lib")
+        }
+        archiveFileName.set("public-acceptance-driver.zip")
+        destinationDirectory.set(layout.buildDirectory.dir("public-acceptance"))
+        isReproducibleFileOrder = true
+        isPreserveFileTimestamps = false
+        duplicatesStrategy = DuplicatesStrategy.FAIL
+    }
+
+val publicAcceptanceDriverChecksum by
+    tasks.registering(Sha256File::class) {
+        group = "verification"
+        inputFile.set(publicAcceptanceDriverArchive.flatMap { it.archiveFile })
+        outputFile.set(
+            layout.buildDirectory.file("public-acceptance/public-acceptance-driver.zip.sha256")
+        )
+    }
