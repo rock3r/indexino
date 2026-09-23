@@ -20,14 +20,13 @@ internal class FileHashProducer : IndexProducer {
 
     override fun produce(context: IndexBuildContext, store: CodeIndexStore) {
         val currentFiles = context.sources.map { it.originId to it.path }.toSet()
+        val changedFiles = context.changedSources.mapTo(hashSetOf()) { it.originId to it.path }
         store
             .prefixScan("file:")
             .filter { (_, record) ->
                 record is FileHashRecord &&
                     (record.originId to record.relativePath !in currentFiles ||
-                        context.changedSources.any {
-                            it.originId == record.originId && it.path == record.relativePath
-                        })
+                        (record.originId to record.relativePath) in changedFiles)
             }
             .map { it.first }
             .toList()
