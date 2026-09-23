@@ -32,7 +32,7 @@ class RuntimeRecoveryTest {
             firstRuntime.close()
             val restarted = WorkspaceRuntime.start(workspace, cacheRoot)
             try {
-                assertEquals(4, oldSnapshot.basicFactSchemaVersion.value)
+                assertEquals(5, oldSnapshot.basicFactSchemaVersion.value)
                 Files.writeString(
                     workspace.resolve("app/src/main/kotlin/Panel.kt"),
                     "package sample\nclass RestartedPanel\n",
@@ -43,7 +43,7 @@ class RuntimeRecoveryTest {
                     val lease = snapshots.acquire(FreshnessPolicy.PUBLISHED)
                     remoteSnapshot(snapshots, lease).use { snapshot ->
                         assertTrue(lease.generation != oldGeneration)
-                        assertEquals(4, snapshot.basicFactSchemaVersion.value)
+                        assertEquals(5, snapshot.basicFactSchemaVersion.value)
                         assertEquals(
                             listOf("RestartedPanel"),
                             queryNames(snapshot, "RestartedPanel"),

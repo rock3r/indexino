@@ -3,8 +3,10 @@
 package dev.sebastiano.indexino.api
 
 import dev.sebastiano.indexino.core.BASIC_FACT_SCHEMA_VERSION
+import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.plugin.StorePluginFactView
 import dev.sebastiano.indexino.core.record.CallSiteRecord
+import dev.sebastiano.indexino.core.record.CodeIndexRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
 import dev.sebastiano.indexino.core.record.ResourceUsageRecord
@@ -98,14 +100,7 @@ private constructor(
                         { it.signature.orEmpty() },
                         SymbolRecord::name,
                     ),
-                scan = { accept ->
-                    localStore.forEachPrefix("sym:") { _, record ->
-                        if (record is SymbolRecord && record.matches(query)) {
-                            accept(record)
-                        }
-                        true
-                    }
-                },
+                scan = { accept -> scanSymbols(query, accept) },
                 transform = { records ->
                     val ownerIds = ownerIdsFor(records)
                     records.map { record ->
@@ -279,10 +274,19 @@ private constructor(
                     ),
                 scan = { accept ->
                     if (!unresolvedEnclosingId) {
-                        localStore.forEachPrefix("call:") { _, record ->
-                            if (record is CallSiteRecord && record.matches(query, enclosing))
-                                accept(record)
-                            true
+                        val file = query.file
+                        if (file != null) {
+                            localStore.forEachCallInFile(file.originId.value, file.path) { _, record
+                                ->
+                                if (record.matches(query, enclosing)) accept(record)
+                                true
+                            }
+                        } else {
+                            localStore.forEachPrefix("call:") { _, record ->
+                                if (record is CallSiteRecord && record.matches(query, enclosing))
+                                    accept(record)
+                                true
+                            }
                         }
                     }
                 },
@@ -440,6 +444,24 @@ private constructor(
         }
     }
 
+    private fun scanSymbols(query: SymbolQuery, action: (SymbolRecord) -> Unit) {
+        val accept: (CodeIndexKey, CodeIndexRecord) -> Boolean = { _, record ->
+            if (record is SymbolRecord && record.matches(query)) action(record)
+            true
+        }
+        val name = query.name
+        when {
+            name == null -> localStore.forEachPrefix("sym:", accept)
+            query.match == NameMatchMode.FQN -> {
+                val key = CodeIndexKey.sym(name)
+                localStore.get(key)?.let { accept(key, it) }
+                localStore.forEachPrefix("${key.value}:", accept)
+            }
+            else ->
+                localStore.forEachSymbolMatching(name, query.match == NameMatchMode.PREFIX, accept)
+        }
+    }
+
     private fun SymbolRecord.matches(query: SymbolQuery): Boolean {
         val requestedFile = query.file
         val fileMatches =
@@ -508,19 +530,14 @@ private constructor(
     }
 
     private fun candidatesByName(names: Set<String>): Map<String, List<SymbolRecord>> {
-        if (names.isEmpty()) return emptyMap()
-        val candidates = names.associateWith { mutableListOf<SymbolRecord>() }
-        localStore.forEachPrefix("sym:") { _, record ->
-            if (record is SymbolRecord) {
-                for (name in names) {
-                    if (record.fqn == name || name in record.aliases) {
-                        candidates.getValue(name) += record
-                    }
-                }
+        return names.associateWith { name ->
+            val candidates = mutableListOf<Pair<CodeIndexKey, SymbolRecord>>()
+            localStore.forEachSymbolMatching(name, prefix = false) { key, record ->
+                if (record.fqn == name || name in record.aliases) candidates += key to record
+                true
             }
-            true
+            candidates.sortedBy { it.first.value }.map { it.second }
         }
-        return candidates
     }
 
     private fun callCandidatesFor(
@@ -632,21 +649,17 @@ private constructor(
 
         val candidates: MutableMap<SymbolRecord, OwnerCandidates> =
             symbolsByOwner.values.flatten().associateWith { OwnerCandidates() }.toMutableMap()
-        localStore.forEachPrefix("sym:") { _, record ->
-            if (record is SymbolRecord) {
-                val owners = buildSet {
-                    if (record.fqn in symbolsByOwner) add(record.fqn)
-                    record.aliases.filterTo(this) { it in symbolsByOwner }
-                }
-                for (owner in owners) {
-                    for (symbol in symbolsByOwner.getValue(owner)) {
+        for ((owner, children) in symbolsByOwner) {
+            localStore.forEachSymbolMatching(owner, prefix = false) { key, record ->
+                if (record.fqn == owner || owner in record.aliases) {
+                    for (symbol in children) {
                         candidates
                             .getValue(symbol)
-                            .consider(owner, symbol.originId, symbol.relativeFile, record)
+                            .consider(owner, symbol.originId, symbol.relativeFile, key, record)
                     }
                 }
+                true
             }
-            true
         }
         return symbols.associateWith { symbol ->
             symbol.ownerFqn?.let { owner ->
@@ -658,28 +671,34 @@ private constructor(
     }
 
     private class OwnerCandidates {
-        private var sameFileExact: SymbolRecord? = null
-        private var sameFileAlias: SymbolRecord? = null
-        private var exact: SymbolRecord? = null
-        private var alias: SymbolRecord? = null
+        private var sameFileExact: Pair<CodeIndexKey, SymbolRecord>? = null
+        private var sameFileAlias: Pair<CodeIndexKey, SymbolRecord>? = null
+        private var exact: Pair<CodeIndexKey, SymbolRecord>? = null
+        private var alias: Pair<CodeIndexKey, SymbolRecord>? = null
 
         fun consider(
             owner: String,
             symbolOriginId: String,
             symbolFile: String,
+            key: CodeIndexKey,
             candidate: SymbolRecord,
         ) {
             if (candidate.originId != symbolOriginId) return
+            fun earlier(
+                previous: Pair<CodeIndexKey, SymbolRecord>?
+            ): Pair<CodeIndexKey, SymbolRecord> =
+                if (previous == null || key.value < previous.first.value) key to candidate
+                else previous
             when {
                 candidate.fqn == owner && candidate.relativeFile == symbolFile ->
-                    sameFileExact = sameFileExact ?: candidate
-                candidate.relativeFile == symbolFile -> sameFileAlias = sameFileAlias ?: candidate
-                candidate.fqn == owner -> exact = exact ?: candidate
-                else -> alias = alias ?: candidate
+                    sameFileExact = earlier(sameFileExact)
+                candidate.relativeFile == symbolFile -> sameFileAlias = earlier(sameFileAlias)
+                candidate.fqn == owner -> exact = earlier(exact)
+                else -> alias = earlier(alias)
             }
         }
 
-        fun best(): SymbolRecord? = sameFileExact ?: sameFileAlias ?: exact ?: alias
+        fun best(): SymbolRecord? = (sameFileExact ?: sameFileAlias ?: exact ?: alias)?.second
     }
 
     private suspend fun <T> mapUnexpectedFailuresSuspend(block: suspend () -> T): T =

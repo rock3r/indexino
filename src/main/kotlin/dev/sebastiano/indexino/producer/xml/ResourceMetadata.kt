@@ -143,10 +143,7 @@ internal object ResourceMetadata {
         indexedSource: IndexedSource,
         metadataPath: String,
     ): String? {
-        val indexedMetadata =
-            context.sources.firstOrNull {
-                it.originId == indexedSource.originId && it.path == metadataPath
-            }
+        val indexedMetadata = context.findSource(indexedSource.originId, metadataPath)
         return indexedMetadata?.let { runCatching { context.readSource(it) }.getOrNull() }
             ?: indexedSource.originRoot.resolve(metadataPath).let { path ->
                 if (Files.isRegularFile(path)) {

@@ -107,8 +107,12 @@ internal object BazelCodeRoleQuery {
         return BazelQueryOutcome(0, sources.distinct())
     }
 
-    private fun run(query: String, workspace: Path, runner: BazelProcessRunner): BazelQueryOutcome =
-        runner.run(query, workspace)
+    private fun run(query: String, workspace: Path, runner: BazelProcessRunner): BazelQueryOutcome {
+        checkBazelInterrupted()
+        val outcome = runner.run(query, workspace)
+        checkBazelInterrupted()
+        return outcome
+    }
 
     private fun isLabel(line: String): Boolean = line.startsWith("//") || line.startsWith("@")
 }

@@ -117,11 +117,55 @@ and call targets, checks that they cannot be reopened as current, and verifies c
 queries after refresh. Local and remote snapshots report this same core schema coordinate, not a
 separate facade version. This is not a general requirement to bump fact schemas for bug fixes.
 
+Version 5 persists the code/non-code analysis role in file-hash records. Aggregate source hashes
+and origin fingerprints include that role as well as captured content hashes. A build-role change
+therefore invalidates analysis even when bytes are unchanged: code-to-resource removes stale
+language facts, and resource-to-code runs language analysis. Both roles retain captured bytes,
+file hashes and provenance. Existing published packs must rebuild because their extension-only
+language facts did not respect build roles. Production/test classification is unchanged.
+
 ## Query path (product)
 
 1. Connect to the workspace runtime (or in-process engine in early slices).
 2. Pin a published generation (`snapshot(PUBLISHED)` or after refresh / `AWAIT_CURRENT`).
 3. Query through `IndexSnapshot` / `BasicFactQueries` — never by opening raw packs from callers.
+
+Named symbol queries do not scan every symbol in newly written Xodus stores. Exact FQN queries
+seek the location-qualified primary-key prefix (and the legacy exact key). Short-name, alias and
+prefix queries use a derived `SymbolNames` duplicate store mapping each term to its primary key.
+Owner resolution uses the same index while retaining origin/file precedence and primary-key tie
+ordering. Public result sorting and pagination are unchanged; broad unnamed queries still scan.
+
+File-scoped call queries use a derived `CallFiles` duplicate store mapping a length-prefixed
+origin ID plus origin-relative file path to primary call keys. Call candidate resolution uses
+`SymbolNames` while retaining FQN/alias filtering; a matching short name alone is not a candidate.
+Call-file entries participate in replacement, deletion and rollback transactions. Writable legacy
+stores backfill once, and read-only legacy stores retain the scanning fallback. Overlay lookups
+mask tombstoned and replaced base keys even when a replacement moves to another file or origin.
+Unrestricted call queries and opaque enclosing-symbol ID resolution still scan.
+
+The name index is updated in the same transaction as primary records, including replacement,
+deletion and rollback. Xodus contextual transactions let nested store operations participate in
+the enclosing batch. Java analysis batches writes per file/pass and emits declarations only in
+the first pass, then references/calls/resource usages in the second pass. Both Java passes share
+an explicitly closed standard file manager with an empty user classpath. Syntax-only parsing does
+not need host dependencies or auto-starting javac plugins; `-proc:none` alone does not exclude them.
+Kotlin also batches fact
+writes per file; it still retains declaration metadata rather than project-wide syntax trees.
+Build contexts lazily index source identities for metadata lookup, avoiding repeated inventory
+scans while keeping origin-specific captured-source reads and unindexed-file fallback unchanged.
+
+XML origin cleanup skips scans when no resource sources are affected. Otherwise it streams each
+record family, retaining only matching deletion keys rather than decoded whole-index records, and
+deletes those keys in bounded transactions. Origin and relative path both participate in matching.
+
+This is derived lookup data, not a basic-fact schema change. A writable legacy environment builds
+the index once; failed initialization releases its environment lock. Read-only legacy snapshots
+remain readable through a scanning fallback and are not modified. Overlay queries suppress base
+records hidden by tombstones or replaced in the delta, even when the replacement no longer matches
+the queried name. Record payloads remain byte-compatible JSON with one reused serializer, rather
+than rebuilding polymorphic metadata per record. Binary payloads are a measured experiment, not
+the production format.
 
 ## Invalidation and reuse
 
@@ -173,6 +217,24 @@ readable through their legacy workspace-origin fields.
 The staging writer is populated from one immutable per-refresh source snapshot. Pack facts and the
 file-hash records inside that pack therefore always describe the same captured content, including
 when the checkout changes while analysis is running.
+
+Before mutation, the build owner streams the physical writable store into a temporary Xodus
+checkpoint beside the compatibility manifest (`manifest.json.rollback/`), while retaining the
+writer's existing Xodus lock. The checkpoint also preserves the prior manifest's bytes or absence.
+An overlay checkpoints only its writable delta, never its inherited read-only base. Producer and
+plugin failures restore that checkpoint using bounded key batches and streamed records. Capture
+and restore copy at most 16 records per transaction; rollback deletes at most 256 keys per
+transaction, rather than committing each record individually. Rollback
+and close failures are suppressed onto the original failure rather than replacing it. Successful
+builds and successful restores close the checkpoint store, make its regular files writable (Xodus
+leaves completed logs read-only), and remove it without following symbolic links. Filesystem deletion
+errors retain their affected path and cause. A failed restore retains the checkpoint, without changing
+its file permissions. Subsequent builds reject the active/unfinished checkpoint before accepting even
+a fresh compatibility index.
+This is recovery for mutable staging, not a crash-atomic transaction or an automatic crash-recovery
+service. Preserve retained checkpoints for investigation; removing only the checkpoint can expose
+partially restored staging as valid. Published generation manifests and immutable packs are not
+rewritten by this rollback.
 
 Each client materializes a referenced immutable pack atomically into its own
 `workspaces/<workspace-id>/refs/<client-id>/<generation-id>/store/` directory before opening a

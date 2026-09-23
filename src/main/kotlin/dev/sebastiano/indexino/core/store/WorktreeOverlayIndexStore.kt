@@ -1,7 +1,9 @@
 package dev.sebastiano.indexino.core.store
 
 import dev.sebastiano.indexino.core.key.CodeIndexKey
+import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.CodeIndexRecord
+import dev.sebastiano.indexino.core.record.SymbolRecord
 
 /**
  * Read-through overlay with deterministic tombstone shadowing. Delta keys override base; tombstone
@@ -45,12 +47,49 @@ internal class WorktreeOverlayIndexStore(
         }
     }
 
+    override fun forEachSymbolMatching(
+        name: String,
+        prefix: Boolean,
+        action: (CodeIndexKey, SymbolRecord) -> Boolean,
+    ) {
+        var keepGoing = true
+        delta?.forEachSymbolMatching(name, prefix) { key, record ->
+            keepGoing = action(key, record)
+            keepGoing
+        }
+        if (!keepGoing) return
+        base.forEachSymbolMatching(name, prefix) { key, record ->
+            if (!isTombstoned(key) && delta?.get(key) == null) {
+                keepGoing = action(key, record)
+            }
+            keepGoing
+        }
+    }
+
+    override fun forEachCallInFile(
+        originId: String,
+        relativeFile: String,
+        action: (CodeIndexKey, CallSiteRecord) -> Boolean,
+    ) {
+        var keepGoing = true
+        delta?.forEachCallInFile(originId, relativeFile) { key, record ->
+            keepGoing = action(key, record)
+            keepGoing
+        }
+        if (!keepGoing) return
+        base.forEachCallInFile(originId, relativeFile) { key, record ->
+            if (!isTombstoned(key) && delta?.get(key) == null) {
+                keepGoing = action(key, record)
+            }
+            keepGoing
+        }
+    }
+
     override fun <T> transaction(block: () -> T): T =
         delta?.transaction(block) ?: base.transaction(block)
 
     override fun close() {
-        delta?.close()
-        base.close()
+        base.use { delta?.close() }
     }
 
     private fun isTombstoned(key: CodeIndexKey): Boolean {

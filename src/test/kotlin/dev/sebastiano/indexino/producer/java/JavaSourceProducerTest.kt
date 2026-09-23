@@ -2,15 +2,19 @@ package dev.sebastiano.indexino.producer.java
 
 import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.CallSiteRecord
+import dev.sebastiano.indexino.core.record.CodeIndexRecord
 import dev.sebastiano.indexino.core.record.CodeIndexRecordCodec
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
 import dev.sebastiano.indexino.core.record.ResourceUsageRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
+import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.producer.IndexBuildContext
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.ProducerRegistry
+import java.io.File
+import javax.tools.ToolProvider
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.writeText
@@ -20,6 +24,117 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class JavaSourceProducerTest {
+    @Test
+    fun `parse only indexing ignores auto starting compiler plugins on the host classpath`() {
+        val host = createTempDirectory("indexino-javac-host-")
+        val originalClasspath = System.getProperty("java.class.path")
+        try {
+            val plugin = host.resolve("HostPlugin.java")
+            plugin.writeText(
+                """
+                import com.sun.source.util.JavacTask;
+                import com.sun.source.util.Plugin;
+                public class HostPlugin implements Plugin {
+                    public String getName() { return "ambient-host-plugin"; }
+                    public boolean autoStart() { return true; }
+                    public void init(JavacTask task, String... args) {
+                        throw new IllegalStateException("Host compiler plugin must not run");
+                    }
+                }
+                """
+                    .trimIndent()
+            )
+            assertEquals(
+                0,
+                ToolProvider.getSystemJavaCompiler()
+                    .run(null, null, null, "-d", host.toString(), plugin.toString()),
+            )
+            host.resolve("META-INF/services/com.sun.source.util.Plugin").also {
+                it.parent.createDirectories()
+                it.writeText("HostPlugin\n")
+            }
+            System.setProperty("java.class.path", originalClasspath + File.pathSeparator + host)
+            withStore { store ->
+                val result = runCatching {
+                    JavaSourceProducer()
+                        .produce(
+                            IndexBuildContext.forInlineSources(
+                                store,
+                                "host-isolation",
+                                mapOf(
+                                    "Example.java" to
+                                        "class Example {\n  MissingType method(MissingType x) { return x; }\n}"
+                                ),
+                            )
+                        )
+                }
+                assertTrue(
+                    result.isSuccess,
+                    "Host plugin affected syntax parsing: ${result.exceptionOrNull()}",
+                )
+                val method =
+                    store
+                        .prefixScan("sym:")
+                        .map { it.second }
+                        .filterIsInstance<SymbolRecord>()
+                        .single { it.name == "method" }
+                assertEquals(2 to 3, method.line to method.column)
+                assertEquals(1, method.arity)
+            }
+        } finally {
+            System.setProperty("java.class.path", originalClasspath)
+            host.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `writes Java facts once in file batches while preserving forward parameter names`() {
+        withStore { delegate ->
+            var depth = 0
+            var unbatched = 0
+            val writes = mutableMapOf<CodeIndexKey, Int>()
+            val store =
+                object : CodeIndexStore by delegate {
+                    override fun put(key: CodeIndexKey, record: CodeIndexRecord) {
+                        if (depth == 0) unbatched++
+                        writes[key] = (writes[key] ?: 0) + 1
+                        delegate.put(key, record)
+                    }
+
+                    override fun <T> transaction(block: () -> T): T = delegate.transaction {
+                        depth++
+                        try {
+                            block()
+                        } finally {
+                            depth--
+                        }
+                    }
+                }
+            JavaSourceProducer()
+                .produce(
+                    IndexBuildContext.forInlineSources(
+                        store,
+                        "batched",
+                        linkedMapOf(
+                            "Caller.java" to
+                                "class Caller { int run(int supplied) { return Target.take(supplied); } }",
+                            "Target.java" to
+                                "class Target { static int take(int expected) { return expected; } }",
+                        ),
+                    )
+                )
+            val call =
+                delegate
+                    .prefixScan("call:")
+                    .map { it.second }
+                    .filterIsInstance<CallSiteRecord>()
+                    .single()
+            assertEquals(listOf("Target#take"), call.candidateSymbolFqns)
+            assertEquals("expected", call.arguments.single().resolvedName)
+            assertEquals(0 to 1, unbatched to writes.values.max())
+        }
+    }
+
     @Test
     fun `preserves one based declaration columns for Java symbols`() {
         val source =

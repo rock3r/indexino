@@ -42,6 +42,7 @@ internal class FileHashProducer : IndexProducer {
                     relativePath = source.path,
                     contentHash = hash,
                     originId = source.originId,
+                    isCode = source.isCode,
                 ),
             )
         }
@@ -78,7 +79,7 @@ internal class FileHashProducer : IndexProducer {
                                 ?: contentHash(
                                     Files.readAllBytes(source.originRoot.resolve(source.path))
                                 )
-                        "${source.originId}:${source.path}:$hash"
+                        "${source.originId}:${source.path}:${source.isCode}:$hash"
                     }
                     .joinToString("\n")
             )

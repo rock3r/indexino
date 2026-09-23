@@ -24,9 +24,11 @@ internal object CodeIndexRecordCodec {
         ignoreUnknownKeys = true
     }
 
+    private val serializer = CodeIndexRecord.serializer()
+
     fun encode(record: CodeIndexRecord): ByteArray =
-        json.encodeToString(CodeIndexRecord.serializer(), record).toByteArray()
+        json.encodeToString(serializer, record).toByteArray()
 
     fun decode(bytes: ByteArray): CodeIndexRecord =
-        json.decodeFromString(CodeIndexRecord.serializer(), bytes.decodeToString())
+        json.decodeFromString(serializer, bytes.decodeToString())
 }

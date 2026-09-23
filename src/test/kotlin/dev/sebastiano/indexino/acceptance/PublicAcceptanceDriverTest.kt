@@ -4,12 +4,40 @@
 package dev.sebastiano.indexino.acceptance
 
 import dev.sebastiano.indexino.model.QueryPage
+import dev.sebastiano.indexino.producer.IndexedSource
+import java.nio.file.Files
+import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.io.TempDir
 
 class PublicAcceptanceDriverTest {
+    @Test
+    fun `captured inventory keeps nested origin prefixes and rejects outside origins`(
+        @TempDir root: Path
+    ) {
+        val workspace = Files.createDirectory(root.resolve("workspace")).toRealPath()
+        val android = Files.createDirectory(workspace.resolve("android"))
+        Files.writeString(workspace.resolve("Same.kt"), "class Main")
+        Files.writeString(android.resolve("Same.kt"), "class Android")
+        val nested =
+            listOf(
+                IndexedSource("main", workspace, "Same.kt"),
+                IndexedSource("android", android, "Same.kt"),
+            )
+        assertEquals(
+            listOf("Same.kt", "android/Same.kt"),
+            capturedInventoryPaths(workspace, nested),
+        )
+        val outside = Files.createDirectory(root.resolve("workspace-outside"))
+        Files.writeString(outside.resolve("Same.kt"), "class Outside")
+        assertFailsWith<IllegalStateException> {
+            capturedInventoryPaths(workspace, listOf(IndexedSource("outside", outside, "Same.kt")))
+        }
+    }
+
     @Test
     fun `call mutations reject stale references and stale callers independently`() {
         assertCallMutationRows(

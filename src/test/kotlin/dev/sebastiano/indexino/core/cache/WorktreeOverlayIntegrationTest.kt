@@ -3,10 +3,13 @@ package dev.sebastiano.indexino.core.cache
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.api.IndexScope
 import dev.sebastiano.indexino.api.Indexino
+import dev.sebastiano.indexino.api.IndexinoException
 import dev.sebastiano.indexino.api.RefreshRequest
 import dev.sebastiano.indexino.cli.CacheMaintenance
 import dev.sebastiano.indexino.core.BASIC_FACT_SCHEMA_VERSION
+import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.store.WorktreeOverlayIndexStore
+import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.model.CallQuery
 import dev.sebastiano.indexino.model.CheckRequest
 import dev.sebastiano.indexino.model.PluginId
@@ -14,15 +17,18 @@ import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.ReferenceQuery
 import dev.sebastiano.indexino.model.ResourceQuery
 import dev.sebastiano.indexino.model.SymbolQuery
+import dev.sebastiano.indexino.producer.JsonlIndexBuildProgressReporter
 import java.nio.file.Files
 import kotlin.io.path.Path
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.parallel.Execution
@@ -620,6 +626,59 @@ class WorktreeOverlayIntegrationTest {
                                 .isNotEmpty()
                         )
                     }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `failed fork producer restores only its writable delta`() {
+        val cacheDirectory = createTempDirectory("indexino-overlay-rollback-cache-")
+        tempDirs.add(cacheDirectory)
+        val (mainWorkspace, forkWorkspace) = createLinkedWorktrees()
+        val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+        withCache(cacheDirectory) {
+            Indexino.connectBlocking(mainWorkspace).use { main ->
+                runBlocking { main.refresh(request).await() }
+                val originalNames = querySymbolNames(main)
+                val source = forkWorkspace.resolve("ui/src/main/kotlin/Panel.kt")
+                Files.writeString(
+                    source,
+                    Files.readString(source).replace("ActionButton", "ForkActionButton"),
+                )
+                val failure = IllegalStateException("after fork producer writes")
+                val reporter = JsonlIndexBuildProgressReporter { event ->
+                    if ("phase_completed" in event && "file-hash" in event) throw failure
+                }
+                Indexino.connectBlocking(forkWorkspace).use { fork ->
+                    val observed =
+                        assertFailsWith<IndexinoException> {
+                            runBlocking { fork.refresh(request, {}, reporter).await() }
+                        }
+                    assertSame(failure, observed.cause)
+                }
+                val delta =
+                    InProcessCacheLayout.overlayBuildDelta(
+                        forkWorkspace,
+                        GitHeadResolver.resolve(forkWorkspace),
+                    )
+                XodusCodeIndexStore.open(delta, readOnly = true).use {
+                    assertFalse(
+                        it.prefixScan("").any(),
+                        "Inherited records must not be copied into the delta",
+                    )
+                }
+                assertEquals(originalNames, querySymbolNames(main))
+                assertNull(
+                    WorkspaceGenerationManifestStore(
+                            canonicalCacheRoot(cacheDirectory),
+                            InProcessCacheLayout.workspaceId(forkWorkspace),
+                        )
+                        .current()
+                )
+                Indexino.connectBlocking(forkWorkspace).use { fork ->
+                    runBlocking { fork.refresh(request).await() }
+                    assertTrue("ForkActionButton" in querySymbolNames(fork))
                 }
             }
         }

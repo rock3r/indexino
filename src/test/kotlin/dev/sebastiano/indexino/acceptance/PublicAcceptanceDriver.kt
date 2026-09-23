@@ -16,6 +16,7 @@ import dev.sebastiano.indexino.model.NameMatchMode
 import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.QueryPage
 import dev.sebastiano.indexino.model.SymbolQuery
+import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.JsonlIndexBuildProgressReporter
 import java.nio.file.Files
 import java.nio.file.Path
@@ -242,10 +243,7 @@ internal object PublicAcceptanceDriver {
         observed: (List<String>) -> Unit,
     ) {
         index.onRefreshSucceededForRuntime = { _, sources, _ ->
-            val actual = sources.map { source ->
-                check(source.originRoot.toRealPath() == workspace) { "Unexpected external origin" }
-                source.path
-            }
+            val actual = capturedInventoryPaths(workspace, sources)
             observed(actual.sorted())
             check(actual.size == actual.toSet().size) { "Duplicate discovered source" }
             check(actual.toSet() == expected.toSet()) {
@@ -292,6 +290,13 @@ internal object PublicAcceptanceDriver {
     private const val QUERY_WARMUP = 10
     private const val QUERY_SAMPLES = 100
 }
+
+internal fun capturedInventoryPaths(workspace: Path, sources: List<IndexedSource>): List<String> =
+    sources.map { source ->
+        val path = source.originRoot.resolve(source.path).toRealPath()
+        check(path.startsWith(workspace)) { "Unexpected external source" }
+        workspace.relativize(path).toString().replace('\\', '/')
+    }
 
 internal suspend fun <T> collectPages(query: suspend (QueryOptions) -> QueryPage<T>): List<T> {
     val result = mutableListOf<T>()

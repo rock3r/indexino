@@ -73,12 +73,16 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                     source.originId,
                     source.path,
                     ResourceMetadata.resourcePackage(context, source),
-                    file,
                     collectSymbols(file).map { it.copy(originId = source.originId) },
                 )
             }
-            val projectSymbols = indexedFiles.flatMap { it.symbols }
-            indexedFiles.forEach { indexedFile -> indexFile(indexedFile, projectSymbols, store) }
+            val projectSymbols = ProjectSymbols(indexedFiles.flatMap { it.symbols })
+            // Keep declaration metadata across files, not the entire project's syntax trees.
+            // Both passes read the same immutable refresh snapshot.
+            ktFiles.forEachIndexed { index, source ->
+                val file = parser.parseFile(source.path, context.readSource(source))
+                store.transaction { indexFile(indexedFiles[index], file, projectSymbols, store) }
+            }
         }
     }
 
@@ -88,6 +92,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
     ): List<IndexedSource> =
         (context.changedSources.filter { it.path.endsWith(extension) } +
                 metadataDependentSources(context, extension))
+            .filter { it.isCode }
             .distinctBy { it.originId to it.path }
 
     private fun metadataDependentSources(
@@ -108,10 +113,10 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
 
     private fun indexFile(
         indexedFile: IndexedKotlinFile,
-        projectSymbols: List<ResolvedSymbol>,
+        file: KtFile,
+        projectSymbols: ProjectSymbols,
         store: CodeIndexStore,
     ) {
-        val file = indexedFile.file
         indexedFile.symbols.forEach { symbol ->
             store.put(
                 CodeIndexKey.symbolDefinition(
@@ -400,7 +405,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         originId: String,
         relativePath: String,
         fileSymbols: List<ResolvedSymbol>,
-        projectSymbols: List<ResolvedSymbol>,
+        projectSymbols: ProjectSymbols,
         imports: Map<String, String>,
         store: CodeIndexStore,
     ) {
@@ -464,26 +469,26 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
     }
 
     private fun sameOriginParameterNames(
-        symbols: List<ResolvedSymbol>,
+        symbols: ProjectSymbols,
         fqn: String,
         originId: String,
         argumentCount: Int,
     ): List<String>? =
-        symbols
+        symbols.byFqn[fqn]
+            .orEmpty()
             .singleOrNull {
-                it.fqn == fqn &&
-                    it.originId == originId &&
-                    (it.arity == null || it.arity >= argumentCount)
+                it.originId == originId && (it.arity == null || it.arity >= argumentCount)
             }
             ?.parameterNames
 
     private fun parameterNames(
-        symbols: List<ResolvedSymbol>,
+        symbols: ProjectSymbols,
         fqn: String,
         argumentCount: Int,
     ): List<String>? =
-        symbols
-            .singleOrNull { it.fqn == fqn && (it.arity == null || it.arity >= argumentCount) }
+        symbols.byFqn[fqn]
+            .orEmpty()
+            .singleOrNull { it.arity == null || it.arity >= argumentCount }
             ?.parameterNames
 
     private fun storedSameOriginParameterNames(
@@ -791,7 +796,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
     private fun resolveCall(
         file: KtFile,
         call: KtCallExpression,
-        symbols: List<ResolvedSymbol>,
+        symbols: ProjectSymbols,
         imports: Map<String, String>,
         store: CodeIndexStore,
     ): InvocationTarget? {
@@ -806,8 +811,8 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         }
         val classOwner = names.classOwner(call)?.let(names::classFqn)
         if (classOwner != null) {
-            symbols
-                .firstOrNull { it.name == name && it.ownerFqn == classOwner }
+            symbols.byName[name]
+                ?.firstOrNull { it.ownerFqn == classOwner }
                 ?.let {
                     return InvocationTarget(it.fqn, name, null)
                 }
@@ -815,12 +820,12 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         val inheritedTarget = names.superClassFqn(call)?.let { "$it#$name" }
         if (
             inheritedTarget != null &&
-                (symbols.any { it.fqn == inheritedTarget } || store.hasSymbol(inheritedTarget))
+                (symbols.byFqn.containsKey(inheritedTarget) || store.hasSymbol(inheritedTarget))
         ) {
             return InvocationTarget(inheritedTarget, name, null)
         }
         val topLevelTarget = names.qualify(name)
-        if (symbols.any { it.fqn == topLevelTarget } || store.hasSymbol(topLevelTarget)) {
+        if (symbols.byFqn.containsKey(topLevelTarget) || store.hasSymbol(topLevelTarget)) {
             return InvocationTarget(topLevelTarget, name, null)
         }
         imports[name]?.let { imported ->
@@ -966,11 +971,15 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         val aliases: List<String> = emptyList(),
     )
 
+    private class ProjectSymbols(symbols: List<ResolvedSymbol>) {
+        val byName: Map<String, List<ResolvedSymbol>> = symbols.groupBy { it.name }
+        val byFqn: Map<String, List<ResolvedSymbol>> = symbols.groupBy { it.fqn }
+    }
+
     private data class IndexedKotlinFile(
         val originId: String,
         val relativePath: String,
         val defaultResourcePackage: String?,
-        val file: KtFile,
         val symbols: List<ResolvedSymbol>,
     )
 

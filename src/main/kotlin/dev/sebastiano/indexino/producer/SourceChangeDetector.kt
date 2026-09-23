@@ -29,7 +29,7 @@ internal object SourceChangeDetector {
                 .prefixScan("file:")
                 .map { it.second }
                 .filterIsInstance<FileHashRecord>()
-                .associate { (it.originId to it.relativePath) to it.contentHash }
+                .associate { (it.originId to it.relativePath) to (it.contentHash to it.isCode) }
         val currentSources = sources.associateBy { it.originId to it.path }
         val changedSources =
             sources.filterIndexedTo(linkedSetOf()) { index, source ->
@@ -39,7 +39,7 @@ internal object SourceChangeDetector {
                         ?: FileHashProducer.contentHash(
                             Files.readAllBytes(source.originRoot.resolve(source.path))
                         )
-                previousHashes[source.originId to source.path] != currentHash
+                previousHashes[source.originId to source.path] != (currentHash to source.isCode)
             }
         return SourceChangeSet(
             changedSources = changedSources,

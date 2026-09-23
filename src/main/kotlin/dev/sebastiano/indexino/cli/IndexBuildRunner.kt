@@ -122,7 +122,12 @@ internal class IndexBuildRunner(
             topologyResult.externalSources.associate { mount ->
                 mount.root.toRealPath() to (mount.originId to mount.expectedRevision)
             }
-        val sources = resolveSources(sourceFiles, topologyResult.externalSources)
+        val sources =
+            resolveSources(
+                sourceFiles,
+                topologyResult.externalSources,
+                topologyResult.codeSourceFiles,
+            )
         latestSourceFiles = sourceFiles
         latestSources = sources
         latestTopologyRoots = (listOf(project) + topologyResult.externalMounts).distinct()
@@ -142,6 +147,7 @@ internal class IndexBuildRunner(
         val commit = GitHeadResolver.resolve(project)
         val resolver = IndexPathResolver(project, storeRootOverride = storeRootOverride)
         val manifestPath = resolver.resolveManifest(commit)
+        BuildStoreCheckpoint.requireRecovered(manifestPath)
         val previewHash = previewHash(sources, sourceSnapshot)
         val origins =
             resolveOrigins(sources, externalOriginMetadata, topologyResult.topology, sourceSnapshot)
@@ -274,11 +280,26 @@ internal class IndexBuildRunner(
     private fun resolveSources(
         sourceFiles: List<String>,
         externalSources: List<ExternalSourceMount>,
+        codeSourceFiles: Set<String>?,
     ): List<IndexedSource> =
         SourceOriginResolver.resolve(project, sourceFiles).flatMap { origin ->
             (origin.sourceFiles +
                     ResourceMetadata.additionalMetadataPaths(origin.root, origin.sourceFiles))
-                .map { path -> IndexedSource(origin.id, origin.root, path) }
+                .map { path ->
+                    IndexedSource(
+                        origin.id,
+                        origin.root,
+                        path,
+                        isCode =
+                            codeSourceFiles?.contains(
+                                project
+                                    .toRealPath()
+                                    .relativize(origin.root.resolve(path))
+                                    .toString()
+                                    .replace('\\', '/')
+                            ) ?: true,
+                    )
+                }
         } +
             externalSources.flatMap { mount ->
                 SourceOriginResolver.resolveExternal(
@@ -293,7 +314,21 @@ internal class IndexBuildRunner(
                                     origin.root,
                                     origin.sourceFiles,
                                 ))
-                            .map { path -> IndexedSource(origin.id, origin.root, path) }
+                            .map { path ->
+                                IndexedSource(
+                                    origin.id,
+                                    origin.root,
+                                    path,
+                                    isCode =
+                                        mount.codeSourceFiles?.contains(
+                                            mount.root
+                                                .toRealPath()
+                                                .relativize(origin.root.resolve(path))
+                                                .toString()
+                                                .replace('\\', '/')
+                                        ) ?: true,
+                                )
+                            }
                     }
             }
 
@@ -320,6 +355,7 @@ internal class IndexBuildRunner(
         if (overlayDeltaPath != null) {
             overlayDeltaPath.parent.toFile().deleteRecursively()
         }
+        val writableStore: XodusCodeIndexStore
         val store =
             if (forkBase != null) {
                 val baseManifest =
@@ -337,73 +373,76 @@ internal class IndexBuildRunner(
                     )
                 val deltaStore =
                     XodusCodeIndexStore.open(checkNotNull(overlayDeltaPath), readOnly = false)
+                writableStore = deltaStore
                 WorktreeOverlayIndexStore(baseStore, deltaStore, emptyList())
             } else {
-                XodusCodeIndexStore.open(resolver.resolveBaseStore(commit))
+                val baseStore = XodusCodeIndexStore.open(resolver.resolveBaseStore(commit))
+                writableStore = baseStore
+                baseStore
             }
-        val previousRecords = store.prefixScan("").toList()
-        try {
-            val changes = detectChanges(store, sources, sourceSnapshot, forceFullRebuild)
-            latestChanges = changes
-            val context =
-                IndexBuildContext(
-                    store = store,
-                    commitHash = commit,
-                    scope = scope,
-                    sourceFiles = sourceFiles,
-                    workspaceRoot = project,
-                    sources = sources,
-                    sourceSnapshot = sourceSnapshot,
-                    resolvedOriginIds = origins.mapTo(linkedSetOf()) { it.originId },
-                    progress = progress,
-                    machineProgress = machineProgress,
-                    changedSourceFiles = changes.changedFiles,
-                    deletedSourceFiles = changes.deletedFiles,
-                    changedSourceSet = changes.changedSources,
-                    deletedSourceSet = changes.deletedSources,
-                )
-            ProducerRegistry.forApplications(applications).forEach { producer ->
-                progress(producer.displayName)
-                val phaseTotal = producer.progressTotal?.invoke(context)
-                machineProgress?.phaseStarted(producer.id, phaseTotal)
-                producer.produce(context.copy(activePhase = producer.id), store)
-                machineProgress?.phaseCompleted(producer.id, phaseTotal)
+        store.use {
+            BuildStoreCheckpoint(writableStore, resolver.resolveManifest(commit)).use { checkpoint
+                ->
+                checkpoint.run {
+                    val changes = detectChanges(store, sources, sourceSnapshot, forceFullRebuild)
+                    latestChanges = changes
+                    val context =
+                        IndexBuildContext(
+                            store = store,
+                            commitHash = commit,
+                            scope = scope,
+                            sourceFiles = sourceFiles,
+                            workspaceRoot = project,
+                            sources = sources,
+                            sourceSnapshot = sourceSnapshot,
+                            resolvedOriginIds = origins.mapTo(linkedSetOf()) { it.originId },
+                            progress = progress,
+                            machineProgress = machineProgress,
+                            changedSourceFiles = changes.changedFiles,
+                            deletedSourceFiles = changes.deletedFiles,
+                            changedSourceSet = changes.changedSources,
+                            deletedSourceSet = changes.deletedSources,
+                        )
+                    ProducerRegistry.forApplications(applications).forEach { producer ->
+                        progress(producer.displayName)
+                        val phaseTotal = producer.progressTotal?.invoke(context)
+                        machineProgress?.phaseStarted(producer.id, phaseTotal)
+                        producer.produce(context.copy(activePhase = producer.id), store)
+                        machineProgress?.phaseCompleted(producer.id, phaseTotal)
+                    }
+                    PluginAnalyzerRunner(pluginRegistry).analyze(context, applications.toSet())
+                    val manifest =
+                        IndexManifest(
+                            commit = commit,
+                            indexerVersion = Version.NAME,
+                            basicFactSchemaVersion = BASIC_FACT_SCHEMA_VERSION,
+                            scope = scope,
+                            topology = topology,
+                            includeDeps = includeDeps,
+                            sourceFileCount = sources.size,
+                            sourcesContentHash = previewHash,
+                            builtAt = Instant.now().toString(),
+                            applications = applications,
+                            pluginCoordinates = pluginCoordinates,
+                            origins = origins,
+                            resolvedTopologyDigest = resolvedTopologyDigest,
+                        )
+                    ManifestIO.write(resolver.resolveManifest(commit), manifest)
+                    latestManifest = manifest
+                    if (overlayDeltaPath != null) {
+                        latestOverlayDeltaPath = overlayDeltaPath
+                        latestTombstonePrefixes =
+                            (changes.deletedSources + changes.changedSources)
+                                .map { source ->
+                                    val relative = source.path.replace('\\', '/')
+                                    WorktreeOverlayIndexStore.tombstonePrefixForRelativeFile(
+                                        relative
+                                    )
+                                }
+                                .distinct()
+                    }
+                }
             }
-            PluginAnalyzerRunner(pluginRegistry).analyze(context, applications.toSet())
-            val manifest =
-                IndexManifest(
-                    commit = commit,
-                    indexerVersion = Version.NAME,
-                    basicFactSchemaVersion = BASIC_FACT_SCHEMA_VERSION,
-                    scope = scope,
-                    topology = topology,
-                    includeDeps = includeDeps,
-                    sourceFileCount = sources.size,
-                    sourcesContentHash = previewHash,
-                    builtAt = Instant.now().toString(),
-                    applications = applications,
-                    pluginCoordinates = pluginCoordinates,
-                    origins = origins,
-                    resolvedTopologyDigest = resolvedTopologyDigest,
-                )
-            ManifestIO.write(resolver.resolveManifest(commit), manifest)
-            latestManifest = manifest
-            if (overlayDeltaPath != null) {
-                latestOverlayDeltaPath = overlayDeltaPath
-                latestTombstonePrefixes =
-                    (changes.deletedSources + changes.changedSources)
-                        .map { source ->
-                            val relative = source.path.replace('\\', '/')
-                            WorktreeOverlayIndexStore.tombstonePrefixForRelativeFile(relative)
-                        }
-                        .distinct()
-            }
-        } catch (@Suppress("TooGenericExceptionCaught") failure: Throwable) {
-            store.prefixScan("").forEach { (key, _) -> store.delete(key) }
-            previousRecords.forEach { (key, record) -> store.put(key, record) }
-            throw failure
-        } finally {
-            store.close()
         }
     }
 

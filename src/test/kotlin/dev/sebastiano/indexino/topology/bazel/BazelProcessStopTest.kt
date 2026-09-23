@@ -27,6 +27,24 @@ class BazelProcessStopTest {
     @TempDir lateinit var workspace: Path
 
     @Test
+    fun `role discovery does not launch a second query after interruption`() {
+        var calls = 0
+        try {
+            val failure = runCatching {
+                BazelCodeRoleQuery.dependencySources("//invented:target", workspace) { _, _ ->
+                    calls++
+                    Thread.currentThread().interrupt()
+                    BazelQueryOutcome(0, emptyList())
+                }
+            }
+            assertEquals(1, calls)
+            assertIs<InterruptedException>(failure.exceptionOrNull())
+        } finally {
+            Thread.interrupted()
+        }
+    }
+
+    @Test
     fun `stopped terminal follows direct client exit even while its output pipe is open`() {
         val marker = workspace.resolve("owned.pid")
         val unrelatedMarker = workspace.resolve("unrelated.pid")

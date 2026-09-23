@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.producer
 
+import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
@@ -40,14 +41,11 @@ internal object SourceRecordCleanup {
     }
 
     fun deleteXmlOriginRecords(store: CodeIndexStore, affectedSources: Set<IndexedSource>) {
+        if (affectedSources.isEmpty()) return
         val affectedKeys = affectedSources.mapTo(mutableSetOf()) { it.originId to it.path }
-        store
-            .prefixScan("sym:")
-            .plus(store.prefixScan("ref:"))
-            .plus(store.prefixScan("res:"))
-            .plus(store.prefixScan("resdef:"))
-            .plus(store.prefixScan("resuse:"))
-            .filter { (_, record) ->
+        for (prefix in listOf("sym:", "ref:", "res:", "resdef:", "resuse:")) {
+            val keys = mutableListOf<CodeIndexKey>()
+            store.forEachPrefix(prefix) { key, record ->
                 val originId: String
                 val relativeFile: String
                 when (record) {
@@ -67,14 +65,18 @@ internal object SourceRecordCleanup {
                         originId = record.originId
                         relativeFile = record.relativeFile
                     }
-                    else -> return@filter false
+                    else -> return@forEachPrefix true
                 }
-                (originId to relativeFile) in affectedKeys
+                if ((originId to relativeFile) in affectedKeys) keys += key
+                true
             }
-            .map { it.first }
-            .toList()
-            .forEach(store::delete)
+            keys.chunked(DELETE_BATCH_SIZE).forEach { batch ->
+                store.transaction { batch.forEach(store::delete) }
+            }
+        }
     }
+
+    private const val DELETE_BATCH_SIZE = 256
 
     private fun deleteOriginMatching(
         store: CodeIndexStore,

@@ -32,7 +32,7 @@ private constructor(private val entries: Map<IndexedSource, Entry>) {
             entries.keys
                 .sortedWith(compareBy(IndexedSource::originId, IndexedSource::path))
                 .joinToString("\n") { source ->
-                    "${source.originId}:${source.path}:${contentHash(source)}"
+                    "${source.originId}:${source.path}:${source.isCode}:${contentHash(source)}"
                 }
         )
 

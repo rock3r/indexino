@@ -1,7 +1,9 @@
 package dev.sebastiano.indexino.cli
 
+import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
 import dev.sebastiano.indexino.core.record.ResourceUsageRecord
+import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.JsonlIndexBuildProgressReporter
@@ -17,9 +19,71 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertSame
 import org.junit.jupiter.api.io.TempDir
 
 class IndexBuildRunnerTest {
+    @Test
+    fun `failed producer restores prior builder and permits retry`() {
+        val workspace = tempDir.resolve("rollback-workspace")
+        Files.createDirectories(workspace.resolve("src/main/kotlin"))
+        workspace.resolve("settings.gradle.kts").writeText("rootProject.name = \"checkpoint\"")
+        val source = workspace.resolve("src/main/kotlin/Marker.kt")
+        source.writeText("class Before")
+        git(workspace, "init")
+        git(workspace, "config", "user.email", "test@example.invalid")
+        git(workspace, "config", "user.name", "Indexino Test")
+        git(workspace, "add", ".")
+        git(workspace, "commit", "-m", "checkpoint fixture")
+        val commit = git(workspace, "rev-parse", "HEAD").trim()
+        val resolver = IndexPathResolver(workspace, storeRootOverride = tempDir.resolve("store"))
+        fun runner(failure: IllegalArgumentException? = null) =
+            IndexBuildRunner(
+                project = workspace,
+                topologyRequest =
+                    TopologyRequest(buildSystem = BuildSystem.GRADLE, gradleModule = ":"),
+                applications = emptyList(),
+                bazelQueryExecutor = null,
+                bazelProcessRunner = null,
+                progress = {},
+                machineProgress =
+                    JsonlIndexBuildProgressReporter { event ->
+                        if (failure != null && "phase_completed" in event && "file-hash" in event)
+                            throw failure
+                    },
+                storeRootOverride = resolver.storeRoot(),
+            )
+        assertEquals(CliExitCodes.SUCCESS, runner().run())
+        val previousManifest = resolver.resolveManifest(commit).readText()
+        val previousRecords =
+            XodusCodeIndexStore.open(resolver.resolveBaseStore(commit)).use {
+                it.prefixScan("").toMap()
+            }
+        source.writeText("class After")
+        val failure = IllegalArgumentException("after producer writes")
+
+        assertSame(failure, assertFailsWith<IllegalArgumentException> { runner(failure).run() })
+        assertEquals(previousManifest, resolver.resolveManifest(commit).readText())
+        XodusCodeIndexStore.open(resolver.resolveBaseStore(commit)).use {
+            assertEquals(previousRecords, it.prefixScan("").toMap())
+        }
+        assertEquals(CliExitCodes.SUCCESS, runner().run())
+        XodusCodeIndexStore.open(resolver.resolveBaseStore(commit)).use {
+            assertEquals(
+                setOf("After"),
+                it.prefixScan("sym:").map { row -> (row.second as SymbolRecord).name }.toSet(),
+            )
+        }
+        // A retained checkpoint must block even the fresh-index fast path.
+        XodusCodeIndexStore.open(resolver.resolveBaseStore(commit)).use {
+            Files.createDirectory(
+                BuildStoreCheckpoint(it, resolver.resolveManifest(commit)).directory
+            )
+        }
+        val pending = assertFailsWith<IllegalStateException> { runner().run() }
+        assertContains(pending.message.orEmpty(), "checkpoint")
+    }
+
     @Test
     fun `indexes external included build sources in composite manifest`() {
         val root = tempDir.resolve("included")
@@ -39,6 +103,11 @@ class IndexBuildRunnerTest {
         Files.writeString(
             includedBuild.resolve("src/main/kotlin/Convention.kt"),
             "class Convention",
+        )
+        Files.createDirectories(includedBuild.resolve("src/main/res/raw"))
+        Files.writeString(
+            includedBuild.resolve("src/main/res/raw/Preview.java"),
+            "class NotCompilationCode {}",
         )
         git(workspace, "init")
         git(workspace, "config", "user.email", "test@example.invalid")
@@ -64,17 +133,19 @@ class IndexBuildRunnerTest {
         assertEquals(CliExitCodes.SUCCESS, execution.exitCode)
         assertContains(
             machineProgress.first { it.contains("discovery_completed") },
-            "\"phaseTotal\":2",
+            "\"phaseTotal\":3",
         )
         assertContains(
             machineProgress.first {
                 it.contains("\"event\":\"progress\"") &&
                     it.contains("\"phase\":\"source-hash-preview\"")
             },
-            "\"phaseTotal\":2",
+            "\"phaseTotal\":3",
         )
-        assertEquals(2, execution.manifest?.sourceFileCount, "manifest=${execution.manifest}")
+        assertEquals(3, execution.manifest?.sourceFileCount, "manifest=${execution.manifest}")
         assertEquals(2, execution.manifest?.origins?.size, "manifest=${execution.manifest}")
+        assertEquals(false, execution.sources.single { it.path.endsWith("Preview.java") }.isCode)
+        assertEquals(2, execution.sources.count { it.isCode })
     }
 
     @Test

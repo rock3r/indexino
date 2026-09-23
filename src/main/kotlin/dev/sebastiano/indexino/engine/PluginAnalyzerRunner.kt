@@ -19,19 +19,11 @@ import kotlinx.coroutines.runBlocking
 
 @OptIn(dev.sebastiano.indexino.model.IndexinoInternalApi::class)
 internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
-    internal fun analyze(context: IndexBuildContext, selectedPluginIds: Set<String>) {
-        val previousPluginFacts = context.store.prefixScan("plugin:").toList()
-        try {
-            analyzeMutable(context, selectedPluginIds)
-        } catch (@Suppress("TooGenericExceptionCaught") failure: Throwable) {
-            context.store.prefixScan("plugin:").forEach { (key, _) -> context.store.delete(key) }
-            previousPluginFacts.forEach { (key, record) -> context.store.put(key, record) }
-            throw failure
-        }
-    }
-
+    /**
+     * Mutates build facts; the build owner checkpoints and restores the complete writable store.
+     */
     @Suppress("LongMethod")
-    private fun analyzeMutable(context: IndexBuildContext, selectedPluginIds: Set<String>) {
+    internal fun analyze(context: IndexBuildContext, selectedPluginIds: Set<String>) {
         registry
             .pluginIds()
             .map { it.value }
