@@ -27,6 +27,8 @@ import kotlinx.serialization.json.put
 
 /** Opt-in controlled edits in an explicitly owned disposable checkout. */
 internal object IncrementalAcceptanceDriver {
+    private val watcherWait = 60.minutes
+
     @JvmStatic
     fun main(args: Array<String>): Unit = runBlocking {
         require(args.size == 5) { "owned-root plan.json manual|watcher repeats report.json" }
@@ -44,6 +46,7 @@ internal object IncrementalAcceptanceDriver {
         val workload = IncrementalWorkload(workspace, plan)
         val samples = mutableListOf<JsonObject>()
         val report = linkedMapOf<String, JsonElement>("status" to JsonPrimitive("incomplete"))
+        if (watcher) report["watcherWaitMillis"] = JsonPrimitive(watcherWait.inWholeMilliseconds)
         fun checkpoint() {
             report["samples"] = JsonArray(samples)
             Files.writeString(output, JsonObject(report).toString() + "\n")
@@ -142,7 +145,7 @@ internal object IncrementalAcceptanceDriver {
             workload.write(group.sources, 1)
             val written = System.nanoTime()
             if (watcher) {
-                withTimeout(20.minutes) {
+                withTimeout(watcherWait) {
                     while (true) {
                         val ready =
                             index.snapshot().use {

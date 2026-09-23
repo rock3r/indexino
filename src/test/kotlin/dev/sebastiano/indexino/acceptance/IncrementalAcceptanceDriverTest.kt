@@ -191,6 +191,13 @@ internal class IncrementalAcceptanceDriverTest {
         )
         val report = Json.parseToJsonElement(Files.readString(output)).jsonObject
         assertEquals("passed", report.getValue("status").jsonPrimitive.content)
+        if (lane == "watcher") {
+            assertEquals(
+                "3600000",
+                report["watcherWaitMillis"]?.jsonPrimitive?.content,
+                "The observed 20m11s Windows publication must fit the bounded watcher wait",
+            )
+        }
         val samples = report.getValue("samples").jsonArray.map { it.jsonObject }
         assertEquals(
             listOf("small", "medium", "large", "small", "medium", "large"),
