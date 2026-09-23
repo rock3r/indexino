@@ -16,7 +16,10 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -30,6 +33,33 @@ import org.junit.jupiter.api.io.TempDir
 
 internal class IncrementalAcceptanceDriverTest {
     @TempDir lateinit var temporary: Path
+
+    @Test
+    fun `watcher baseline reset retries a joined stale refresh and remains bounded`(): Unit =
+        runBlocking {
+            var refreshes = 0
+            val failure =
+                runCatching {
+                        IncrementalAcceptanceDriver.awaitRestoredBaseline(
+                            500.milliseconds,
+                            { refreshes++ },
+                        ) {
+                            refreshes >= 2
+                        }
+                    }
+                    .exceptionOrNull()
+            assertNull(failure, "The first joined V1 refresh cannot establish restored V0")
+            assertEquals(2, refreshes, "The first joined V1 refresh cannot establish restored V0")
+
+            assertFailsWith<TimeoutCancellationException> {
+                IncrementalAcceptanceDriver.awaitRestoredBaseline(
+                    100.milliseconds,
+                    { refreshes++ },
+                ) {
+                    false
+                }
+            }
+        }
 
     @Test
     fun `failed topology retains structured failure and diagnostic progress`() {

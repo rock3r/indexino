@@ -10,6 +10,7 @@ import dev.sebastiano.indexino.api.RefreshRequest
 import dev.sebastiano.indexino.api.RuntimeAttachMode
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -77,9 +78,20 @@ internal object IncrementalAcceptanceDriver {
                             samples += measure(index, request, workload, group, watcher, repetition)
                             checkpoint()
                             workload.write(group.sources, 0)
-                            refreshAndLog(index, request)
-                            index.snapshot().use {
-                                check(workload.matches(it, workload.sources, 0))
+                            if (watcher) {
+                                awaitRestoredBaseline(
+                                    watcherWait,
+                                    { refreshAndLog(index, request) },
+                                ) {
+                                    index.snapshot().use {
+                                        workload.matches(it, workload.sources, 0)
+                                    }
+                                }
+                            } else {
+                                refreshAndLog(index, request)
+                                index.snapshot().use {
+                                    check(workload.matches(it, workload.sources, 0))
+                                }
                             }
                         }
                     }
@@ -119,6 +131,22 @@ internal object IncrementalAcceptanceDriver {
 
     private suspend fun refreshAndLog(index: Indexino, request: RefreshRequest) =
         index.refresh(request, { System.err.println(it) }, null).await()
+
+    internal suspend fun awaitRestoredBaseline(
+        timeout: Duration,
+        refresh: suspend () -> Unit,
+        matches: suspend () -> Boolean,
+    ) {
+        withTimeout(timeout) {
+            while (true) {
+                // An explicit refresh can join the watcher-triggered V1 refresh that was still
+                // publishing when we restored V0. Awaiting that handle alone is not a V0 barrier.
+                refresh()
+                if (matches()) break
+                delay(50)
+            }
+        }
+    }
 
     private fun request(plan: JsonObject): RefreshRequest {
         val target = plan.getValue("target").jsonPrimitive.content
