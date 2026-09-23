@@ -13,6 +13,21 @@ import org.junit.jupiter.api.io.TempDir
 
 class SourceRecordCleanupTest {
     @Test
+    fun `empty language invalidation never scans records`(@TempDir root: Path) {
+        XodusCodeIndexStore.open(root.resolve("store")).use { actual ->
+            val guarded =
+                object : CodeIndexStore by actual {
+                    override fun prefixScan(
+                        prefix: String
+                    ): Sequence<Pair<CodeIndexKey, CodeIndexRecord>> =
+                        fail("Empty invalidation must not scan $prefix")
+                }
+            SourceRecordCleanup.deleteLanguageOriginRecords(guarded, "java", ".java", emptySet())
+            SourceRecordCleanup.deleteLanguageOriginRecords(guarded, "kotlin", ".kt", emptySet())
+        }
+    }
+
+    @Test
     fun `empty XML invalidation never scans records`(@TempDir root: Path) {
         XodusCodeIndexStore.open(root.resolve("store")).use { actual ->
             val guarded =

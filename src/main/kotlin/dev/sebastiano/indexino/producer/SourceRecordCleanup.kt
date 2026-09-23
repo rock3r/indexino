@@ -27,6 +27,7 @@ internal object SourceRecordCleanup {
         extension: String,
         affectedSources: Set<IndexedSource>,
     ) {
+        if (affectedSources.isEmpty()) return
         deleteOriginMatching(store, "sym:", language, extension, affectedSources)
         deleteOriginMatching(store, "ref:", language, extension, affectedSources)
         deleteOriginMatching(store, "call:", language, extension, affectedSources)
