@@ -175,7 +175,7 @@ internal object IncrementalAcceptanceDriver {
                     try {
                         val seedStart = System.nanoTime()
                         withTimeout(stageWait) {
-                            refreshAndLog(index, request)
+                            refreshAndLog(index, request, watcher)
                             index.snapshot().use {
                                 check(workload.matches(it, workload.sources, 0))
                             }
@@ -207,7 +207,7 @@ internal object IncrementalAcceptanceDriver {
                                         val resetStart = System.nanoTime()
                                         awaitRestoredBaseline(
                                             stageWait,
-                                            { refreshAndLog(index, request) },
+                                            { refreshAndLog(index, request, true) },
                                         ) {
                                             index.snapshot().use { snapshot ->
                                                 observe(
@@ -282,8 +282,30 @@ internal object IncrementalAcceptanceDriver {
         }
     }
 
-    private suspend fun refreshAndLog(index: Indexino, request: RefreshRequest) =
-        index.refresh(request, { System.err.println(it) }, null).await()
+    private suspend fun refreshAndLog(
+        index: Indexino,
+        request: RefreshRequest,
+        remote: Boolean = false,
+    ): dev.sebastiano.indexino.api.RefreshResult {
+        val handle = index.refresh(request, { System.err.println(it) }, null)
+        try {
+            return handle.await()
+        } catch (failure: Exception) {
+            if (remote) {
+                try {
+                    val journal = index.refreshProgress(handle.id.value)
+                    System.err.println("failed daemon refresh ${handle.id.value}; last progress:")
+                    journal.text.takeLast(32).forEach { System.err.println(it.take(512)) }
+                    journal.machine.lastOrNull()?.let { System.err.println(it.take(512)) }
+                } catch (diagnosticFailure: Exception) {
+                    System.err.println(
+                        "daemon progress unavailable: ${diagnosticFailure.javaClass.simpleName}"
+                    )
+                }
+            }
+            throw failure
+        }
+    }
 
     private fun currentRefresh(index: Indexino, request: RefreshRequest): JsonObject = runBlocking {
         val active = index.activeRefreshes().firstOrNull { it.request == request }

@@ -156,6 +156,36 @@ internal class IncrementalAcceptanceDriverTest {
         assertTrue(diagnostics.toString().contains("topology discovery failed: no source files"))
         assertEquals("class Unindexed {}", Files.readString(source))
         assertFalse(Files.readString(output).contains(temporary.toString()))
+
+        val watcherOutput = temporary.resolve("watcher-failure-report.json")
+        diagnostics.reset()
+        try {
+            PrintStream(diagnostics).use { stream ->
+                System.setErr(stream)
+                assertFailsWith<java.util.concurrent.CompletionException> {
+                    IncrementalAcceptanceDriver.main(
+                        arrayOf(
+                            root.toString(),
+                            plan.toString(),
+                            "watcher",
+                            "1",
+                            watcherOutput.toString(),
+                        )
+                    )
+                }
+            }
+        } finally {
+            System.setErr(previous)
+        }
+        val watcherReport = Json.parseToJsonElement(Files.readString(watcherOutput)).jsonObject
+        assertEquals("CompletionException", watcherReport["failureType"]?.jsonPrimitive?.content)
+        assertEquals("seed", watcherReport["failureStage"]?.jsonPrimitive?.content)
+        assertTrue(
+            diagnostics.toString().contains("topology discovery failed: no source files"),
+            "Failed remote refresh must retain its daemon journal before shutdown",
+        )
+        assertTrue(diagnostics.toString().contains("index phase=topology state=started"))
+        assertFalse(Files.readString(watcherOutput).contains(temporary.toString()))
     }
 
     @Test
