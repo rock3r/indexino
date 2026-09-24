@@ -20,6 +20,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -136,6 +137,87 @@ class AutoRefreshControllerTest {
                 "Newer edit did not start a successor",
             )
             assertEquals(2, refreshCount.get())
+        } finally {
+            controller.close()
+            workspace.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `burst waits for quiet before starting its first refresh`() {
+        val workspace = Files.createTempDirectory(Path.of("/tmp"), "indexino-burst-edit-")
+        val sourceRoot = workspace.resolve("src/main/kotlin")
+        val source = sourceRoot.resolve("Panel.kt")
+        Files.createDirectories(sourceRoot)
+        Files.writeString(source, "class Panel")
+        val request = RefreshRequest.forScope(IndexScope.gradle(":app"))
+        val observed = CopyOnWriteArrayList<Int>()
+        val firstRefresh = CountDownLatch(1)
+        val version = AtomicInteger()
+        val controller =
+            AutoRefreshController(
+                workspace,
+                AutoRefreshMode.ENABLED,
+                refresh = {
+                    observed.add(version.get())
+                    firstRefresh.countDown()
+                },
+            )
+        try {
+            controller.register(
+                request,
+                listOf(IndexedSource("workspace", workspace, "src/main/kotlin/Panel.kt")),
+            )
+            repeat(12) {
+                version.incrementAndGet()
+                controller.onPathChangedForTests(source)
+                Thread.sleep(70L)
+            }
+            assertTrue(firstRefresh.await(5, TimeUnit.SECONDS))
+            assertEquals(listOf(12), observed.toList(), "Burst must not start from its first edit")
+        } finally {
+            controller.close()
+            workspace.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `continuous burst starts a refresh within the maximum delay and retains the final edit`() {
+        val workspace = Files.createTempDirectory(Path.of("/tmp"), "indexino-continuous-edit-")
+        val sourceRoot = workspace.resolve("src/main/kotlin")
+        val source = sourceRoot.resolve("Panel.kt")
+        Files.createDirectories(sourceRoot)
+        Files.writeString(source, "class Panel")
+        val request = RefreshRequest.forScope(IndexScope.gradle(":app"))
+        val observed = CopyOnWriteArrayList<Int>()
+        val firstRefresh = CountDownLatch(1)
+        val lastRefresh = CountDownLatch(1)
+        val version = AtomicInteger()
+        val controller =
+            AutoRefreshController(
+                workspace,
+                AutoRefreshMode.ENABLED,
+                refresh = {
+                    val current = version.get()
+                    observed.add(current)
+                    firstRefresh.countDown()
+                    if (current == 20) lastRefresh.countDown()
+                },
+                maxDebounceNanos = TimeUnit.MILLISECONDS.toNanos(350),
+            )
+        try {
+            controller.register(
+                request,
+                listOf(IndexedSource("workspace", workspace, "src/main/kotlin/Panel.kt")),
+            )
+            repeat(20) {
+                version.incrementAndGet()
+                controller.onPathChangedForTests(source)
+                Thread.sleep(70L)
+            }
+            assertTrue(firstRefresh.await(5, TimeUnit.SECONDS))
+            assertTrue(observed.first() < 20, "Continuous edits must not defer refresh forever")
+            assertTrue(lastRefresh.await(5, TimeUnit.SECONDS), "Final edit needs a successor")
         } finally {
             controller.close()
             workspace.toFile().deleteRecursively()

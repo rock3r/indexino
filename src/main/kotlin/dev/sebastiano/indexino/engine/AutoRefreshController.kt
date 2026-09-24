@@ -33,6 +33,7 @@ internal class AutoRefreshController(
     private val refresh: (RefreshRequest) -> Unit,
     private val maxWatchedDirectories: Int = Int.MAX_VALUE,
     private val reconciliationIntervalMillis: Long = RECONCILIATION_INTERVAL_MILLIS,
+    private val maxDebounceNanos: Long = MAX_DEBOUNCE_NANOS,
 ) : AutoCloseable {
     private val closed = AtomicBoolean()
     private val watcherKind = AutoRefreshWatcherFactory.configuredKind()
@@ -67,7 +68,11 @@ internal class AutoRefreshController(
 
     init {
         scheduler.scheduleWithFixedDelay(
-            { uncovered.forEach(::enqueue) },
+            {
+                uncovered.forEach { request ->
+                    if (!queued.contains(request) && !active.containsKey(request)) enqueue(request)
+                }
+            },
             reconciliationIntervalMillis,
             reconciliationIntervalMillis,
             TimeUnit.MILLISECONDS,
@@ -217,14 +222,25 @@ internal class AutoRefreshController(
     private fun enqueue(request: RefreshRequest) {
         if (closed.get()) return
         dirty.add(request)
-        dirtyEpoch.computeIfAbsent(request) { AtomicLong() }.incrementAndGet()
+        val epoch = dirtyEpoch.computeIfAbsent(request) { AtomicLong() }.incrementAndGet()
         retryAttempts.remove(request)
         if (mode == AutoRefreshMode.DISABLED || active.containsKey(request) || !queued.add(request))
             return
+        scheduleDebounced(request, epoch, System.nanoTime())
+    }
+
+    private fun scheduleDebounced(request: RefreshRequest, epoch: Long, firstChangeNanos: Long) {
         scheduler.schedule(
             {
-                queued.remove(request)
-                if (!closed.get() && dirty.remove(request)) {
+                val latestEpoch = dirtyEpoch[request]?.get() ?: epoch
+                if (
+                    !closed.get() &&
+                        queued.contains(request) &&
+                        latestEpoch != epoch &&
+                        System.nanoTime() - firstChangeNanos < maxDebounceNanos
+                ) {
+                    scheduleDebounced(request, latestEpoch, firstChangeNanos)
+                } else if (queued.remove(request) && !closed.get() && dirty.remove(request)) {
                     automatic.add(request)
                     refresh(request)
                 }
@@ -356,6 +372,7 @@ internal class AutoRefreshController(
 
     private companion object {
         const val DEBOUNCE_MILLIS = 150L
+        val MAX_DEBOUNCE_NANOS = TimeUnit.SECONDS.toNanos(30)
         const val RECONCILIATION_INTERVAL_MILLIS = 30_000L
         const val MAX_RETRY_ATTEMPTS = 3
         const val MAX_MODULE_DISCOVERY_DEPTH = 6

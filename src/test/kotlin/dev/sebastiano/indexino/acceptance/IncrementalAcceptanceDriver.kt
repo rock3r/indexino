@@ -31,6 +31,7 @@ internal object IncrementalAcceptanceDriver {
     private val watcherWait = 90.minutes
 
     @JvmStatic
+    @Suppress("CyclomaticComplexMethod", "LongMethod")
     fun main(args: Array<String>): Unit = runBlocking {
         require(args.size == 5) { "owned-root plan.json manual|watcher repeats report.json" }
         val root = Path.of(args[0]).toRealPath()
