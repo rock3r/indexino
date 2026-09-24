@@ -107,7 +107,12 @@ internal class IncrementalWorkload(workspace: Path, plan: JsonObject) {
         sources.forEach { Files.writeString(it.path, it.original) }
     }
 
-    suspend fun matches(snapshot: IndexSnapshot, selected: List<Source>, version: Int): Boolean {
+    suspend fun matches(
+        snapshot: IndexSnapshot,
+        selected: List<Source>,
+        version: Int,
+        onMismatch: (Int, String) -> Unit = { _, _ -> },
+    ): Boolean {
         for (source in selected) {
             val current = collectPages {
                 snapshot.findSymbols(
@@ -119,15 +124,20 @@ internal class IncrementalWorkload(workspace: Path, plan: JsonObject) {
                 current.size != 1 ||
                     current.single().name != source.name(version) ||
                     current.single().location.file != source.file
-            )
+            ) {
+                onMismatch(source.ordinal, "declaration")
                 return false
+            }
             val old = collectPages {
                 snapshot.findSymbols(
                     SymbolQuery.named(source.fqn(1 - version)).withMatch(NameMatchMode.FQN),
                     it,
                 )
             }
-            if (old.isNotEmpty()) return false
+            if (old.isNotEmpty()) {
+                onMismatch(source.ordinal, "oldDeclaration")
+                return false
+            }
             val methods = collectPages {
                 snapshot.findSymbols(
                     SymbolQuery.named("${source.fqn(version)}#probe").withMatch(NameMatchMode.FQN),
@@ -138,9 +148,14 @@ internal class IncrementalWorkload(workspace: Path, plan: JsonObject) {
                 methods.size != 1 ||
                     methods.single().arity != version + 1 ||
                     methods.single().location.file != source.file
-            )
+            ) {
+                onMismatch(source.ordinal, "method")
                 return false
-            if (!callerMatches(snapshot, source, version, methods.single().id)) return false
+            }
+            if (!callerMatches(snapshot, source, version, methods.single().id)) {
+                onMismatch(source.ordinal, "caller")
+                return false
+            }
         }
         return true
     }

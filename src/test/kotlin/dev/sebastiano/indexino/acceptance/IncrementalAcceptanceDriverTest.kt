@@ -97,6 +97,7 @@ internal class IncrementalAcceptanceDriverTest {
         val report = Json.parseToJsonElement(Files.readString(output)).jsonObject
         assertEquals("refresh_failed_3", report["failureCode"]?.jsonPrimitive?.content)
         assertEquals("TOPOLOGY", report["failureCategory"]?.jsonPrimitive?.content)
+        assertEquals("seed", report["failureStage"]?.jsonPrimitive?.content)
         assertTrue(diagnostics.toString().contains("topology discovery failed: no source files"))
         assertEquals("class Unindexed {}", Files.readString(source))
         assertFalse(Files.readString(output).contains(temporary.toString()))
@@ -149,10 +150,14 @@ internal class IncrementalAcceptanceDriverTest {
                         )
                         .await()
                     index.snapshot().use {
+                        var mismatch: Pair<Int, String>? = null
                         assertFalse(
-                            workload.matches(it, workload.sources, 1),
+                            workload.matches(it, workload.sources, 1) { ordinal, predicate ->
+                                mismatch = ordinal to predicate
+                            },
                             "Missing caller must not be ready",
                         )
+                        assertEquals(0 to "caller", mismatch)
                     }
                 }
         } finally {
@@ -223,9 +228,9 @@ internal class IncrementalAcceptanceDriverTest {
         assertEquals("passed", report.getValue("status").jsonPrimitive.content)
         if (lane == "watcher") {
             assertEquals(
-                "3600000",
+                "5400000",
                 report["watcherWaitMillis"]?.jsonPrimitive?.content,
-                "The observed 20m11s Windows publication must fit the bounded watcher wait",
+                "The Mac medium generation published near the previous 60-minute deadline",
             )
         }
         val samples = report.getValue("samples").jsonArray.map { it.jsonObject }

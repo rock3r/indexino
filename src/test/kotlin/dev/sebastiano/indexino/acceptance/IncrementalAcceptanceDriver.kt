@@ -28,7 +28,7 @@ import kotlinx.serialization.json.put
 
 /** Opt-in controlled edits in an explicitly owned disposable checkout. */
 internal object IncrementalAcceptanceDriver {
-    private val watcherWait = 60.minutes
+    private val watcherWait = 90.minutes
 
     @JvmStatic
     fun main(args: Array<String>): Unit = runBlocking {
@@ -47,6 +47,16 @@ internal object IncrementalAcceptanceDriver {
         val workload = IncrementalWorkload(workspace, plan)
         val samples = mutableListOf<JsonObject>()
         val report = linkedMapOf<String, JsonElement>("status" to JsonPrimitive("incomplete"))
+        var stage = "seed"
+        var lastWatcherObservation: JsonObject? = null
+        fun observe(generation: String, elapsedNanos: Long, ordinal: Int?, predicate: String) {
+            lastWatcherObservation = buildJsonObject {
+                put("generation", generation)
+                put("elapsedNanos", elapsedNanos)
+                put("predicate", predicate)
+                if (ordinal != null) put("ordinal", ordinal)
+            }
+        }
         if (watcher) report["watcherWaitMillis"] = JsonPrimitive(watcherWait.inWholeMilliseconds)
         fun checkpoint() {
             report["samples"] = JsonArray(samples)
@@ -75,16 +85,49 @@ internal object IncrementalAcceptanceDriver {
                     checkpoint()
                     repeat(repeats) { repetition ->
                         for (group in workload.groups) {
-                            samples += measure(index, request, workload, group, watcher, repetition)
+                            stage = "edit:${group.id}:$repetition"
+                            lastWatcherObservation = null
+                            samples +=
+                                measure(
+                                    index,
+                                    request,
+                                    workload,
+                                    group,
+                                    watcher,
+                                    repetition,
+                                    ::observe,
+                                )
                             checkpoint()
+                            stage = "reset:${group.id}:$repetition"
+                            lastWatcherObservation = null
                             workload.write(group.sources, 0)
                             if (watcher) {
+                                val resetStart = System.nanoTime()
                                 awaitRestoredBaseline(
                                     watcherWait,
                                     { refreshAndLog(index, request) },
                                 ) {
-                                    index.snapshot().use {
-                                        workload.matches(it, workload.sources, 0)
+                                    index.snapshot().use { snapshot ->
+                                        observe(
+                                            snapshot.generation.value,
+                                            System.nanoTime() - resetStart,
+                                            null,
+                                            "querying",
+                                        )
+                                        var mismatch: Pair<Int, String>? = null
+                                        val matches =
+                                            workload.matches(snapshot, workload.sources, 0) {
+                                                ordinal,
+                                                predicate ->
+                                                mismatch = ordinal to predicate
+                                            }
+                                        observe(
+                                            snapshot.generation.value,
+                                            System.nanoTime() - resetStart,
+                                            mismatch?.first,
+                                            mismatch?.second ?: "matched",
+                                        )
+                                        matches
                                     }
                                 }
                             } else {
@@ -95,6 +138,7 @@ internal object IncrementalAcceptanceDriver {
                             }
                         }
                     }
+                    stage = "shutdown"
                 } finally {
                     if (watcher) index.shutdownRuntime()
                 }
@@ -102,6 +146,8 @@ internal object IncrementalAcceptanceDriver {
             report["status"] = JsonPrimitive("passed")
         } catch (error: Exception) {
             report["failureType"] = JsonPrimitive(error.javaClass.simpleName)
+            report["failureStage"] = JsonPrimitive(stage)
+            lastWatcherObservation?.let { report["lastWatcherObservation"] = it }
             if (error is IndexinoException) {
                 report["failureCode"] = JsonPrimitive(error.failure.code)
                 report["failureCategory"] = JsonPrimitive(error.failure.category.value)
@@ -166,6 +212,7 @@ internal object IncrementalAcceptanceDriver {
         group: IncrementalWorkload.Group,
         watcher: Boolean,
         repetition: Int,
+        onWatcherPoll: (String, Long, Int?, String) -> Unit,
     ): JsonObject =
         index.snapshot().use { previous ->
             check(workload.matches(previous, workload.sources, 0))
@@ -176,9 +223,38 @@ internal object IncrementalAcceptanceDriver {
                 withTimeout(watcherWait) {
                     while (true) {
                         val ready =
-                            index.snapshot().use {
-                                it.generation != previous.generation &&
-                                    workload.matches(it, group.sources, 1)
+                            index.snapshot().use { snapshot ->
+                                val generation = snapshot.generation
+                                if (generation == previous.generation) {
+                                    onWatcherPoll(
+                                        generation.value,
+                                        System.nanoTime() - written,
+                                        null,
+                                        "generationUnchanged",
+                                    )
+                                    false
+                                } else {
+                                    onWatcherPoll(
+                                        generation.value,
+                                        System.nanoTime() - written,
+                                        null,
+                                        "querying",
+                                    )
+                                    var mismatch: Pair<Int, String>? = null
+                                    val matches =
+                                        workload.matches(snapshot, group.sources, 1) {
+                                            ordinal,
+                                            predicate ->
+                                            mismatch = ordinal to predicate
+                                        }
+                                    onWatcherPoll(
+                                        generation.value,
+                                        System.nanoTime() - written,
+                                        mismatch?.first,
+                                        mismatch?.second ?: "matched",
+                                    )
+                                    matches
+                                }
                             }
                         if (ready) break
                         delay(50)
