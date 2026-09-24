@@ -158,6 +158,8 @@ scans while keeping origin-specific captured-source reads and unindexed-file fal
 XML origin cleanup skips scans when no resource sources are affected. Otherwise it streams each
 record family, retaining only matching deletion keys rather than decoded whole-index records, and
 deletes those keys in bounded transactions. Origin and relative path both participate in matching.
+Java/Kotlin origin cleanup streams and batches deletions the same way; it still scans each relevant
+record family, so this reduces materialization and transaction overhead, not scan complexity.
 
 This is derived lookup data, not a basic-fact schema change. A writable legacy environment builds
 the index once; failed initialization releases its environment lock. Read-only legacy snapshots

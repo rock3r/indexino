@@ -79,6 +79,7 @@ internal object SourceRecordCleanup {
 
     private const val DELETE_BATCH_SIZE = 256
 
+    @Suppress("CyclomaticComplexMethod")
     private fun deleteOriginMatching(
         store: CodeIndexStore,
         prefix: String,
@@ -87,20 +88,20 @@ internal object SourceRecordCleanup {
         affectedSources: Set<IndexedSource>,
     ) {
         val affectedKeys = affectedSources.mapTo(mutableSetOf()) { it.originId to it.path }
-        store
-            .prefixScan(prefix)
-            .filter { (_, record) ->
-                val matchesLanguage =
-                    when (record) {
-                        is SymbolRecord ->
-                            record.language == language || record.relativeFile.endsWith(extension)
-                        is ReferenceRecord ->
-                            record.language == language || record.relativeFile.endsWith(extension)
-                        is CallSiteRecord -> record.relativeFile.endsWith(extension)
-                        is ResourceUsageRecord ->
-                            record.language == language || record.relativeFile.endsWith(extension)
-                        else -> false
-                    }
+        val keys = mutableListOf<CodeIndexKey>()
+        store.forEachPrefix(prefix) { key, record ->
+            val matchesLanguage =
+                when (record) {
+                    is SymbolRecord ->
+                        record.language == language || record.relativeFile.endsWith(extension)
+                    is ReferenceRecord ->
+                        record.language == language || record.relativeFile.endsWith(extension)
+                    is CallSiteRecord -> record.relativeFile.endsWith(extension)
+                    is ResourceUsageRecord ->
+                        record.language == language || record.relativeFile.endsWith(extension)
+                    else -> false
+                }
+            if (
                 matchesLanguage &&
                     when (record) {
                         is SymbolRecord -> (record.originId to record.relativeFile) in affectedKeys
@@ -112,10 +113,13 @@ internal object SourceRecordCleanup {
                             (record.originId to record.relativeFile) in affectedKeys
                         else -> false
                     }
-            }
-            .map { it.first }
-            .toList()
-            .forEach(store::delete)
+            )
+                keys += key
+            true
+        }
+        keys.chunked(DELETE_BATCH_SIZE).forEach { batch ->
+            store.transaction { batch.forEach(store::delete) }
+        }
     }
 
     private fun deleteMatching(

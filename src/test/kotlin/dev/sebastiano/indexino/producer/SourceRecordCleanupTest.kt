@@ -49,6 +49,59 @@ class SourceRecordCleanupTest {
     }
 
     @Test
+    fun `language cleanup streams records and preserves other origins and files`(
+        @TempDir root: Path
+    ) {
+        XodusCodeIndexStore.open(root.resolve("store")).use { actual ->
+            val records =
+                listOf(
+                    SymbolRecord(
+                        fqn = "remove",
+                        relativeFile = "src/Panel.java",
+                        line = 1,
+                        originId = "workspace",
+                        kind = "class",
+                        name = "remove",
+                    ),
+                    SymbolRecord(
+                        fqn = "otherOrigin",
+                        relativeFile = "src/Panel.java",
+                        line = 1,
+                        originId = "nested",
+                        kind = "class",
+                        name = "otherOrigin",
+                    ),
+                    SymbolRecord(
+                        fqn = "otherFile",
+                        relativeFile = "src/Other.java",
+                        line = 1,
+                        originId = "workspace",
+                        kind = "class",
+                        name = "otherFile",
+                    ),
+                )
+            records.forEach { actual.put(CodeIndexKey.parse("sym:${it.fqn}"), it) }
+            val guarded =
+                object : CodeIndexStore by actual {
+                    override fun prefixScan(
+                        prefix: String
+                    ): Sequence<Pair<CodeIndexKey, CodeIndexRecord>> =
+                        fail("Cleanup must not materialize records for $prefix")
+                }
+            SourceRecordCleanup.deleteLanguageOriginRecords(
+                guarded,
+                "java",
+                ".java",
+                setOf(IndexedSource.workspace(root, "src/Panel.java")),
+            )
+            assertEquals(
+                records.drop(1).toSet(),
+                actual.prefixScan("sym:").map { it.second }.toSet(),
+            )
+        }
+    }
+
+    @Test
     fun `XML cleanup streams records and preserves other origins and files`(@TempDir root: Path) {
         XodusCodeIndexStore.open(root.resolve("store")).use { actual ->
             val records =
