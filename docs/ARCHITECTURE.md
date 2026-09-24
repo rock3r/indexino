@@ -125,7 +125,9 @@ process for durable indexing.
 
 Watcher edits for a scope wait for 150 ms of quiet before starting a refresh, capped at 30 seconds
 of continuous changes. Edits during an active refresh queue a successor so a snapshot captured
-mid-burst does not become the last published view of that burst.
+mid-burst does not become the last published view of that burst. The controller reserves the
+change epoch before launching a worker; a later edit stays dirty even if its event arrives before
+the worker's handle is registered.
 
 Daemon close excludes overlapping cleanup attempts. A failed lease release remains retryable without
 closing an already stopped handshake server again; identity checks still protect successor leases.

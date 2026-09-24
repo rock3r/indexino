@@ -144,6 +144,71 @@ class AutoRefreshControllerTest {
     }
 
     @Test
+    fun `edit after a worker captures input but before its handle is registered starts a successor`() {
+        assertEditBeforeHandleRegistrationStartsSuccessor(promoteForAwaitCurrent = false)
+    }
+
+    @Test
+    fun `await current promotion preserves an edit before handle registration`() {
+        assertEditBeforeHandleRegistrationStartsSuccessor(promoteForAwaitCurrent = true)
+    }
+
+    private fun assertEditBeforeHandleRegistrationStartsSuccessor(promoteForAwaitCurrent: Boolean) {
+        val workspace = Files.createTempDirectory(Path.of("/tmp"), "indexino-launch-edit-")
+        val sourceRoot = workspace.resolve("src/main/kotlin")
+        val source = sourceRoot.resolve("Panel.kt")
+        Files.createDirectories(sourceRoot)
+        Files.writeString(source, "class Panel")
+        val request = RefreshRequest.forScope(IndexScope.gradle(":app"))
+        val version = AtomicInteger(1)
+        val observed = CopyOnWriteArrayList<Int>()
+        val successorStarted = CountDownLatch(1)
+        lateinit var controller: AutoRefreshController
+        controller =
+            AutoRefreshController(
+                workspace,
+                AutoRefreshMode.ENABLED,
+                refresh = {
+                    observed.add(
+                        version.get()
+                    ) // The worker captured this input before registration.
+                    if (observed.size == 1) {
+                        version.set(2)
+                        controller.onPathChangedForTests(source)
+                        val id = RefreshId.of("launched")
+                        controller.onRefreshStarted(
+                            request,
+                            RefreshHandle.inFlight(
+                                id,
+                                CompletableFuture.completedFuture(successfulResult(request, id)),
+                                CompletableFuture(),
+                                stopAction = {},
+                            ),
+                        )
+                    } else {
+                        successorStarted.countDown()
+                    }
+                },
+            )
+        try {
+            controller.register(
+                request,
+                listOf(IndexedSource("workspace", workspace, "src/main/kotlin/Panel.kt")),
+            )
+            controller.onPathChangedForTests(source)
+            if (promoteForAwaitCurrent) controller.startQueuedForAwaitCurrent()
+            assertTrue(
+                successorStarted.await(5, TimeUnit.SECONDS),
+                "An edit after the first capture needs a successor",
+            )
+            assertEquals(listOf(1, 2), observed.toList())
+        } finally {
+            controller.close()
+            workspace.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `burst waits for quiet before starting its first refresh`() {
         val workspace = Files.createTempDirectory(Path.of("/tmp"), "indexino-burst-edit-")
         val sourceRoot = workspace.resolve("src/main/kotlin")
@@ -193,13 +258,24 @@ class AutoRefreshControllerTest {
         val firstRefresh = CountDownLatch(1)
         val lastRefresh = CountDownLatch(1)
         val version = AtomicInteger()
-        val controller =
+        lateinit var controller: AutoRefreshController
+        controller =
             AutoRefreshController(
                 workspace,
                 AutoRefreshMode.ENABLED,
                 refresh = {
                     val current = version.get()
                     observed.add(current)
+                    val id = RefreshId.of("continuous-$current")
+                    controller.onRefreshStarted(
+                        request,
+                        RefreshHandle.inFlight(
+                            id,
+                            CompletableFuture.completedFuture(successfulResult(request, id)),
+                            CompletableFuture(),
+                            stopAction = {},
+                        ),
+                    )
                     firstRefresh.countDown()
                     if (current == 20) lastRefresh.countDown()
                 },

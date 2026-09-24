@@ -47,7 +47,8 @@ internal class AutoRefreshController(
     private val dirty = ConcurrentHashMap.newKeySet<RefreshRequest>()
     private val dirtyEpoch = ConcurrentHashMap<RefreshRequest, AtomicLong>()
     private val active = ConcurrentHashMap<RefreshRequest, String>()
-    private val automatic = ConcurrentHashMap.newKeySet<RefreshRequest>()
+    private val pendingLaunch = ConcurrentHashMap<RefreshRequest, Long>()
+    private val stateLock = Any()
     private val retryAttempts = ConcurrentHashMap<RefreshRequest, Int>()
     private val uncovered = ConcurrentHashMap.newKeySet<RefreshRequest>()
     private val macWatcher: MacFseventsWatcher? =
@@ -132,27 +133,34 @@ internal class AutoRefreshController(
     internal fun onWatcherOverflowForTests() = onWatcherOverflow()
 
     fun onRefreshStarted(request: RefreshRequest, handle: RefreshHandle) {
-        active[request] = handle.id.value
-        val epochAtStart = dirtyEpoch[request]?.get() ?: 0L
-        val automaticRefresh = automatic.remove(request)
+        val (epochAtStart, automaticRefresh) =
+            synchronized(stateLock) {
+                if (active[request] == handle.id.value) return
+                active[request] = handle.id.value
+                val automaticEpoch = pendingLaunch.remove(request)
+                (automaticEpoch ?: (dirtyEpoch[request]?.get() ?: 0L)) to (automaticEpoch != null)
+            }
         scheduler.execute {
             var succeeded = false
             try {
                 kotlinx.coroutines.runBlocking { handle.await() }
                 succeeded = true
             } catch (_: Exception) {
-                if (automaticRefresh) {
-                    dirty.add(request)
-                    scheduleRetry(request)
-                }
+                // Automatic failures retain the dirty epoch for bounded retry.
             } finally {
-                active.remove(request, handle.id.value)
-                val newerChange = (dirtyEpoch[request]?.get() ?: 0L) > epochAtStart
-                if (succeeded && !newerChange) {
-                    dirty.remove(request)
-                    retryAttempts.remove(request)
-                } else if (dirty.contains(request) && (succeeded || !automaticRefresh)) {
-                    enqueue(request)
+                synchronized(stateLock) {
+                    if (active.remove(request, handle.id.value)) {
+                        val newerChange = (dirtyEpoch[request]?.get() ?: 0L) > epochAtStart
+                        if (succeeded && !newerChange) {
+                            dirty.remove(request)
+                            retryAttempts.remove(request)
+                        } else {
+                            if (newerChange || automaticRefresh) dirty.add(request)
+                            if (!succeeded && automaticRefresh) scheduleRetry(request)
+                            else if (dirty.contains(request) && !queued.contains(request))
+                                enqueue(request)
+                        }
+                    }
                 }
             }
         }
@@ -161,10 +169,15 @@ internal class AutoRefreshController(
     fun startQueuedForAwaitCurrent() {
         if (mode == AutoRefreshMode.DISABLED) return
         dirty.toList().forEach { request ->
-            if (active.containsKey(request)) return@forEach
-            queued.remove(request)
-            automatic.add(request)
-            refresh(request)
+            val launch =
+                synchronized(stateLock) {
+                    if (active.containsKey(request) || pendingLaunch.containsKey(request)) false
+                    else {
+                        queued.remove(request)
+                        claimLaunch(request)
+                    }
+                }
+            if (launch) refresh(request)
         }
     }
 
@@ -220,30 +233,53 @@ internal class AutoRefreshController(
     }
 
     private fun enqueue(request: RefreshRequest) {
-        if (closed.get()) return
-        dirty.add(request)
-        val epoch = dirtyEpoch.computeIfAbsent(request) { AtomicLong() }.incrementAndGet()
-        retryAttempts.remove(request)
-        if (mode == AutoRefreshMode.DISABLED || active.containsKey(request) || !queued.add(request))
-            return
-        scheduleDebounced(request, epoch, System.nanoTime())
+        synchronized(stateLock) {
+            if (closed.get()) return
+            dirty.add(request)
+            val epoch = dirtyEpoch.computeIfAbsent(request) { AtomicLong() }.incrementAndGet()
+            retryAttempts.remove(request)
+            if (
+                mode == AutoRefreshMode.DISABLED ||
+                    active.containsKey(request) ||
+                    pendingLaunch.containsKey(request) ||
+                    !queued.add(request)
+            )
+                return
+            scheduleDebounced(request, epoch, System.nanoTime())
+        }
+    }
+
+    private fun claimLaunch(request: RefreshRequest): Boolean {
+        if (
+            closed.get() ||
+                pendingLaunch.containsKey(request) ||
+                active.containsKey(request) ||
+                !dirty.remove(request)
+        )
+            return false
+        pendingLaunch[request] = dirtyEpoch[request]?.get() ?: 0L
+        return true
     }
 
     private fun scheduleDebounced(request: RefreshRequest, epoch: Long, firstChangeNanos: Long) {
         scheduler.schedule(
             {
-                val latestEpoch = dirtyEpoch[request]?.get() ?: epoch
-                if (
-                    !closed.get() &&
-                        queued.contains(request) &&
-                        latestEpoch != epoch &&
-                        System.nanoTime() - firstChangeNanos < maxDebounceNanos
-                ) {
-                    scheduleDebounced(request, latestEpoch, firstChangeNanos)
-                } else if (queued.remove(request) && !closed.get() && dirty.remove(request)) {
-                    automatic.add(request)
-                    refresh(request)
-                }
+                val launch =
+                    synchronized(stateLock) {
+                        val latestEpoch = dirtyEpoch[request]?.get() ?: epoch
+                        if (
+                            !closed.get() &&
+                                queued.contains(request) &&
+                                latestEpoch != epoch &&
+                                System.nanoTime() - firstChangeNanos < maxDebounceNanos
+                        ) {
+                            scheduleDebounced(request, latestEpoch, firstChangeNanos)
+                            false
+                        } else {
+                            queued.remove(request) && claimLaunch(request)
+                        }
+                    }
+                if (launch) refresh(request)
             },
             DEBOUNCE_MILLIS,
             TimeUnit.MILLISECONDS,
@@ -260,11 +296,9 @@ internal class AutoRefreshController(
         }
         scheduler.schedule(
             {
-                queued.remove(request)
-                if (!closed.get() && dirty.contains(request) && !active.containsKey(request)) {
-                    automatic.add(request)
-                    refresh(request)
-                }
+                val launch =
+                    synchronized(stateLock) { queued.remove(request) && claimLaunch(request) }
+                if (launch) refresh(request)
             },
             RETRY_DELAYS_MILLIS[attempt - 1],
             TimeUnit.MILLISECONDS,
