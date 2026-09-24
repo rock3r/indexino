@@ -33,6 +33,55 @@ class InProcessIndexinoTest {
     }
 
     @Test
+    fun `refresh reports generation publication separately from store build`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-publication-progress-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            Indexino.connectBlocking(workspace).use { index ->
+                val lines = java.util.concurrent.CopyOnWriteArrayList<String>()
+                index.onRefreshSucceededForRuntime = { _, _, _ -> }
+                runSuspend {
+                    index
+                        .refresh(
+                            RefreshRequest.forScope(IndexScope.gradle(":ui")),
+                            progress = lines::add,
+                            machineProgress = null,
+                        )
+                        .await()
+                }
+                val started = lines.indexOf("index phase=publication state=started")
+                assertTrue(started >= 0, "publication missing: $lines")
+                assertTrue(
+                    lines.drop(started + 1).any {
+                        it.matches(
+                            Regex("index phase=publication state=completed durationMillis=\\d+")
+                        )
+                    },
+                    "publication completion missing: $lines",
+                )
+                val watcher = lines.indexOf("index phase=watcher-registration state=started")
+                assertTrue(watcher > started, "watcher registration missing: $lines")
+                assertTrue(
+                    lines.drop(watcher + 1).any {
+                        it.matches(
+                            Regex(
+                                "index phase=watcher-registration state=completed durationMillis=\\d+"
+                            )
+                        )
+                    },
+                    "watcher registration completion missing: $lines",
+                )
+            }
+        } finally {
+            if (previousCacheDirectory == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheDirectory)
+        }
+    }
+
+    @Test
     fun `manual refresh exposes paged symbols and references through a stable snapshot`() {
         val workspace = createGitWorkspace()
         val cacheDirectory = createTempDirectory("indexino-facade-cache-")

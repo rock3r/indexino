@@ -20,6 +20,7 @@ import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 import org.junit.jupiter.api.io.TempDir
 
 class IndexBuildRunnerTest {
@@ -116,6 +117,7 @@ class IndexBuildRunnerTest {
         git(workspace, "commit", "-m", "workspace")
 
         val machineProgress = mutableListOf<String>()
+        val diagnosticProgress = mutableListOf<String>()
         val execution =
             IndexBuildRunner(
                     project = workspace,
@@ -124,13 +126,29 @@ class IndexBuildRunnerTest {
                     applications = emptyList(),
                     bazelQueryExecutor = null,
                     bazelProcessRunner = null,
-                    progress = {},
+                    progress = diagnosticProgress::add,
                     machineProgress = JsonlIndexBuildProgressReporter(machineProgress::add),
                     storeRootOverride = tempDir.resolve("store"),
                 )
                 .runDetailed()
 
         assertEquals(CliExitCodes.SUCCESS, execution.exitCode)
+        for (phase in
+            listOf(
+                "topology",
+                "source-capture",
+                "source-preview",
+                "store-build",
+                "checkpoint",
+                "change-detection",
+                "producer:java-source",
+            )) {
+            val started = diagnosticProgress.indexOf("index phase=$phase state=started")
+            val completed = diagnosticProgress.indexOfFirst {
+                it.matches(Regex("index phase=$phase state=completed durationMillis=\\d+"))
+            }
+            assertTrue(started >= 0 && completed > started, "$phase: $diagnosticProgress")
+        }
         assertContains(
             machineProgress.first { it.contains("discovery_completed") },
             "\"phaseTotal\":3",
@@ -565,8 +583,8 @@ class IndexBuildRunnerTest {
                     applications = emptyList(),
                     bazelQueryExecutor = null,
                     bazelProcessRunner = null,
-                    progress = {
-                        if (!headAdvanced) {
+                    progress = { message ->
+                        if (!headAdvanced && message == "index phase=store-build state=started") {
                             headAdvanced = true
                             Files.writeString(workspace.resolve("head-marker.txt"), "advanced")
                             git(workspace, "add", "head-marker.txt")

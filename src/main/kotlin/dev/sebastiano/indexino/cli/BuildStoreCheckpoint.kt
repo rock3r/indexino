@@ -11,12 +11,14 @@ import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.BasicFileAttributes
+import java.util.concurrent.TimeUnit
 import kotlin.io.path.exists
 
 /** Checkpoints the physical writable store, never an overlay's inherited read-only view. */
 internal class BuildStoreCheckpoint(
     private val store: CodeIndexStore,
     private val manifestPath: Path,
+    private val progress: (String) -> Unit = {},
 ) : AutoCloseable {
     val directory: Path = directoryFor(manifestPath)
     private var backup: XodusCodeIndexStore? = null
@@ -40,6 +42,8 @@ internal class BuildStoreCheckpoint(
     }
 
     private fun capture() {
+        progress("index phase=checkpoint state=started")
+        val started = System.nanoTime()
         Files.createDirectories(directory.parent)
         Files.createDirectory(directory)
         created = true
@@ -47,6 +51,8 @@ internal class BuildStoreCheckpoint(
         val target = XodusCodeIndexStore.open(directory.resolve("records"))
         backup = target
         copyRecords(store, target)
+        val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+        progress("index phase=checkpoint state=completed durationMillis=$elapsedMillis")
     }
 
     private fun restore() {

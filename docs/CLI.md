@@ -111,7 +111,12 @@ Bazel/Gradle, may open a commit-addressed store under the project, runs core pro
 commit is provenance only. Core producers build Kotlin/Java symbols, references, and XML facts;
 plugins (e.g. selection-context) are loaded explicitly or bundled in the fat JAR.
 
-Progress lines (producer names and `[N/M] file` per source file) go to stderr.
+Progress lines (producer names and `[N/M] file` per source file) go to stderr. Text progress also
+marks topology, source capture, aggregate source preview, store build, its checkpoint copy,
+change detection, plugins, each producer, generation publication and runtime watcher registration as
+`index phase=<name> state=started` followed on success by
+`index phase=<name> state=completed durationMillis=<elapsed>`. These coarse monotonic timings are
+diagnostic, not a guarantee of incremental speed; incomplete phases have no completion line.
 
 #### Machine progress JSONL
 

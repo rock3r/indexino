@@ -12,6 +12,9 @@ import java.io.ByteArrayOutputStream
 import java.io.PrintStream
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -33,6 +36,58 @@ import org.junit.jupiter.api.io.TempDir
 
 internal class IncrementalAcceptanceDriverTest {
     @TempDir lateinit var temporary: Path
+
+    @Test
+    fun `stage heartbeat remains visible before a sample finishes`() {
+        val lines = CopyOnWriteArrayList<String>()
+        val heartbeat = CountDownLatch(1)
+        IncrementalAcceptanceDriver.Progress(20L) { line ->
+                lines.add(line)
+                if ("source-capture" in line) heartbeat.countDown()
+            }
+            .use { progress ->
+                progress.stage("edit:medium:0")
+                progress.observe("generation-a", 123L, 11, "declaration")
+                progress.refreshProbe = {
+                    buildJsonObject {
+                        put("phaseDetail", "index phase=source-capture state=started")
+                    }
+                }
+                assertTrue(heartbeat.await(2, TimeUnit.SECONDS))
+                val latest = Json.parseToJsonElement(lines.last()).jsonObject
+                assertEquals("edit:medium:0", latest["stage"]?.jsonPrimitive?.content)
+                assertEquals("generation-a", latest["generation"]?.jsonPrimitive?.content)
+                assertEquals("declaration", latest["predicate"]?.jsonPrimitive?.content)
+                assertEquals("11", latest["ordinal"]?.jsonPrimitive?.content)
+                assertTrue(latest["at"]?.jsonPrimitive?.content?.isNotEmpty() == true)
+                assertEquals(
+                    "index phase=source-capture state=started",
+                    latest["refresh"]?.jsonObject?.get("phaseDetail")?.jsonPrimitive?.content,
+                )
+            }
+    }
+
+    @Test
+    fun `slow daemon progress query cannot silence the stage heartbeat`() {
+        val lines = CopyOnWriteArrayList<String>()
+        val blocked = CountDownLatch(1)
+        val beat = CountDownLatch(2)
+        IncrementalAcceptanceDriver.Progress(20L) { line ->
+                lines.add(line)
+                beat.countDown()
+            }
+            .use { progress ->
+                try {
+                    progress.refreshProbe = {
+                        blocked.await(1, TimeUnit.SECONDS)
+                        null
+                    }
+                    assertTrue(beat.await(250, TimeUnit.MILLISECONDS), "$lines")
+                } finally {
+                    blocked.countDown()
+                }
+            }
+    }
 
     @Test
     fun `watcher baseline reset retries a joined stale refresh and remains bounded`(): Unit =
@@ -226,11 +281,12 @@ internal class IncrementalAcceptanceDriverTest {
         )
         val report = Json.parseToJsonElement(Files.readString(output)).jsonObject
         assertEquals("passed", report.getValue("status").jsonPrimitive.content)
+        assertEquals("600000", report["runWaitMillis"]?.jsonPrimitive?.content)
         if (lane == "watcher") {
             assertEquals(
-                "5400000",
+                "600000",
                 report["watcherWaitMillis"]?.jsonPrimitive?.content,
-                "The Mac medium generation published near the previous 60-minute deadline",
+                "An incremental stage exceeding ten minutes is a performance failure",
             )
         }
         val samples = report.getValue("samples").jsonArray.map { it.jsonObject }

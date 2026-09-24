@@ -53,6 +53,7 @@ import java.util.HexFormat
 import java.util.UUID
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 @Suppress("LargeClass", "TooManyFunctions")
@@ -329,6 +330,8 @@ private constructor(
                 )
                 val revision = manifest.toWorkspaceRevision()
                 val generation = manifest.toGenerationId(revision)
+                progress("index phase=publication state=started")
+                val publicationStart = System.nanoTime()
                 operation.commitIfActive {
                     publishGenerationOrAbortIfClosed(
                         manifest.commit,
@@ -342,11 +345,21 @@ private constructor(
                         execution.tombstonePrefixes,
                     )
                 }
-                onRefreshSucceededForRuntime?.invoke(
-                    request,
-                    execution.sources,
-                    execution.topologyRoots,
+                val publicationMillis =
+                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - publicationStart)
+                progress(
+                    "index phase=publication state=completed durationMillis=$publicationMillis"
                 )
+                onRefreshSucceededForRuntime?.let { register ->
+                    progress("index phase=watcher-registration state=started")
+                    val registrationStart = System.nanoTime()
+                    register(request, execution.sources, execution.topologyRoots)
+                    val registrationMillis =
+                        TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - registrationStart)
+                    progress(
+                        "index phase=watcher-registration state=completed durationMillis=$registrationMillis"
+                    )
+                }
                 val changedFileCount = execution.changes?.changedSources?.size ?: 0
                 val removedFileCount = execution.changes?.deletedSources?.size ?: 0
                 val result =

@@ -36,6 +36,7 @@ import dev.sebastiano.indexino.topology.bazel.BazelProcessRunner
 import dev.sebastiano.indexino.topology.bazel.BazelQueryExecutor
 import java.nio.file.Path
 import java.time.Instant
+import java.util.concurrent.TimeUnit
 import kotlin.io.path.exists
 
 internal class IndexBuildRunner(
@@ -101,13 +102,15 @@ internal class IndexBuildRunner(
         latestOverlayDeltaPath = null
         latestTombstonePrefixes = emptyList()
         val topologyResult =
-            TopologyResolver.resolve(
-                project = project,
-                request = topologyRequest,
-                bazelQueryExecutor = bazelQueryExecutor,
-                bazelProcessRunner = bazelProcessRunner,
-                onStderr = progress,
-            )
+            timedPhase("topology") {
+                TopologyResolver.resolve(
+                    project = project,
+                    request = topologyRequest,
+                    bazelQueryExecutor = bazelQueryExecutor,
+                    bazelProcessRunner = bazelProcessRunner,
+                    onStderr = progress,
+                )
+            }
         if (
             topologyResult.sourceFiles.isEmpty() &&
                 topologyResult.externalSources.none { it.sourceFiles.isNotEmpty() }
@@ -141,14 +144,14 @@ internal class IndexBuildRunner(
             machineProgress?.failed(CliExitCodes.INVALID_ARGUMENTS, message)
             return CliExitCodes.INVALID_ARGUMENTS
         }
-        val sourceSnapshot = SourceContentSnapshot.capture(sources)
+        val sourceSnapshot = timedPhase("source-capture") { SourceContentSnapshot.capture(sources) }
         val pluginCoordinates = pluginRegistry.selectedCoordinates(applications)
         machineProgress?.discoveryCompleted(sources.size)
         val commit = GitHeadResolver.resolve(project)
         val resolver = IndexPathResolver(project, storeRootOverride = storeRootOverride)
         val manifestPath = resolver.resolveManifest(commit)
         BuildStoreCheckpoint.requireRecovered(manifestPath)
-        val previewHash = previewHash(sources, sourceSnapshot)
+        val previewHash = timedPhase("source-preview") { previewHash(sources, sourceSnapshot) }
         val origins =
             resolveOrigins(sources, externalOriginMetadata, topologyResult.topology, sourceSnapshot)
         val existingManifest = manifestPath.takeIf { it.exists() }?.let(ManifestIO::read)
@@ -216,27 +219,30 @@ internal class IndexBuildRunner(
             latestForkBase = forkBase
         }
 
-        buildStore(
-            resolver = resolver,
-            commit = commit,
-            scope = topologyResult.scope,
-            topology = topologyResult.topology,
-            resolvedTopologyDigest = topologyResult.resolvedTopologyDigest,
-            includeDeps = topologyResult.includeDeps,
-            sourceFiles = sourceFiles,
-            sources = sources,
-            sourceSnapshot = sourceSnapshot,
-            origins = origins,
-            previewHash = previewHash,
-            pluginRegistry = pluginRegistry,
-            pluginCoordinates = pluginCoordinates,
-            forceFullRebuild =
-                (existingManifest == null && forkBase == null) ||
-                    (existingManifest != null &&
-                        (existingManifest.indexerVersion != Version.NAME ||
-                            existingManifest.basicFactSchemaVersion != BASIC_FACT_SCHEMA_VERSION)),
-            forkBase = forkBase,
-        )
+        timedPhase("store-build") {
+            buildStore(
+                resolver = resolver,
+                commit = commit,
+                scope = topologyResult.scope,
+                topology = topologyResult.topology,
+                resolvedTopologyDigest = topologyResult.resolvedTopologyDigest,
+                includeDeps = topologyResult.includeDeps,
+                sourceFiles = sourceFiles,
+                sources = sources,
+                sourceSnapshot = sourceSnapshot,
+                origins = origins,
+                previewHash = previewHash,
+                pluginRegistry = pluginRegistry,
+                pluginCoordinates = pluginCoordinates,
+                forceFullRebuild =
+                    (existingManifest == null && forkBase == null) ||
+                        (existingManifest != null &&
+                            (existingManifest.indexerVersion != Version.NAME ||
+                                existingManifest.basicFactSchemaVersion !=
+                                    BASIC_FACT_SCHEMA_VERSION)),
+                forkBase = forkBase,
+            )
+        }
         machineProgress?.completed("indexed")
         return CliExitCodes.SUCCESS
     }
@@ -254,6 +260,15 @@ internal class IndexBuildRunner(
             includeWorkspaceWithoutSources = topology != "repo-manifest",
             sourceSnapshot = sourceSnapshot,
         )
+
+    private fun <T> timedPhase(phase: String, block: () -> T): T {
+        progress("index phase=$phase state=started")
+        val start = System.nanoTime()
+        val result = block()
+        val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start)
+        progress("index phase=$phase state=completed durationMillis=$elapsedMillis")
+        return result
+    }
 
     private fun previewHash(
         sources: List<IndexedSource>,
@@ -332,6 +347,7 @@ internal class IndexBuildRunner(
                     }
             }
 
+    @Suppress("LongMethod")
     private fun buildStore(
         resolver: IndexPathResolver,
         commit: String,
@@ -381,10 +397,13 @@ internal class IndexBuildRunner(
                 baseStore
             }
         store.use {
-            BuildStoreCheckpoint(writableStore, resolver.resolveManifest(commit)).use { checkpoint
-                ->
+            BuildStoreCheckpoint(writableStore, resolver.resolveManifest(commit), progress).use {
+                checkpoint ->
                 checkpoint.run {
-                    val changes = detectChanges(store, sources, sourceSnapshot, forceFullRebuild)
+                    val changes =
+                        timedPhase("change-detection") {
+                            detectChanges(store, sources, sourceSnapshot, forceFullRebuild)
+                        }
                     latestChanges = changes
                     val context =
                         IndexBuildContext(
@@ -407,10 +426,14 @@ internal class IndexBuildRunner(
                         progress(producer.displayName)
                         val phaseTotal = producer.progressTotal?.invoke(context)
                         machineProgress?.phaseStarted(producer.id, phaseTotal)
-                        producer.produce(context.copy(activePhase = producer.id), store)
+                        timedPhase("producer:${producer.id}") {
+                            producer.produce(context.copy(activePhase = producer.id), store)
+                        }
                         machineProgress?.phaseCompleted(producer.id, phaseTotal)
                     }
-                    PluginAnalyzerRunner(pluginRegistry).analyze(context, applications.toSet())
+                    timedPhase("plugins") {
+                        PluginAnalyzerRunner(pluginRegistry).analyze(context, applications.toSet())
+                    }
                     val manifest =
                         IndexManifest(
                             commit = commit,

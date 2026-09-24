@@ -231,6 +231,8 @@ leaves completed logs read-only), and remove it without following symbolic links
 errors retain their affected path and cause. A failed restore retains the checkpoint, without changing
 its file permissions. Subsequent builds reject the active/unfinished checkpoint before accepting even
 a fresh compatibility index.
+The diagnostic `checkpoint` phase measures this record-copy capture separately from change
+detection and producers; it does not change the checkpoint or rollback semantics.
 This is recovery for mutable staging, not a crash-atomic transaction or an automatic crash-recovery
 service. Preserve retained checkpoints for investigation; removing only the checkpoint can expose
 partially restored staging as valid. Published generation manifests and immutable packs are not
