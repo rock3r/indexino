@@ -8,7 +8,7 @@ description: >
   (e.g. CI infrastructure issues, exhausted flaky retries, or ambiguous/blocking review
   feedback). Use when the user asks to monitor a PR, watch CI, handle review comments, or
   keep an eye on failures and feedback on an open PR.
-allowed-tools: Bash(python3 */skills/babysit-pr/scripts/*), Bash(gh pr *), Bash(gh run *), Bash(gh api *), Bash(git fetch *), Bash(git rebase *), Bash(git merge *), Bash(git checkout *), Bash(git switch *), Bash(git push *), Bash(git commit *), Bash(git diff *), Bash(git log *), Bash(git status), Bash(git branch *), Bash(git worktree *), Bash(./gradlew check *), Read, Edit
+allowed-tools: Bash(python3 */skills/babysit-pr/scripts/*), Bash(gh pr *), Bash(gh run *), Bash(gh api *), Bash(git fetch *), Bash(git rebase *), Bash(git merge *), Bash(git checkout *), Bash(git switch *), Bash(git push *), Bash(git commit *), Bash(git diff *), Bash(git log *), Bash(git status), Bash(git branch *), Bash(git rev-parse *), Bash(git worktree *), Bash(./gradlew check *), Read, Edit
 ---
 
 # PR Babysitter
@@ -78,31 +78,30 @@ when CodeRabbit is still reviewing (`wait_coderabbit`), or when CI is green, but
 
 ## Post-merge cleanup (when `stop_pr_closed` and PR is merged)
 
-After a PR is merged, clean up the local environment automatically:
+`stop_pr_closed` also fires for a PR that was closed without merging. Clean up only when the PR was merged: check
+`pr.merged` in the snapshot, or run `gh pr view <n> --json mergedAt` and confirm that `mergedAt` is set. For a PR
+that was closed without merging, keep everything and tell the user.
 
-1. **If currently on the PR branch, switch away first** (for example to `main`):
-   ```bash
-   git checkout main
-   ```
+Run every step from the main checkout, never from inside the PR's worktree. If the current working directory is the
+worktree, `cd` to the main checkout first. Skip any step whose worktree or branch does not exist locally.
 
-2. **Delete the local branch** (squash merges leave it unmerged by default):
+1. **Remove the git worktree**, if the branch is checked out in one. Run `git worktree list` and look for an entry
+   whose branch matches the PR's `head_branch`:
    ```bash
-   git branch -D <head_branch>
-   ```
-
-3. **Remove the git worktree**, if the branch was checked out in one:
-   ```bash
-   # Find worktrees for this branch
-   git worktree list
-   # Remove if found (adjust path as needed)
    git worktree remove /path/to/worktree
    ```
+   Git refuses when the worktree has uncommitted changes. Do not force it; ask the user instead. Remove the
+   worktree before deleting the branch, because Git will not delete a branch that a worktree still uses.
 
-**How to detect a worktree:** run `git worktree list` and check if any entry's branch matches the PR's `head_branch`. If the current working directory IS the worktree, `cd` to the main checkout first before removing it.
+2. **Delete the local branch only when nothing would be lost.** Squash merges leave the branch looking unmerged,
+   so `git branch -d` refuses and `git branch -D` is needed. Force-deleting a branch can lose commits, so first
+   prove that the local tip is exactly the head that was merged:
+   ```bash
+   test "$(git rev-parse <head_branch>)" = "$(gh pr view <n> --json headRefOid --jq .headRefOid)" && git branch -D <head_branch>
+   ```
+   If the local tip differs, it has commits that were never merged. Keep the branch and tell the user.
 
 **Only delete the local branch and worktree** — never touch remote branches (the remote is already deleted by GitHub's "delete branch on merge" setting or the `--delete-branch` flag used at merge time).
-
-Skip silently if the branch or worktree doesn't exist locally.
 
 ## Push discipline — batch all fixes before pushing (cost control)
 
@@ -123,13 +122,16 @@ After pushing the fix batch, resolve all bot threads on GitHub (or reply + resol
 
 If either bot finishes while you are mid-fix and posts new comments, incorporate those fixes into the same commit before pushing.
 
+Pushing also follows the approval rules in `AGENTS.md`: push only to the PR branch this task is working on, and only
+after TDD is complete and `./gradlew check` passes.
+
 ## Conflict + Bugbot batching strategy (use this when PR shows `CONFLICTING`/`DIRTY`)
 
 When GitHub reports merge conflicts while Bugbot/Codex/CI is still running:
 
 1. **Do not push immediately.** Wait until neither Bugbot nor Codex is `IN_PROGRESS`.
 2. Snapshot latest status/comments.
-3. If conflict remains, rebase branch onto `origin/main` (or merge main if repo policy prefers).
+3. If conflict remains, merge `origin/main` into the PR branch. That keeps history intact. Rebasing rewrites the branch's history and needs a force push, so only rebase when the user asks for it.
 4. Resolve conflicts and **in the same fix cycle** apply all actionable Bugbot/Codex comments.
 5. Run `./gradlew check`.
 6. Push once.
@@ -159,6 +161,11 @@ Codex does **not** use a CI check. Instead it uses emoji reactions on the PR:
 - **👀 reaction removed, review comments posted** → Codex found issues. Fix them the same way as Bugbot comments (see push discipline).
 
 The watcher automatically detects the 👀 reaction via the PR reactions API and surfaces `codex_gate` in the snapshot.
+If the reactions lookup fails, `codex_gate.status` is `unknown`. The watcher cannot tell whether Codex is still
+reviewing, so it does not emit `stop_ready_to_merge` until the lookup works again.
+
+Codex also keeps a "Codex Review Summary" status table as a PR comment and edits it on every review. It is not a
+finding, so the watcher ignores it.
 
 ### CodeRabbit (conditional)
 
@@ -184,6 +191,10 @@ The watcher surfaces feedback from:
 - **chatgpt-codex-connector[bot]** — OpenAI Codex (emoji reaction-based code review; always a merge gate)
 - **coderabbitai[bot]** — CodeRabbit (CI check + inline review comments; a **presence-conditional** gate, see below)
 - Trusted humans: authors with `OWNER`, `MEMBER`, or `COLLABORATOR` association
+
+Comments by the account that `gh` is authenticated as are never surfaced as new review items. The agent usually
+authenticates as the owner, so the owner's own unresolved inline threads still go into `blocking_review_items` and
+block merge readiness.
 
 ### CodeRabbit (presence-conditional gate)
 
@@ -245,14 +256,21 @@ Use `--snapshot` for an instant point-in-time view with no waiting.
 
 All modes emit newline-delimited JSON.
 
-- `--once` / `--snapshot` / `--retry-failed-now`: emit a top-level snapshot/result object where `actions` is directly available.
-- `--watch`: emits event envelopes:
-  - `{"event":"snapshot","payload":{"snapshot":{...},"state_file":"...","next_poll_seconds":30}}`
-  - `{"event":"stop","payload":{...}}`
+Where the `actions` list is depends on the mode:
 
-In `--watch`, read actions from `payload.snapshot.actions` for `snapshot` events and `payload.actions` for `stop` events.
+| Mode | Read the actions from |
+|---|---|
+| `--once`, `--snapshot` | top-level `actions` |
+| `--retry-failed-now` | `snapshot.actions`. The top level reports the rerun: `rerun_attempted`, `rerun_count`, `reason`. |
+| `--watch` | `payload.snapshot.actions` on `snapshot` events, `payload.actions` on `stop` events |
 
-`blocking_review_items` contains actionable unresolved inline review comments. When thread-resolution lookup is unavailable, inline blocking falls back to a 30-minute freshness heuristic. While non-empty, `stop_ready_to_merge` is not emitted.
+`--watch` emits event envelopes:
+- `{"event":"snapshot","payload":{"snapshot":{...},"state_file":"...","next_poll_seconds":30}}`
+- `{"event":"stop","payload":{...}}`
+
+`blocking_review_items` contains actionable unresolved inline review comments. When the thread-resolution lookup is unavailable, the watcher fails closed: every actionable inline review comment blocks, whatever its age. While the list is not empty, `stop_ready_to_merge` is not emitted.
+
+`checks.failed_count` includes cancelled checks. `gh pr checks` exits 1 when a check failed and 8 while checks are pending; the watcher still reads the JSON it prints in both cases.
 
 Example snapshot payload shape (`--once` / `--snapshot`, or `--watch` under `payload.snapshot`):
 
