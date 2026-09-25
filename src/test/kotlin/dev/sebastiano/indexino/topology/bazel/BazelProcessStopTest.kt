@@ -118,6 +118,39 @@ class BazelProcessStopTest {
     }
 
     @Test
+    fun `running client reports its pid before the command completes`() {
+        val marker = workspace.resolve("observed.pid")
+        val started = AtomicReference<Long>()
+        val failure = AtomicReference<Throwable>()
+        val worker = Thread {
+            try {
+                LiveBazelProcessRunner.runCommand(
+                    command("open-output", marker),
+                    workspace,
+                    onStarted = started::set,
+                )
+            } catch (thrown: Throwable) {
+                failure.set(thrown)
+            }
+        }
+        worker.start()
+        var owned: ProcessHandle? = null
+        try {
+            owned = awaitProcess(marker)
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (started.get() == null && System.nanoTime() < deadline) Thread.sleep(10)
+            assertEquals(owned.pid(), started.get())
+            assertTrue(worker.isAlive, "The client PID must be visible while the query is blocked")
+        } finally {
+            worker.interrupt()
+            owned?.let(::terminateFixture)
+            worker.join(8000)
+        }
+        assertFalse(worker.isAlive)
+        assertIs<InterruptedException>(failure.get())
+    }
+
+    @Test
     fun `command deadline terminates its direct client before reporting timeout`() {
         val marker = workspace.resolve("deadline.pid")
         val failure = AtomicReference<Throwable>()

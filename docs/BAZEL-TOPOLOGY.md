@@ -130,6 +130,12 @@ propagates and prevents another query or BUILD-parse fallback. Queries have no n
 limit; explicit refresh stop interrupts their wait. The ten-second `bazel version` probe remains
 only for classifying a separately injected query executor's topology.
 
+Each query attempt reports its ordinal start, client PID once launched, and completion exit code
+and elapsed time through the existing progress callback. A failed attempt reports its exception
+class and elapsed time without logging query text or source paths. A query start without a client
+PID narrows the delay to process launch or its callback; a client PID without completion identifies
+an unfinished client wait. Neither alone distinguishes Bazel server startup from query evaluation.
+
 Query and probe output is captured in a temporary file rather than drained synchronously from a
 pipe. On interruption or timeout, Indexino terminates only the directly launched client, waits up
 to two seconds, then forcibly terminates it and waits up to two more seconds. Interrupt status is

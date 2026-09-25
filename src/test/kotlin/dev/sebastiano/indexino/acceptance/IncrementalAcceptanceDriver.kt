@@ -307,6 +307,12 @@ internal object IncrementalAcceptanceDriver {
         }
     }
 
+    internal fun activeQueryDetail(lines: List<String>): String? {
+        val latestPhase = lines.lastOrNull { it.startsWith("index phase=") }
+        if (latestPhase != null && latestPhase != "index phase=topology state=started") return null
+        return lines.lastOrNull { it.startsWith("bazel query index=") }
+    }
+
     private fun currentRefresh(index: Indexino, request: RefreshRequest): JsonObject = runBlocking {
         val active = index.activeRefreshes().firstOrNull { it.request == request }
         if (active == null) {
@@ -320,6 +326,7 @@ internal object IncrementalAcceptanceDriver {
                 journal.text
                     .lastOrNull { it.startsWith("index phase=") }
                     ?.let { put("phaseDetail", it) }
+                activeQueryDetail(journal.text)?.let { put("queryDetail", it) }
                 event?.get("event")?.let { put("event", it) }
                 event?.get("phase")?.let { put("phase", it) }
                 event?.get("phaseCompleted")?.let { put("phaseCompleted", it) }

@@ -3,6 +3,7 @@ package dev.sebastiano.indexino.topology.bazel
 import dev.sebastiano.indexino.topology.TopologyResult
 import java.io.IOException
 import java.nio.file.Path
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import kotlin.io.path.exists
 import kotlin.io.path.isDirectory
@@ -76,11 +77,38 @@ internal object BazelTopology {
         runner: BazelProcessRunner = LiveBazelProcessRunner,
         onStderr: (String) -> Unit = { System.err.println(it) },
     ): BazelQueryResult {
+        var queryIndex = 0
+        val observedRunner = BazelProcessRunner { query, directory ->
+            val index = ++queryIndex
+            onStderr("bazel query index=$index state=started")
+            val start = System.nanoTime()
+            try {
+                val result =
+                    if (runner === LiveBazelProcessRunner) {
+                        LiveBazelProcessRunner.runObserved(query, directory) { pid ->
+                            onStderr("bazel query index=$index state=client-started pid=$pid")
+                        }
+                    } else {
+                        runner.run(query, directory)
+                    }
+                onStderr(
+                    "bazel query index=$index state=completed exitCode=${result.exitCode} " +
+                        "durationMillis=${TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start)}"
+                )
+                result
+            } catch (@Suppress("TooGenericExceptionCaught") failure: Exception) {
+                onStderr(
+                    "bazel query index=$index state=failed cause=${failure.javaClass.simpleName} " +
+                        "durationMillis=${TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start)}"
+                )
+                throw failure
+            }
+        }
         if (includeDeps) {
             val dependencyQuery = "kind('source file', deps($target))"
-            val primary = runner.runActive(dependencyQuery, workspace)
+            val primary = observedRunner.runActive(dependencyQuery, workspace)
             if (primary.exitCode == 0) {
-                val roles = BazelCodeRoleQuery.dependencySources(target, workspace, runner)
+                val roles = BazelCodeRoleQuery.dependencySources(target, workspace, observedRunner)
                 if (roles.exitCode != 0) {
                     onStderr("bazel code-role query failed; preserving unknown classification")
                 }
@@ -92,7 +120,7 @@ internal object BazelTopology {
             }
 
             onStderr("bazel query failed ($dependencyQuery); retrying with labels(srcs, $target)")
-            val fallback = queryTargetOnly(target, workspace, runner)
+            val fallback = queryTargetOnly(target, workspace, observedRunner)
             if (fallback.exitCode == 0) {
                 if (fallback.codeLines == null) {
                     onStderr("bazel code-role query failed; preserving unknown classification")
@@ -103,7 +131,7 @@ internal object BazelTopology {
             return degradedQueryResult(target, workspace, includeDeps = false, onStderr)
         }
 
-        val primary = queryTargetOnly(target, workspace, runner)
+        val primary = queryTargetOnly(target, workspace, observedRunner)
         if (primary.exitCode == 0) {
             if (primary.codeLines == null) {
                 onStderr("bazel code-role query failed; preserving unknown classification")

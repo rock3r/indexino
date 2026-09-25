@@ -90,6 +90,27 @@ internal class IncrementalAcceptanceDriverTest {
     }
 
     @Test
+    fun `heartbeat selects the current Bazel client and not a completed topology query`() {
+        val topology = "index phase=topology state=started"
+        val journal =
+            listOf(
+                topology,
+                "bazel query index=1 state=completed exitCode=0 durationMillis=50",
+                "bazel query index=2 state=started",
+                "bazel query index=2 state=client-started pid=12345",
+            )
+        assertEquals(
+            "bazel query index=2 state=client-started pid=12345",
+            IncrementalAcceptanceDriver.activeQueryDetail(journal),
+        )
+        assertNull(
+            IncrementalAcceptanceDriver.activeQueryDetail(
+                journal + "index phase=topology state=completed durationMillis=500"
+            )
+        )
+    }
+
+    @Test
     fun `watcher baseline reset retries a joined stale refresh and remains bounded`(): Unit =
         runBlocking {
             var refreshes = 0

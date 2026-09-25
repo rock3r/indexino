@@ -97,7 +97,17 @@ class BazelQueryFallbackTest {
             listOf("plugins/foo/ui/src/main/kotlin/Panel.kt"),
             BazelQueryResultParser.parseKotlinSourcePaths(lines.lines),
         )
-        assertTrue(warnings.isEmpty())
+        assertEquals(
+            listOf(
+                "bazel query index=1 state=started",
+                "bazel query index=1 state=completed exitCode=0",
+                "bazel query index=2 state=started",
+                "bazel query index=2 state=completed exitCode=0",
+                "bazel query index=3 state=started",
+                "bazel query index=3 state=completed exitCode=0",
+            ),
+            warnings.map { it.substringBefore(" durationMillis=") },
+        )
         assertEquals(true, lines.includeDeps)
     }
 

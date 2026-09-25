@@ -17,12 +17,24 @@ internal fun interface BazelProcessRunner {
 
 internal object LiveBazelProcessRunner : BazelProcessRunner {
     override fun run(query: String, workspace: Path): BazelQueryOutcome =
-        runCommand(listOf("bazel", "query", query, "--output=label"), workspace)
+        runObserved(query, workspace) {}
+
+    internal fun runObserved(
+        query: String,
+        workspace: Path,
+        onStarted: (Long) -> Unit,
+    ): BazelQueryOutcome =
+        runCommand(
+            listOf("bazel", "query", query, "--output=label"),
+            workspace,
+            onStarted = onStarted,
+        )
 
     internal fun runCommand(
         command: List<String>,
         workspace: Path,
         timeoutMillis: Long? = null,
+        onStarted: (Long) -> Unit = {},
     ): BazelQueryOutcome {
         checkBazelInterrupted()
         val output = Files.createTempFile("indexino-bazel-", ".output")
@@ -35,6 +47,7 @@ internal object LiveBazelProcessRunner : BazelProcessRunner {
                     .start()
             var commandFailure: Throwable? = null
             try {
+                onStarted(process.pid())
                 val exitCode =
                     if (timeoutMillis == null) {
                         process.waitFor()
