@@ -43,27 +43,28 @@ internal object BazelTopology {
             )
         }
 
-        if (processRunner != null || isBazelAvailable(workspace)) {
-            val runner = processRunner ?: LiveBazelProcessRunner
-            val queryResult = queryWithFallback(target, workspace, includeDeps, runner, onStderr)
-            return TopologyResult(
-                sourceFiles = BazelQueryResultParser.parseKotlinSourcePaths(queryResult.lines),
-                codeSourceFiles =
-                    queryResult.codeLines
-                        ?.let(BazelQueryResultParser::parseKotlinSourcePaths)
-                        ?.toSet(),
-                topology = queryResult.topology,
-                includeDeps = queryResult.includeDeps,
-                scope = target,
-            )
-        }
-
-        val parsed = degradedBuildResult(target, workspace, onStderr)
+        val queryResult =
+            try {
+                queryWithFallback(
+                    target,
+                    workspace,
+                    includeDeps,
+                    processRunner ?: LiveBazelProcessRunner,
+                    onStderr,
+                )
+            } catch (failure: IOException) {
+                checkBazelInterrupted()
+                onStderr(
+                    "bazel query unavailable (${failure.javaClass.simpleName}); retrying with build-parse"
+                )
+                degradedQueryResult(target, workspace, includeDeps = false, onStderr)
+            }
         return TopologyResult(
-            sourceFiles = parsed.paths,
-            codeSourceFiles = parsed.codePaths,
-            topology = "build-parse",
-            includeDeps = false,
+            sourceFiles = BazelQueryResultParser.parseKotlinSourcePaths(queryResult.lines),
+            codeSourceFiles =
+                queryResult.codeLines?.let(BazelQueryResultParser::parseKotlinSourcePaths)?.toSet(),
+            topology = queryResult.topology,
+            includeDeps = queryResult.includeDeps,
             scope = target,
         )
     }

@@ -1,8 +1,11 @@
 package dev.sebastiano.indexino.topology.bazel
 
+import java.io.IOException
 import kotlin.io.path.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class BazelQueryFallbackTest {
@@ -153,5 +156,49 @@ class BazelQueryFallbackTest {
             ),
             BazelQueryResultParser.parseKotlinSourcePaths(lines.lines).sorted(),
         )
+    }
+
+    @Test
+    fun `query launch failure falls back to BUILD parsing without hiding a client cleanup failure`() {
+        val warnings = mutableListOf<String>()
+        var queries = 0
+        val resolution = runCatching {
+            BazelTopology.resolveSources(
+                target = "//plugins/foo/ui:ui",
+                workspace = Path("src/test/resources/fixtures/bazel"),
+                includeDeps = true,
+                processRunner =
+                    BazelProcessRunner { _, _ ->
+                        queries++
+                        throw IOException("invented missing bazel binary")
+                    },
+                onStderr = warnings::add,
+            )
+        }
+
+        assertEquals(1, queries)
+        assertNull(resolution.exceptionOrNull(), "A missing Bazel executable permits BUILD parsing")
+        val result = resolution.getOrThrow()
+        assertEquals("build-parse", result.topology)
+        assertEquals(false, result.includeDeps)
+        assertEquals(
+            listOf(
+                "plugins/foo/ui/src/main/kotlin/Other.kt",
+                "plugins/foo/ui/src/main/kotlin/Panel.kt",
+            ),
+            result.sourceFiles.sorted(),
+        )
+        assertTrue(warnings.any { it.contains("bazel query unavailable") })
+
+        assertFailsWith<BazelClientCleanupException> {
+            BazelTopology.resolveSources(
+                target = "//plugins/foo/ui:ui",
+                workspace = Path("src/test/resources/fixtures/bazel"),
+                includeDeps = true,
+                processRunner =
+                    BazelProcessRunner { _, _ -> throw BazelClientCleanupException(null) },
+                onStderr = {},
+            )
+        }
     }
 }

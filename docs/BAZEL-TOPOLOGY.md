@@ -122,10 +122,13 @@ for either target-only fallback and for `build-parse` degraded mode.
 
 ## Explicit refresh stop and process ownership
 
-The availability probe runs `bazel version` in the requested workspace with a ten-second wait
-deadline. A missing executable, nonzero exit, or expired probe permits degraded discovery.
-Interruption does not: it propagates and prevents another query or BUILD-parse fallback.
-Queries have no new wall-clock limit; explicit refresh stop interrupts their wait.
+Live source discovery starts with the requested `bazel query` directly; it does not gate a valid
+query on a separate ten-second `bazel version` startup probe. A query that cannot run because of
+an I/O failure reports the failure class and permits degraded BUILD parsing. Nonzero query exits
+retain the target-only/BUILD fallback above. Interruption does not permit degraded discovery: it
+propagates and prevents another query or BUILD-parse fallback. Queries have no new wall-clock
+limit; explicit refresh stop interrupts their wait. The ten-second `bazel version` probe remains
+only for classifying a separately injected query executor's topology.
 
 Query and probe output is captured in a temporary file rather than drained synchronously from a
 pipe. On interruption or timeout, Indexino terminates only the directly launched client, waits up
