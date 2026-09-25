@@ -181,10 +181,11 @@ class NativeReleaseReadinessContractTest {
         assertContains(workflow, "timeout-minutes: 300")
         assertContains(workflow, "test -n \"\$INDEXINO_RELEASE_VERSION\"")
         assertContains(build, "excludeTags(\"native-performance\")")
-        assertFalse(
-            workflow.substringBefore("workflow_call:").contains("release:"),
-            "Manual dispatch must not expose release signing",
-        )
+        val dispatchInputs = workflow.substringBefore("workflow_call:")
+        assertContains(dispatchInputs, "release:")
+        assertContains(dispatchInputs.substringAfter("release:"), "default: false")
+        assertContains(workflow, "if: inputs.release\n")
+        assertContains(workflow, "if: inputs.release && matrix.target == 'macos-arm64'")
         assertContains(workflow, "MACOS_CERTIFICATE_P12")
         assertContains(workflow, "APPLE_APP_SPECIFIC_PASSWORD")
         assertContains(workflow, "sign-notarize-macos-distribution.sh")
