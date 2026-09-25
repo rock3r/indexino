@@ -11,7 +11,7 @@ issue affects caller control, state ownership, recomposition, readability, or te
 - Nacho López' Compose Rules: https://mrmans0n.github.io/compose-rules/latest/rules/.
 - AndroidX Compose API/component guidelines, adapted for Compose Desktop/Jewel.
 
-## What to flag during a Compose Pi UI audit
+## What to flag during a Compose Desktop UI audit
 
 ### Public API documentation and naming
 
@@ -115,4 +115,4 @@ issue affects caller control, state ownership, recomposition, readability, or te
 - Prefer one systemic finding with representative examples over many one-line style nits.
 - If Detekt would catch the issue mechanically, say so, but still explain the Compose runtime or API-design consequence.
 - Do not import Android-only advice: no Android lifecycle owners, Navigation, Material 2/3 migration, Accompanist,
-  baseline profiles, or R8 for Compose Pi Desktop/Jewel audits.
+  baseline profiles, or R8 for Compose Desktop/Jewel audits.

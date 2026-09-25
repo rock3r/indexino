@@ -1,5 +1,5 @@
 {
-  "attribution": "Adapted from obra/superpowers (https://github.com/obra/superpowers) with Compose Pi-specific additions.",
+  "attribution": "Adapted from obra/superpowers (https://github.com/obra/superpowers) with project-specific additions.",
   "schemaVersion": 1,
   "skill": "using-git-worktree",
   "sources": [
@@ -19,11 +19,11 @@
     },
     {
       "fetchedAt": "2026-06-11",
-      "label": "Compose Pi original content and adaptation for using-git-worktree",
+      "label": "Original content and adaptation for using-git-worktree",
       "role": "original-content",
       "type": "local-original-content",
-      "version": "2872629c4100e50f576f95c415279361cf0b30b9",
-      "versionSource": "gitCommit",
+      "version": "2026-06-11",
+      "versionSource": "fetchDate",
       "license": "project"
     }
   ]

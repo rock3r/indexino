@@ -1,5 +1,5 @@
 {
-  "attribution": "Adapted from Anthropic's skill-creator distribution, with Compose Pi portable writing guidance, local packaging adaptations, and guidance folded back from ADUX-sandbox/portable-gmac-skills.",
+  "attribution": "Adapted from Anthropic's skill-creator distribution, with portable writing guidance, local packaging adaptations, and guidance folded back from a private skills repository.",
   "schemaVersion": 1,
   "skill": "skill-creator",
   "sources": [
@@ -19,45 +19,24 @@
     },
     {
       "fetchedAt": "2026-06-11",
-      "label": "Compose Pi portable writing guidance and local packaging adaptations",
+      "label": "Portable writing guidance and local packaging adaptations",
       "role": "original-content",
       "type": "local-original-content",
-      "version": "76dc56ecf628916599a773ebdf54790cee0e5b61",
-      "versionSource": "gitCommit",
+      "version": "2026-06-11",
+      "versionSource": "fetchDate",
       "license": "project"
     },
     {
       "type": "upstream-reference",
       "role": "supporting-reference",
-      "label": "Portable gMac writing-skills authoring guidance",
-      "url": "https://github.com/ADUX-sandbox/portable-gmac-skills/tree/main/.agents/skills/writing-skills",
-      "version": "7a8cb7ca742f4b61af8b34c27a0897784ca869e2",
-      "versionSource": "gitCommit",
+      "label": "Portable skill authoring guidance and principles from a private skills repository",
+      "version": "2026-06-11",
+      "versionSource": "fetchDate",
       "fetchedAt": "2026-06-11",
       "license": "unknown",
       "check": {
-        "type": "github",
-        "repository": "ADUX-sandbox/portable-gmac-skills",
-        "path": ".agents/skills/writing-skills",
-        "trackingRef": "main",
-        "localCheckoutHint": "~/src/portable-gmac-skills"
-      }
-    },
-    {
-      "type": "upstream-reference",
-      "role": "supporting-reference",
-      "label": "Portable gMac skill authoring principles",
-      "url": "https://github.com/ADUX-sandbox/portable-gmac-skills/blob/main/docs/portable-skill-authoring-principles.md",
-      "version": "7a8cb7ca742f4b61af8b34c27a0897784ca869e2",
-      "versionSource": "gitCommit",
-      "fetchedAt": "2026-06-11",
-      "license": "unknown",
-      "check": {
-        "type": "github",
-        "repository": "ADUX-sandbox/portable-gmac-skills",
-        "path": "docs/portable-skill-authoring-principles.md",
-        "trackingRef": "main",
-        "localCheckoutHint": "~/src/portable-gmac-skills"
+        "type": "manual",
+        "reason": "The source repository is private"
       }
     }
   ]

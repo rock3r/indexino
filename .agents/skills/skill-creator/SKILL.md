@@ -21,7 +21,7 @@ Keep this skill agent-neutral by default. Use `agent`, `model`, `subagent`, `har
    - When should it trigger? Include concrete user phrases, symptoms, tools, file types, and failure modes.
    - What output or behavior counts as success?
    - What should the skill explicitly not do?
-   - In Compose Pi, should the result be bundled/exported (`include`) or non-bundled repo-local maintainer guidance (`exclude`)?
+   - In projects that bundle skills, should the result be bundled/exported (`include`) or non-bundled repo-local maintainer guidance (`exclude`)?
 
 2. **Gather source material**
    - Extract everything already available from the prompt and conversation before asking questions.

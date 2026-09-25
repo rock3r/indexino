@@ -124,13 +124,13 @@ password flow (`notarytool --apple-id`) rather than Spectre's App Store Connect 
 From a machine with `op`, `gh`, `jq`, and `openssl` authenticated:
 
 ```bash
-.github/scripts/setup-macos-release-secrets.sh rock3r/indexino
+OP_APPLE_ITEM='<1Password item title>' .github/scripts/setup-macos-release-secrets.sh rock3r/indexino
 ```
 
 The script reads:
 
-- **Compose Pi Apple signing cert** — app-specific password (`credential`) and attached
-  `.cer`/`.key` → base64 `.p12`
+- **The item named by `OP_APPLE_ITEM`** (required) — app-specific password (`credential`) and
+  attached `.cer`/`.key` → base64 `.p12`
 - **Apple ID** — account email (`username` → `APPLE_ID`) and `team ID` → `APPLE_TEAM_ID`
 
 Before the first release, confirm that the Central Portal account can publish under the verified

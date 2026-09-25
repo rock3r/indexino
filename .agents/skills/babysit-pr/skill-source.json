@@ -1,5 +1,5 @@
 {
-  "attribution": "Adapted from the Codex PR-babysitter pattern; rewritten for Compose Pi CI gates.",
+  "attribution": "Adapted from the Codex PR-babysitter pattern; rewritten for project-specific CI gates.",
   "schemaVersion": 1,
   "skill": "babysit-pr",
   "sources": [
@@ -19,11 +19,11 @@
     },
     {
       "fetchedAt": "2026-06-11",
-      "label": "Compose Pi CI gates, Bugbot/Codex review handling, and watcher script adaptations",
+      "label": "Project-specific CI gates, Bugbot/Codex review handling, and watcher script adaptations",
       "role": "original-content",
       "type": "local-original-content",
-      "version": "4f6e94ee2f428ee858a7126950ac28a9a6d3bb67",
-      "versionSource": "gitCommit",
+      "version": "2026-06-11",
+      "versionSource": "fetchDate",
       "license": "project"
     }
   ]
