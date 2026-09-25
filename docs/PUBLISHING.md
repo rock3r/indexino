@@ -102,6 +102,10 @@ The macOS job signs all Mach-O payloads, creates the immutable final ZIP, submit
 for notarization, exercises online Gatekeeper, and reruns the complete native verifier against the
 signed archive before replacing its checksum. The workflow never auto-publishes the GitHub draft.
 
+To sign and notarize macOS bytes without a new tag, for example for a version that Central has
+already promoted, dispatch `native-distributions.yml` manually with `release` set to true. The
+`release` input defaults to false. When it is true, the run requires the `version` input.
+
 Required repository secrets:
 
 | Secret | Purpose |
