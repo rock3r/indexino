@@ -45,17 +45,20 @@ import kotlinx.serialization.json.put
 /**
  * Private opt-in corpus experiment, not a runtime feature. Compares a complete one-file fact delta
  * queried through the real IndexSnapshot implementation with the daemon's durable publication on
- * the same saved edit. The live revision is deliberately experimental, not Git provenance.
+ * the same saved edit. Optional `manual repeat` reverts the edited file in the same connected
+ * runtime and reports those phase times with a `repeat_` prefix. The live revision is deliberately
+ * experimental, not Git provenance.
  */
 @OptIn(IndexinoInternalApi::class)
 internal object LiveOverlayCorpusProbe {
     @JvmStatic
     fun main(args: Array<String>) = runBlocking {
-        require(args.size == 4 || args.size == 5) {
-            "owned-root plan.json report.json edit-nonce [watcher|manual]"
+        require(args.size in 4..6) {
+            "owned-root plan.json report.json edit-nonce [watcher|manual] [repeat]"
         }
         val durableMode = args.getOrNull(4) ?: "watcher"
         require(durableMode in setOf("watcher", "manual"))
+        require(args.size != 6 || (durableMode == "manual" && args[5] == "repeat"))
         val root = Path.of(args[0]).toRealPath()
         require(Files.isRegularFile(root.resolve(".indexino-benchmark-owned")))
         val workspace = root.resolve("workspace").toRealPath()
@@ -72,7 +75,7 @@ internal object LiveOverlayCorpusProbe {
         try {
             System.setProperty("indexino.cache.dir", root.resolve("cache").toString())
             workload.write(workload.sources, 0)
-            runCorpus(workspace, plan, workload, source, durableMode, report)
+            runCorpus(workspace, plan, workload, source, durableMode, args.size == 6, report)
             report["status"] = "passed"
         } catch (error: Exception) {
             report["failure"] = error.javaClass.simpleName
@@ -99,6 +102,7 @@ internal object LiveOverlayCorpusProbe {
         workload: IncrementalWorkload,
         source: IncrementalWorkload.Source,
         durableMode: String,
+        repeat: Boolean,
         report: MutableMap<String, String>,
     ) {
         val target = plan.getValue("target").jsonPrimitive.content
@@ -156,12 +160,74 @@ internal object LiveOverlayCorpusProbe {
                         workload,
                         source,
                         durableMode,
+                        1,
                         report,
                     )
+                    if (repeat)
+                        compareRevertedEdit(
+                            index,
+                            request,
+                            old,
+                            workspace,
+                            workload,
+                            source,
+                            durableMode,
+                            report,
+                        )
                 }
             } finally {
                 index.shutdownRuntime()
             }
+        }
+    }
+
+    private suspend fun compareRevertedEdit(
+        index: Indexino,
+        request: RefreshRequest,
+        original: IndexSnapshot,
+        workspace: Path,
+        workload: IncrementalWorkload,
+        source: IncrementalWorkload.Source,
+        durableMode: String,
+        report: MutableMap<String, String>,
+    ) {
+        // Keep the original snapshot pinned while measuring the reverse edit against the
+        // newly published generation in this same runtime.
+        index.snapshot().use { afterFirst ->
+            check(workload.matches(afterFirst, listOf(source), 1))
+            val cacheRoot = InProcessCacheLayout.cacheRoot()
+            val nextManifest =
+                checkNotNull(
+                    WorkspaceGenerationManifestStore(
+                            cacheRoot,
+                            InProcessCacheLayout.workspaceId(workspace),
+                        )
+                        .current()
+                )
+            check(nextManifest.generation == afterFirst.generation.value)
+            val nextBase =
+                WorktreeOverlayStoreOpener.openForQuery(
+                    cacheRoot,
+                    workspace,
+                    "live-experiment-${System.nanoTime()}",
+                    nextManifest,
+                )
+            val repeatReport = mutableMapOf<String, String>()
+            compareEdit(
+                index,
+                request,
+                afterFirst,
+                nextBase,
+                nextManifest,
+                workspace,
+                workload,
+                source,
+                durableMode,
+                0,
+                repeatReport,
+            )
+            repeatReport.forEach { (key, value) -> report["repeat_$key"] = value }
+            check(workload.matches(original, listOf(source), 0))
         }
     }
 
@@ -175,6 +241,7 @@ internal object LiveOverlayCorpusProbe {
         workload: IncrementalWorkload,
         source: IncrementalWorkload.Source,
         durableMode: String,
+        version: Int,
         report: MutableMap<String, String>,
     ) =
         Executors.newSingleThreadExecutor { runnable ->
@@ -186,7 +253,7 @@ internal object LiveOverlayCorpusProbe {
                     var baseHandedOff = false
                     try {
                         val edited = System.nanoTime()
-                        workload.write(listOf(source), 1)
+                        workload.write(listOf(source), version)
                         val written = System.nanoTime()
                         report["writeNanos"] = (written - edited).toString()
                         val durableObserved =
@@ -197,7 +264,11 @@ internal object LiveOverlayCorpusProbe {
                                         val matched =
                                             index.snapshot().use { durable ->
                                                 durable.generation != old.generation &&
-                                                    workload.matches(durable, listOf(source), 1)
+                                                    workload.matches(
+                                                        durable,
+                                                        listOf(source),
+                                                        version,
+                                                    )
                                             }
                                         if (matched) break
                                         delay(50)
@@ -218,15 +289,15 @@ internal object LiveOverlayCorpusProbe {
                             baseHandedOff = true
                             live.use {
                                 val queryStarted = System.nanoTime()
-                                check(workload.matches(it, listOf(source), 1))
+                                check(workload.matches(it, listOf(source), version))
                                 report["liveQueryNanos"] =
                                     (System.nanoTime() - queryStarted).toString()
                                 report["liveReadyNanos"] = (System.nanoTime() - written).toString()
-                                check(workload.matches(old, listOf(source), 0))
+                                check(workload.matches(old, listOf(source), 1 - version))
                                 report["durableReadyNanos"] = durableObserved.await().toString()
                                 index.snapshot().use { durable ->
                                     check(durable.generation != old.generation)
-                                    check(workload.matches(durable, listOf(source), 1))
+                                    check(workload.matches(durable, listOf(source), version))
                                     check(
                                         workload.matches(
                                             durable,

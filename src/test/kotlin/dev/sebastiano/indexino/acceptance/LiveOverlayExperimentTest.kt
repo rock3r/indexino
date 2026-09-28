@@ -136,13 +136,13 @@ internal class LiveOverlayExperimentTest {
             )
         val report = temporary.resolve("probe.json")
 
-        // Each probe call reconnects and reseeds the baseline. The repeated call exercises
-        // JVM first-use vs later-use, not two edits against a long-lived daemon. Timings are
-        // diagnostic only; both calls must still verify pinned and changed public snapshots.
+        // The two calls compare JVM first-use with later-use across connections. The second
+        // call additionally edits and reverts within one daemon. Timings are diagnostic only;
+        // every edit must verify pinned, unchanged, and changed public snapshots.
         writePlan(1)
         repeat(2) { run ->
             val javaReport = temporary.resolve("java-$run.json")
-            LiveOverlayCorpusProbe.main(
+            val args =
                 arrayOf(
                     root.toString(),
                     plan.toString(),
@@ -150,7 +150,7 @@ internal class LiveOverlayExperimentTest {
                     "fixture-java-$run",
                     "manual",
                 )
-            )
+            LiveOverlayCorpusProbe.main(if (run == 1) args + "repeat" else args)
             val javaResult = Json.parseToJsonElement(Files.readString(javaReport)).jsonObject
             assertEquals("passed", javaResult.getValue("status").jsonPrimitive.content)
             assertEquals(
@@ -158,6 +158,27 @@ internal class LiveOverlayExperimentTest {
                 javaResult.getValue("oldPinAndUnchangedVerified").jsonPrimitive.content,
             )
             assertEquals("true", javaResult.getValue("publicQueriesVerified").jsonPrimitive.content)
+            if (run == 1) {
+                assertEquals(
+                    "true",
+                    javaResult.getValue("repeat_oldPinAndUnchangedVerified").jsonPrimitive.content,
+                )
+                assertEquals(
+                    "true",
+                    javaResult.getValue("repeat_publicQueriesVerified").jsonPrimitive.content,
+                )
+                assertTrue(
+                    javaResult
+                        .getValue("repeat_liveJavaProducerNanos")
+                        .jsonPrimitive
+                        .content
+                        .toLong() > 0
+                )
+                assertTrue(
+                    javaResult.getValue("repeat_durableReadyNanos").jsonPrimitive.content.toLong() >
+                        0
+                )
+            }
             assertEquals(
                 "package sample; class Helper {}\n",
                 Files.readString(workspace.resolve(helper)),
