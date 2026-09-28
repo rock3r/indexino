@@ -64,8 +64,9 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             ".kt",
             affectedSources.toSet(),
         )
+        val ktFiles = sourceFilesToProcess(context, ".kt")
+        if (ktFiles.isEmpty()) return
         KotlinPsiParser().use { parser ->
-            val ktFiles = sourceFilesToProcess(context, ".kt")
             val indexedFiles = ktFiles.mapIndexed { index, source ->
                 context.reportFileProgress(index + 1, ktFiles.size, source)
                 val file = parser.parseFile(source.path, context.readSource(source))

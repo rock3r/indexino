@@ -19,9 +19,41 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class KotlinPsiSymbolProducerTest {
+    @Test
+    fun `Java-only edit does not initialize the Kotlin parser`() {
+        val keys =
+            listOf(
+                "idea.home.path",
+                "idea.config.path",
+                "idea.system.path",
+                "idea.plugins.path",
+                "user.home",
+            )
+        val saved = keys.associateWith(System::getProperty)
+        try {
+            keys.forEach(System::clearProperty)
+            System.setProperty("user.home", tempDir.toString())
+            KotlinPsiSymbolProducer()
+                .produce(
+                    IndexBuildContext.forInlineSources(
+                        store,
+                        "java-only",
+                        mapOf("Panel.java" to "class Panel {}"),
+                    ),
+                    store,
+                )
+            assertNull(System.getProperty("idea.home.path"))
+        } finally {
+            for ((key, value) in saved) {
+                if (value == null) System.clearProperty(key) else System.setProperty(key, value)
+            }
+        }
+    }
+
     @Test
     fun `batches Kotlin writes per file while preserving forward calls`() {
         var depth = 0
