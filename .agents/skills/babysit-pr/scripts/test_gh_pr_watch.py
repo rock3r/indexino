@@ -157,142 +157,9 @@ class RetryEligibilityTests(unittest.TestCase):
             max_retries=3,
             checks_terminal_elapsed=None,
             blocking_review_items=[],
-            bugbot_gate={
-                "required": True,
-                "status": "completed",
-                "conclusion": "success",
-                "is_success": True,
-            },
         )
 
         self.assertIn("diagnose_merge_conflict", actions)
-
-    def test_recommend_actions_hard_blocks_bugbot_non_success(self):
-        actions = watch.recommend_actions(
-            pr=self._base_pr(),
-            checks_summary={
-                "all_terminal": True,
-                "failed_count": 0,
-                "pending_count": 0,
-                "passed_count": 2,
-            },
-            failed_runs=[],
-            new_review_items=[],
-            hung_checks=[],
-            retries_used=0,
-            max_retries=3,
-            checks_terminal_elapsed=120,
-            blocking_review_items=[],
-            bugbot_gate={
-                "required": True,
-                "status": "completed",
-                "conclusion": "skipped",
-                "is_success": False,
-            },
-        )
-
-        self.assertIn("stop_bugbot_not_green", actions)
-        self.assertNotIn("stop_ready_to_merge", actions)
-
-    def test_recommend_actions_waits_during_bugbot_non_success_grace_window(self):
-        actions = watch.recommend_actions(
-            pr=self._base_pr(),
-            checks_summary={
-                "all_terminal": True,
-                "failed_count": 0,
-                "pending_count": 0,
-                "passed_count": 2,
-            },
-            failed_runs=[],
-            new_review_items=[],
-            hung_checks=[],
-            retries_used=0,
-            max_retries=3,
-            checks_terminal_elapsed=10,
-            blocking_review_items=[],
-            bugbot_gate={
-                "required": True,
-                "status": "completed",
-                "conclusion": "neutral",
-                "is_success": False,
-            },
-        )
-
-        self.assertIn("wait_bugbot", actions)
-        self.assertNotIn("stop_bugbot_not_green", actions)
-
-    def test_summarize_bugbot_gate_prefers_pr_checks_over_actions_runs(self):
-        checks = [
-            {
-                "name": "Cursor Bugbot",
-                "workflow": "",
-                "state": "SUCCESS",
-                "bucket": "pass",
-                "link": "https://example.invalid/bugbot-check",
-                "startedAt": "2026-01-01T00:00:00Z",
-                "completedAt": "2026-01-01T00:05:00Z",
-            }
-        ]
-        runs = [
-            {
-                "head_sha": "abc123",
-                "name": "CI",
-                "status": "completed",
-                "conclusion": "success",
-                "html_url": "https://example.invalid/ci",
-                "id": 1,
-            }
-        ]
-
-        gate = watch.summarize_bugbot_gate(checks, runs, "abc123")
-
-        self.assertTrue(gate["present"])
-        self.assertEqual(gate["status"], "completed")
-        self.assertEqual(gate["conclusion"], "success")
-        self.assertTrue(gate["is_success"])
-        self.assertEqual(gate["source"], "checks")
-
-    def test_summarize_bugbot_gate_uses_bucket_when_state_completed(self):
-        checks = [
-            {
-                "name": "Cursor Bugbot",
-                "state": "COMPLETED",
-                "bucket": "fail",
-                "link": "https://example.invalid/bugbot-check",
-            }
-        ]
-
-        gate = watch.summarize_bugbot_gate(checks, [], "abc123")
-
-        self.assertEqual(gate["status"], "completed")
-        self.assertEqual(gate["conclusion"], "failure")
-        self.assertFalse(gate["is_success"])
-
-    def test_summarize_bugbot_gate_prefers_pending_rerun_over_old_success(self):
-        checks = [
-            {
-                "name": "Cursor Bugbot",
-                "state": "SUCCESS",
-                "bucket": "pass",
-                "startedAt": "2026-01-01T00:00:00Z",
-                "completedAt": "2026-01-01T00:05:00Z",
-                "link": "https://example.invalid/old-success",
-            },
-            {
-                "name": "Cursor Bugbot",
-                "state": "IN_PROGRESS",
-                "bucket": "pending",
-                "startedAt": "2026-01-01T00:06:00Z",
-                "completedAt": "",
-                "link": "https://example.invalid/new-rerun",
-            },
-        ]
-
-        gate = watch.summarize_bugbot_gate(checks, [], "abc123")
-
-        self.assertEqual(gate["status"], "in_progress")
-        self.assertEqual(gate["conclusion"], "")
-        self.assertFalse(gate["is_success"])
 
     def test_fetch_new_review_items_excludes_resolved_blocking_comments(self):
         pr = {
@@ -310,7 +177,7 @@ class RetryEligibilityTests(unittest.TestCase):
         review_comment_payload = [
             {
                 "id": 42,
-                "user": {"login": "cursor[bot]"},
+                "user": {"login": "coderabbitai[bot]"},
                 "author_association": "NONE",
                 "created_at": "2026-01-01T00:00:00Z",
                 "body": "Please fix this.",
@@ -356,7 +223,7 @@ class RetryEligibilityTests(unittest.TestCase):
         review_comment_payload = [
             {
                 "id": 42,
-                "user": {"login": "cursor[bot]"},
+                "user": {"login": "coderabbitai[bot]"},
                 "author_association": "NONE",
                 "created_at": "2025-01-01T00:00:00Z",
                 "body": "Please fix this.",
@@ -403,7 +270,7 @@ class RetryEligibilityTests(unittest.TestCase):
         review_comment_payload = [
             {
                 "id": 99,
-                "user": {"login": "cursor[bot]"},
+                "user": {"login": "coderabbitai[bot]"},
                 "author_association": "NONE",
                 "created_at": "2026-01-01T00:00:00Z",
                 "body": "FYI",
@@ -679,7 +546,7 @@ class RetryEligibilityTests(unittest.TestCase):
         review_comment_payload = [
             {
                 "id": 42,
-                "user": {"login": "cursor[bot]"},
+                "user": {"login": "coderabbitai[bot]"},
                 "author_association": "NONE",
                 "created_at": "2025-01-01T00:00:00Z",
                 "body": "Please fix this.",
@@ -727,60 +594,6 @@ class RetryEligibilityTests(unittest.TestCase):
         self.assertEqual(len(hung), 1)
         self.assertEqual(hung[0]["name"], "CI")
 
-    def test_recommend_actions_waits_for_missing_bugbot_while_checks_pending(self):
-        actions = watch.recommend_actions(
-            pr=self._base_pr(),
-            checks_summary={
-                "all_terminal": False,
-                "failed_count": 0,
-                "pending_count": 1,
-                "passed_count": 0,
-            },
-            failed_runs=[],
-            new_review_items=[],
-            hung_checks=[],
-            retries_used=0,
-            max_retries=3,
-            checks_terminal_elapsed=None,
-            blocking_review_items=[],
-            bugbot_gate={
-                "required": True,
-                "status": "missing",
-                "conclusion": "",
-                "is_success": False,
-            },
-        )
-
-        self.assertIn("wait_bugbot", actions)
-        self.assertNotIn("stop_bugbot_not_green", actions)
-
-    def test_recommend_actions_waits_for_missing_bugbot_during_grace(self):
-        actions = watch.recommend_actions(
-            pr=self._base_pr(),
-            checks_summary={
-                "all_terminal": True,
-                "failed_count": 0,
-                "pending_count": 0,
-                "passed_count": 2,
-            },
-            failed_runs=[],
-            new_review_items=[],
-            hung_checks=[],
-            retries_used=0,
-            max_retries=3,
-            checks_terminal_elapsed=10,
-            blocking_review_items=[],
-            bugbot_gate={
-                "required": True,
-                "status": "missing",
-                "conclusion": "",
-                "is_success": False,
-            },
-        )
-
-        self.assertIn("wait_bugbot", actions)
-        self.assertNotIn("stop_bugbot_not_green", actions)
-
     def test_reset_state_for_new_head_sha_clears_pending_map(self):
         state = {
             "last_seen_head_sha": "oldsha",
@@ -822,8 +635,7 @@ class RetryEligibilityTests(unittest.TestCase):
         self.assertIsNone(loaded["checks_went_terminal_at"])
         self.assertIsNone(loaded["checks_terminal_sha"])
 
-    def test_should_stop_watching_waits_when_conflict_and_bugbot_running(self):
-        self.assertFalse(watch.should_stop_watching(["diagnose_merge_conflict", "wait_bugbot"]))
+    def test_should_stop_watching_stops_on_conflict(self):
         self.assertTrue(watch.should_stop_watching(["diagnose_merge_conflict"]))
 
     def test_is_ci_green_false_when_blocking_review_items_present(self):
@@ -834,14 +646,13 @@ class RetryEligibilityTests(unittest.TestCase):
                 "failed_count": 0,
                 "pending_count": 0,
             },
-            "bugbot_gate": {"required": True, "is_success": True},
             "blocking_review_items": [{"id": "1"}],
             "checks_terminal_elapsed_seconds": 120,
         }
 
         self.assertFalse(watch.is_ci_green(snapshot))
 
-    def test_is_ci_green_allows_non_required_bugbot(self):
+    def test_is_ci_green_when_checks_and_reviews_are_clear(self):
         snapshot = {
             "pr": {"review_decision": "APPROVED"},
             "checks": {
@@ -849,7 +660,6 @@ class RetryEligibilityTests(unittest.TestCase):
                 "failed_count": 0,
                 "pending_count": 0,
             },
-            "bugbot_gate": {"required": False, "is_success": False},
             "blocking_review_items": [],
             "checks_terminal_elapsed_seconds": 120,
         }
@@ -874,12 +684,6 @@ class RetryEligibilityTests(unittest.TestCase):
                 "failed_count": 0,
                 "pending_count": 0,
                 "passed_count": 3,
-            },
-            "bugbot_gate": {
-                "required": True,
-                "is_success": True,
-                "status": "completed",
-                "conclusion": "success",
             },
             "new_review_items": [],
             "blocking_review_items": [],
@@ -948,14 +752,11 @@ class NeedsAgentAttentionTests(unittest.TestCase):
     def test_idle_does_not_need_attention(self):
         self.assertFalse(watch.needs_agent_attention(["idle"]))
 
-    def test_wait_bugbot_does_not_need_attention(self):
-        self.assertFalse(watch.needs_agent_attention(["wait_bugbot"]))
-
     def test_wait_codex_does_not_need_attention(self):
         self.assertFalse(watch.needs_agent_attention(["wait_codex"]))
 
     def test_combined_passive_waits_do_not_need_attention(self):
-        self.assertFalse(watch.needs_agent_attention(["idle", "wait_bugbot", "wait_codex"]))
+        self.assertFalse(watch.needs_agent_attention(["idle", "wait_codex"]))
 
     def test_stop_ready_to_merge_needs_attention(self):
         self.assertTrue(watch.needs_agent_attention(["stop_ready_to_merge"]))
@@ -973,7 +774,7 @@ class NeedsAgentAttentionTests(unittest.TestCase):
         self.assertTrue(watch.needs_agent_attention(["stop_pr_closed"]))
 
     def test_mixed_passive_and_active_needs_attention(self):
-        self.assertTrue(watch.needs_agent_attention(["wait_bugbot", "diagnose_ci_failure"]))
+        self.assertTrue(watch.needs_agent_attention(["wait_codex", "diagnose_ci_failure"]))
 
     def test_empty_actions_needs_attention(self):
         self.assertTrue(watch.needs_agent_attention([]))
@@ -1034,12 +835,12 @@ class RunOnceTests(unittest.TestCase):
         self.assertEqual(len(sleeps), 3)
         self.assertIn("diagnose_ci_failure", result["actions"])
 
-    def test_waits_through_bugbot_and_codex(self):
-        """wait_bugbot and wait_codex should not cause early return."""
+    def test_waits_through_codex(self):
+        """wait_codex should not cause early return."""
         waiting = {
             "pr": {"closed": False, "merged": False},
             "checks": {"all_terminal": True, "failed_count": 0, "pending_count": 0, "passed_count": 2},
-            "actions": ["wait_bugbot", "wait_codex"],
+            "actions": ["wait_codex"],
         }
         ready = {
             "pr": {"closed": False, "merged": False},
@@ -1107,6 +908,42 @@ class RunOnceTests(unittest.TestCase):
 
 
 class CodexGateTests(unittest.TestCase):
+    def test_snapshot_is_merge_ready_with_green_ci_idle_codex_and_no_retired_bot(self):
+        pr = {
+            "repo": "rock3r/indexino",
+            "number": 716,
+            "head_sha": "abc123",
+            "closed": False,
+            "merged": False,
+            "state": "OPEN",
+            "mergeable": "MERGEABLE",
+            "merge_state_status": "CLEAN",
+            "review_decision": "APPROVED",
+        }
+        checks = [{"name": "CI", "state": "SUCCESS", "bucket": "pass"}]
+
+        with tempfile.TemporaryDirectory() as tmp_dir, \
+             patch.object(watch, "resolve_pr", return_value=pr), \
+             patch.object(watch, "get_pr_checks", return_value=checks), \
+             patch.object(watch, "get_workflow_runs_for_sha", return_value=[]), \
+             patch.object(watch, "get_authenticated_login", return_value="octocat"), \
+             patch.object(watch, "fetch_new_review_items", return_value=([], [])), \
+             patch.object(watch, "get_pr_issue_reactions", return_value=[]), \
+             patch.object(watch.time, "time", return_value=1000):
+            state_file = os.path.join(tmp_dir, "state.json")
+            watch.Path(state_file).write_text(json.dumps({
+                "started_at": 1,
+                "checks_terminal_sha": "abc123",
+                "checks_went_terminal_at": 900,
+                "last_snapshot_at": 999,
+            }))
+            snapshot, _ = watch.collect_snapshot(SimpleNamespace(
+                pr="716", repo=None, state_file=state_file, max_flaky_retries=3,
+            ))
+
+        self.assertEqual(snapshot["actions"], ["stop_ready_to_merge"])
+        self.assertNotIn("bugbot_gate", snapshot)
+
     def test_codex_reviewing_blocks_merge_readiness(self):
         pr = {
             "closed": False,
@@ -1125,7 +962,6 @@ class CodexGateTests(unittest.TestCase):
         ready = watch.is_pr_ready_to_merge(
             pr, checks, new_review_items=[], checks_terminal_elapsed=120,
             blocking_review_items=[],
-            bugbot_gate={"required": True, "is_success": True},
             codex_gate={"reviewing": True, "status": "in_progress"},
         )
         self.assertFalse(ready)
@@ -1148,7 +984,6 @@ class CodexGateTests(unittest.TestCase):
         ready = watch.is_pr_ready_to_merge(
             pr, checks, new_review_items=[], checks_terminal_elapsed=120,
             blocking_review_items=[],
-            bugbot_gate={"required": True, "is_success": True},
             codex_gate={"reviewing": False, "status": "idle"},
         )
         self.assertTrue(ready)
@@ -1171,7 +1006,6 @@ class CodexGateTests(unittest.TestCase):
             max_retries=3,
             checks_terminal_elapsed=120,
             blocking_review_items=[],
-            bugbot_gate={"required": True, "status": "completed", "conclusion": "success", "is_success": True},
             codex_gate={"reviewing": True, "status": "in_progress"},
         )
         self.assertIn("wait_codex", actions)
@@ -1217,7 +1051,6 @@ class SkippingChecksTests(unittest.TestCase):
             max_retries=3,
             checks_terminal_elapsed=120,
             blocking_review_items=[],
-            bugbot_gate={"required": True, "status": "completed", "conclusion": "success", "is_success": True},
         )
         self.assertIn("diagnose_skipping_checks", actions)
 
@@ -1487,7 +1320,6 @@ class CodeRabbitGateTests(unittest.TestCase):
             new_review_items=[],
             checks_terminal_elapsed=120,
             blocking_review_items=[],
-            bugbot_gate={"required": True, "is_success": True},
             codex_gate={"reviewing": False, "status": "idle"},
             coderabbit_gate={"active": True, "reviewing": True, "status": "in_progress"},
         )
@@ -1500,7 +1332,6 @@ class CodeRabbitGateTests(unittest.TestCase):
             new_review_items=[],
             checks_terminal_elapsed=120,
             blocking_review_items=[],
-            bugbot_gate={"required": True, "is_success": True},
             codex_gate={"reviewing": False, "status": "idle"},
             coderabbit_gate={"active": False, "reviewing": False, "status": "idle"},
         )
@@ -1517,7 +1348,6 @@ class CodeRabbitGateTests(unittest.TestCase):
             max_retries=3,
             checks_terminal_elapsed=120,
             blocking_review_items=[],
-            bugbot_gate={"required": True, "status": "completed", "conclusion": "success", "is_success": True},
             codex_gate={"reviewing": False, "status": "idle"},
             coderabbit_gate={"active": True, "reviewing": True, "status": "in_progress"},
         )
@@ -1535,7 +1365,6 @@ class CodeRabbitGateTests(unittest.TestCase):
             max_retries=3,
             checks_terminal_elapsed=120,
             blocking_review_items=[],
-            bugbot_gate={"required": True, "status": "completed", "conclusion": "success", "is_success": True},
             codex_gate={"reviewing": False, "status": "idle"},
             coderabbit_gate={"active": False, "reviewing": False, "status": "idle"},
         )
@@ -1549,7 +1378,6 @@ class CodeRabbitGateTests(unittest.TestCase):
         snapshot = {
             "pr": {"review_decision": "APPROVED"},
             "checks": {"all_terminal": True, "failed_count": 0, "pending_count": 0},
-            "bugbot_gate": {"required": True, "is_success": True},
             "codex_gate": {"reviewing": False},
             "coderabbit_gate": {"active": True, "reviewing": True},
             "blocking_review_items": [],
