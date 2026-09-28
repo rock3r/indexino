@@ -12,7 +12,8 @@ import tempfile
 import time
 import zipfile
 
-from harness import bazel_inventory, compare_inventory, phase_metrics, readiness, samples, verify_artifact
+from harness import (JOB_MEMORY_BYTES, JVM_HEAP, MIN_AVAILABLE_MEMORY_BYTES,
+                     bazel_inventory, compare_inventory, phase_metrics, readiness, samples, verify_artifact)
 from runner import Commands, clone
 
 HERE = Path(__file__).resolve().parent
@@ -46,6 +47,15 @@ def gradle_inventory(workspace, roots):
                     if path.is_symlink() or not path.resolve().is_relative_to(workspace):
                         raise ValueError("source escapes disposable corpus")
                     result.append(path.relative_to(workspace).as_posix())
+        # The observed closure includes package/namespace metadata captured alongside sources.
+        # Enumerate it from the independently specified module, never from Indexino's result.
+        for metadata in ("build.gradle.kts", "build.gradle", "src/main/AndroidManifest.xml",
+                         "src/androidMain/AndroidManifest.xml", "AndroidManifest.xml"):
+            path = source_root.parent / metadata
+            if path.is_file():
+                if path.is_symlink() or not path.resolve().is_relative_to(workspace):
+                    raise ValueError("metadata escapes disposable corpus")
+                result.append(path.relative_to(workspace).as_posix())
     return sorted(result)
 
 
@@ -64,7 +74,8 @@ def bazel_setup(commands, workspace, root, corpus):
         raise ValueError("public corpus Bazel version changed")
     # Preserve the pinned workspace rc but exclude host rc/config. Its sibling
     # try-import is inside this job's disposable root, never a host checkout.
-    startup = [str(binary), f"--output_user_root={root / 'bazel-output'}", "--nosystem_rc", "--nohome_rc"]
+    startup = [str(binary), f"--output_user_root={root / 'bazel-output'}", "--nosystem_rc", "--nohome_rc",
+               f"--host_jvm_args=-Xmx{JVM_HEAP}"]
     rc = root / "private.bazelrc"
     rc.write_text(f"common --repository_cache={root / 'bazel-repository-cache'}\n")
     startup.append(f"--bazelrc={rc}")
@@ -164,6 +175,8 @@ def execute(args, report):
                 raise AssertionError("invented fixture acceptance failed; retained all lane reports")
             acquisition = time.monotonic_ns()
             clone(commands, corpus, workspace)
+            if args.corpus == "intellij":
+                clone(commands, corpus["android"], workspace / "android")
             startup = bazel_setup(commands, workspace, root, corpus) if args.corpus == "intellij" else None
             report["corpusBootstrapWallNanos"] = time.monotonic_ns() - acquisition
             for include_deps in corpus["includeDependencies"]:
@@ -174,7 +187,7 @@ def execute(args, report):
                     # label_kind independently distinguishes generated outputs.
                     raw = commands.run(startup + ["query", "kind('source file|generated file', deps(//:main))",
                                        "--output=label_kind"], workspace, timeout=7200)
-                    expected, excluded = bazel_inventory(raw.splitlines())
+                    expected, excluded = bazel_inventory(raw.splitlines(), workspace)
                     scope_report["exclusions"] = excluded
                 else:
                     roots = corpus["sourceRoots"]["dependencies" if include_deps else "target"]
@@ -194,7 +207,7 @@ def execute(args, report):
                         scope_report["repeats"].append(result)
                     try:
                         try:
-                            commands.run(["java", "-Xmx12g"] + java_isolation + ["--enable-native-access=ALL-UNNAMED", "-cp", classpath,
+                            commands.run(["java", f"-Xmx{JVM_HEAP}"] + java_isolation + ["--enable-native-access=ALL-UNNAMED", "-cp", classpath,
                                           "dev.sebastiano.indexino.acceptance.PublicAcceptanceDriver", str(workspace),
                                           str(root / f"index-{include_deps}-{repeat}"), corpus["buildSystem"],
                                           corpus["target"], str(include_deps).lower(), str(contract), str(output)] +
@@ -242,6 +255,11 @@ def main():
     disk = shutil.disk_usage(args.scratch).free
     reasons = readiness(platform.system(), memory, disk, args.cgroup_parent)
     report = {"schema": 1, "status": "not-ready", "reasons": reasons,
+              "resourceProfile": {"name": "serial-linux-32g", "maxConcurrentCorpora": 1,
+                                  "jobMemoryBytes": JOB_MEMORY_BYTES, "swapBytes": 0,
+                                  "minimumAvailableMemoryBytes": MIN_AVAILABLE_MEMORY_BYTES,
+                                  "driverMaxHeap": JVM_HEAP, "bazelMaxHeap": JVM_HEAP,
+                                  "hostIsolation": "not guaranteed; contended correctness evidence only"},
               "machine": {"os": platform.system(), "release": platform.release(), "arch": platform.machine(),
                           "cpus": os.cpu_count(), "availableMemoryBytes": memory, "freeDiskBytes": disk},
               "cache": {"indexino": "cold per repeat", "osPageCache": "uncontrolled"},

@@ -17,9 +17,12 @@ import dev.sebastiano.indexino.api.RefreshRequest
 import dev.sebastiano.indexino.api.RuntimeAttachMode
 import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
+import dev.sebastiano.indexino.core.cache.WorktreeOverlayPolicy
+import dev.sebastiano.indexino.core.cache.WorktreeOverlayStoreOpener
 import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
+import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.engine.extension.DistributionCapabilities
 import dev.sebastiano.indexino.model.PluginId
 import dev.sebastiano.indexino.producer.IndexBuildProgressReporter
@@ -29,7 +32,9 @@ import dev.sebastiano.indexino.topology.BuildSystemDetector
 import dev.sebastiano.indexino.topology.TopologyRequest
 import dev.sebastiano.indexino.topology.bazel.BazelProcessRunner
 import dev.sebastiano.indexino.topology.bazel.BazelQueryExecutor
+import java.nio.file.Files
 import java.nio.file.Path
+import java.util.UUID
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -167,11 +172,46 @@ internal class IndexCommand : CliktCommand(name = "index") {
             )
         val resolver = IndexPathResolver(project)
         val commit = GitHeadResolver.resolve(project)
-        ContentAddressedPackCache(cacheRoot)
-            .replaceMaterializedDirectory(
-                manifest.packKeys.single(),
-                resolver.resolveBaseStore(commit),
-            )
+        val packs = ContentAddressedPackCache(cacheRoot)
+        val packKey =
+            if (manifest.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) {
+                // Transitional project-local lookup commands still require one physical store.
+                // Only the CLI constructs this projection; daemon and embedded refreshes do not.
+                val staging =
+                    resolver
+                        .resolveBaseStore(commit)
+                        .resolveSibling("cli-projection-${UUID.randomUUID()}")
+                try {
+                    XodusCodeIndexStore.open(staging).use { target ->
+                        WorktreeOverlayStoreOpener.openForBuildBase(cacheRoot, project, manifest)
+                            .use { source ->
+                                val batch =
+                                    mutableListOf<
+                                        Pair<
+                                            dev.sebastiano.indexino.core.key.CodeIndexKey,
+                                            dev.sebastiano.indexino.core.record.CodeIndexRecord,
+                                        >
+                                    >()
+                                fun flush() {
+                                    target.transaction {
+                                        batch.forEach { (key, record) -> target.put(key, record) }
+                                    }
+                                    batch.clear()
+                                }
+                                source.forEachPrefix("") { key, record ->
+                                    batch += key to record
+                                    if (batch.size == 16) flush()
+                                    true
+                                }
+                                if (batch.isNotEmpty()) flush()
+                            }
+                    }
+                    packs.installDirectory(staging, manifest.basicFactSchemaVersion)
+                } finally {
+                    if (Files.exists(staging)) staging.toFile().deleteRecursively()
+                }
+            } else manifest.packKeys.single()
+        packs.replaceMaterializedDirectory(packKey, resolver.resolveBaseStore(commit))
         ManifestIO.write(
             resolver.resolveManifest(commit),
             requireNotNull(manifest.compatibilityManifest) {

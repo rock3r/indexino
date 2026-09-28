@@ -23,13 +23,39 @@ internal object SourceChangeDetector {
         sources: List<IndexedSource>,
         sourceSnapshot: SourceContentSnapshot? = null,
         onFileProcessed: ((index: Int, total: Int, source: IndexedSource) -> Unit)? = null,
-    ): SourceChangeSet {
-        val previousHashes =
+    ): SourceChangeSet =
+        compareHashes(
             store
                 .prefixScan("file:")
                 .map { it.second }
                 .filterIsInstance<FileHashRecord>()
-                .associate { (it.originId to it.relativePath) to (it.contentHash to it.isCode) }
+                .associate { (it.originId to it.relativePath) to (it.contentHash to it.isCode) },
+            sources,
+            sourceSnapshot,
+            onFileProcessed,
+        )
+
+    fun detect(
+        previous: Map<IndexedSource, String>,
+        sources: List<IndexedSource>,
+        sourceSnapshot: SourceContentSnapshot,
+        onFileProcessed: ((index: Int, total: Int, source: IndexedSource) -> Unit)? = null,
+    ): SourceChangeSet =
+        compareHashes(
+            previous.entries.associate { (source, hash) ->
+                (source.originId to source.path) to (hash to source.isCode)
+            },
+            sources,
+            sourceSnapshot,
+            onFileProcessed,
+        )
+
+    private fun compareHashes(
+        previousHashes: Map<Pair<String, String>, Pair<String, Boolean>>,
+        sources: List<IndexedSource>,
+        sourceSnapshot: SourceContentSnapshot?,
+        onFileProcessed: ((index: Int, total: Int, source: IndexedSource) -> Unit)?,
+    ): SourceChangeSet {
         val currentSources = sources.associateBy { it.originId to it.path }
         val changedSources =
             sources.filterIndexedTo(linkedSetOf()) { index, source ->

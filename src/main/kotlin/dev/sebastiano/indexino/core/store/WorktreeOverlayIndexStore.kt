@@ -3,6 +3,11 @@ package dev.sebastiano.indexino.core.store
 import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.CodeIndexRecord
+import dev.sebastiano.indexino.core.record.FileHashRecord
+import dev.sebastiano.indexino.core.record.PluginFactRecord
+import dev.sebastiano.indexino.core.record.ReferenceRecord
+import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
+import dev.sebastiano.indexino.core.record.ResourceUsageRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 
 /**
@@ -12,14 +17,27 @@ import dev.sebastiano.indexino.core.record.SymbolRecord
 internal class WorktreeOverlayIndexStore(
     private val base: CodeIndexStore,
     private val delta: CodeIndexStore?,
-    private val tombstonePrefixes: List<String>,
+    tombstonePrefixes: List<String>,
 ) : CodeIndexStore {
+    private val tombstonePrefixes = tombstonePrefixes.toMutableSet()
+
+    fun hideBaseForFiles(tombstones: Collection<String>) {
+        tombstonePrefixes.addAll(tombstones)
+    }
+
+    override fun forEachWritablePrefix(
+        prefix: String,
+        action: (CodeIndexKey, CodeIndexRecord) -> Boolean,
+    ) {
+        delta?.forEachPrefix(prefix, action)
+    }
+
     override fun get(key: CodeIndexKey): CodeIndexRecord? {
         delta?.get(key)?.let {
             return it
         }
-        if (isTombstoned(key)) return null
-        return base.get(key)
+        val record = base.get(key) ?: return null
+        return record.takeUnless { isTombstoned(key, it) }
     }
 
     override fun put(key: CodeIndexKey, record: CodeIndexRecord) {
@@ -35,7 +53,7 @@ internal class WorktreeOverlayIndexStore(
     override fun prefixScan(prefix: String): Sequence<Pair<CodeIndexKey, CodeIndexRecord>> {
         val merged = linkedMapOf<CodeIndexKey, CodeIndexRecord>()
         base.prefixScan(prefix).forEach { (key, record) ->
-            if (!isTombstoned(key)) merged[key] = record
+            if (!isTombstoned(key, record)) merged[key] = record
         }
         delta?.prefixScan(prefix)?.forEach { (key, record) -> merged[key] = record }
         return merged.entries.sortedBy { it.key.value }.asSequence().map { it.key to it.value }
@@ -59,7 +77,7 @@ internal class WorktreeOverlayIndexStore(
         }
         if (!keepGoing) return
         base.forEachSymbolMatching(name, prefix) { key, record ->
-            if (!isTombstoned(key) && delta?.get(key) == null) {
+            if (!isTombstoned(key, record) && delta?.get(key) == null) {
                 keepGoing = action(key, record)
             }
             keepGoing
@@ -77,8 +95,9 @@ internal class WorktreeOverlayIndexStore(
             keepGoing
         }
         if (!keepGoing) return
+        if (tombstonePrefixForSource(originId, relativeFile) in tombstonePrefixes) return
         base.forEachCallInFile(originId, relativeFile) { key, record ->
-            if (!isTombstoned(key) && delta?.get(key) == null) {
+            if (!isTombstoned(key, record) && delta?.get(key) == null) {
                 keepGoing = action(key, record)
             }
             keepGoing
@@ -92,12 +111,26 @@ internal class WorktreeOverlayIndexStore(
         base.use { delta?.close() }
     }
 
-    private fun isTombstoned(key: CodeIndexKey): Boolean {
-        val raw = key.value
-        return tombstonePrefixes.any { prefix -> prefix in raw }
+    private fun isTombstoned(key: CodeIndexKey, record: CodeIndexRecord): Boolean {
+        val source =
+            when (record) {
+                is FileHashRecord -> record.originId to record.relativePath
+                is SymbolRecord -> record.originId to record.relativeFile
+                is ReferenceRecord -> record.originId to record.relativeFile
+                is CallSiteRecord -> record.originId to record.relativeFile
+                is ResourceDefinitionRecord -> record.originId to record.relativeFile
+                is ResourceUsageRecord -> record.originId to record.relativeFile
+                is PluginFactRecord -> record.originId to record.relativeFile
+                else -> return false
+            }
+        return tombstonePrefixForSource(source.first, source.second) in tombstonePrefixes ||
+            tombstonePrefixes.any { prefix -> '\u0000' !in prefix && prefix in key.value }
     }
 
     companion object {
+        fun tombstonePrefixForSource(originId: String, relativeFile: String): String =
+            "$originId\u0000$relativeFile"
+
         fun tombstonePrefixForRelativeFile(relativeFile: String): String = ":$relativeFile:"
     }
 }

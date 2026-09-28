@@ -46,7 +46,7 @@ internal object SourceRecordCleanup {
         val affectedKeys = affectedSources.mapTo(mutableSetOf()) { it.originId to it.path }
         for (prefix in listOf("sym:", "ref:", "res:", "resdef:", "resuse:")) {
             val keys = mutableListOf<CodeIndexKey>()
-            store.forEachPrefix(prefix) { key, record ->
+            store.forEachWritablePrefix(prefix) { key, record ->
                 val originId: String
                 val relativeFile: String
                 when (record) {
@@ -66,7 +66,7 @@ internal object SourceRecordCleanup {
                         originId = record.originId
                         relativeFile = record.relativeFile
                     }
-                    else -> return@forEachPrefix true
+                    else -> return@forEachWritablePrefix true
                 }
                 if ((originId to relativeFile) in affectedKeys) keys += key
                 true
@@ -89,7 +89,7 @@ internal object SourceRecordCleanup {
     ) {
         val affectedKeys = affectedSources.mapTo(mutableSetOf()) { it.originId to it.path }
         val keys = mutableListOf<CodeIndexKey>()
-        store.forEachPrefix(prefix) { key, record ->
+        store.forEachWritablePrefix(prefix) { key, record ->
             val matchesLanguage =
                 when (record) {
                     is SymbolRecord ->

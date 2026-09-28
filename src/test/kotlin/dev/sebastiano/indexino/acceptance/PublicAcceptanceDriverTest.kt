@@ -94,4 +94,30 @@ class PublicAcceptanceDriverTest {
             collectPages { QueryPage(listOf("first"), 0, 2, false, null, 5) }
         }
     }
+
+    @Test
+    fun `multi item pages retain all records and reject duplicates across boundaries`(): Unit =
+        runBlocking {
+            val records = listOf("a", "b", "c", "d", "e", "f", "g")
+            val offsets = mutableListOf<Int>()
+            val actual =
+                collectPages(pageSize = 3) { options ->
+                    offsets += options.offset
+                    QueryPage(
+                        records.drop(options.offset).take(options.limit),
+                        options.offset,
+                        options.limit,
+                        options.offset + options.limit < records.size,
+                        null,
+                        records.size,
+                    )
+                }
+            assertEquals(records, actual)
+            assertEquals(listOf(0, 3, 6), offsets)
+            assertFailsWith<IllegalStateException> {
+                collectPages(pageSize = 3) { options ->
+                    QueryPage(listOf("duplicate"), options.offset, options.limit, true, null, null)
+                }
+            }
+        }
 }

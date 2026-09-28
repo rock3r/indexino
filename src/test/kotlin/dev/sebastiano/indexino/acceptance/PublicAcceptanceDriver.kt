@@ -298,13 +298,17 @@ internal fun capturedInventoryPaths(workspace: Path, sources: List<IndexedSource
         workspace.relativize(path).toString().replace('\\', '/')
     }
 
-internal suspend fun <T> collectPages(query: suspend (QueryOptions) -> QueryPage<T>): List<T> {
+internal suspend fun <T> collectPages(
+    pageSize: Int = 1,
+    query: suspend (QueryOptions) -> QueryPage<T>,
+): List<T> {
+    require(pageSize in 1..10_000)
     val result = mutableListOf<T>()
     val seen = mutableSetOf<T>()
     repeat(10_000) {
-        val page = query(QueryOptions.page(1, result.size))
+        val page = query(QueryOptions.page(pageSize, result.size))
         check(page.offset == result.size) { "Incorrect page offset" }
-        check(page.items.size <= 1) { "Page exceeds requested bound" }
+        check(page.items.size <= pageSize) { "Page exceeds requested bound" }
         check(page.items.all(seen::add)) { "Duplicate paginated record" }
         result.addAll(page.items)
         if (!page.hasMore) {

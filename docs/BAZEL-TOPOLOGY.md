@@ -83,6 +83,21 @@ enter the capture. Kotlin, Java and XML files and files below recognized resourc
 retained. Missing or unreadable required files still fail capture rather than silently publishing
 a truncated generation.
 
+After a successful daemon refresh, a fully covered watcher can reuse that daemon's in-memory
+`TopologyResult` for a modification to a known, still-present source path. It does not launch a
+new Bazel query on that path; `index topology=reused watcher-source-edit` identifies the shortcut
+in the refresh journal. An atomic save that replaces a known source can use this shortcut if the
+path exists again when refresh begins; a missing source still forces discovery. Explicit refreshes,
+unknown paths (including BUILD inputs and new files), overflow, uncovered watches and failed
+automatic retries re-run discovery. The initial seed always resolves the source closure. A
+missing source on a hinted refresh fails capture; it never publishes a truncated generation.
+Native watches are armed before the seed's source capture; subsequent covered known-source edits
+read only the hinted files and inherit unchanged hashes/facts from the matching published
+generation. Reads of inherited source text are verified against that hash. Polling-only macOS
+external mounts, watcher gaps and changed generations use full capture. In-memory inventory
+traversal and delta publication still prevent claiming subsecond latency without a measured
+large-workspace result.
+
 Flags:
 
 - Embedded `IndexScope.bazel(target)` is target-only;

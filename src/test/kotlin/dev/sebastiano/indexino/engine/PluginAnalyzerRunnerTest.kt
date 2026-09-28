@@ -2,6 +2,7 @@ package dev.sebastiano.indexino.engine
 
 import dev.sebastiano.indexino.cli.BuildStoreCheckpoint
 import dev.sebastiano.indexino.core.key.CodeIndexKey
+import dev.sebastiano.indexino.core.plugin.PluginFactValueCodec
 import dev.sebastiano.indexino.core.plugin.StorePluginFactSink
 import dev.sebastiano.indexino.core.record.FileHashRecord
 import dev.sebastiano.indexino.core.record.PluginFactRecord
@@ -9,11 +10,14 @@ import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.model.IndexinoInternalApi
 import dev.sebastiano.indexino.model.PluginFactValue
 import dev.sebastiano.indexino.model.PluginId
+import dev.sebastiano.indexino.plugin.api.FileAnalysisContextV1
+import dev.sebastiano.indexino.plugin.api.FileAnalyzerV1
 import dev.sebastiano.indexino.plugin.api.PostProcessContextV1
 import dev.sebastiano.indexino.plugin.api.PostProcessLevelV1
 import dev.sebastiano.indexino.plugin.api.PostProcessorV1
 import dev.sebastiano.indexino.producer.IndexBuildContext
 import dev.sebastiano.indexino.producer.IndexedSource
+import kotlin.io.path.Path
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -23,6 +27,64 @@ import kotlinx.coroutines.runBlocking
 
 @OptIn(IndexinoInternalApi::class)
 class PluginAnalyzerRunnerTest {
+    @Test
+    fun `file analyzers replace only changed facts`() {
+        val root = createTempDirectory("plugin-incremental-")
+        try {
+            XodusCodeIndexStore.open(root.resolve("store")).use { store ->
+                val pluginId = PluginId.of("dev.example.incremental")
+                val files = mapOf("A.kt" to "class NewA", "B.kt" to "class B", "C.kt" to "class C")
+                val calls = mutableListOf<String>()
+                val analyzer =
+                    object : FileAnalyzerV1 {
+                        override val id: String = "file-fact"
+
+                        override suspend fun analyze(context: FileAnalysisContextV1) {
+                            calls += context.file.path
+                            context.facts.put("text", PluginFactValue.Text.of(context.sourceText))
+                        }
+                    }
+                val registry =
+                    PluginRegistry(
+                        descriptors = emptyMap(),
+                        fileAnalyzers =
+                            listOf(PluginRegistry.RegisteredFileAnalyzer(pluginId, analyzer)),
+                        postProcessors = emptyList(),
+                        checks = emptyList(),
+                    )
+                runBlocking {
+                    StorePluginFactSink(store, pluginId.value, "A.kt")
+                        .put("text", PluginFactValue.Text.of("class OldA"))
+                    StorePluginFactSink(store, pluginId.value, "B.kt")
+                        .put("text", PluginFactValue.Text.of("class B"))
+                    StorePluginFactSink(store, pluginId.value, "C.kt")
+                        .put("text", PluginFactValue.Text.of("class C"))
+                }
+                val context =
+                    IndexBuildContext.forInlineSources(store, "fixture", files)
+                        .copy(changedSourceSet = setOf(IndexedSource.workspace(Path("."), "A.kt")))
+
+                PluginAnalyzerRunner(registry).analyze(context, setOf(pluginId.value))
+                assertEquals(listOf("A.kt"), calls)
+                assertEquals(
+                    files.values.toSet(),
+                    store
+                        .prefixScan(CodeIndexKey.pluginFactPluginPrefix(pluginId.value))
+                        .map { (it.second as PluginFactRecord).encodedValue }
+                        .map(PluginFactValueCodec::decode)
+                        .map { (it as PluginFactValue.Text).value }
+                        .toSet(),
+                )
+                calls.clear()
+                PluginAnalyzerRunner(registry)
+                    .analyze(context, setOf(pluginId.value), setOf(pluginId.value))
+                assertEquals(files.keys.toList(), calls)
+            }
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
     @Test
     fun `build checkpoint restores basic and plugin facts after post processor failure`() {
         val root = createTempDirectory("plugin-rollback-")

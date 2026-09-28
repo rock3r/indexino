@@ -74,6 +74,13 @@ private constructor(
     private val closed = AtomicBoolean()
     private val queries = IndexSnapshotQueries(generation)
     private val checkResults = ConcurrentHashMap<CheckRequest, CompletableDeferred<List<Finding>>>()
+    private val fileCallCache =
+        object :
+            LinkedHashMap<SourceFile, List<CallSiteRecord>>(FILE_CALL_CACHE_ENTRIES, 0.75f, true) {
+            override fun removeEldestEntry(
+                eldest: MutableMap.MutableEntry<SourceFile, List<CallSiteRecord>>
+            ): Boolean = size > FILE_CALL_CACHE_ENTRIES
+        }
     private val localStore: CodeIndexStore
         get() = checkNotNull(store)
 
@@ -259,19 +266,28 @@ private constructor(
         }
         validateQueryOptions(options)
         return mapUnexpectedFailures {
+            val file = query.file
+            if (
+                file != null &&
+                    query.calleeName == null &&
+                    query.callSiteId == null &&
+                    query.enclosingSymbolId == null
+            ) {
+                val offset = parsePageOffset(options)
+                validatePageWindow(offset, options.limit)
+                return@mapUnexpectedFailures pageFromOrdered(fileCalls(file), offset, options) {
+                    records ->
+                    val candidates = callCandidatesFor(records)
+                    records.map { record ->
+                        with(queries) { record.toPublicCallSite(candidates.getValue(record)) }
+                    }
+                }
+            }
             val enclosing = query.enclosingSymbolId?.let(::findSymbolById)
             val unresolvedEnclosingId = query.enclosingSymbolId != null && enclosing == null
             orderedPage(
                 options = options,
-                comparator =
-                    compareBy(
-                        CallSiteRecord::originId,
-                        CallSiteRecord::relativeFile,
-                        CallSiteRecord::startOffset,
-                        CallSiteRecord::endOffset,
-                        CallSiteRecord::calleeName,
-                        CallSiteRecord::identity,
-                    ),
+                comparator = CALL_COMPARATOR,
                 scan = { accept ->
                     if (!unresolvedEnclosingId) {
                         val file = query.file
@@ -299,6 +315,27 @@ private constructor(
             )
         }
     }
+
+    @Synchronized
+    private fun fileCalls(file: SourceFile): List<CallSiteRecord> =
+        fileCallCache.getOrPut(file) {
+            val retained =
+                PriorityQueue<CallSiteRecord>(
+                    HOST_QUERY_WINDOW_MAXIMUM + 1,
+                    CALL_COMPARATOR.reversed(),
+                )
+            localStore.forEachCallInFile(file.originId.value, file.path) { _, record ->
+                if (record.originId == file.originId.value && record.relativeFile == file.path) {
+                    if (retained.size <= HOST_QUERY_WINDOW_MAXIMUM) retained.add(record)
+                    else if (CALL_COMPARATOR.compare(record, retained.peek()) < 0) {
+                        retained.remove()
+                        retained.add(record)
+                    }
+                }
+                true
+            }
+            retained.sortedWith(CALL_COMPARATOR)
+        }
 
     @OptIn(IndexinoInternalApi::class)
     public suspend fun runCheck(request: CheckRequest, options: QueryOptions): QueryPage<Finding> {
@@ -424,6 +461,7 @@ private constructor(
     override fun close() {
         if (closed.compareAndSet(false, true)) {
             try {
+                synchronized(this) { fileCallCache.clear() }
                 store?.let { localStore -> mapUnexpectedFailures { localStore.close() } }
             } finally {
                 // Unpin even when store.close fails — a leaked generation pin is worse than a
@@ -828,6 +866,16 @@ private constructor(
             }
         }
         val ordered = retained.sortedWith(comparator)
+        return pageFromOrdered(ordered, offset, options, transform)
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    private fun <T, R> pageFromOrdered(
+        ordered: List<T>,
+        offset: Int,
+        options: QueryOptions,
+        transform: (List<T>) -> List<R>,
+    ): QueryPage<R> {
         val end = minOf(offset + options.limit, ordered.size)
         if (ordered.size > end && end == HOST_QUERY_WINDOW_MAXIMUM) {
             throw indexinoFailure(
@@ -886,6 +934,16 @@ private constructor(
 
     internal companion object {
         private const val CURSOR_PREFIX: String = "indexino:v1:"
+        private const val FILE_CALL_CACHE_ENTRIES = 2
+        private val CALL_COMPARATOR =
+            compareBy(
+                CallSiteRecord::originId,
+                CallSiteRecord::relativeFile,
+                CallSiteRecord::startOffset,
+                CallSiteRecord::endOffset,
+                CallSiteRecord::calleeName,
+                CallSiteRecord::identity,
+            )
         // Host policy for this in-process facade. Not a public ABI constant until the owner
         // settles exact default page limits in docs/PUBLIC-API-DESIGN.html.
         private const val HOST_QUERY_LIMIT_MAXIMUM: Int = 10_000

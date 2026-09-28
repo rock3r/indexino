@@ -54,6 +54,31 @@ def fake_clone(commands, corpus, workspace):
 
 
 class OrchestrationTest(unittest.TestCase):
+    def test_intellij_acquires_pinned_android_before_full_scope_enumeration(self):
+        class BazelJob(FakeJob):
+            def run(self, argv, cwd, timeout=120):
+                if "query" in argv:
+                    self.calls.append(argv)
+                    return "source file //core/src/main/kotlin:Invented.kt\n"
+                return super().run(argv, cwd, timeout)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifact = root / "driver.zip"
+            artifact.write_bytes(b"fake artifact")
+            args = SimpleNamespace(corpus="intellij", artifact=artifact,
+                sha256=hashlib.sha256(b"fake artifact").hexdigest(), scratch=root, cgroup_parent=root)
+            with patch.object(run, "Commands", BazelJob), patch.object(run, "extract_driver"), \
+                    patch.object(run, "bazel_setup", return_value=["bazel"]), \
+                    patch.object(run, "clone", side_effect=fake_clone) as acquired:
+                run.execute(args, {})
+        self.assertEqual(2, acquired.call_count)
+        companion = acquired.call_args_list[1].args
+        self.assertEqual("https://github.com/JetBrains/android.git", companion[1]["url"])
+        self.assertEqual("0c3aa8d0201b5f0d79e1952d2a472b7ed34b128c", companion[1]["commit"])
+        self.assertEqual("android", companion[2].name)
+        self.assertIn("kind('source file|generated file', deps(//:main))",
+                      next(call for call in BazelJob.instances[-1].calls if "query" in call))
+
     def test_controller_failure_stays_actionable_without_exporting_exception_text(self):
         with tempfile.TemporaryDirectory() as temporary:
             report = Path(temporary) / "report.json"
@@ -234,15 +259,34 @@ class OrchestrationTest(unittest.TestCase):
         self.assertEqual(["manual", "watcher", "calls-manual", "calls-watcher"], [f["lane"] for f in report["fixtures"]])
         self.assertEqual(8, sum("dev.sebastiano.indexino.acceptance.PublicAcceptanceDriver" in c
                                 for c in FakeJob.instances[-1].calls))
+        for call in FakeJob.instances[-1].calls:
+            if "dev.sebastiano.indexino.acceptance.PublicAcceptanceDriver" in call:
+                self.assertIn("-Xmx6g", call)
+
+    def test_bazel_heap_override_is_shared_by_inventory_wrapper_and_shutdown(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "corpus"
+            workspace.mkdir()
+            (workspace / ".bazelversion").write_text("pinned-bazel\n")
+            commands = FakeJob(root, root)
+            commands.env = {"PATH": "/bin"}
+            with patch.object(run, "verify_artifact"), patch.object(Path, "chmod"):
+                startup = run.bazel_setup(commands, workspace, root, {"bazel": "pinned-bazel"})
+            self.assertIn("--host_jvm_args=-Xmx6g", startup)
+            self.assertIn("--host_jvm_args=-Xmx6g", (root / "tools/bazel").read_text())
+            self.assertEqual(startup + ["shutdown"], commands.bazel_shutdown[0])
 
     def test_inventory_excludes_tests_but_keeps_all_three_independent_roots(self):
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
             fake_clone(None, None, workspace)
+            (workspace / "core/build.gradle.kts").write_text("plugins {}")
+            (workspace / "input-coordinator/build.gradle.kts").write_text("plugins {}")
             decoy = workspace / "core/src/test/kotlin/Decoy.kt"
             decoy.parent.mkdir(parents=True)
             decoy.write_text("class Decoy")
-            self.assertEqual(["core/src/main/kotlin/Invented.kt"],
+            self.assertEqual(["core/build.gradle.kts", "core/src/main/kotlin/Invented.kt"],
                              run.gradle_inventory(workspace, ["core/src"]))
 
 

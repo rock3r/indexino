@@ -591,6 +591,11 @@ class WorkspaceRuntimeTest {
 
                     assertEquals(firstHandle.id, secondHandle.id)
                     assertEquals(firstHandle.await().generation, secondHandle.await().generation)
+                    val journal = RuntimeRefreshClient(second).progress(secondHandle.id).text
+                    assertTrue(
+                        "index phase=topology state=started" in journal,
+                        "A joining client must observe the running refresh's journal: $journal",
+                    )
                 }
             }
         } finally {

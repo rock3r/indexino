@@ -129,6 +129,32 @@ mid-burst does not become the last published view of that burst. The controller 
 change epoch before launching a worker; a later edit stays dirty even if its event arrives before
 the worker's handle is registered.
 
+On macOS a recursive FSEvents stream covers the workspace, so only directories outside it (for
+example external included builds) are registered with the JDK `WatchService`, which polls there.
+Paths inside `.git` directories and the Indexino cache are ignored on every transport: Git's index
+bookkeeping during origin resolution is not a source edit and must not schedule another refresh.
+A `.git` entry being created or removed still re-resolves topology; a polled modification of that
+entry (its mtime changes on every index lock) does not.
+
+Origin provenance (HEAD, working-tree fingerprint, dirty flag) normally costs whole-repository
+`git diff HEAD`, `git status` and `git ls-files --others` walks, seconds on a large checkout. A
+known-source watcher refresh updates it incrementally only with evidence: the macOS FSEvents stream
+recursively covers the origin (per-directory `WatchService` keys do not), so any other working-tree
+change, overflow or coverage loss already forces a full refresh; and a per-origin stamp proves Git
+state the watcher ignores is unchanged: HEAD and its tree, the owning repository's HEAD, effective
+configuration, the index file identity and ignore, attribute, graft and sparse-checkout files. The
+stamp is taken before and after the reads. Only hinted files are then re-read with
+pathspec-limited `diff` and `status`, and the full diff is rebuilt from per-path sections, so the
+result is byte-identical to a full resolution. Unparseable output (renames, quoted paths, extra
+stderr), too many hints, or a nested origin whose files an enclosing repository tracks fall back to
+the full reads for that origin. Like inherited source hashes, the evidence is only as current as
+event delivery: a change whose event arrives after a refresh started schedules a successor. When
+all intervening events name known sources under continuous recursive coverage, the successor keeps
+their path hints and can reuse topology and unchanged hashes; unknown paths, overflow, failed
+refreshes and lost coverage still force full reconciliation.
+Origin reads never write the user's index: `status` runs with optional locks disabled and daemon
+`diff` reads a private copy of the index, because `git diff` otherwise refreshes the index.
+
 Daemon close excludes overlapping cleanup attempts. A failed lease release remains retryable without
 closing an already stopped handshake server again; identity checks still protect successor leases.
 

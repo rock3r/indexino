@@ -24,6 +24,18 @@ class FakeCommands:
 
 
 class RunnerTest(unittest.TestCase):
+    def test_default_job_limit_fits_serial_32_gib_host(self):
+        parent, child = MagicMock(), MagicMock()
+        parent.__truediv__.return_value = child
+        files = {name: MagicMock() for name in
+                 ("cgroup.kill", "memory.max", "memory.swap.max", "pids.max", "cpu.stat", "memory.peak")}
+        child.__truediv__.side_effect = files.__getitem__
+        with tempfile.TemporaryDirectory() as temporary, patch.object(runner.platform, "system", return_value="Linux"):
+            runner.Commands(parent, Path(temporary))
+        files["memory.max"].write_text.assert_called_once_with(str(16 << 30))
+        files["memory.swap.max"].write_text.assert_called_once_with("0")
+        files["pids.max"].write_text.assert_called_once_with("1024")
+
     def test_new_command_invalidates_previous_cleanup_evidence_even_when_launch_fails(self):
         commands = runner.Commands.__new__(runner.Commands)
         commands.cleanup_verified = True
@@ -69,6 +81,18 @@ class RunnerTest(unittest.TestCase):
                          Path(tmp) / "corpus")
         self.assertTrue(any(call[0][-3:] == ["checkout", "--detach", pin] for call in commands.calls))
         self.assertTrue(all(0 < call[2] <= 1800 for call in commands.calls))
+
+    def test_android_companion_is_public_and_detached_at_its_own_pin(self):
+        pin = "3" * 40
+        commands = FakeCommands(pin)
+        with tempfile.TemporaryDirectory() as temporary:
+            try:
+                runner.clone(commands, {"url": "https://github.com/JetBrains/android.git", "commit": pin},
+                             Path(temporary) / "android")
+            except ValueError as error:
+                self.fail(f"pinned public Android companion rejected: {error}")
+        self.assertTrue(any(call[0] == ["git", "fetch", "--depth=1", "origin", pin] for call in commands.calls))
+        self.assertTrue(any(call[0][-3:] == ["checkout", "--detach", pin] for call in commands.calls))
 
     def test_environment_drops_ambient_jvm_and_git_configuration(self):
         with tempfile.TemporaryDirectory() as tmp:

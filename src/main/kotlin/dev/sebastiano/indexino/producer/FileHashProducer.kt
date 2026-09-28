@@ -21,16 +21,17 @@ internal class FileHashProducer : IndexProducer {
     override fun produce(context: IndexBuildContext, store: CodeIndexStore) {
         val currentFiles = context.sources.map { it.originId to it.path }.toSet()
         val changedFiles = context.changedSources.mapTo(hashSetOf()) { it.originId to it.path }
-        store
-            .prefixScan("file:")
-            .filter { (_, record) ->
+        val removedKeys = mutableListOf<CodeIndexKey>()
+        store.forEachWritablePrefix("file:") { key, record ->
+            if (
                 record is FileHashRecord &&
                     (record.originId to record.relativePath !in currentFiles ||
                         (record.originId to record.relativePath) in changedFiles)
-            }
-            .map { it.first }
-            .toList()
-            .forEach(store::delete)
+            )
+                removedKeys += key
+            true
+        }
+        removedKeys.forEach(store::delete)
         val files = context.changedSources
         files.forEachIndexed { index, source ->
             context.reportFileProgress(index + 1, files.size, source)

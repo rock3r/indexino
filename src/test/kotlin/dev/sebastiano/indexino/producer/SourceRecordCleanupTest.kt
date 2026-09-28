@@ -4,6 +4,7 @@ import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.CodeIndexRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
+import dev.sebastiano.indexino.core.store.WorktreeOverlayIndexStore
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import java.nio.file.Path
 import kotlin.test.Test
@@ -12,6 +13,52 @@ import kotlin.test.fail
 import org.junit.jupiter.api.io.TempDir
 
 class SourceRecordCleanupTest {
+    @Test
+    fun `overlay cleanup visits only the writable delta, never the base families`(
+        @TempDir root: Path
+    ) {
+        val base = XodusCodeIndexStore.open(root.resolve("base"))
+        val delta = XodusCodeIndexStore.open(root.resolve("delta"))
+        val edited = IndexedSource.workspace(root, "src/Panel.java")
+        val baseKey = CodeIndexKey.parse("sym:old")
+        val deltaKey = CodeIndexKey.parse("sym:previous-edit")
+        base.put(baseKey, SymbolRecord("old", edited.path, 1, kind = "class", name = "old"))
+        delta.put(
+            deltaKey,
+            SymbolRecord("previous-edit", edited.path, 1, kind = "class", name = "previous-edit"),
+        )
+        val guarded =
+            object : CodeIndexStore by base {
+                override fun forEachPrefix(
+                    prefix: String,
+                    action: (CodeIndexKey, CodeIndexRecord) -> Boolean,
+                ) {
+                    fail("Cleanup scanned base family $prefix")
+                }
+
+                override fun prefixScan(
+                    prefix: String
+                ): Sequence<Pair<CodeIndexKey, CodeIndexRecord>> =
+                    fail("Cleanup materialized base family $prefix")
+            }
+        WorktreeOverlayIndexStore(
+                guarded,
+                delta,
+                listOf(
+                    WorktreeOverlayIndexStore.tombstonePrefixForSource(edited.originId, edited.path)
+                ),
+            )
+            .use { overlay ->
+                SourceRecordCleanup.deleteLanguageOriginRecords(
+                    overlay,
+                    "java",
+                    ".java",
+                    setOf(edited),
+                )
+                assertEquals(emptyList(), delta.prefixScan("sym:").toList())
+            }
+    }
+
     @Test
     fun `empty language invalidation never scans records`(@TempDir root: Path) {
         XodusCodeIndexStore.open(root.resolve("store")).use { actual ->

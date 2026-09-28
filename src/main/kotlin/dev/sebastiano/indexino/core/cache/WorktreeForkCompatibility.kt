@@ -12,9 +12,50 @@ internal data class WorktreeForkBase(
     val baseManifest: IndexManifest,
     val unchanged: Boolean,
     val overlayChainDepth: Int,
+    val previousOverlayPackKey: String? = null,
+    val previousTombstones: List<String> = emptyList(),
 )
 
 internal object WorktreeForkCompatibility {
+    @Suppress("ReturnCount")
+    fun findCurrentWorkspaceBase(
+        project: Path,
+        cacheRoot: Path,
+        criteria: ManifestFreshnessCriteria,
+    ): WorktreeForkBase? {
+        val workspaceId = dev.sebastiano.indexino.api.InProcessCacheLayout.workspaceId(project)
+        val current =
+            WorkspaceGenerationManifestStore(cacheRoot, workspaceId).current() ?: return null
+        val compatibility = current.compatibilityManifest ?: return null
+        if (!isForkCompatibleBase(compatibility, criteria)) return null
+        if (current.basicFactSchemaVersion != criteria.basicFactSchemaVersion) return null
+        val baseId =
+            if (current.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) {
+                current.baseWorkspaceId ?: return null
+            } else workspaceId
+        val baseGeneration =
+            if (current.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) {
+                current.baseGeneration ?: return null
+            } else current.generation
+        val basePath =
+            if (baseId == workspaceId) project
+            else WorkspaceRegistryStore(cacheRoot).entry(baseId)?.path?.let(Path::of) ?: return null
+        if (current.overlayPackKeys.size > 1) return null
+        return WorktreeForkBase(
+            baseWorkspaceId = baseId,
+            baseGeneration = baseGeneration,
+            baseWorkspacePath = basePath,
+            baseManifest = compatibility,
+            unchanged = false,
+            overlayChainDepth =
+                if (current.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) {
+                    current.overlayChainDepth
+                } else 1,
+            previousOverlayPackKey = current.overlayPackKeys.singleOrNull(),
+            previousTombstones = current.tombstonePrefixes,
+        )
+    }
+
     fun findCompatibleBase(
         project: Path,
         cacheRoot: Path,

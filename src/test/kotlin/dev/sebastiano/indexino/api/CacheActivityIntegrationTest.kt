@@ -32,7 +32,7 @@ internal class CacheActivityIntegrationTest {
     }
 
     @Test
-    fun `gc retains superseded packs until pins outliving client close are released`() =
+    fun `gc retains an overlay base after pins close until the workspace is forgotten`() =
         runBlocking {
             withIndex { index, workspace, cache ->
                 val request =
@@ -67,7 +67,13 @@ internal class CacheActivityIntegrationTest {
                     pinned.close()
                 }
                 CacheMaintenance.gc(cache)
-                assertFalse(Files.exists(oldPack), "Closed pins must no longer block reclamation")
+                assertTrue(Files.exists(oldPack), "The current overlay still references its base")
+                assertEquals(0, CacheMaintenance.forget(cache, workspace))
+                CacheMaintenance.gc(cache)
+                assertFalse(
+                    Files.exists(oldPack),
+                    "Forgotten workspace no longer references the base",
+                )
             }
         }
 

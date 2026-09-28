@@ -86,6 +86,35 @@ class WorktreeOverlayIndexStoreTest {
     }
 
     @Test
+    fun `origin qualified tombstone hides only the edited origin even when keys share a path`() {
+        val path = "src/Shared.kt"
+        val one = CodeIndexKey.symbolDefinition("First", "git:one", path, 1, 1)
+        val two = CodeIndexKey.symbolDefinition("Second", "git:two", path, 1, 1)
+        base.put(one, symbol("First", path).copy(originId = "git:one"))
+        base.put(two, symbol("Second", path).copy(originId = "git:two"))
+        val overlay = WorktreeOverlayIndexStore(base, delta, listOf("git:one\u0000$path"))
+        try {
+            assertNull(overlay.get(one))
+            assertEquals("Second", (overlay.get(two) as SymbolRecord).name)
+            assertEquals(
+                listOf("Second"),
+                overlay
+                    .prefixScan("sym:")
+                    .map { (_, record) -> (record as SymbolRecord).name }
+                    .toList(),
+            )
+            val found = mutableListOf<String>()
+            overlay.forEachSymbolMatching("Second", prefix = false) { _, record ->
+                found += record.name
+                true
+            }
+            assertEquals(listOf("Second"), found)
+        } finally {
+            overlay.close()
+        }
+    }
+
+    @Test
     fun `delta overrides base when no tombstone applies`() {
         val relativeFile = "ui/src/main/kotlin/Other.kt"
         val key = CodeIndexKey.symbolDefinition("Panel", "workspace", relativeFile, 1, 0)
@@ -175,6 +204,61 @@ class WorktreeOverlayIndexStoreTest {
             false
         }
         assertEquals(listOf(moved), new)
+    }
+
+    @Test
+    fun `qualified file tombstone skips hidden base call lookup but retains delta and other files`() {
+        val original =
+            CallSiteRecord(
+                identity = "original",
+                calleeName = "target",
+                candidateSymbolFqns = emptyList(),
+                relativeFile = "Edited.kt",
+                originId = "workspace",
+                startLine = 1,
+                startColumn = 1,
+                startOffset = 0,
+                endLine = 1,
+                endColumn = 8,
+                endOffset = 7,
+                confidence = "UNRESOLVED",
+            )
+        base.put(CodeIndexKey.call("old"), original)
+        base.put(CodeIndexKey.call("other"), original.copy(relativeFile = "Other.kt"))
+        delta.put(CodeIndexKey.call("new"), original.copy(identity = "new"))
+        val visited = mutableListOf<String>()
+        val observedBase =
+            object : CodeIndexStore by base {
+                override fun forEachCallInFile(
+                    originId: String,
+                    relativeFile: String,
+                    action: (CodeIndexKey, CallSiteRecord) -> Boolean,
+                ) {
+                    visited += relativeFile
+                    base.forEachCallInFile(originId, relativeFile, action)
+                }
+            }
+        val overlay =
+            WorktreeOverlayIndexStore(
+                observedBase,
+                delta,
+                listOf(WorktreeOverlayIndexStore.tombstonePrefixForSource("workspace", "Edited.kt")),
+            )
+        val edited = mutableListOf<CodeIndexKey>()
+        overlay.forEachCallInFile("workspace", "Edited.kt") { key, _ ->
+            edited += key
+            true
+        }
+        assertEquals(listOf(CodeIndexKey.call("new")), edited)
+        assertEquals(emptyList(), visited, "Every base call in the edited file is tombstoned")
+
+        val other = mutableListOf<CodeIndexKey>()
+        overlay.forEachCallInFile("workspace", "Other.kt") { key, _ ->
+            other += key
+            true
+        }
+        assertEquals(listOf(CodeIndexKey.call("other")), other)
+        assertEquals(listOf("Other.kt"), visited)
     }
 
     private fun symbol(

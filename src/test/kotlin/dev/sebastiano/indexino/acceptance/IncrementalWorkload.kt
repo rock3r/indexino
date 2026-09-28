@@ -16,9 +16,23 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-/** Controlled payloads appended to existing captured files; original source remains intact. */
-internal class IncrementalWorkload(workspace: Path, plan: JsonObject) {
-    internal class Source(
+/**
+ * Controlled payloads appended to existing captured files; original source remains intact. An
+ * [editNonce] makes edited (V1) bytes unique to one run, so an edit cannot recreate a generation an
+ * earlier run already published; baseline (V0) bytes are unchanged.
+ */
+internal class IncrementalWorkload(
+    workspace: Path,
+    plan: JsonObject,
+    private val editNonce: String? = null,
+) {
+    init {
+        require(editNonce == null || editNonce.matches(Regex("[A-Za-z0-9._-]{1,64}"))) {
+            "Edit nonce must be 1-64 filename-safe characters"
+        }
+    }
+
+    internal inner class Source(
         val path: Path,
         val relative: String,
         val module: String,
@@ -49,7 +63,9 @@ internal class IncrementalWorkload(workspace: Path, plan: JsonObject) {
                     "class ${name(version)} { fun probe($parameters): Int = $expression; " +
                         "fun caller(): Int = probe($arguments) }"
                 }
-            return "$original\n$body\n"
+            val nonce =
+                if (version == 1 && editNonce != null) "// indexino-edit-nonce $editNonce\n" else ""
+            return "$original\n$body\n$nonce"
         }
     }
 
@@ -174,7 +190,7 @@ internal class IncrementalWorkload(workspace: Path, plan: JsonObject) {
         }
         if (callers.size != 1 || callers.single().location.file != source.file) return false
         val calls =
-            collectPages { snapshot.findCalls(CallQuery.inFile(source.file), it) }
+            collectPages(pageSize = 1_000) { snapshot.findCalls(CallQuery.inFile(source.file), it) }
                 .filter { it.enclosingSymbolId == callers.single().id }
         if (calls.size != 1) return false
         val call = calls.single()

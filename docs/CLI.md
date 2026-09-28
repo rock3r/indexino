@@ -111,12 +111,28 @@ Bazel/Gradle, may open a commit-addressed store under the project, runs core pro
 commit is provenance only. Core producers build Kotlin/Java symbols, references, and XML facts;
 plugins (e.g. selection-context) are loaded explicitly or bundled in the fat JAR.
 
+The daemon and embedded refresh path can publish a small overlay delta for a compatible edit,
+without repacking its base. The transitional `index` CLI still projects an overlay into a full
+physical store for legacy lookup commands after the refresh completes. That projection scans and
+packs the merged facts, so CLI indexing is not yet a bounded one-file operation; it does not affect
+daemon-owned watcher refresh or embedded publication. Use published snapshots for latency
+measurement, not this compatibility projection.
+
 Progress lines (producer names and `[N/M] file` per source file) go to stderr. Text progress also
-marks topology, source capture, aggregate source preview, store build, its checkpoint copy,
+marks topology, source resolution, source capture, aggregate source preview, origin resolution
+(Git revision and working-tree fingerprints), store build, its checkpoint copy,
 change detection, plugins, each producer, generation publication and runtime watcher registration as
 `index phase=<name> state=started` followed on success by
 `index phase=<name> state=completed durationMillis=<elapsed>`. These coarse monotonic timings are
 diagnostic, not a guarantee of incremental speed; incomplete phases have no completion line.
+Daemon and embedded refreshes add `refresh-queue` (request to worker start) and `refresh` (whole
+worker, including lock waits and publication) completion lines, and every refresh reports
+`index origins incremental=<n> full=<n>`: origins updated from watcher evidence versus whole-repository
+Git reads (see ARCHITECTURE.md). A rebuild also reports `index store=writer|overlay` and
+`index changes changed=<n> deleted=<n> full=<true|false>`. A daemon watcher refresh for known
+source edits reuses the captured topology and source closure, reporting
+`index topology=reused watcher-source-edit` and `index sources=reused watcher-capture` instead of
+the topology query and source-resolution phase.
 
 #### Machine progress JSONL
 

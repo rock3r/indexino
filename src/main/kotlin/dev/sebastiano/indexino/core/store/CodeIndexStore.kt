@@ -27,6 +27,11 @@ internal interface CodeIndexStore : AutoCloseable {
         }
     }
 
+    /** Scan only records physically owned by this writer when cleaning invalidated source facts. */
+    fun forEachWritablePrefix(prefix: String, action: (CodeIndexKey, CodeIndexRecord) -> Boolean) {
+        forEachPrefix(prefix, action)
+    }
+
     /**
      * Visits symbol records whose name, FQN, or alias equals [name], or starts with it when
      * [prefix] is true. Each primary key is emitted at most once. Return false to stop early.

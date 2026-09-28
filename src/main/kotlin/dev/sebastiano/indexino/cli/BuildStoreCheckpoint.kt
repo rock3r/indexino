@@ -89,38 +89,59 @@ internal class BuildStoreCheckpoint(
         flush()
     }
 
-    override fun close() {
-        try {
-            backup?.close()
-        } catch (@Suppress("TooGenericExceptionCaught") failure: Throwable) {
-            retain = true
-            throw failure
-        }
-        if (created && !retain) {
-            Files.walkFileTree(
-                directory,
-                object : SimpleFileVisitor<Path>() {
-                    override fun visitFile(
-                        file: Path,
-                        attrs: BasicFileAttributes,
-                    ): FileVisitResult {
-                        // Xodus leaves completed logs read-only, even after closing the
-                        // environment.
-                        // Do not follow links or change anything outside this disposable
-                        // checkpoint.
-                        if (attrs.isRegularFile) file.toFile().setWritable(true)
-                        Files.delete(file)
-                        return FileVisitResult.CONTINUE
-                    }
+    override fun close() =
+        cleanupPhase("checkpoint-release") {
+            try {
+                backup?.let { pending ->
+                    cleanupPhase("checkpoint-backup-close") { pending.close() }
+                    backup = null
+                }
+            } catch (@Suppress("TooGenericExceptionCaught") failure: Throwable) {
+                retain = true
+                throw failure
+            }
+            if (created && !retain) {
+                cleanupPhase("checkpoint-delete") {
+                    Files.walkFileTree(
+                        directory,
+                        object : SimpleFileVisitor<Path>() {
+                            override fun visitFile(
+                                file: Path,
+                                attrs: BasicFileAttributes,
+                            ): FileVisitResult {
+                                // Xodus leaves completed logs read-only, even after closing the
+                                // environment. Do not follow links or touch another directory.
+                                if (attrs.isRegularFile) file.toFile().setWritable(true)
+                                Files.delete(file)
+                                return FileVisitResult.CONTINUE
+                            }
 
-                    override fun postVisitDirectory(dir: Path, exc: IOException?): FileVisitResult {
-                        if (exc != null) throw exc
-                        Files.delete(dir)
-                        return FileVisitResult.CONTINUE
-                    }
-                },
+                            override fun postVisitDirectory(
+                                dir: Path,
+                                exc: IOException?,
+                            ): FileVisitResult {
+                                if (exc != null) throw exc
+                                Files.delete(dir)
+                                return FileVisitResult.CONTINUE
+                            }
+                        },
+                    )
+                }
+            }
+        }
+
+    private fun <T> cleanupPhase(phase: String, action: () -> T): T {
+        val started = System.nanoTime()
+        // A cancelled refresh may reject progress reporting; cleanup must still run.
+        runCatching { progress("index phase=$phase state=started") }
+        val result = action()
+        runCatching {
+            progress(
+                "index phase=$phase state=completed durationMillis=" +
+                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
             )
         }
+        return result
     }
 
     companion object {

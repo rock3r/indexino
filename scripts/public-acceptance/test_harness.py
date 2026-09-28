@@ -59,6 +59,80 @@ class HarnessTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             harness.bazel_inventory(["source file //a:../../escape.kt"])
 
+    def test_bazel_inventory_counts_directories_without_hiding_missing_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            (workspace / "resources/nested").mkdir(parents=True)
+            (workspace / "resources/icon.svg").write_text("<svg/>")
+            paths, excluded = harness.bazel_inventory([
+                "source file //resources:nested", "source file //resources:icon.svg",
+                "source file //:Missing.kt",
+            ], workspace)
+            self.assertEqual(["Missing.kt", "resources/icon.svg"], paths)
+            self.assertEqual(1, excluded.get("directory"))
+
+    def test_bazel_inventory_includes_non_xml_resource_files(self):
+        paths, excluded = harness.bazel_inventory([
+            "source file //a:resources/icons/icon.svg",
+            "source file //a:android-res/raw/data.bin",
+            "source file //a:src/commonMain/composeResources/font/font.ttf",
+            "source file //a:icons/unrelated.svg",
+        ])
+        self.assertEqual(["a/android-res/raw/data.bin", "a/resources/icons/icon.svg",
+                          "a/src/commonMain/composeResources/font/font.ttf"], paths)
+        self.assertEqual(1, excluded["unsupported"])
+
+    def test_bazel_inventory_captures_only_metadata_reachable_from_queried_inputs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            metadata = ["app/build.gradle.kts", "app/src/main/AndroidManifest.xml",
+                        "android/lib/build.gradle", "flat/build.gradle.kts",
+                        "assets/AndroidManifest.xml", "unrelated/build.gradle.kts",
+                        "config/build.gradle.kts"]
+            for name in metadata:
+                path = workspace / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("invented metadata")
+            paths, _ = harness.bazel_inventory([
+                "source file //app:src/main/kotlin/A.kt",
+                "source file //app:src/main/AndroidManifest.xml",
+                "source file //android/lib:src/main/java/B.java",
+                "source file //flat:C.kt",
+                "source file //assets:src/commonMain/composeResources/raw/data.bin",
+                "source file //config:settings.xml",
+                "source file //missing:src/main/kotlin/Missing.kt",
+            ], workspace)
+            expected = ["app/src/main/kotlin/A.kt", "app/src/main/AndroidManifest.xml",
+                        "android/lib/src/main/java/B.java", "flat/C.kt",
+                        "assets/src/commonMain/composeResources/raw/data.bin",
+                        "config/settings.xml", "missing/src/main/kotlin/Missing.kt",
+                        "app/build.gradle.kts", "android/lib/build.gradle",
+                        "flat/build.gradle.kts", "assets/AndroidManifest.xml"]
+            self.assertEqual(sorted(expected), paths)
+
+    def test_bazel_inventory_rejects_metadata_symlinks_outside_corpus(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "corpus"
+            (workspace / "app").mkdir(parents=True)
+            outside = root / "outside.gradle.kts"
+            outside.write_text("outside")
+            (workspace / "app/build.gradle.kts").symlink_to(outside)
+            with self.assertRaisesRegex(ValueError, "metadata escapes"):
+                harness.bazel_inventory(["source file //app:src/main/kotlin/A.kt"], workspace)
+
+    def test_bazel_label_kind_preserves_spaces_in_supported_and_excluded_paths(self):
+        try:
+            paths, excluded = harness.bazel_inventory([
+                "source file //java/java-impl:resources/fileTemplates/code/Catch Statement Body.java",
+                "source file //a:resource with spaces.txt",
+                "generated file //a:Generated File.kt",
+            ])
+        except ValueError as error:
+            self.fail(f"valid Bazel filenames with spaces rejected: {error}")
+        self.assertEqual(["java/java-impl/resources/fileTemplates/code/Catch Statement Body.java"], paths)
+        self.assertEqual({"external": 0, "generated": 1, "unsupported": 1}, excluded)
+
     def test_percentiles_retain_samples_nearest_rank(self):
         result = harness.samples([100, 1, 2, 3, 4])
         self.assertEqual([100, 1, 2, 3, 4], result["raw"])
@@ -73,6 +147,15 @@ class HarnessTest(unittest.TestCase):
         reasons = harness.readiness("Linux", 12 << 30, 10 << 30, None)
         self.assertTrue(any("memory" in x for x in reasons))
         self.assertTrue(any("disk" in x for x in reasons))
+
+    def test_serial_profile_accepts_18_gib_available_but_not_one_byte_less(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            group = Path(temporary)
+            for name, value in {"cgroup.kill": "", "pids.max": "max", "memory.max": "max"}.items():
+                (group / name).write_text(value)
+            self.assertEqual([], harness.readiness("Linux", 18 << 30, 200 << 30, group))
+            reasons = harness.readiness("Linux", (18 << 30) - 1, 200 << 30, group)
+            self.assertTrue(any("memory" in reason for reason in reasons), reasons)
 
     def test_parent_cgroup_limit_cannot_be_hidden_by_host_memory(self):
         with tempfile.TemporaryDirectory() as temporary:

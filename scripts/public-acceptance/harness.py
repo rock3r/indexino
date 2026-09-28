@@ -6,6 +6,11 @@ import math
 from pathlib import Path, PurePosixPath
 
 
+JOB_MEMORY_BYTES = 16 << 30
+MIN_AVAILABLE_MEMORY_BYTES = JOB_MEMORY_BYTES + (2 << 30)
+JVM_HEAP = "6g"
+
+
 def phase_metrics(events):
     starts, phases, discovery = {}, {}, []
     refresh_start = None
@@ -50,11 +55,14 @@ def compare_inventory(expected, actual):
     return hashlib.sha256(("\n".join(sorted(expected)) + "\n").encode()).hexdigest()
 
 
-def bazel_inventory(rows):
+def bazel_inventory(rows, workspace=None):
     paths = []
     excluded = {"external": 0, "generated": 0, "unsupported": 0}
+    if workspace is not None:
+        excluded["directory"] = 0
     for row in rows:
-        kind, label = row.rsplit(" ", 1)
+        category, file_word, label = row.split(" ", 2)
+        kind = f"{category} {file_word}"
         if label.startswith("@"):
             excluded["external"] += 1
         elif kind == "generated file":
@@ -68,11 +76,54 @@ def bazel_inventory(rows):
             path = f"{package}/{name}" if package else name
             if any(x in ("", ".", "..") for x in path.split("/")) or "\\" in path:
                 raise ValueError(f"unsafe source label: {label}")
-            if PurePosixPath(path).suffix not in (".kt", ".java", ".xml"):
+            if workspace is not None and (workspace / path).is_dir():
+                excluded["directory"] += 1
+                continue
+            resource = any(is_resource_directory(part)
+                           for part in PurePosixPath(path).parts[:-1])
+            if PurePosixPath(path).suffix not in (".kt", ".java", ".xml") and not resource:
                 excluded["unsupported"] += 1
             else:
                 paths.append(path)
+    if workspace is not None:
+        paths.extend(bazel_metadata_inventory(workspace, paths))
     return sorted(set(paths)), excluded
+
+
+def is_resource_directory(name):
+    return name in ("res", "resources", "composeResources") or name.endswith(
+        ("_res", "-res", "_resources", "-resources"))
+
+
+def bazel_metadata_inventory(workspace, sources):
+    # Derive metadata candidates from the independent query, never the observed index.
+    # Resource roots end in <resource-dir>/<type>/<file>; code roots use src/res or
+    # the source's containing directory when no conventional module root is present.
+    modules = set()
+    for source in sources:
+        path = PurePosixPath(source)
+        parents = path.parts[:-1]
+        if (len(path.parts) >= 3 and is_resource_directory(path.parts[-3]) and
+                path.suffix[1:].isascii() and path.suffix[1:].isalnum()):
+            module = path.parts[:-3]
+            if len(module) >= 2 and module[-2] == "src":
+                module = module[:-2]
+        elif path.suffix in (".kt", ".java"):
+            marker = "src" if "src" in parents else "res" if "res" in parents else None
+            module = parents[:parents.index(marker)] if marker else parents
+        else:
+            continue
+        modules.add(PurePosixPath(*module))
+    result = []
+    for module in modules:
+        for metadata in ("build.gradle.kts", "build.gradle", "src/main/AndroidManifest.xml",
+                         "src/androidMain/AndroidManifest.xml", "AndroidManifest.xml"):
+            path = workspace / module / metadata
+            if path.is_file():
+                if path.is_symlink() or not path.resolve().is_relative_to(workspace.resolve()):
+                    raise ValueError("metadata escapes disposable corpus")
+                result.append((module / metadata).as_posix())
+    return result
 
 
 def samples(values):
@@ -98,8 +149,8 @@ def readiness(system, memory, disk, cgroup):
             reasons.append("memory: could not measure effective ancestor cgroup limit")
     if memory is None:
         reasons.append("memory: available-memory measurement unsupported on this host (not a capacity failure)")
-    elif memory < 32 << 30:
-        reasons.append("memory: requires 32 GiB available; public Bazel rc alone requests 12 GiB heap")
+    elif memory < MIN_AVAILABLE_MEMORY_BYTES:
+        reasons.append("memory: serial profile requires 18 GiB available for a 16 GiB job plus headroom")
     if disk < 150 << 30:
         reasons.append("disk: requires 150 GiB disposable free space")
     if system != "Linux" or cgroup is None:

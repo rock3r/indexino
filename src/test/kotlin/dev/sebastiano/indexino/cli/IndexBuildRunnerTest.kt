@@ -10,6 +10,8 @@ import dev.sebastiano.indexino.producer.JsonlIndexBuildProgressReporter
 import dev.sebastiano.indexino.topology.BuildSystem
 import dev.sebastiano.indexino.topology.SourceOriginResolver
 import dev.sebastiano.indexino.topology.TopologyRequest
+import dev.sebastiano.indexino.topology.TopologyResult
+import dev.sebastiano.indexino.topology.bazel.BazelQueryExecutor
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.Path
@@ -24,6 +26,148 @@ import kotlin.test.assertTrue
 import org.junit.jupiter.api.io.TempDir
 
 class IndexBuildRunnerTest {
+    @Test
+    fun `hinted refresh inherits unchanged source hashes while updating edited facts`() {
+        val workspace = tempDir.resolve("hinted-capture-workspace")
+        val sourceRoot = workspace.resolve("src/main/kotlin")
+        Files.createDirectories(sourceRoot)
+        Files.writeString(sourceRoot.resolve("Unchanged.kt"), "class Unchanged")
+        val edited = sourceRoot.resolve("Edited.kt")
+        Files.writeString(edited, "class Before")
+        val topology =
+            TopologyResult(
+                sourceFiles = listOf("src/main/kotlin/Unchanged.kt", "src/main/kotlin/Edited.kt"),
+                topology = "bazel-query",
+                includeDeps = false,
+                scope = "//:main",
+            )
+        val store = tempDir.resolve("hinted-capture-store")
+        fun run(previous: IndexBuildExecution? = null): IndexBuildExecution =
+            IndexBuildRunner(
+                    project = workspace,
+                    topologyRequest =
+                        TopologyRequest(buildSystem = BuildSystem.BAZEL, bazelTarget = "//:main"),
+                    applications = emptyList(),
+                    bazelQueryExecutor =
+                        BazelQueryExecutor { _, _ -> error("Unexpected Bazel query") },
+                    bazelProcessRunner = null,
+                    progress = {},
+                    machineProgress = null,
+                    storeRootOverride = store,
+                    topologyOverride = topology,
+                    inheritedSourceHashes = previous?.sourceHashes.orEmpty(),
+                    hintedPaths = if (previous == null) emptySet() else setOf(edited),
+                )
+                .runDetailed()
+        val first = run()
+        assertEquals(CliExitCodes.SUCCESS, first.exitCode)
+        Files.writeString(edited, "class After")
+        val second = run(first)
+        assertEquals(CliExitCodes.SUCCESS, second.exitCode)
+        assertEquals(1, second.changes?.changedSources?.size)
+        assertEquals(
+            first.sourceHashes.entries.single { it.key.path.endsWith("Unchanged.kt") }.value,
+            second.sourceHashes.entries.single { it.key.path.endsWith("Unchanged.kt") }.value,
+        )
+        val commit = dev.sebastiano.indexino.core.git.GitHeadResolver.resolve(workspace)
+        XodusCodeIndexStore.open(
+                IndexPathResolver(workspace, storeRootOverride = store).resolveBaseStore(commit)
+            )
+            .use {
+                assertEquals(
+                    setOf("Unchanged", "After"),
+                    it.prefixScan("sym:").map { row -> (row.second as SymbolRecord).name }.toSet(),
+                )
+            }
+    }
+
+    @Test
+    fun `known source topology override avoids Bazel while retaining source content checks`() {
+        val workspace = tempDir.resolve("bazel-watcher-workspace")
+        val source = workspace.resolve("src/main/kotlin/Panel.kt")
+        Files.createDirectories(source.parent)
+        Files.writeString(source, "class Panel")
+        val query = BazelQueryExecutor { _, _ -> error("Bazel should not run for a known edit") }
+        val diagnostics = mutableListOf<String>()
+        fun run(override: TopologyResult?) =
+            IndexBuildRunner(
+                    project = workspace,
+                    topologyRequest =
+                        TopologyRequest(buildSystem = BuildSystem.BAZEL, bazelTarget = "//:main"),
+                    applications = emptyList(),
+                    bazelQueryExecutor = query,
+                    bazelProcessRunner = null,
+                    progress = diagnostics::add,
+                    machineProgress = null,
+                    storeRootOverride = tempDir.resolve("store"),
+                    topologyOverride = override,
+                )
+                .runDetailed()
+        val cached =
+            TopologyResult(
+                sourceFiles = listOf("src/main/kotlin/Panel.kt"),
+                topology = "bazel-query",
+                includeDeps = false,
+                scope = "//:main",
+            )
+        assertFailsWith<IllegalStateException> { run(null) }
+        assertEquals(CliExitCodes.SUCCESS, run(cached).exitCode)
+        assertContains(diagnostics, "index topology=reused watcher-source-edit")
+        Files.delete(source)
+        assertFailsWith<java.nio.file.NoSuchFileException> { run(cached) }
+    }
+
+    @Test
+    fun `diagnostic callback failure cannot prevent checkpoint and store cleanup`() {
+        for (phase in listOf("checkpoint-release", "store-close")) {
+            val workspace = tempDir.resolve("cleanup-$phase-workspace")
+            val source = workspace.resolve("src/main/kotlin/Panel.kt")
+            Files.createDirectories(source.parent)
+            Files.writeString(source, "class Panel")
+            val storeRoot = tempDir.resolve("cleanup-$phase-store")
+            val result =
+                IndexBuildRunner(
+                        project = workspace,
+                        topologyRequest =
+                            TopologyRequest(
+                                buildSystem = BuildSystem.BAZEL,
+                                bazelTarget = "//:main",
+                            ),
+                        applications = emptyList(),
+                        bazelQueryExecutor = null,
+                        bazelProcessRunner = null,
+                        progress = { message ->
+                            if (message == "index phase=$phase state=started")
+                                error("Diagnostic sink unavailable")
+                        },
+                        machineProgress = null,
+                        storeRootOverride = storeRoot,
+                        topologyOverride =
+                            TopologyResult(
+                                listOf("src/main/kotlin/Panel.kt"),
+                                topology = "bazel-query",
+                                includeDeps = false,
+                                scope = "//:main",
+                            ),
+                    )
+                    .runDetailed()
+            assertEquals(CliExitCodes.SUCCESS, result.exitCode)
+            val resolver = IndexPathResolver(workspace, storeRootOverride = storeRoot)
+            val commit = checkNotNull(result.manifest).commit
+            val manifestPath = resolver.resolveManifest(commit)
+            assertTrue(
+                Files.notExists(manifestPath.resolveSibling("${manifestPath.fileName}.rollback"))
+            )
+            XodusCodeIndexStore.open(resolver.resolveBaseStore(commit)).use { indexed ->
+                assertTrue(
+                    indexed.prefixScan("sym:").any { (_, record) ->
+                        (record as SymbolRecord).name == "Panel"
+                    }
+                )
+            }
+        }
+    }
+
     @Test
     fun `failed producer restores prior builder and permits retry`() {
         val workspace = tempDir.resolve("rollback-workspace")
@@ -136,10 +280,16 @@ class IndexBuildRunnerTest {
         for (phase in
             listOf(
                 "topology",
+                "source-resolution",
                 "source-capture",
                 "source-preview",
+                "origin-resolution",
                 "store-build",
                 "checkpoint",
+                "checkpoint-release",
+                "checkpoint-backup-close",
+                "checkpoint-delete",
+                "store-close",
                 "change-detection",
                 "producer:java-source",
             )) {
@@ -149,6 +299,8 @@ class IndexBuildRunnerTest {
             }
             assertTrue(started >= 0 && completed > started, "$phase: $diagnosticProgress")
         }
+        assertContains(diagnosticProgress, "index store=writer")
+        assertContains(diagnosticProgress, "index changes changed=3 deleted=0 full=true")
         assertContains(
             machineProgress.first { it.contains("discovery_completed") },
             "\"phaseTotal\":3",

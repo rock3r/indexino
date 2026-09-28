@@ -3,6 +3,7 @@ package dev.sebastiano.indexino.cli
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.core.BASIC_FACT_SCHEMA_VERSION
 import dev.sebastiano.indexino.core.Version
+import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.cache.WorktreeForkBase
 import dev.sebastiano.indexino.core.cache.WorktreeForkCompatibility
@@ -32,6 +33,7 @@ import dev.sebastiano.indexino.topology.ExternalSourceMount
 import dev.sebastiano.indexino.topology.SourceOriginResolver
 import dev.sebastiano.indexino.topology.TopologyRequest
 import dev.sebastiano.indexino.topology.TopologyResolver
+import dev.sebastiano.indexino.topology.TopologyResult
 import dev.sebastiano.indexino.topology.bazel.BazelProcessRunner
 import dev.sebastiano.indexino.topology.bazel.BazelQueryExecutor
 import java.nio.file.Path
@@ -48,12 +50,26 @@ internal class IndexBuildRunner(
     private val progress: (String) -> Unit,
     private val machineProgress: IndexBuildProgressReporter?,
     private val storeRootOverride: Path? = null,
+    private val topologyOverride: TopologyResult? = null,
+    private val inheritedSourceHashes: Map<IndexedSource, String> = emptyMap(),
+    /** The closure resolved for [topologyOverride]; only valid with that exact topology. */
+    private val inheritedSources: List<IndexedSource>? = null,
+    /** Git origin state captured with [inheritedSources]; see [OriginIncrementalHint]. */
+    private val inheritedOriginStates: Map<String, OriginGitState>? = null,
+    /** Root of a recursive watcher that proved only [hintedPaths] changed since the capture. */
+    private val recursiveWatchRoot: Path? = null,
+    private val captureOriginStates: Boolean = false,
+    private val hintedPaths: Set<Path> = emptySet(),
+    private val onSourcesResolved: ((List<IndexedSource>, List<Path>) -> Unit)? = null,
 ) {
     private var latestChanges: SourceChangeSet? = null
     private var latestManifest: IndexManifest? = null
     private var latestSourceFiles: List<String> = emptyList()
     private var latestSources: List<IndexedSource> = emptyList()
     private var latestTopologyRoots: List<Path> = emptyList()
+    private var latestTopologyResult: TopologyResult? = null
+    private var latestSourceHashes: Map<IndexedSource, String> = emptyMap()
+    private var latestOriginStates: Map<String, OriginGitState> = emptyMap()
     private var reusedFreshIndex: Boolean = false
     private var latestForkBase: WorktreeForkBase? = null
     private var latestOverlayDeltaPath: Path? = null
@@ -73,6 +89,9 @@ internal class IndexBuildRunner(
                 latestForkBase,
                 latestOverlayDeltaPath,
                 latestTombstonePrefixes,
+                latestTopologyResult,
+                latestSourceHashes,
+                latestOriginStates,
             )
         }
         return IndexBuildExecution(
@@ -87,6 +106,9 @@ internal class IndexBuildRunner(
             forkBase = latestForkBase,
             overlayDeltaPath = latestOverlayDeltaPath,
             tombstonePrefixes = latestTombstonePrefixes,
+            topologyResult = latestTopologyResult,
+            sourceHashes = latestSourceHashes,
+            originStates = latestOriginStates,
         )
     }
 
@@ -97,20 +119,25 @@ internal class IndexBuildRunner(
         latestSourceFiles = emptyList()
         latestSources = emptyList()
         latestTopologyRoots = emptyList()
+        latestTopologyResult = null
+        latestSourceHashes = emptyMap()
+        latestOriginStates = emptyMap()
         reusedFreshIndex = false
         latestForkBase = null
         latestOverlayDeltaPath = null
         latestTombstonePrefixes = emptyList()
         val topologyResult =
             timedPhase("topology") {
-                TopologyResolver.resolve(
-                    project = project,
-                    request = topologyRequest,
-                    bazelQueryExecutor = bazelQueryExecutor,
-                    bazelProcessRunner = bazelProcessRunner,
-                    onStderr = progress,
-                )
+                topologyOverride?.also { progress("index topology=reused watcher-source-edit") }
+                    ?: TopologyResolver.resolve(
+                        project = project,
+                        request = topologyRequest,
+                        bazelQueryExecutor = bazelQueryExecutor,
+                        bazelProcessRunner = bazelProcessRunner,
+                        onStderr = progress,
+                    )
             }
+        latestTopologyResult = topologyResult
         if (
             topologyResult.sourceFiles.isEmpty() &&
                 topologyResult.externalSources.none { it.sourceFiles.isNotEmpty() }
@@ -126,11 +153,14 @@ internal class IndexBuildRunner(
                 mount.root.toRealPath() to (mount.originId to mount.expectedRevision)
             }
         val sources =
-            resolveSources(
-                sourceFiles,
-                topologyResult.externalSources,
-                topologyResult.codeSourceFiles,
-            )
+            inheritedSources?.also { progress("index sources=reused watcher-capture") }
+                ?: timedPhase("source-resolution") {
+                    resolveSources(
+                        sourceFiles,
+                        topologyResult.externalSources,
+                        topologyResult.codeSourceFiles,
+                    )
+                }
         latestSourceFiles = sourceFiles
         latestSources = sources
         latestTopologyRoots = (listOf(project) + topologyResult.externalMounts).distinct()
@@ -144,7 +174,18 @@ internal class IndexBuildRunner(
             machineProgress?.failed(CliExitCodes.INVALID_ARGUMENTS, message)
             return CliExitCodes.INVALID_ARGUMENTS
         }
-        val sourceSnapshot = timedPhase("source-capture") { SourceContentSnapshot.capture(sources) }
+        onSourcesResolved?.let { register ->
+            timedPhase("watcher-registration") { register(sources, latestTopologyRoots) }
+        }
+        val sourceSnapshot =
+            timedPhase("source-capture") {
+                SourceContentSnapshot.capture(sources, inheritedSourceHashes, hintedPaths)
+            }
+        val inheritedCount = sourceSnapshot.inheritedCount()
+        progress(
+            "index source-capture read=${sources.size - inheritedCount} inherited=$inheritedCount"
+        )
+        latestSourceHashes = sourceSnapshot.hashes()
         val pluginCoordinates = pluginRegistry.selectedCoordinates(applications)
         machineProgress?.discoveryCompleted(sources.size)
         val commit = GitHeadResolver.resolve(project)
@@ -153,7 +194,14 @@ internal class IndexBuildRunner(
         BuildStoreCheckpoint.requireRecovered(manifestPath)
         val previewHash = timedPhase("source-preview") { previewHash(sources, sourceSnapshot) }
         val origins =
-            resolveOrigins(sources, externalOriginMetadata, topologyResult.topology, sourceSnapshot)
+            timedPhase("origin-resolution") {
+                resolveOrigins(
+                    sources,
+                    externalOriginMetadata,
+                    topologyResult.topology,
+                    sourceSnapshot,
+                )
+            }
         val existingManifest = manifestPath.takeIf { it.exists() }?.let(ManifestIO::read)
         val vanishedOrigins =
             existingManifest
@@ -188,7 +236,19 @@ internal class IndexBuildRunner(
                 origins = origins,
                 resolvedTopologyDigest = topologyResult.resolvedTopologyDigest,
             )
-        if (existingManifest != null && ManifestFreshness.isFresh(existingManifest, criteria)) {
+        val publishedManifest =
+            WorkspaceGenerationManifestStore(
+                    InProcessCacheLayout.cacheRoot(),
+                    InProcessCacheLayout.workspaceId(project),
+                )
+                .current()
+                ?.compatibilityManifest
+        if (
+            existingManifest != null &&
+                ManifestFreshness.isFresh(existingManifest, criteria) &&
+                (storeRootOverride != InProcessCacheLayout.writerRoot(project) ||
+                    publishedManifest?.copy(builtAt = existingManifest.builtAt) == existingManifest)
+        ) {
             latestManifest = existingManifest
             reusedFreshIndex = true
             progress("index fresh for ${topologyResult.scope} @ $commit — skip rebuild")
@@ -204,7 +264,13 @@ internal class IndexBuildRunner(
                     criteria = criteria,
                 )
             } else {
-                null
+                if (storeRootOverride == InProcessCacheLayout.writerRoot(project)) {
+                    WorktreeForkCompatibility.findCurrentWorkspaceBase(
+                        project = project,
+                        cacheRoot = InProcessCacheLayout.cacheRoot(),
+                        criteria = criteria,
+                    )
+                } else null
             }
         if (forkBase != null && forkBase.unchanged) {
             ManifestIO.write(manifestPath, forkBase.baseManifest)
@@ -218,6 +284,7 @@ internal class IndexBuildRunner(
         if (forkBase != null) {
             latestForkBase = forkBase
         }
+        progress("index store=${if (forkBase == null) "writer" else "overlay"}")
 
         timedPhase("store-build") {
             buildStore(
@@ -234,8 +301,15 @@ internal class IndexBuildRunner(
                 previewHash = previewHash,
                 pluginRegistry = pluginRegistry,
                 pluginCoordinates = pluginCoordinates,
+                previousPluginCoordinates =
+                    (existingManifest ?: forkBase?.baseManifest)?.pluginCoordinates.orEmpty(),
                 forceFullRebuild =
                     (existingManifest == null && forkBase == null) ||
+                        (existingManifest != null &&
+                            forkBase == null &&
+                            storeRootOverride == InProcessCacheLayout.writerRoot(project) &&
+                            publishedManifest?.copy(builtAt = existingManifest.builtAt) !=
+                                existingManifest) ||
                         (existingManifest != null &&
                             (existingManifest.indexerVersion != Version.NAME ||
                                 existingManifest.basicFactSchemaVersion !=
@@ -252,14 +326,36 @@ internal class IndexBuildRunner(
         externalOriginMetadata: Map<Path, Pair<String?, String?>>,
         topology: String,
         sourceSnapshot: SourceContentSnapshot,
-    ): List<IndexManifestOrigin> =
-        ManifestOriginResolver.resolve(
-            project,
-            sources,
-            externalOriginMetadata,
-            includeWorkspaceWithoutSources = topology != "repo-manifest",
-            sourceSnapshot = sourceSnapshot,
+    ): List<IndexManifestOrigin> {
+        val hint =
+            if (inheritedOriginStates != null && recursiveWatchRoot != null) {
+                OriginIncrementalHint(
+                    previous = inheritedOriginStates,
+                    hintedSources =
+                        sources.filter { source ->
+                            source.originRoot.resolve(source.path).normalize() in hintedPaths
+                        },
+                    recursiveWatchRoot = recursiveWatchRoot,
+                )
+            } else null
+        val resolution =
+            ManifestOriginResolver.resolveWithState(
+                project,
+                sources,
+                externalOriginMetadata,
+                includeWorkspaceWithoutSources = topology != "repo-manifest",
+                sourceSnapshot = sourceSnapshot,
+                captureState = captureOriginStates,
+                hint = hint,
+                progress = progress,
+            )
+        latestOriginStates = resolution.states
+        progress(
+            "index origins incremental=${resolution.incremental} " +
+                "full=${resolution.origins.size - resolution.incremental}"
         )
+        return resolution.origins
+    }
 
     private fun <T> timedPhase(phase: String, block: () -> T): T {
         progress("index phase=$phase state=started")
@@ -296,8 +392,10 @@ internal class IndexBuildRunner(
         sourceFiles: List<String>,
         externalSources: List<ExternalSourceMount>,
         codeSourceFiles: Set<String>?,
-    ): List<IndexedSource> =
-        SourceOriginResolver.resolve(project, sourceFiles).flatMap { origin ->
+    ): List<IndexedSource> {
+        // Canonicalize roots once; per-source realpath calls dominate large closures.
+        val canonicalProject = project.toRealPath()
+        return SourceOriginResolver.resolve(project, sourceFiles).flatMap { origin ->
             (origin.sourceFiles +
                     ResourceMetadata.additionalMetadataPaths(origin.root, origin.sourceFiles))
                 .map { path ->
@@ -307,8 +405,7 @@ internal class IndexBuildRunner(
                         path,
                         isCode =
                             codeSourceFiles?.contains(
-                                project
-                                    .toRealPath()
+                                canonicalProject
                                     .relativize(origin.root.resolve(path))
                                     .toString()
                                     .replace('\\', '/')
@@ -317,6 +414,7 @@ internal class IndexBuildRunner(
                 }
         } +
             externalSources.flatMap { mount ->
+                val canonicalMount = mount.root.toRealPath()
                 SourceOriginResolver.resolveExternal(
                         mountRoot = mount.root,
                         sourceFiles = mount.sourceFiles,
@@ -336,8 +434,7 @@ internal class IndexBuildRunner(
                                     path,
                                     isCode =
                                         mount.codeSourceFiles?.contains(
-                                            mount.root
-                                                .toRealPath()
+                                            canonicalMount
                                                 .relativize(origin.root.resolve(path))
                                                 .toString()
                                                 .replace('\\', '/')
@@ -346,6 +443,7 @@ internal class IndexBuildRunner(
                             }
                     }
             }
+    }
 
     @Suppress("LongMethod")
     private fun buildStore(
@@ -362,6 +460,7 @@ internal class IndexBuildRunner(
         previewHash: String,
         pluginRegistry: PluginRegistry,
         pluginCoordinates: Map<String, String>,
+        previousPluginCoordinates: Map<String, String>,
         forceFullRebuild: Boolean,
         forkBase: WorktreeForkBase? = null,
     ) {
@@ -370,6 +469,12 @@ internal class IndexBuildRunner(
         }
         if (overlayDeltaPath != null) {
             overlayDeltaPath.parent.toFile().deleteRecursively()
+            forkBase.previousOverlayPackKey?.let { packKey ->
+                timedPhase("overlay-restore") {
+                    ContentAddressedPackCache(InProcessCacheLayout.cacheRoot())
+                        .materializeDirectory(packKey, overlayDeltaPath)
+                }
+            }
         }
         val writableStore: XodusCodeIndexStore
         val store =
@@ -390,13 +495,25 @@ internal class IndexBuildRunner(
                 val deltaStore =
                     XodusCodeIndexStore.open(checkNotNull(overlayDeltaPath), readOnly = false)
                 writableStore = deltaStore
-                WorktreeOverlayIndexStore(baseStore, deltaStore, emptyList())
+                WorktreeOverlayIndexStore(baseStore, deltaStore, forkBase.previousTombstones)
             } else {
                 val baseStore = XodusCodeIndexStore.open(resolver.resolveBaseStore(commit))
                 writableStore = baseStore
                 baseStore
             }
-        store.use {
+        val timedClose = AutoCloseable {
+            val started = System.nanoTime()
+            // Closing must not be skipped when a cancelled refresh rejects progress.
+            runCatching { progress("index phase=store-close state=started") }
+            store.close()
+            runCatching {
+                progress(
+                    "index phase=store-close state=completed durationMillis=" +
+                        TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+                )
+            }
+        }
+        timedClose.use {
             BuildStoreCheckpoint(writableStore, resolver.resolveManifest(commit), progress).use {
                 checkpoint ->
                 checkpoint.run {
@@ -405,6 +522,27 @@ internal class IndexBuildRunner(
                             detectChanges(store, sources, sourceSnapshot, forceFullRebuild)
                         }
                     latestChanges = changes
+                    val tombstones =
+                        (changes.deletedSources + changes.changedSources).map { source ->
+                            WorktreeOverlayIndexStore.tombstonePrefixForSource(
+                                source.originId,
+                                source.path.replace('\\', '/'),
+                            )
+                        } +
+                            if (
+                                pluginRegistry.postProcessors.any {
+                                    it.pluginId.value in applications
+                                }
+                            ) {
+                                (origins.map { it.originId } + "workspace").distinct().map {
+                                    originId ->
+                                    WorktreeOverlayIndexStore.tombstonePrefixForSource(
+                                        originId,
+                                        PluginAnalyzerRunner.POST_PROCESSOR_FILE,
+                                    )
+                                }
+                            } else emptyList()
+                    (store as? WorktreeOverlayIndexStore)?.hideBaseForFiles(tombstones)
                     val context =
                         IndexBuildContext(
                             store = store,
@@ -432,7 +570,14 @@ internal class IndexBuildRunner(
                         machineProgress?.phaseCompleted(producer.id, phaseTotal)
                     }
                     timedPhase("plugins") {
-                        PluginAnalyzerRunner(pluginRegistry).analyze(context, applications.toSet())
+                        val fullAnalysisPlugins =
+                            pluginCoordinates
+                                .filter { (id, coordinate) ->
+                                    forceFullRebuild || previousPluginCoordinates[id] != coordinate
+                                }
+                                .keys
+                        PluginAnalyzerRunner(pluginRegistry)
+                            .analyze(context, applications.toSet(), fullAnalysisPlugins)
                     }
                     val manifest =
                         IndexManifest(
@@ -455,14 +600,7 @@ internal class IndexBuildRunner(
                     if (overlayDeltaPath != null) {
                         latestOverlayDeltaPath = overlayDeltaPath
                         latestTombstonePrefixes =
-                            (changes.deletedSources + changes.changedSources)
-                                .map { source ->
-                                    val relative = source.path.replace('\\', '/')
-                                    WorktreeOverlayIndexStore.tombstonePrefixForRelativeFile(
-                                        relative
-                                    )
-                                }
-                                .distinct()
+                            (forkBase.previousTombstones + tombstones).distinct()
                     }
                 }
             }
@@ -476,16 +614,19 @@ internal class IndexBuildRunner(
         forceFullRebuild: Boolean,
     ): SourceChangeSet {
         machineProgress?.phaseStarted(SOURCE_CHANGE_DETECTION_PHASE, sources.size)
+        val report: (Int, Int, IndexedSource) -> Unit = { index, total, source ->
+            machineProgress?.fileProgress(
+                SOURCE_CHANGE_DETECTION_PHASE,
+                index,
+                total,
+                source.originId,
+                source.path,
+            )
+        }
         val detectedChanges =
-            SourceChangeDetector.detect(store, sources, sourceSnapshot) { index, total, source ->
-                machineProgress?.fileProgress(
-                    SOURCE_CHANGE_DETECTION_PHASE,
-                    index,
-                    total,
-                    source.originId,
-                    source.path,
-                )
-            }
+            if (inheritedSourceHashes.isEmpty())
+                SourceChangeDetector.detect(store, sources, sourceSnapshot, report)
+            else SourceChangeDetector.detect(inheritedSourceHashes, sources, sourceSnapshot, report)
         machineProgress?.phaseCompleted(SOURCE_CHANGE_DETECTION_PHASE, sources.size)
         val changes =
             if (forceFullRebuild) {
@@ -496,6 +637,10 @@ internal class IndexBuildRunner(
             } else {
                 detectedChanges
             }
+        progress(
+            "index changes changed=${changes.changedSources.size} " +
+                "deleted=${changes.deletedSources.size} full=$forceFullRebuild"
+        )
         machineProgress?.countersAvailable(
             changedFiles = changes.changedSources.size,
             unchangedFiles = sources.size - changes.changedSources.size,
@@ -520,4 +665,7 @@ internal data class IndexBuildExecution(
     val forkBase: WorktreeForkBase? = null,
     val overlayDeltaPath: Path? = null,
     val tombstonePrefixes: List<String> = emptyList(),
+    val topologyResult: TopologyResult? = null,
+    val sourceHashes: Map<IndexedSource, String> = emptyMap(),
+    val originStates: Map<String, OriginGitState> = emptyMap(),
 )

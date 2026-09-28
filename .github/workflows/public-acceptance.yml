@@ -1,23 +1,23 @@
-name: Public acceptance (manual, isolated runners)
+name: Public acceptance (manual, serial corpora)
 
 on:
   workflow_dispatch:
     inputs:
       runner_profile:
-        description: Confirm operator-provisioned ephemeral Linux x64, 64 GiB RAM, 200 GiB scratch, delegated cgroup-v2
+        description: Confirm operator-provisioned Linux x64, 32 GiB RAM, 200 GiB scratch, delegated cgroup-v2; serial jobs
         required: true
         type: choice
         default: disabled
         options:
           - disabled
-          - ephemeral-linux-x64-64g
+          - ephemeral-linux-x64-32g-serial
 
 permissions:
   contents: read
 
 jobs:
   build-driver:
-    if: inputs.runner_profile == 'ephemeral-linux-x64-64g' && github.ref == 'refs/heads/main'
+    if: inputs.runner_profile == 'ephemeral-linux-x64-32g-serial' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -47,6 +47,7 @@ jobs:
     timeout-minutes: 360
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         corpus: [spectre, intellij]
     steps:

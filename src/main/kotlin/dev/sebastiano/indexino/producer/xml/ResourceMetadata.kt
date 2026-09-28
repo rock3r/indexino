@@ -144,14 +144,16 @@ internal object ResourceMetadata {
         metadataPath: String,
     ): String? {
         val indexedMetadata = context.findSource(indexedSource.originId, metadataPath)
-        return indexedMetadata?.let { runCatching { context.readSource(it) }.getOrNull() }
-            ?: indexedSource.originRoot.resolve(metadataPath).let { path ->
-                if (Files.isRegularFile(path)) {
-                    runCatching { Files.readString(path) }.getOrNull()
-                } else {
-                    null
-                }
+        if (indexedMetadata != null) return context.readSource(indexedMetadata)
+        // A metadata file discovered after the snapshot cannot be mixed into its facts.
+        if (context.sourceSnapshot != null) return null
+        return indexedSource.originRoot.resolve(metadataPath).let { path ->
+            if (Files.isRegularFile(path)) {
+                runCatching { Files.readString(path) }.getOrNull()
+            } else {
+                null
             }
+        }
     }
 
     private fun metadataPath(moduleDirectory: String, relativePath: String): String =

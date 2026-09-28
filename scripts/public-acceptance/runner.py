@@ -10,12 +10,15 @@ import subprocess
 import time
 import uuid
 
+from harness import JOB_MEMORY_BYTES
+
 
 def clone(commands, corpus, destination):
     pin = corpus["commit"]
     if not re.fullmatch(r"[0-9a-f]{40}", pin):
         raise ValueError("corpus requires a full immutable commit")
     if corpus["url"] not in ("https://github.com/rock3r/spectre.git",
+                             "https://github.com/JetBrains/android.git",
                              "https://github.com/JetBrains/intellij-community.git"):
         raise ValueError("corpus URL is not public-allowlisted")
     commands.run(["git", "init", str(destination)], destination.parent)
@@ -66,11 +69,11 @@ def stderr_diagnostic(path):
 class Commands:
     """One cgroup per job. setsid/double-fork cannot escape cgroup membership.
 
-    Requires operator-delegated controllers on an ephemeral isolated runner. It
+    Requires operator-delegated controllers and a disposable job root. It
     does not create a privileged delegation or stop another job's Bazel server.
     """
 
-    def __init__(self, parent, root, memory_bytes=28 << 30):
+    def __init__(self, parent, root, memory_bytes=JOB_MEMORY_BYTES):
         if not containment_supported(platform.system()):
             raise RuntimeError("not-ready: detached-child containment requires Linux cgroup v2")
         self.root = root

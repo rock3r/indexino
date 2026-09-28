@@ -8,6 +8,7 @@ import dev.sebastiano.indexino.api.IndexinoConfiguration
 import dev.sebastiano.indexino.api.IndexinoException
 import dev.sebastiano.indexino.api.RefreshRequest
 import dev.sebastiano.indexino.api.RuntimeAttachMode
+import dev.sebastiano.indexino.api.SnapshotFreshness
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
@@ -33,7 +34,79 @@ import kotlinx.serialization.json.put
 /** Opt-in controlled edits in an explicitly owned disposable checkout. */
 internal object IncrementalAcceptanceDriver {
     private val stageWait = 10.minutes
-    private val runWait = 10.minutes
+    private val defaultRunWait = 10.minutes
+    private const val MAX_SEED_WAIT_MINUTES = 120
+    private const val MAX_RUN_WAIT_MINUTES = 240
+    private const val MAX_EVIDENCE_LINE = 300
+    internal const val EDIT_NONCE_PROPERTY = "indexino.acceptance.editNonce"
+    private val phaseCompleted = Regex("index phase=(\\S+) state=completed durationMillis=(\\d+)")
+    private val evidencePrefixes = listOf("index ", "bazel query index=", "worktree fork ")
+
+    /**
+     * Refresh journals observed during one stage. Lines naming the private owned root are dropped
+     * so reports stay shareable; phase durations are summed per phase name.
+     */
+    internal class RefreshEvidence(private val privateRoot: String) {
+        private val ids = linkedSetOf<String>()
+        private val local = mutableMapOf<String, List<String>>()
+
+        @Synchronized
+        fun observe(id: String) {
+            ids += id
+        }
+
+        @Synchronized
+        fun record(id: String, lines: List<String>) {
+            ids += id
+            local[id] = lines
+        }
+
+        fun drain(remote: ((String) -> List<String>)?): JsonArray {
+            val (drained, recorded) =
+                synchronized(this) {
+                    (ids.toList() to local.toMap()).also {
+                        ids.clear()
+                        local.clear()
+                    }
+                }
+            return JsonArray(
+                drained.map { id ->
+                    val lines =
+                        recorded[id]
+                            ?: runCatching { remote?.invoke(id) }.getOrNull()
+                            ?: return@map buildJsonObject {
+                                put("id", id)
+                                put("journalUnavailable", true)
+                            }
+                    summarize(id, lines, privateRoot)
+                }
+            )
+        }
+
+        companion object {
+            fun summarize(id: String, lines: List<String>, privateRoot: String): JsonObject {
+                val kept =
+                    lines
+                        .filter { line -> evidencePrefixes.any(line::startsWith) }
+                        .filterNot { privateRoot in it }
+                        .map { it.take(MAX_EVIDENCE_LINE) }
+                val phaseMillis = linkedMapOf<String, Long>()
+                kept.forEach { line ->
+                    phaseCompleted.matchEntire(line)?.destructured?.let { (phase, millis) ->
+                        phaseMillis[phase] = (phaseMillis[phase] ?: 0L) + millis.toLong()
+                    }
+                }
+                return buildJsonObject {
+                    put("id", id)
+                    put(
+                        "phaseMillis",
+                        buildJsonObject { phaseMillis.forEach { (phase, ms) -> put(phase, ms) } },
+                    )
+                    put("lines", JsonArray(kept.map(::JsonPrimitive)))
+                }
+            }
+        }
+    }
 
     internal class Progress(private val periodMillis: Long, private val sink: (String) -> Unit) :
         AutoCloseable {
@@ -116,7 +189,22 @@ internal object IncrementalAcceptanceDriver {
     @JvmStatic
     @Suppress("CyclomaticComplexMethod", "LongMethod")
     fun main(args: Array<String>): Unit = runBlocking {
-        require(args.size == 5) { "owned-root plan.json manual|watcher repeats report.json" }
+        require(args.size == 5 || args.size == 7) {
+            "owned-root plan.json manual|watcher repeats report.json " +
+                "[seed-wait-minutes run-wait-minutes]"
+        }
+        val seedWait =
+            if (args.size == 7) {
+                args[5].toInt().also { require(it in 1..MAX_SEED_WAIT_MINUTES) }.minutes
+            } else stageWait
+        val runWait =
+            if (args.size == 7) {
+                args[6]
+                    .toInt()
+                    .also { require(it in 1..MAX_RUN_WAIT_MINUTES) }
+                    .minutes
+                    .also { require(it > seedWait) { "The run bound must leave time for edits" } }
+            } else defaultRunWait
         val root = Path.of(args[0]).toRealPath()
         require(Files.isRegularFile(root.resolve(".indexino-benchmark-owned")))
         val workspace = root.resolve("workspace").toRealPath()
@@ -128,9 +216,12 @@ internal object IncrementalAcceptanceDriver {
         val repeats = args[3].toInt().also { require(it in 1..10) }
         val output = Path.of(args[4]).toAbsolutePath().normalize()
         require(!output.startsWith(root) && Files.isDirectory(output.parent))
-        val workload = IncrementalWorkload(workspace, plan)
+        // Opt-in: edited bytes unique to this run cannot repoint to a generation from earlier runs.
+        val editNonce = System.getProperty(EDIT_NONCE_PROPERTY)
+        val workload = IncrementalWorkload(workspace, plan, editNonce)
         val samples = mutableListOf<JsonObject>()
         val report = linkedMapOf<String, JsonElement>("status" to JsonPrimitive("incomplete"))
+        editNonce?.let { report["editNonce"] = JsonPrimitive(it) }
         val progress = Progress(30_000L, System.err::println)
         var stage = "seed"
         var lastWatcherObservation: JsonObject? = null
@@ -150,7 +241,10 @@ internal object IncrementalAcceptanceDriver {
         }
         if (watcher) report["watcherWaitMillis"] = JsonPrimitive(stageWait.inWholeMilliseconds)
         report["stageWaitMillis"] = JsonPrimitive(stageWait.inWholeMilliseconds)
+        report["seedWaitMillis"] = JsonPrimitive(seedWait.inWholeMilliseconds)
         report["runWaitMillis"] = JsonPrimitive(runWait.inWholeMilliseconds)
+        val evidence = RefreshEvidence(root.toString())
+        val resets = mutableListOf<JsonObject>()
         fun checkpoint() {
             report["samples"] = JsonArray(samples)
             Files.writeString(output, JsonObject(report).toString() + "\n")
@@ -171,22 +265,56 @@ internal object IncrementalAcceptanceDriver {
                             if (watcher) AutoRefreshMode.ENABLED else AutoRefreshMode.DISABLED
                         )
                 Indexino.connect(configuration).use { index ->
-                    if (watcher) progress.refreshProbe = { currentRefresh(index, request) }
+                    val remoteJournal: ((String) -> List<String>)? =
+                        if (watcher) { id -> index.refreshProgress(id).text } else null
+                    if (watcher) {
+                        progress.refreshProbe = {
+                            currentRefresh(index, request).also { refresh ->
+                                refresh["id"]?.jsonPrimitive?.content?.let(evidence::observe)
+                            }
+                        }
+                    }
                     try {
                         val seedStart = System.nanoTime()
-                        withTimeout(stageWait) {
-                            refreshAndLog(index, request, watcher)
+                        var seedRefreshed = seedStart
+                        withTimeout(seedWait) {
+                            refreshAndLog(index, request, watcher, evidence)
+                            seedRefreshed = System.nanoTime()
                             index.snapshot().use {
                                 check(workload.matches(it, workload.sources, 0))
                             }
                         }
-                        report["seedReadyNanos"] = JsonPrimitive(System.nanoTime() - seedStart)
+                        val seedReady = System.nanoTime()
+                        report["seedReadyNanos"] = JsonPrimitive(seedReady - seedStart)
+                        report["seedRefreshNanos"] = JsonPrimitive(seedRefreshed - seedStart)
+                        report["seedVerifyNanos"] = JsonPrimitive(seedReady - seedRefreshed)
+                        report["seedRefreshes"] = evidence.drain(remoteJournal)
                         checkpoint()
                         repeat(repeats) { repetition ->
                             for (group in workload.groups) {
+                                setStage("settle:${group.id}:$repetition")
+                                val settleNanos =
+                                    if (watcher) {
+                                        val settleStart = System.nanoTime()
+                                        awaitQuiescent(
+                                            stageWait,
+                                            active = {
+                                                index.activeRefreshes().map { it.id.value }
+                                            },
+                                            dirty = {
+                                                index.snapshot().use {
+                                                    it.freshnessAtAcquisition ==
+                                                        SnapshotFreshness.DIRTY
+                                                }
+                                            },
+                                            onActive = evidence::observe,
+                                        )
+                                        System.nanoTime() - settleStart
+                                    } else 0L
+                                val settleRefreshes = evidence.drain(remoteJournal)
                                 setStage("edit:${group.id}:$repetition")
                                 lastWatcherObservation = null
-                                samples +=
+                                val sample =
                                     withTimeout(stageWait) {
                                         measure(
                                             index,
@@ -196,8 +324,17 @@ internal object IncrementalAcceptanceDriver {
                                             watcher,
                                             repetition,
                                             ::observe,
+                                            evidence,
                                         )
                                     }
+                                samples += buildJsonObject {
+                                    sample.forEach { (key, value) -> put(key, value) }
+                                    if (watcher) {
+                                        put("preEditSettleNanos", settleNanos)
+                                        put("settleRefreshes", settleRefreshes)
+                                    }
+                                    put("refreshes", evidence.drain(remoteJournal))
+                                }
                                 checkpoint()
                                 setStage("reset:${group.id}:$repetition")
                                 lastWatcherObservation = null
@@ -207,7 +344,7 @@ internal object IncrementalAcceptanceDriver {
                                         val resetStart = System.nanoTime()
                                         awaitRestoredBaseline(
                                             stageWait,
-                                            { refreshAndLog(index, request, true) },
+                                            { refreshAndLog(index, request, true, evidence) },
                                         ) {
                                             index.snapshot().use { snapshot ->
                                                 observe(
@@ -235,15 +372,24 @@ internal object IncrementalAcceptanceDriver {
                                             }
                                         }
                                     } else {
-                                        refreshAndLog(index, request)
+                                        refreshAndLog(index, request, evidence = evidence)
                                         index.snapshot().use {
                                             check(workload.matches(it, workload.sources, 0))
                                         }
                                     }
                                 }
+                                resets += buildJsonObject {
+                                    put("stage", stage)
+                                    put("refreshes", evidence.drain(remoteJournal))
+                                }
+                                report["resets"] = JsonArray(resets)
                             }
                         }
                         setStage("shutdown")
+                    } catch (error: Exception) {
+                        // Journals are daemon-owned; collect them before the runtime shuts down.
+                        report["failureRefreshes"] = evidence.drain(remoteJournal)
+                        throw error
                     } finally {
                         if (watcher) index.shutdownRuntime()
                     }
@@ -275,7 +421,9 @@ internal object IncrementalAcceptanceDriver {
                 report["timing"] =
                     JsonPrimitive(
                         "readyNanos starts after final write and ends after correct public queries; " +
-                            "totalNanos includes writes"
+                            "totalNanos includes writes; watcher edits start only after " +
+                            "preEditSettleNanos observes no active refresh and no dirty scope; " +
+                            "seedReadyNanos is a separate bounded seed stage, not edit latency"
                     )
                 checkpoint()
             }
@@ -286,8 +434,20 @@ internal object IncrementalAcceptanceDriver {
         index: Indexino,
         request: RefreshRequest,
         remote: Boolean = false,
+        evidence: RefreshEvidence? = null,
     ): dev.sebastiano.indexino.api.RefreshResult {
-        val handle = index.refresh(request, { System.err.println(it) }, null)
+        val lines = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val handle =
+            index.refresh(
+                request,
+                { line ->
+                    System.err.println(line)
+                    lines += line
+                },
+                null,
+            )
+        // Remote refreshes ignore local progress; their journal is fetched from the daemon.
+        if (remote) evidence?.observe(handle.id.value) else evidence?.record(handle.id.value, lines)
         try {
             return handle.await()
         } catch (failure: Exception) {
@@ -336,6 +496,28 @@ internal object IncrementalAcceptanceDriver {
         }
     }
 
+    /**
+     * Waits until no refresh is active and the scope is not dirty in two consecutive polls, so a
+     * measured edit does not also wait for unrelated background refresh work.
+     */
+    internal suspend fun awaitQuiescent(
+        timeout: Duration,
+        active: suspend () -> List<String>,
+        dirty: suspend () -> Boolean,
+        onActive: (String) -> Unit,
+        pollMillis: Long = 100L,
+    ) {
+        withTimeout(timeout) {
+            var quietPolls = 0
+            while (quietPolls < 2) {
+                val ids = active()
+                ids.forEach(onActive)
+                quietPolls = if (ids.isEmpty() && !dirty()) quietPolls + 1 else 0
+                if (quietPolls < 2) delay(pollMillis)
+            }
+        }
+    }
+
     internal suspend fun awaitRestoredBaseline(
         timeout: Duration,
         refresh: suspend () -> Unit,
@@ -371,16 +553,25 @@ internal object IncrementalAcceptanceDriver {
         watcher: Boolean,
         repetition: Int,
         onWatcherPoll: (String, Long, Int?, String) -> Unit,
+        evidence: RefreshEvidence,
     ): JsonObject =
         index.snapshot().use { previous ->
             check(workload.matches(previous, workload.sources, 0))
             val start = System.nanoTime()
             workload.write(group.sources, 1)
             val written = System.nanoTime()
+            val timing = WatcherTiming()
             if (watcher) {
                 while (true) {
+                    val polled = System.nanoTime() - written
+                    index.activeRefreshes().forEach {
+                        evidence.observe(it.id.value)
+                        timing.active(it.id.value, polled)
+                    }
+                    val acquiring = System.nanoTime()
                     val ready =
                         index.snapshot().use { snapshot ->
+                            timing.acquired(System.nanoTime() - acquiring)
                             val generation = snapshot.generation
                             if (generation == previous.generation) {
                                 onWatcherPoll(
@@ -398,12 +589,15 @@ internal object IncrementalAcceptanceDriver {
                                     "querying",
                                 )
                                 var mismatch: Pair<Int, String>? = null
+                                val querying = System.nanoTime()
+                                timing.newGeneration(querying - written)
                                 val matches =
                                     workload.matches(snapshot, group.sources, 1) {
                                         ordinal,
                                         predicate ->
                                         mismatch = ordinal to predicate
                                     }
+                                timing.queried(System.nanoTime() - querying)
                                 onWatcherPoll(
                                     generation.value,
                                     System.nanoTime() - written,
@@ -417,7 +611,7 @@ internal object IncrementalAcceptanceDriver {
                     delay(50)
                 }
             } else {
-                val result = refreshAndLog(index, request)
+                val result = refreshAndLog(index, request, evidence = evidence)
                 check(result.changes.changedFileCount == group.sources.size)
                 check(result.changes.removedFileCount == 0)
                 index.snapshot().use {
@@ -441,6 +635,55 @@ internal object IncrementalAcceptanceDriver {
                 put("totalNanos", ready - start)
                 put("pinnedVerified", true)
                 put("queriesVerified", true)
+                if (watcher) put("watcherTiming", timing.toJson())
             }
         }
+
+    /**
+     * Splits watcher readiness into detection, refresh windows, publication visibility and
+     * snapshot/query work. Windows come from 50ms polling, so they are approximate.
+     */
+    internal class WatcherTiming {
+        private val windows = linkedMapOf<String, LongArray>()
+        private var firstNewGeneration: Long? = null
+        private var lastAcquire = 0L
+        private var lastQuery = 0L
+        private var queryPolls = 0
+
+        fun active(id: String, sinceWrite: Long) {
+            windows.getOrPut(id) { longArrayOf(sinceWrite, sinceWrite) }[1] = sinceWrite
+        }
+
+        fun acquired(nanos: Long) {
+            lastAcquire = nanos
+        }
+
+        fun newGeneration(sinceWrite: Long) {
+            if (firstNewGeneration == null) firstNewGeneration = sinceWrite
+        }
+
+        fun queried(nanos: Long) {
+            lastQuery = nanos
+            queryPolls++
+        }
+
+        fun toJson(): JsonObject = buildJsonObject {
+            put(
+                "refreshWindows",
+                JsonArray(
+                    windows.map { (id, window) ->
+                        buildJsonObject {
+                            put("id", id)
+                            put("firstSeenNanos", window[0])
+                            put("lastSeenNanos", window[1])
+                        }
+                    }
+                ),
+            )
+            firstNewGeneration?.let { put("firstNewGenerationNanos", it) }
+            put("finalSnapshotAcquireNanos", lastAcquire)
+            put("finalQueryNanos", lastQuery)
+            put("queryPolls", queryPolls)
+        }
+    }
 }

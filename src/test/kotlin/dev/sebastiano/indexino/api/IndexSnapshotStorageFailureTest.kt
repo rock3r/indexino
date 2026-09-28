@@ -805,6 +805,116 @@ class IndexSnapshotStorageFailureTest {
     }
 
     @OptIn(IndexinoInternalApi::class)
+    @Test
+    fun `file call pages reuse one bounded snapshot scan without mixing files`() {
+        val records =
+            listOf(11, 3, 8, 1, 5).map { offset ->
+                val call =
+                    CallSiteRecord(
+                        identity = "A.kt:$offset",
+                        calleeName = "call$offset",
+                        candidateSymbolFqns = emptyList(),
+                        relativeFile = "A.kt",
+                        startLine = 1,
+                        startColumn = offset,
+                        startOffset = offset,
+                        endLine = 1,
+                        endColumn = offset + 1,
+                        endOffset = offset + 1,
+                        confidence = "UNRESOLVED",
+                    )
+                CodeIndexKey.call(call.identity) to call
+            } +
+                (CodeIndexKey.call("B.kt:2") to
+                    CallSiteRecord(
+                        identity = "B.kt:2",
+                        calleeName = "other",
+                        candidateSymbolFqns = emptyList(),
+                        relativeFile = "B.kt",
+                        startLine = 1,
+                        startColumn = 2,
+                        startOffset = 2,
+                        endLine = 1,
+                        endColumn = 3,
+                        endOffset = 3,
+                        confidence = "UNRESOLVED",
+                    ))
+        val delegate = RecordsCodeIndexStore(records)
+        val visited = mutableListOf<String>()
+        val store =
+            object : CodeIndexStore by delegate {
+                override fun forEachCallInFile(
+                    originId: String,
+                    relativeFile: String,
+                    action: (CodeIndexKey, CallSiteRecord) -> Boolean,
+                ) {
+                    visited += relativeFile
+                    delegate.forEachCallInFile(originId, relativeFile, action)
+                }
+            }
+        IndexSnapshot.create(store, workspaceRevision(), WorkspaceGenerationId.of("generation"))
+            .use { snapshot ->
+                val a =
+                    CallQuery.inFile(SourceFile.of(SourceOriginId.of("workspace"), "A.kt", "A.kt"))
+                val b =
+                    CallQuery.inFile(SourceFile.of(SourceOriginId.of("workspace"), "B.kt", "B.kt"))
+                val first = runSuspend { snapshot.findCalls(a, QueryOptions.page(2)) }
+                assertEquals(listOf("call1", "call3"), first.items.map { it.calleeName })
+                assertTrue(first.hasMore)
+                val second = runSuspend {
+                    snapshot.findCalls(a, QueryOptions.after(2, checkNotNull(first.nextCursor)))
+                }
+                assertEquals(listOf("call5", "call8"), second.items.map { it.calleeName })
+                assertEquals(
+                    listOf("other"),
+                    runSuspend { snapshot.findCalls(b, QueryOptions.page(2)) }
+                        .items
+                        .map { it.calleeName },
+                )
+                val last = runSuspend { snapshot.findCalls(a, QueryOptions.page(1, 4)) }
+                assertEquals(listOf("call11"), last.items.map { it.calleeName })
+                assertEquals(listOf("A.kt", "B.kt"), visited)
+            }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    @Test
+    fun `cached file calls preserve the ten thousand result window boundary`() {
+        val calls =
+            (10_000 downTo 0).map { offset ->
+                val call =
+                    CallSiteRecord(
+                        identity = "Huge.kt:$offset",
+                        calleeName = "call$offset",
+                        candidateSymbolFqns = emptyList(),
+                        relativeFile = "Huge.kt",
+                        startLine = 1,
+                        startColumn = 1,
+                        startOffset = offset,
+                        endLine = 1,
+                        endColumn = 2,
+                        endOffset = offset + 1,
+                        confidence = "UNRESOLVED",
+                    )
+                CodeIndexKey.call(call.identity) to call
+            }
+        snapshotWithRecords(*calls.toTypedArray()).use { snapshot ->
+            val query =
+                CallQuery.inFile(
+                    SourceFile.of(SourceOriginId.of("workspace"), "Huge.kt", "Huge.kt")
+                )
+            val penultimate = runSuspend { snapshot.findCalls(query, QueryOptions.page(1, 9_998)) }
+            assertEquals(listOf("call9998"), penultimate.items.map { it.calleeName })
+            assertTrue(penultimate.hasMore)
+            val failure =
+                assertFailsWith<IndexinoException> {
+                    runSuspend { snapshot.findCalls(query, QueryOptions.page(1, 9_999)) }
+                }
+            assertEquals("result_window_exceeds_maximum", failure.failure.code)
+        }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
     private fun snapshotWithRecords(
         vararg records: Pair<CodeIndexKey, CodeIndexRecord>
     ): IndexSnapshot =

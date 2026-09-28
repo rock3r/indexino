@@ -14,13 +14,18 @@
       "dependencies": {"count": 65, "sha256": "e79ce6c8249667a1f9f3c4c2db7023d25496e7518cd1e8f5185d5c5d5259d6ff"}
     },
     "symbols": [
-      {"name": "ComposeAutomator", "fqn": "dev.sebastiano.spectre.core.ComposeAutomator", "path": "core/src/main/kotlin/dev/sebastiano/spectre/core/ComposeAutomator.kt", "line": 41},
+      {"name": "ComposeAutomator", "fqn": "dev.sebastiano.spectre.core.ComposeAutomator", "path": "core/src/main/kotlin/dev/sebastiano/spectre/core/ComposeAutomator.kt", "line": 40},
       {"name": "AutomatorNode", "fqn": "dev.sebastiano.spectre.core.AutomatorNode", "path": "core/src/main/kotlin/dev/sebastiano/spectre/core/AutomatorNode.kt", "line": 67}
     ]
   },
   "intellij": {
     "url": "https://github.com/JetBrains/intellij-community.git",
     "commit": "9b85e0691870ce22856a4592e7dbcdc5d85b61d4",
+    "android": {
+      "url": "https://github.com/JetBrains/android.git",
+      "commit": "0c3aa8d0201b5f0d79e1952d2a472b7ed34b128c",
+      "selection": "Latest public mirror commit before the IntelliJ pin's committer timestamp; independently selected, not an upstream-paired revision"
+    },
     "buildSystem": "bazel",
     "target": "//:main",
     "includeDependencies": [true],

@@ -142,6 +142,12 @@ origin ID plus origin-relative file path to primary call keys. Call candidate re
 Call-file entries participate in replacement, deletion and rollback transactions. Writable legacy
 stores backfill once, and read-only legacy stores retain the scanning fallback. Overlay lookups
 mask tombstoned and replaced base keys even when a replacement moves to another file or origin.
+An origin-qualified file tombstone skips the base call-file lookup entirely; the delta still supplies
+replacement calls, while untombstoned files continue to read the base.
+For repeated `findCalls(inFile)` pages, a pinned snapshot retains the two most recently requested
+files' ordered call records, capped at the host's 10,000-result window plus one sentinel per file.
+The first page still scans its file; later pages reuse those records without scanning Xodus again.
+The cache is snapshot-local and discarded on close. Other call predicates retain their usual scan.
 Unrestricted call queries and opaque enclosing-symbol ID resolution still scan.
 
 The name index is updated in the same transaction as primary records, including replacement,
@@ -179,12 +185,13 @@ the production format.
 | New worktree, same machine | Share chunks; new workspace id + current pointer |
 | Confirmed workspace loss | Tombstone; abandon worktree staging/refs; keep shared chunks until GC |
 
-A refresh captures each discovered source once before analysis. Change detection, analyzers,
-per-file content hashes, the aggregate source hash, and origin source fingerprints all consume that
-immutable refresh snapshot. If a file changes after capture, the published generation remains
-internally consistent with the captured bytes and the next refresh detects the newer content. A
-read or refresh may instead fail and retry, but no generation may publish facts beside a hash from a
-different read of the file.
+A full refresh captures each discovered source once before analysis. A watcher-hinted refresh may
+inherit unchanged source hashes and facts from its current published generation when native watches
+were armed before that generation's capture and remained covered. It reads and hashes each hinted
+source; if an analyzer needs inherited source text, that read must match the inherited hash or the
+refresh fails for full reconciliation. Change detection, analyzers, the aggregate source hash, and
+origin source fingerprints use this logical immutable snapshot. A read or refresh may fail and
+retry, but no generation may publish facts beside a hash from a different read of the file.
 
 ### Reclamation
 
@@ -216,25 +223,68 @@ origin graph (origin ID, actual revision, expected revision when applicable, and
 fingerprint), workspace revision fingerprint, and pack keys. Older single-origin entries remain
 readable through their legacy workspace-origin fields.
 
-The staging writer is populated from one immutable per-refresh source snapshot. Pack facts and the
-file-hash records inside that pack therefore always describe the same captured content, including
-when the checkout changes while analysis is running.
+The staging writer is populated from a consistent immutable source snapshot, including prior
+captures inherited under continuous native watcher coverage. Pack facts and file-hash records
+inside that pack describe the same captured content, including when the checkout changes during
+analysis.
+
+When the current workspace generation is compatible, subsequent edits keep its immutable
+materialized base and publish a cumulative overlay delta instead of repacking the base. The
+published manifest names both the base generation and the delta pack; source tombstones identify
+the origin and relative path so a deleted/changed file cannot expose inherited facts from a
+different origin. Repeated edits reload the prior delta into the staging writer, remove obsolete
+delta facts, and publish a new immutable delta. Readers pin the previous generation while the
+new one is built. A byte-for-byte revert to an existing generation repoints to its original
+manifest; unchanged refreshes do not reinstall the writer pack. File analyzers process changed
+sources; post-processors still recompute their declared scope. Physical cleanup scans the delta
+for invalidated records rather than streaming the inherited base.
+
+This is an incremental **fact-storage and source-capture** path, not a subsecond whole-workspace
+refresh guarantee:
+the daemon may reuse its last resolved topology when a fully covered watcher reports only edits to
+known, still-existing source paths. Explicit refreshes, changes outside the known source set,
+new source paths, deletions that leave a known source absent at launch, watcher overflow, uncovered
+watches, and failed automatic refresh retries resolve topology anew. A delete/create pair that
+replaces a known file can retain the hint if the path exists when the refresh is claimed. This
+hint is in-memory and never persisted across daemon restarts.
+The daemon arms its watches before the full capture; for a subsequent known-source edit it reads
+only hinted sources, inherits other hashes from the matching published generation, and avoids a
+disk fact scan for change detection. Analyzers verify any inherited source bytes they need against
+the saved hash. A watcher overflow, invalid watch, failed auto refresh, changed generation, or
+polling-only macOS external mount disables inheritance; explicit refreshes still read all sources.
+If known-source edits arrive while an automatic refresh runs, their retained hints can drive a
+second incremental refresh rather than discarding them and forcing a full Bazel/source/Git walk.
+After a successful full capture, the watcher discards path and topology hints observed before
+source capture began, even if the handle was already active. Events after that boundary retain
+their latest per-path epoch and drive a successor; a failed refresh does not discard hints.
+The first published generation may reflect only an early part of a long write burst; readers must
+wait for the successor and verify its facts before treating the whole burst as indexed.
+Even on the hinted path, source preview and change detection visit the in-memory inventory,
+post-processors run their declared scope, and cumulative delta materialization has a cost.
+The Kotlin producer skips PSI environment initialization when no Kotlin source needs analysis, after
+performing any required cleanup for deleted Kotlin sources. The legacy CLI `index` projection
+described in [CLI.md](CLI.md) materializes the merged store after
+publication. These remaining whole-scope costs need measurement and reduction before promising
+subsecond updates for large Bazel workspaces.
 
 Before mutation, the build owner streams the physical writable store into a temporary Xodus
 checkpoint beside the compatibility manifest (`manifest.json.rollback/`), while retaining the
 writer's existing Xodus lock. The checkpoint also preserves the prior manifest's bytes or absence.
 An overlay checkpoints only its writable delta, never its inherited read-only base. Producer and
-plugin failures restore that checkpoint using bounded key batches and streamed records. Capture
-and restore copy at most 16 records per transaction; rollback deletes at most 256 keys per
-transaction, rather than committing each record individually. Rollback
+plugin failures restore that checkpoint. Capture and restore copy at most 16 records per transaction;
+rollback deletes at most 256 keys per transaction, rather than committing each record individually. Rollback
 and close failures are suppressed onto the original failure rather than replacing it. Successful
-builds and successful restores close the checkpoint store, make its regular files writable (Xodus
-leaves completed logs read-only), and remove it without following symbolic links. Filesystem deletion
+builds and successful restores make the checkpoint's regular files writable (Xodus leaves
+completed logs read-only) and remove them without following symbolic links. Filesystem deletion
 errors retain their affected path and cause. A failed restore retains the checkpoint, without changing
 its file permissions. Subsequent builds reject the active/unfinished checkpoint before accepting even
 a fresh compatibility index.
 The diagnostic `checkpoint` phase measures this record-copy capture separately from change
-detection and producers; it does not change the checkpoint or rollback semantics.
+detection and producers. `checkpoint-release` includes `checkpoint-backup-close` and
+`checkpoint-delete`.
+`store-close` measures closing the writable store after the build. When a prior overlay delta
+exists, `overlay-restore` measures unpacking it before opening the store. These nested phases
+separate otherwise hidden costs within `store-build`; they do not change rollback semantics.
 This is recovery for mutable staging, not a crash-atomic transaction or an automatic crash-recovery
 service. Preserve retained checkpoints for investigation; removing only the checkpoint can expose
 partially restored staging as valid. Published generation manifests and immutable packs are not
@@ -249,7 +299,10 @@ If another complete directory wins the rename, its copy is reused and the losing
 is removed. A move failure without a directory at the destination still propagates.
 Closing one snapshot does not close another snapshot's environment. Snapshot pins retain those
 caller-owned refs until close. Client-owned overlay base copies are tracked alongside the snapshot
-pins and reclaimed after the last pin closes; shared packs remain immutable and
+pins and reclaimed after the last pin closes, except the materialized base of the client's current
+published overlay: it stays until another generation is published or the client closes, because
+the next snapshot would otherwise unpack the whole base again (gigabytes on a large workspace).
+Nested overlay bases are not retained. Shared packs remain immutable and
 are reclaimed only by reachability/age/quota GC. There is no runtime `legacy-store` layout. Do **not**
 extend `<project>/.indexino/index/<commit>/`; new features must assume user-local composite storage.
 
