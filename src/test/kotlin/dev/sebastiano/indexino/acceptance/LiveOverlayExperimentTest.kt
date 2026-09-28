@@ -108,7 +108,7 @@ internal class LiveOverlayExperimentTest {
         }
 
     @Test
-    fun `live corpus probe verifies the same saved edit as durable refresh in a disposable fixture`() {
+    fun `live corpus probe verifies repeated Java edits and Kotlin edit against durable refresh`() {
         val root = Files.createDirectory(temporary.resolve("owned"))
         Files.writeString(root.resolve(".indexino-benchmark-owned"), "fixture")
         val workspace = Files.createDirectory(root.resolve("workspace"))
@@ -125,16 +125,46 @@ internal class LiveOverlayExperimentTest {
             Files.writeString(file, content)
         }
         val plan = temporary.resolve("plan.json")
-        Files.writeString(
-            plan,
-            """{"schema":1,"buildSystem":"gradle","target":":alpha","files":[
+        fun writePlan(changedFile: Int) =
+            Files.writeString(
+                plan,
+                """{"schema":1,"buildSystem":"gradle","target":":alpha","files":[
                 {"path":"$caller","module":":alpha","package":"sample"},
                 {"path":"$helper","module":":alpha","package":"sample"}],
-                "groups":[{"id":"small1","files":[0]}]}"""
-                .trimIndent(),
-        )
+                "groups":[{"id":"small1","files":[$changedFile]}]}"""
+                    .trimIndent(),
+            )
         val report = temporary.resolve("probe.json")
 
+        // Each probe call reconnects and reseeds the baseline. The repeated call exercises
+        // JVM first-use vs later-use, not two edits against a long-lived daemon. Timings are
+        // diagnostic only; both calls must still verify pinned and changed public snapshots.
+        writePlan(1)
+        repeat(2) { run ->
+            val javaReport = temporary.resolve("java-$run.json")
+            LiveOverlayCorpusProbe.main(
+                arrayOf(
+                    root.toString(),
+                    plan.toString(),
+                    javaReport.toString(),
+                    "fixture-java-$run",
+                    "manual",
+                )
+            )
+            val javaResult = Json.parseToJsonElement(Files.readString(javaReport)).jsonObject
+            assertEquals("passed", javaResult.getValue("status").jsonPrimitive.content)
+            assertEquals(
+                "true",
+                javaResult.getValue("oldPinAndUnchangedVerified").jsonPrimitive.content,
+            )
+            assertEquals("true", javaResult.getValue("publicQueriesVerified").jsonPrimitive.content)
+            assertEquals(
+                "package sample; class Helper {}\n",
+                Files.readString(workspace.resolve(helper)),
+            )
+            println("live-overlay-java-run-$run: $javaResult")
+        }
+        writePlan(0)
         LiveOverlayCorpusProbe.main(
             arrayOf(root.toString(), plan.toString(), report.toString(), "fixture-1", "manual")
         )
