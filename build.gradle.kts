@@ -75,6 +75,18 @@ tasks
     .matching { it.name.startsWith("ktfmtCheck") || it.name.startsWith("ktfmtFormat") }
     .configureEach { (this as? org.gradle.api.tasks.SourceTask)?.exclude(*generatedSourceExcludes) }
 
+// The plugin's scripts tasks filter a recursive project-root tree after traversal. Use only
+// root-level scripts so a generated corpus under build/ cannot be followed during that walk.
+listOf("ktfmtCheckScripts", "ktfmtFormatScripts").forEach { taskName ->
+    tasks.named(taskName) {
+        (this as org.gradle.api.tasks.SourceTask).setSource(
+            provider {
+                projectDir.listFiles()?.filter { it.isFile && it.extension == "kts" }.orEmpty()
+            }
+        )
+    }
+}
+
 val generatedVersionDirectory = layout.buildDirectory.dir("generated/sources/version/kotlin")
 
 val generateVersionSource by tasks.registering {
