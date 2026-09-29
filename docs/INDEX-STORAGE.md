@@ -261,6 +261,11 @@ The first published generation may reflect only an early part of a long write bu
 wait for the successor and verify its facts before treating the whole burst as indexed.
 Even on the hinted path, source preview and change detection visit the in-memory inventory,
 post-processors run their declared scope, and cumulative delta materialization has a cost.
+For a changed captured source with unchanged topology and the exact prior origin IDs, origin
+provenance may resolve concurrently with staging-store mutation. The full origin result joins
+inside the checkpoint before writing the compatibility manifest; failure restores the previous
+store and manifest. Unchanged sources, missing or source-less origins, and incompatible generations
+retain sequential provenance checks before any reuse decision.
 The Kotlin producer skips PSI environment initialization when no Kotlin source needs analysis, after
 performing any required cleanup for deleted Kotlin sources. The legacy CLI `index` projection
 described in [CLI.md](CLI.md) materializes the merged store after

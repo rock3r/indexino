@@ -14,6 +14,10 @@ import dev.sebastiano.indexino.topology.TopologyResult
 import dev.sebastiano.indexino.topology.bazel.BazelQueryExecutor
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import kotlin.io.path.Path
 import kotlin.io.path.readText
 import kotlin.io.path.writeText
@@ -21,11 +25,182 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.io.TempDir
 
 class IndexBuildRunnerTest {
+    // One fixture covers rollback, publication ordering, and fresh fallback.
+    @Test
+    @Suppress("LongMethod")
+    fun `changed source builds against its snapshot while origin resolution waits to publish`() {
+        val workspace = tempDir.resolve("overlap-workspace")
+        val source = workspace.resolve("src/main/java/Panel.java")
+        Files.createDirectories(source.parent)
+        source.writeText("class Before {}")
+        val storeRoot = tempDir.resolve("overlap-store")
+        val topology =
+            TopologyResult(
+                sourceFiles = listOf("src/main/java/Panel.java"),
+                topology = "bazel-query",
+                includeDeps = false,
+                scope = "//:main",
+            )
+        fun runner(previous: IndexBuildExecution? = null, progress: (String) -> Unit = {}) =
+            IndexBuildRunner(
+                project = workspace,
+                topologyRequest =
+                    TopologyRequest(buildSystem = BuildSystem.BAZEL, bazelTarget = "//:main"),
+                applications = emptyList(),
+                bazelQueryExecutor = null,
+                bazelProcessRunner = null,
+                progress = progress,
+                machineProgress = null,
+                storeRootOverride = storeRoot,
+                topologyOverride = topology,
+                inheritedSources = previous?.sources,
+                inheritedSourceHashes = previous?.sourceHashes.orEmpty(),
+                inheritedOriginStates = previous?.originStates,
+                recursiveWatchRoot = previous?.let { workspace },
+                hintedPaths = previous?.let { setOf(source) }.orEmpty(),
+                captureOriginStates = true,
+            )
+        val initial = runner().runDetailed()
+        assertEquals(CliExitCodes.SUCCESS, initial.exitCode)
+        val manifestPath =
+            IndexPathResolver(workspace, storeRootOverride = storeRoot)
+                .resolveManifest(checkNotNull(initial.manifest).commit)
+        val previousManifest = manifestPath.readText()
+        source.writeText("class After {}")
+
+        val failingOriginStarted = CountDownLatch(1)
+        val releaseFailingOrigin = CountDownLatch(1)
+        val producerFailed = CountDownLatch(1)
+        val failure = IllegalArgumentException("producer stopped")
+        val failedBuild = CompletableFuture.supplyAsync {
+            assertSame(
+                failure,
+                assertFailsWith<IllegalArgumentException> {
+                    runner(initial) { message ->
+                            when {
+                                message == "index phase=origin-resolution state=started" -> {
+                                    failingOriginStarted.countDown()
+                                    check(releaseFailingOrigin.await(15, TimeUnit.SECONDS))
+                                }
+                                message.startsWith(
+                                    "index phase=producer:file-hash state=completed"
+                                ) -> {
+                                    producerFailed.countDown()
+                                    throw failure
+                                }
+                            }
+                        }
+                        .runDetailed()
+                },
+            )
+        }
+        try {
+            assertTrue(failingOriginStarted.await(5, TimeUnit.SECONDS))
+            assertTrue(producerFailed.await(10, TimeUnit.SECONDS))
+            assertFailsWith<TimeoutException> { failedBuild.get(100, TimeUnit.MILLISECONDS) }
+        } finally {
+            releaseFailingOrigin.countDown()
+        }
+        failedBuild.get(20, TimeUnit.SECONDS)
+        assertEquals(previousManifest, manifestPath.readText())
+        XodusCodeIndexStore.open(
+                IndexPathResolver(workspace, storeRootOverride = storeRoot)
+                    .resolveBaseStore(checkNotNull(initial.manifest).commit)
+            )
+            .use { indexed ->
+                assertEquals(
+                    setOf("Before"),
+                    indexed
+                        .prefixScan("sym:")
+                        .map { (_, record) -> (record as SymbolRecord).name }
+                        .toSet(),
+                )
+            }
+
+        val originStarted = CountDownLatch(1)
+        val releaseOrigin = CountDownLatch(1)
+        val storeStarted = CountDownLatch(1)
+        val producersFinished = CountDownLatch(1)
+        val result = CompletableFuture.supplyAsync {
+            runner(initial) { message ->
+                    when (message) {
+                        "index phase=origin-resolution state=started" -> {
+                            originStarted.countDown()
+                            check(releaseOrigin.await(15, TimeUnit.SECONDS))
+                        }
+                        "index phase=store-build state=started" -> storeStarted.countDown()
+                        else -> {
+                            if (
+                                message.startsWith("index phase=producer:file-hash state=completed")
+                            )
+                                producersFinished.countDown()
+                        }
+                    }
+                }
+                .runDetailed()
+        }
+        try {
+            assertTrue(originStarted.await(5, TimeUnit.SECONDS))
+            assertTrue(storeStarted.await(3, TimeUnit.SECONDS), "store must overlap origin reads")
+            assertTrue(producersFinished.await(10, TimeUnit.SECONDS))
+            assertEquals(
+                previousManifest,
+                manifestPath.readText(),
+                "must not publish before origin join",
+            )
+        } finally {
+            releaseOrigin.countDown()
+        }
+        val execution = result.get(20, TimeUnit.SECONDS)
+        assertEquals(CliExitCodes.SUCCESS, execution.exitCode)
+        assertEquals(
+            initial.manifest.origins.map { it.originId },
+            execution.manifest?.origins?.map { it.originId },
+        )
+        assertTrue(manifestPath.readText() != previousManifest)
+        XodusCodeIndexStore.open(
+                IndexPathResolver(workspace, storeRootOverride = storeRoot)
+                    .resolveBaseStore(checkNotNull(execution.manifest).commit)
+            )
+            .use { indexed ->
+                assertEquals(
+                    setOf("After"),
+                    indexed
+                        .prefixScan("sym:")
+                        .map { (_, record) -> (record as SymbolRecord).name }
+                        .toSet(),
+                )
+            }
+        val unchangedOriginStarted = CountDownLatch(1)
+        val releaseUnchangedOrigin = CountDownLatch(1)
+        val unchangedStoreStarted = CountDownLatch(1)
+        val unchanged = CompletableFuture.supplyAsync {
+            runner(execution) { message ->
+                    when (message) {
+                        "index phase=origin-resolution state=started" -> {
+                            unchangedOriginStarted.countDown()
+                            check(releaseUnchangedOrigin.await(15, TimeUnit.SECONDS))
+                        }
+                        "index phase=store-build state=started" -> unchangedStoreStarted.countDown()
+                    }
+                }
+                .runDetailed()
+        }
+        try {
+            assertTrue(unchangedOriginStarted.await(5, TimeUnit.SECONDS))
+            assertFalse(unchangedStoreStarted.await(100, TimeUnit.MILLISECONDS))
+        } finally {
+            releaseUnchangedOrigin.countDown()
+        }
+        assertTrue(unchanged.get(20, TimeUnit.SECONDS).reusedFreshIndex)
+    }
+
     @Test
     fun `hinted refresh inherits unchanged source hashes while updating edited facts`() {
         val workspace = tempDir.resolve("hinted-capture-workspace")

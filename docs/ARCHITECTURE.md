@@ -157,6 +157,12 @@ Origin reads never write the user's index: `status` runs with optional locks dis
 For a captured source snapshot, each origin computes its source fingerprint alongside its Git
 state, then joins both before constructing provenance. Callers without a captured snapshot retain
 sequential reads so a live source read does not race with its Git-state observation.
+On a watcher-hinted changed-source refresh with the same topology, origin inventory, applications,
+and current published generation, the store builds from the captured sources while origin
+provenance resolves. The build uses known origin IDs only for fact ownership; resolved provenance
+joins inside the rollback checkpoint before the compatibility manifest is written. An origin
+failure rolls back staging. Fresh/no-op, missing-origin, cold, and fork-reuse decisions still wait
+for origin resolution before building or publishing.
 
 Daemon close excludes overlapping cleanup attempts. A failed lease release remains retryable without
 closing an already stopped handshake server again; identity checks still protect successor leases.

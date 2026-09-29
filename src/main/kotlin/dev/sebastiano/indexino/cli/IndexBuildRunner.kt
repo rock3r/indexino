@@ -38,9 +38,13 @@ import dev.sebastiano.indexino.topology.bazel.BazelProcessRunner
 import dev.sebastiano.indexino.topology.bazel.BazelQueryExecutor
 import java.nio.file.Path
 import java.time.Instant
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionException
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.exists
 
+// Keep eligibility, checkpoint join, and fallback decisions in the build owner.
+@Suppress("LargeClass")
 internal class IndexBuildRunner(
     private val project: Path,
     private val topologyRequest: TopologyRequest,
@@ -193,21 +197,59 @@ internal class IndexBuildRunner(
         val manifestPath = resolver.resolveManifest(commit)
         BuildStoreCheckpoint.requireRecovered(manifestPath)
         val previewHash = timedPhase("source-preview") { previewHash(sources, sourceSnapshot) }
-        val origins =
-            timedPhase("origin-resolution") {
-                resolveOrigins(
-                    sources,
-                    externalOriginMetadata,
-                    topologyResult.topology,
-                    sourceSnapshot,
-                )
-            }
         val existingManifest = manifestPath.takeIf { it.exists() }?.let(ManifestIO::read)
+        val publishedManifest =
+            WorkspaceGenerationManifestStore(
+                    InProcessCacheLayout.cacheRoot(),
+                    InProcessCacheLayout.workspaceId(project),
+                )
+                .current()
+                ?.compatibilityManifest
+        val sourceOriginIds = sources.map { it.originId }.distinct().sorted()
+        val sourceRoots = sources.mapTo(linkedSetOf()) { it.originRoot }
+        // Only a known-source edit can skip the freshness decision while provenance is pending.
+        // Source-less mounts and implicit workspace origins may change the origin inventory.
+        val overlapOrigins =
+            inheritedSources != null &&
+                inheritedOriginStates != null &&
+                recursiveWatchRoot != null &&
+                hintedPaths.isNotEmpty() &&
+                existingManifest != null &&
+                existingManifest.commit == commit &&
+                existingManifest.sourcesContentHash != previewHash &&
+                existingManifest.scope == topologyResult.scope &&
+                existingManifest.topology == topologyResult.topology &&
+                existingManifest.includeDeps == topologyResult.includeDeps &&
+                existingManifest.resolvedTopologyDigest == topologyResult.resolvedTopologyDigest &&
+                existingManifest.applications.sorted() == applications.sorted() &&
+                existingManifest.pluginCoordinates == pluginCoordinates &&
+                existingManifest.indexerVersion == Version.NAME &&
+                existingManifest.basicFactSchemaVersion == BASIC_FACT_SCHEMA_VERSION &&
+                existingManifest.origins.all { it.available } &&
+                existingManifest.origins.map { it.originId }.sorted() == sourceOriginIds &&
+                externalOriginMetadata.keys.all { root ->
+                    sourceRoots.any { it.toRealPath() == root }
+                } &&
+                (storeRootOverride != InProcessCacheLayout.writerRoot(project) ||
+                    publishedManifest?.copy(builtAt = existingManifest.builtAt) ==
+                        existingManifest) &&
+                (topologyResult.topology == "repo-manifest" || "workspace" in sourceOriginIds)
+        val origins =
+            if (overlapOrigins) null
+            else
+                timedPhase("origin-resolution") {
+                    resolveOrigins(
+                        sources,
+                        externalOriginMetadata,
+                        topologyResult.topology,
+                        sourceSnapshot,
+                    )
+                }
         val vanishedOrigins =
             existingManifest
                 ?.origins
                 ?.mapTo(linkedSetOf()) { it.originId }
-                ?.minus(origins.mapTo(linkedSetOf()) { it.originId })
+                ?.minus((origins?.map { it.originId } ?: sourceOriginIds).toSet())
                 .orEmpty()
         val preservesExistingTopology =
             existingManifest?.scope == topologyResult.scope &&
@@ -233,18 +275,12 @@ internal class IndexBuildRunner(
                 sourcesContentHash = previewHash,
                 applications = applications,
                 pluginCoordinates = pluginCoordinates,
-                origins = origins,
+                origins = origins.orEmpty(),
                 resolvedTopologyDigest = topologyResult.resolvedTopologyDigest,
             )
-        val publishedManifest =
-            WorkspaceGenerationManifestStore(
-                    InProcessCacheLayout.cacheRoot(),
-                    InProcessCacheLayout.workspaceId(project),
-                )
-                .current()
-                ?.compatibilityManifest
         if (
-            existingManifest != null &&
+            !overlapOrigins &&
+                existingManifest != null &&
                 ManifestFreshness.isFresh(existingManifest, criteria) &&
                 (storeRootOverride != InProcessCacheLayout.writerRoot(project) ||
                     publishedManifest?.copy(builtAt = existingManifest.builtAt) == existingManifest)
@@ -284,38 +320,70 @@ internal class IndexBuildRunner(
         if (forkBase != null) {
             latestForkBase = forkBase
         }
-        progress("index store=${if (forkBase == null) "writer" else "overlay"}")
-
-        timedPhase("store-build") {
-            buildStore(
-                resolver = resolver,
-                commit = commit,
-                scope = topologyResult.scope,
-                topology = topologyResult.topology,
-                resolvedTopologyDigest = topologyResult.resolvedTopologyDigest,
-                includeDeps = topologyResult.includeDeps,
-                sourceFiles = sourceFiles,
-                sources = sources,
-                sourceSnapshot = sourceSnapshot,
-                origins = origins,
-                previewHash = previewHash,
-                pluginRegistry = pluginRegistry,
-                pluginCoordinates = pluginCoordinates,
-                previousPluginCoordinates =
-                    (existingManifest ?: forkBase?.baseManifest)?.pluginCoordinates.orEmpty(),
-                forceFullRebuild =
-                    (existingManifest == null && forkBase == null) ||
-                        (existingManifest != null &&
-                            forkBase == null &&
-                            storeRootOverride == InProcessCacheLayout.writerRoot(project) &&
-                            publishedManifest?.copy(builtAt = existingManifest.builtAt) !=
-                                existingManifest) ||
-                        (existingManifest != null &&
-                            (existingManifest.indexerVersion != Version.NAME ||
-                                existingManifest.basicFactSchemaVersion !=
-                                    BASIC_FACT_SCHEMA_VERSION)),
-                forkBase = forkBase,
-            )
+        val pendingOrigins =
+            if (overlapOrigins)
+                CompletableFuture.supplyAsync {
+                    timedPhase("origin-resolution") {
+                        resolveOrigins(
+                            sources,
+                            externalOriginMetadata,
+                            topologyResult.topology,
+                            sourceSnapshot,
+                        )
+                    }
+                }
+            else null
+        fun resolvedOrigins(): List<IndexManifestOrigin> =
+            origins
+                ?: try {
+                    checkNotNull(pendingOrigins).join()
+                } catch (failure: CompletionException) {
+                    throw failure.cause ?: failure
+                }
+        try {
+            progress("index store=${if (forkBase == null) "writer" else "overlay"}")
+            timedPhase("store-build") {
+                buildStore(
+                    resolver = resolver,
+                    commit = commit,
+                    scope = topologyResult.scope,
+                    topology = topologyResult.topology,
+                    resolvedTopologyDigest = topologyResult.resolvedTopologyDigest,
+                    includeDeps = topologyResult.includeDeps,
+                    sourceFiles = sourceFiles,
+                    sources = sources,
+                    sourceSnapshot = sourceSnapshot,
+                    originIds = origins?.map { it.originId } ?: sourceOriginIds,
+                    originsForPublication = ::resolvedOrigins,
+                    previewHash = previewHash,
+                    pluginRegistry = pluginRegistry,
+                    pluginCoordinates = pluginCoordinates,
+                    previousPluginCoordinates =
+                        (existingManifest ?: forkBase?.baseManifest)?.pluginCoordinates.orEmpty(),
+                    forceFullRebuild =
+                        (existingManifest == null && forkBase == null) ||
+                            (existingManifest != null &&
+                                forkBase == null &&
+                                storeRootOverride == InProcessCacheLayout.writerRoot(project) &&
+                                publishedManifest?.copy(builtAt = existingManifest.builtAt) !=
+                                    existingManifest) ||
+                            (existingManifest != null &&
+                                (existingManifest.indexerVersion != Version.NAME ||
+                                    existingManifest.basicFactSchemaVersion !=
+                                        BASIC_FACT_SCHEMA_VERSION)),
+                    forkBase = forkBase,
+                )
+            }
+        } catch (@Suppress("TooGenericExceptionCaught") failure: Throwable) {
+            // No origin worker may outlive a failed build; preserve origin-first failure ordering.
+            val originFailure = pendingOrigins?.let {
+                runCatching(::resolvedOrigins).exceptionOrNull()
+            }
+            if (originFailure != null && originFailure !== failure) {
+                originFailure.addSuppressed(failure)
+                throw originFailure
+            }
+            throw failure
         }
         machineProgress?.completed("indexed")
         return CliExitCodes.SUCCESS
@@ -456,7 +524,8 @@ internal class IndexBuildRunner(
         sourceFiles: List<String>,
         sources: List<IndexedSource>,
         sourceSnapshot: SourceContentSnapshot,
-        origins: List<IndexManifestOrigin>,
+        originIds: List<String>,
+        originsForPublication: () -> List<IndexManifestOrigin>,
         previewHash: String,
         pluginRegistry: PluginRegistry,
         pluginCoordinates: Map<String, String>,
@@ -534,8 +603,7 @@ internal class IndexBuildRunner(
                                     it.pluginId.value in applications
                                 }
                             ) {
-                                (origins.map { it.originId } + "workspace").distinct().map {
-                                    originId ->
+                                (originIds + "workspace").distinct().map { originId ->
                                     WorktreeOverlayIndexStore.tombstonePrefixForSource(
                                         originId,
                                         PluginAnalyzerRunner.POST_PROCESSOR_FILE,
@@ -552,7 +620,7 @@ internal class IndexBuildRunner(
                             workspaceRoot = project,
                             sources = sources,
                             sourceSnapshot = sourceSnapshot,
-                            resolvedOriginIds = origins.mapTo(linkedSetOf()) { it.originId },
+                            resolvedOriginIds = originIds.toCollection(linkedSetOf()),
                             progress = progress,
                             machineProgress = machineProgress,
                             changedSourceFiles = changes.changedFiles,
@@ -578,6 +646,10 @@ internal class IndexBuildRunner(
                                 .keys
                         PluginAnalyzerRunner(pluginRegistry)
                             .analyze(context, applications.toSet(), fullAnalysisPlugins)
+                    }
+                    val origins = originsForPublication()
+                    check(origins.map { it.originId }.sorted() == originIds.sorted()) {
+                        "Origin inventory changed during build"
                     }
                     val manifest =
                         IndexManifest(
