@@ -14,32 +14,33 @@ import dev.sebastiano.indexino.plugin.api.FileAnalysisContextV1
 import dev.sebastiano.indexino.plugin.api.PostProcessContextV1
 import dev.sebastiano.indexino.plugin.api.PostProcessLevelV1
 import dev.sebastiano.indexino.producer.IndexBuildContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runBlocking
 
 @OptIn(dev.sebastiano.indexino.model.IndexinoInternalApi::class)
 internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
-    internal fun analyze(context: IndexBuildContext, selectedPluginIds: Set<String>) {
-        val previousPluginFacts = context.store.prefixScan("plugin:").toList()
-        try {
-            analyzeMutable(context, selectedPluginIds)
-        } catch (@Suppress("TooGenericExceptionCaught") failure: Throwable) {
-            context.store.prefixScan("plugin:").forEach { (key, _) -> context.store.delete(key) }
-            previousPluginFacts.forEach { (key, record) -> context.store.put(key, record) }
-            throw failure
-        }
-    }
-
+    /**
+     * Mutates build facts; the build owner checkpoints and restores the complete writable store.
+     */
     @Suppress("LongMethod")
-    private fun analyzeMutable(context: IndexBuildContext, selectedPluginIds: Set<String>) {
+    internal fun analyze(
+        context: IndexBuildContext,
+        selectedPluginIds: Set<String>,
+        fullAnalysisPlugins: Set<String> = emptySet(),
+    ) {
         registry
             .pluginIds()
             .map { it.value }
             .filterNot(selectedPluginIds::contains)
             .forEach { pluginId ->
-                context.store.prefixScan(CodeIndexKey.pluginFactPluginPrefix(pluginId)).forEach {
-                    (key, _) ->
-                    context.store.delete(key)
+                val keys = mutableListOf<CodeIndexKey>()
+                context.store.forEachWritablePrefix(
+                    CodeIndexKey.pluginFactPluginPrefix(pluginId)
+                ) { key, _ ->
+                    keys += key
+                    true
                 }
+                keys.forEach(context.store::delete)
             }
         val analyzersByPlugin =
             registry.fileAnalyzers
@@ -47,28 +48,25 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                 .groupBy { it.pluginId.value }
         selectedPluginIds.forEach { pluginId ->
             val analyzers = analyzersByPlugin[pluginId].orEmpty()
-            val affectedSources = context.sources + context.deletedSources
-            context.store
-                .prefixScan(CodeIndexKey.pluginFactPluginPrefix(pluginId))
-                .filter { (_, record) ->
+            val filesToAnalyze =
+                if (pluginId in fullAnalysisPlugins) context.sources else context.changedSources
+            val affectedSources = filesToAnalyze + context.deletedSources
+            val affectedFiles = affectedSources.mapTo(hashSetOf()) { it.originId to it.path }
+            val keys = mutableListOf<CodeIndexKey>()
+            context.store.forEachWritablePrefix(CodeIndexKey.pluginFactPluginPrefix(pluginId)) {
+                key,
+                record ->
+                if (
                     record is PluginFactRecord &&
-                        affectedSources.any { source ->
-                            record.originId == source.originId && record.relativeFile == source.path
-                        }
-                }
-                .map { it.first }
-                .toList()
-                .forEach(context.store::delete)
-            context.store
-                .prefixScan(CodeIndexKey.pluginFactPluginPrefix(pluginId))
-                .filter { (_, record) ->
-                    record is PluginFactRecord && record.relativeFile == POST_PROCESSOR_FILE
-                }
-                .map { it.first }
-                .toList()
-                .forEach(context.store::delete)
+                        ((record.originId to record.relativeFile) in affectedFiles ||
+                            record.relativeFile == POST_PROCESSOR_FILE)
+                )
+                    keys += key
+                true
+            }
+            keys.forEach(context.store::delete)
             try {
-                context.sources.forEach { source ->
+                filesToAnalyze.forEach { source ->
                     analyzers.forEach { registered ->
                         runBlocking {
                             registered.analyzer.analyze(
@@ -87,7 +85,10 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                                             source.path,
                                             source.originId,
                                         ),
-                                    active = { true },
+                                    active = {
+                                        coroutineContext.ensureActive()
+                                        !Thread.currentThread().isInterrupted
+                                    },
                                 )
                             )
                         }
@@ -119,7 +120,10 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                                                 originId,
                                             ),
                                         originId = SourceOriginId.of(originId),
-                                        active = { true },
+                                        active = {
+                                            coroutineContext.ensureActive()
+                                            !Thread.currentThread().isInterrupted
+                                        },
                                     )
                                 )
                             }
@@ -142,7 +146,10 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                                         pluginId,
                                         POST_PROCESSOR_FILE,
                                     ),
-                                active = { true },
+                                active = {
+                                    coroutineContext.ensureActive()
+                                    !Thread.currentThread().isInterrupted
+                                },
                             )
                         )
                     }
@@ -150,7 +157,7 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
         }
     }
 
-    private companion object {
+    internal companion object {
         const val POST_PROCESSOR_FILE: String = "__postprocess__"
     }
 }

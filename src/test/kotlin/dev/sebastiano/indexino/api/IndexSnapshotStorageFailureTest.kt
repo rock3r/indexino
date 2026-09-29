@@ -7,11 +7,13 @@ import dev.sebastiano.indexino.core.record.CodeIndexRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
+import dev.sebastiano.indexino.core.store.WorktreeOverlayIndexStore
 import dev.sebastiano.indexino.model.CallQuery
 import dev.sebastiano.indexino.model.IndexinoInternalApi
 import dev.sebastiano.indexino.model.NameMatchMode
 import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.ReferenceQuery
+import dev.sebastiano.indexino.model.SourceFile
 import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.SourceOriginRevision
 import dev.sebastiano.indexino.model.SymbolId
@@ -186,6 +188,259 @@ class IndexSnapshotStorageFailureTest {
 
     @OptIn(IndexinoInternalApi::class)
     @Test
+    fun `exact FQN visits only matching definitions including legacy keys`() {
+        val records =
+            listOf("demo.TargetOther", "demo.Target", "unrelated.Target").map { fqn ->
+                CodeIndexKey.symbolDefinition(fqn, "$fqn.kt", 1, 1) to
+                    SymbolRecord(
+                        fqn = fqn,
+                        relativeFile = "$fqn.kt",
+                        line = 1,
+                        kind = "class",
+                        name = "Target",
+                    )
+            } +
+                (CodeIndexKey.sym("demo.Target") to
+                    SymbolRecord(
+                        fqn = "demo.Target",
+                        relativeFile = "Legacy.kt",
+                        line = 2,
+                        kind = "class",
+                        name = "Target",
+                    ))
+        val store = CountingRecordsCodeIndexStore(records)
+        IndexSnapshot.create(
+                store = store,
+                revision = workspaceRevision(),
+                generation = WorkspaceGenerationId.of("generation"),
+            )
+            .use { snapshot ->
+                val page = runSuspend {
+                    snapshot.findSymbols(
+                        SymbolQuery.named("demo.Target").withMatch(NameMatchMode.FQN),
+                        QueryOptions.page(limit = 10),
+                    )
+                }
+                assertEquals(
+                    listOf("Legacy.kt", "demo.Target.kt"),
+                    page.items.map { it.location.file.path },
+                )
+                assertEquals(1, store.visitedRows)
+            }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    @Test
+    fun `names aliases prefixes and owners use indexed symbol candidates`() {
+        val owner =
+            SymbolRecord(
+                fqn = "demo.Owner",
+                relativeFile = "Owner.kt",
+                line = 1,
+                kind = "class",
+                name = "Owner",
+                aliases = listOf("OwnerAlias"),
+            )
+        val member =
+            SymbolRecord(
+                fqn = "demo.Owner.target",
+                relativeFile = "Owner.kt",
+                line = 3,
+                kind = "function",
+                name = "Target",
+                ownerFqn = "OwnerAlias",
+                aliases = listOf("Widget"),
+            )
+        val records =
+            listOf(owner, member).map { record ->
+                CodeIndexKey.symbolDefinition(record.fqn, record.relativeFile, record.line, 1) to
+                    record
+            }
+        val delegate = RecordsCodeIndexStore(records)
+        val store =
+            object : CodeIndexStore by delegate {
+                override fun forEachPrefix(
+                    prefix: String,
+                    action: (CodeIndexKey, CodeIndexRecord) -> Boolean,
+                ) {
+                    check(prefix != "sym:") { "Named queries must not scan every symbol" }
+                    delegate.forEachPrefix(prefix, action)
+                }
+            }
+        IndexSnapshot.create(
+                store = store,
+                revision = workspaceRevision(),
+                generation = WorkspaceGenerationId.of("generation"),
+            )
+            .use { snapshot ->
+                val ownerId =
+                    runSuspend {
+                            snapshot.findSymbols(
+                                SymbolQuery.named("demo.Owner").withMatch(NameMatchMode.FQN),
+                                QueryOptions.page(1),
+                            )
+                        }
+                        .items
+                        .single()
+                        .id
+                for (query in
+                    listOf(
+                        SymbolQuery.named("Target"),
+                        SymbolQuery.named("Widget"),
+                        SymbolQuery.named("Wid").withMatch(NameMatchMode.PREFIX),
+                    )) {
+                    val result = runCatching {
+                        runSuspend { snapshot.findSymbols(query, QueryOptions.page(1)) }
+                    }
+                    assertTrue(
+                        result.isSuccess,
+                        "Indexed query failed: ${result.exceptionOrNull()}",
+                    )
+                    val symbol = result.getOrThrow().items.single()
+                    assertEquals("Target", symbol.name)
+                    assertEquals(ownerId, symbol.ownerId)
+                }
+            }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    @Test
+    fun `call candidate lookup uses name index without accepting short name collisions`() {
+        val target =
+            SymbolRecord(
+                fqn = "demo.actual",
+                relativeFile = "Target.kt",
+                line = 1,
+                kind = "function",
+                name = "actual",
+                arity = 0,
+                aliases = listOf("demo.alias"),
+            )
+        val collision =
+            target.copy(fqn = "other.function", name = "demo.alias", aliases = emptyList())
+        val caller =
+            target.copy(
+                fqn = "demo.caller",
+                name = "caller",
+                relativeFile = "Use.kt",
+                aliases = emptyList(),
+            )
+        val call =
+            CallSiteRecord(
+                identity = "workspace:Use.kt:10",
+                calleeName = "alias",
+                candidateSymbolFqns = listOf("demo.alias"),
+                enclosingSymbolFqn = "demo.caller",
+                relativeFile = "Use.kt",
+                startLine = 2,
+                startColumn = 1,
+                startOffset = 10,
+                endLine = 2,
+                endColumn = 8,
+                endOffset = 17,
+                confidence = "RESOLVED",
+            )
+        val delegate =
+            RecordsCodeIndexStore(
+                listOf(target, collision, caller).map {
+                    CodeIndexKey.symbolDefinition(it.fqn, it.relativeFile, it.line, 1) to it
+                } + (CodeIndexKey.call(call.identity) to call)
+            )
+        var fileQuery = false
+        val store =
+            object : CodeIndexStore by delegate {
+                override fun forEachPrefix(
+                    prefix: String,
+                    action: (CodeIndexKey, CodeIndexRecord) -> Boolean,
+                ) {
+                    check(prefix != "sym:") { "Call candidates must not scan all symbols" }
+                    check(!fileQuery || prefix != "call:") {
+                        "File queries must not scan all calls"
+                    }
+                    delegate.forEachPrefix(prefix, action)
+                }
+            }
+        val generation = WorkspaceGenerationId.of("generation")
+        IndexSnapshot.create(store, workspaceRevision(), generation).use { snapshot ->
+            val result = runCatching {
+                runSuspend { snapshot.findCalls(CallQuery.to("alias"), QueryOptions.page(1)) }
+            }
+            assertTrue(
+                result.isSuccess,
+                "Indexed candidate lookup failed: ${result.exceptionOrNull()}",
+            )
+            val actual = result.getOrThrow().items.single()
+            with(IndexSnapshotQueries(generation)) {
+                assertEquals(listOf(target.definitionId()), actual.candidateSymbolIds)
+                assertEquals(caller.definitionId(), actual.enclosingSymbolId)
+            }
+            fileQuery = true
+            val inFile = runCatching {
+                runSuspend {
+                    snapshot.findCalls(
+                        CallQuery.inFile(
+                            SourceFile.of(SourceOriginId.of("workspace"), "Use.kt", "Use.kt")
+                        ),
+                        QueryOptions.page(1),
+                    )
+                }
+            }
+            assertTrue(inFile.isSuccess, "File-scoped lookup failed: ${inFile.exceptionOrNull()}")
+            assertEquals(actual, inFile.getOrThrow().items.single())
+        }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    @Test
+    fun `indexed owner ties preserve primary key order across base and delta`() {
+        val baseOwner =
+            SymbolRecord(
+                fqn = "demo.A",
+                relativeFile = "Owners.kt",
+                line = 1,
+                kind = "class",
+                name = "A",
+                aliases = listOf("OwnerAlias"),
+            )
+        val deltaOwner = baseOwner.copy(fqn = "demo.Z", name = "Z", line = 3)
+        val member =
+            SymbolRecord(
+                fqn = "demo.target",
+                relativeFile = "Owners.kt",
+                line = 5,
+                kind = "function",
+                name = "target",
+                ownerFqn = "OwnerAlias",
+            )
+        fun records(vararg symbols: SymbolRecord): CodeIndexStore =
+            RecordsCodeIndexStore(
+                symbols.map {
+                    CodeIndexKey.symbolDefinition(it.fqn, it.relativeFile, it.line, 1) to it
+                }
+            )
+        val overlay =
+            WorktreeOverlayIndexStore(records(baseOwner), records(deltaOwner, member), emptyList())
+        IndexSnapshot.create(overlay, workspaceRevision(), WorkspaceGenerationId.of("generation"))
+            .use { snapshot ->
+                val expectedOwner =
+                    runSuspend {
+                            snapshot.findSymbols(
+                                SymbolQuery.named("demo.A").withMatch(NameMatchMode.FQN),
+                                QueryOptions.page(1),
+                            )
+                        }
+                        .items
+                        .single()
+                        .id
+                val actual = runSuspend {
+                    snapshot.findSymbols(SymbolQuery.named("target"), QueryOptions.page(1))
+                }
+                assertEquals(expectedOwner, actual.items.single().ownerId)
+            }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    @Test
     fun `findSymbols batches owner resolution into one additional store scan`() {
         val store =
             CountingRecordsCodeIndexStore(
@@ -346,6 +601,63 @@ class IndexSnapshotStorageFailureTest {
 
     @OptIn(IndexinoInternalApi::class)
     @Test
+    fun `exactly ten thousand results remain pageable through the final item`() {
+        val records =
+            (9_999 downTo 0).map { index ->
+                val name = "demo.%05d".format(Locale.ROOT, index)
+                CodeIndexKey.symbolDefinition(name, "$index.kt", 1, 1) to
+                    SymbolRecord(
+                        fqn = name,
+                        relativeFile = "$index.kt",
+                        line = 1,
+                        kind = "class",
+                        name = name,
+                    )
+            }
+        snapshotWithRecords(*records.toTypedArray()).use { snapshot ->
+            val query = SymbolQuery.named("demo.").withMatch(NameMatchMode.PREFIX)
+            val penultimate = runSuspend {
+                snapshot.findSymbols(query, QueryOptions.page(limit = 1, offset = 9_998))
+            }
+            assertEquals(listOf("demo.09998"), penultimate.items.map { it.name })
+            assertTrue(penultimate.hasMore)
+            val last = runSuspend {
+                snapshot.findSymbols(
+                    query,
+                    QueryOptions.after(1, requireNotNull(penultimate.nextCursor)),
+                )
+            }
+            assertEquals(listOf("demo.09999"), last.items.map { it.name })
+            assertEquals(false, last.hasMore)
+            assertEquals(null, last.nextCursor)
+            val tail = runSuspend {
+                snapshot.findSymbols(query, QueryOptions.page(limit = 2, offset = 9_998))
+            }
+            assertEquals(listOf("demo.09998", "demo.09999"), tail.items.map { it.name })
+            assertEquals(false, tail.hasMore)
+        }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    @Test
+    fun `offset plus limit one beyond window fails before storage is read`() {
+        snapshotWithThrowingStore().use { snapshot ->
+            val failure =
+                assertFailsWith<IndexinoException> {
+                    runSuspend {
+                        snapshot.findSymbols(
+                            SymbolQuery.named("demo"),
+                            QueryOptions.page(limit = 2, offset = 9_999),
+                        )
+                    }
+                }
+            assertEquals("INVALID_REQUEST", failure.failure.category.value)
+            assertEquals("page_window_exceeds_maximum", failure.failure.code)
+        }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    @Test
     fun `queries fail rather than expose an unusable cursor beyond the host window`() {
         val records =
             (0..10_000).map { index ->
@@ -493,6 +805,116 @@ class IndexSnapshotStorageFailureTest {
     }
 
     @OptIn(IndexinoInternalApi::class)
+    @Test
+    fun `file call pages reuse one bounded snapshot scan without mixing files`() {
+        val records =
+            listOf(11, 3, 8, 1, 5).map { offset ->
+                val call =
+                    CallSiteRecord(
+                        identity = "A.kt:$offset",
+                        calleeName = "call$offset",
+                        candidateSymbolFqns = emptyList(),
+                        relativeFile = "A.kt",
+                        startLine = 1,
+                        startColumn = offset,
+                        startOffset = offset,
+                        endLine = 1,
+                        endColumn = offset + 1,
+                        endOffset = offset + 1,
+                        confidence = "UNRESOLVED",
+                    )
+                CodeIndexKey.call(call.identity) to call
+            } +
+                (CodeIndexKey.call("B.kt:2") to
+                    CallSiteRecord(
+                        identity = "B.kt:2",
+                        calleeName = "other",
+                        candidateSymbolFqns = emptyList(),
+                        relativeFile = "B.kt",
+                        startLine = 1,
+                        startColumn = 2,
+                        startOffset = 2,
+                        endLine = 1,
+                        endColumn = 3,
+                        endOffset = 3,
+                        confidence = "UNRESOLVED",
+                    ))
+        val delegate = RecordsCodeIndexStore(records)
+        val visited = mutableListOf<String>()
+        val store =
+            object : CodeIndexStore by delegate {
+                override fun forEachCallInFile(
+                    originId: String,
+                    relativeFile: String,
+                    action: (CodeIndexKey, CallSiteRecord) -> Boolean,
+                ) {
+                    visited += relativeFile
+                    delegate.forEachCallInFile(originId, relativeFile, action)
+                }
+            }
+        IndexSnapshot.create(store, workspaceRevision(), WorkspaceGenerationId.of("generation"))
+            .use { snapshot ->
+                val a =
+                    CallQuery.inFile(SourceFile.of(SourceOriginId.of("workspace"), "A.kt", "A.kt"))
+                val b =
+                    CallQuery.inFile(SourceFile.of(SourceOriginId.of("workspace"), "B.kt", "B.kt"))
+                val first = runSuspend { snapshot.findCalls(a, QueryOptions.page(2)) }
+                assertEquals(listOf("call1", "call3"), first.items.map { it.calleeName })
+                assertTrue(first.hasMore)
+                val second = runSuspend {
+                    snapshot.findCalls(a, QueryOptions.after(2, checkNotNull(first.nextCursor)))
+                }
+                assertEquals(listOf("call5", "call8"), second.items.map { it.calleeName })
+                assertEquals(
+                    listOf("other"),
+                    runSuspend { snapshot.findCalls(b, QueryOptions.page(2)) }
+                        .items
+                        .map { it.calleeName },
+                )
+                val last = runSuspend { snapshot.findCalls(a, QueryOptions.page(1, 4)) }
+                assertEquals(listOf("call11"), last.items.map { it.calleeName })
+                assertEquals(listOf("A.kt", "B.kt"), visited)
+            }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    @Test
+    fun `cached file calls preserve the ten thousand result window boundary`() {
+        val calls =
+            (10_000 downTo 0).map { offset ->
+                val call =
+                    CallSiteRecord(
+                        identity = "Huge.kt:$offset",
+                        calleeName = "call$offset",
+                        candidateSymbolFqns = emptyList(),
+                        relativeFile = "Huge.kt",
+                        startLine = 1,
+                        startColumn = 1,
+                        startOffset = offset,
+                        endLine = 1,
+                        endColumn = 2,
+                        endOffset = offset + 1,
+                        confidence = "UNRESOLVED",
+                    )
+                CodeIndexKey.call(call.identity) to call
+            }
+        snapshotWithRecords(*calls.toTypedArray()).use { snapshot ->
+            val query =
+                CallQuery.inFile(
+                    SourceFile.of(SourceOriginId.of("workspace"), "Huge.kt", "Huge.kt")
+                )
+            val penultimate = runSuspend { snapshot.findCalls(query, QueryOptions.page(1, 9_998)) }
+            assertEquals(listOf("call9998"), penultimate.items.map { it.calleeName })
+            assertTrue(penultimate.hasMore)
+            val failure =
+                assertFailsWith<IndexinoException> {
+                    runSuspend { snapshot.findCalls(query, QueryOptions.page(1, 9_999)) }
+                }
+            assertEquals("result_window_exceeds_maximum", failure.failure.code)
+        }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
     private fun snapshotWithRecords(
         vararg records: Pair<CodeIndexKey, CodeIndexRecord>
     ): IndexSnapshot =
@@ -574,6 +996,9 @@ class IndexSnapshotStorageFailureTest {
         var forEachPrefixCalls: Int = 0
             private set
 
+        var visitedRows: Int = 0
+            private set
+
         override fun get(key: CodeIndexKey): CodeIndexRecord? =
             records.firstOrNull { it.first == key }?.second
 
@@ -590,7 +1015,10 @@ class IndexSnapshotStorageFailureTest {
         ) {
             forEachPrefixCalls += 1
             for ((key, record) in records) {
-                if (key.value.startsWith(prefix) && !action(key, record)) return
+                if (key.value.startsWith(prefix)) {
+                    visitedRows += 1
+                    if (!action(key, record)) return
+                }
             }
         }
 

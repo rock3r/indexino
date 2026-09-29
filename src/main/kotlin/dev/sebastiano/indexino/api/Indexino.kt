@@ -6,6 +6,7 @@ import dev.sebastiano.indexino.cli.CliExitCodes
 import dev.sebastiano.indexino.cli.IndexBuildExecution
 import dev.sebastiano.indexino.cli.IndexBuildRunner
 import dev.sebastiano.indexino.core.BASIC_FACT_SCHEMA_VERSION
+import dev.sebastiano.indexino.core.cache.CacheActivityLock
 import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
 import dev.sebastiano.indexino.core.cache.GitWorktreeLayout
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifest
@@ -43,6 +44,8 @@ import dev.sebastiano.indexino.producer.IndexBuildProgressReporter
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.topology.BuildSystem as InternalBuildSystem
 import dev.sebastiano.indexino.topology.TopologyRequest
+import dev.sebastiano.indexino.topology.TopologyResult
+import dev.sebastiano.indexino.topology.bazel.BazelClientCleanupException
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -51,6 +54,8 @@ import java.util.HexFormat
 import java.util.UUID
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 @Suppress("LargeClass", "TooManyFunctions")
@@ -62,11 +67,40 @@ private constructor(
     private val closed = AtomicBoolean()
     private val clientId = UUID.randomUUID().toString()
     private val storeRoot = InProcessCacheLayout.writerRoot(workspace)
+    private val cacheActivity =
+        if (runtimeConnection == null) CacheActivityLock.acquire(InProcessCacheLayout.cacheRoot())
+        else null
     private val generationLock = Any()
     private val generationStores = mutableMapOf<WorkspaceGenerationId, Path>()
     private val snapshotPins = mutableMapOf<WorkspaceGenerationId, Int>()
+    private val baseGenerationRefs = mutableSetOf<Path>()
     private var published: PublishedGeneration? = null
     private val remoteSnapshots = mutableMapOf<String, IndexSnapshot>()
+    private val watcherCaptures = ConcurrentHashMap<RefreshRequest, WatcherCapture>()
+
+    private class WatcherCapture(
+        val topology: TopologyResult,
+        val generation: String,
+        val hashes: Map<IndexedSource, String>,
+        val sources: List<IndexedSource>,
+        val originStates: Map<String, dev.sebastiano.indexino.cli.OriginGitState>,
+    )
+
+    private fun currentWatcherCapture(request: RefreshRequest): WatcherCapture? =
+        watcherCaptures[request]?.takeIf(::captureIsPublished)
+
+    private fun captureIsPublished(capture: WatcherCapture): Boolean =
+        WorkspaceGenerationManifestStore(
+                InProcessCacheLayout.cacheRoot(),
+                InProcessCacheLayout.workspaceId(workspace),
+            )
+            .current()
+            ?.let { current ->
+                current.generation == capture.generation && current.origins.all { it.available }
+            } == true
+
+    internal fun topologyForWatch(request: RefreshRequest): TopologyResult? =
+        currentWatcherCapture(request)?.topology
 
     /**
      * Test-only seam: runs after a generation copy is staged and before it is published under
@@ -84,6 +118,12 @@ private constructor(
     /** Runtime-owned hook that receives the resolved source closure of completed refreshes. */
     @Volatile
     internal var onRefreshSucceededForRuntime:
+        ((RefreshRequest, List<IndexedSource>, List<Path>) -> Unit)? =
+        null
+
+    /** Arm source coverage before capturing bytes, not after publishing a generation. */
+    @Volatile
+    internal var onSourcesResolvedForRuntime:
         ((RefreshRequest, List<IndexedSource>, List<Path>) -> Unit)? =
         null
 
@@ -147,7 +187,18 @@ private constructor(
                             cause = thrown,
                         )
                     }
-                RuntimeAttachMode.IN_PROCESS -> Indexino(canonical)
+                RuntimeAttachMode.IN_PROCESS ->
+                    try {
+                        Indexino(canonical)
+                    } catch (thrown: IOException) {
+                        throw indexinoFailure(
+                            category = IndexFailureCategory.IO,
+                            code = "cache_open_failed",
+                            message = "Unable to acquire the cache activity lease",
+                            retryable = true,
+                            cause = thrown,
+                        )
+                    }
             }
         }
 
@@ -188,45 +239,52 @@ private constructor(
         request: RefreshRequest,
         progress: (String) -> Unit,
         machineProgress: IndexBuildProgressReporter?,
+        topologyOverride: TopologyResult? = null,
+        hintedPaths: Set<Path> = emptySet(),
+        watcherCoverageValid: () -> Boolean = { true },
+        recursiveWatchRoot: Path? = null,
     ): RefreshHandle {
         ensureOpen()
         runtimeConnection?.let { connection ->
             return mapRemoteFailures { remoteRefresh(connection, request) }
         }
         val applications = applicationsFor(request)
+        val requested = System.nanoTime()
         val operation =
             IndexingCoordinator.start(workspace, request) { created ->
                 try {
+                    val started = System.nanoTime()
+                    // Coarse attribution of time outside the build phases: worker start delay and
+                    // the whole worker, including lock waits and publication.
+                    progress(
+                        "index phase=refresh-queue state=completed durationMillis=" +
+                            TimeUnit.NANOSECONDS.toMillis(started - requested)
+                    )
                     val result =
-                        runRefresh(
-                            request,
-                            created.id,
-                            applications,
-                            created,
-                            progress,
-                            machineProgress,
-                        )
-                    if (!created.isStopped()) {
+                        CacheActivityLock.acquire(InProcessCacheLayout.cacheRoot()).use {
+                            runRefresh(
+                                request,
+                                created.id,
+                                applications,
+                                created,
+                                progress,
+                                machineProgress,
+                                topologyOverride,
+                                hintedPaths,
+                                watcherCoverageValid,
+                                recursiveWatchRoot,
+                            )
+                        }
+                    progress(
+                        "index phase=refresh state=completed durationMillis=" +
+                            TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+                    )
+                    created.publishIfActive {
                         created.result.complete(result)
                         created.terminalEvent.complete(RefreshCompleted(created.id, result))
                     }
-                } catch (cancelled: CancellationException) {
-                    if (!created.isStopped()) {
-                        val failure = mapRefreshFailure(cancelled)
-                        created.result.completeExceptionally(failure)
-                        created.terminalEvent.complete(
-                            RefreshHandle.failed(created.id, failure.failure)
-                        )
-                    }
-                } catch (thrown: IndexinoException) {
-                    created.result.completeExceptionally(thrown)
-                    created.terminalEvent.complete(RefreshHandle.failed(created.id, thrown.failure))
                 } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
-                    val failure = mapRefreshFailure(thrown)
-                    created.result.completeExceptionally(failure)
-                    created.terminalEvent.complete(
-                        RefreshHandle.failed(created.id, failure.failure)
-                    )
+                    completeRefreshFailure(created, thrown)
                 }
             }
         return RefreshHandle.inFlight(
@@ -235,6 +293,28 @@ private constructor(
             operation.terminalEvent,
             operation::stop,
         )
+    }
+
+    private fun completeRefreshFailure(operation: InFlightRefresh, thrown: Throwable) {
+        val failure = mapRefreshFailure(thrown)
+        if (
+            generateSequence(thrown) { it.cause }
+                .filterIsInstance<BazelClientCleanupException>()
+                .any()
+        ) {
+            operation.failAfterCleanup(failure)
+            return
+        }
+        try {
+            operation.publishIfActive {
+                operation.result.completeExceptionally(failure)
+                operation.terminalEvent.complete(
+                    RefreshHandle.failed(operation.id, failure.failure)
+                )
+            }
+        } catch (_: CancellationException) {
+            // Stop won the completion boundary. Worker-finally reports it after cleanup returns.
+        }
     }
 
     internal fun refreshProgress(
@@ -259,6 +339,7 @@ private constructor(
             .toList()
     }
 
+    @Suppress("LongMethod", "CyclomaticComplexMethod")
     @OptIn(IndexinoInternalApi::class)
     private fun runRefresh(
         request: RefreshRequest,
@@ -267,12 +348,22 @@ private constructor(
         operation: InFlightRefresh,
         progress: (String) -> Unit,
         machineProgress: IndexBuildProgressReporter?,
+        topologyOverride: TopologyResult?,
+        hintedPaths: Set<Path>,
+        watcherCoverageValid: () -> Boolean,
+        recursiveWatchRoot: Path?,
     ): RefreshResult {
         // Serialize in-process peers across run+copy so a shared commit writer cannot mutate while
         // another client copies it. Cross-process single-writer election remains S6.
         synchronized(IndexingCoordinator.refreshLockFor(workspace)) {
             try {
                 operation.checkActive()
+                val inherited =
+                    if (hintedPaths.isNotEmpty())
+                        currentWatcherCapture(request)?.takeIf { it.topology == topologyOverride }
+                    else null
+                // A failed or stopped refresh must not leave a previous capture eligible.
+                watcherCaptures.remove(request)
                 val execution =
                     IndexBuildRunner(
                             project = workspace,
@@ -286,9 +377,29 @@ private constructor(
                             },
                             machineProgress = machineProgress,
                             storeRootOverride = storeRoot,
+                            topologyOverride =
+                                if (hintedPaths.isNotEmpty() && inherited == null) null
+                                else topologyOverride,
+                            inheritedSourceHashes = inherited?.hashes.orEmpty(),
+                            inheritedSources = inherited?.sources,
+                            inheritedOriginStates = inherited?.originStates,
+                            recursiveWatchRoot = recursiveWatchRoot.takeIf { inherited != null },
+                            captureOriginStates = onSourcesResolvedForRuntime != null,
+                            hintedPaths = if (inherited == null) emptySet() else hintedPaths,
+                            onSourcesResolved =
+                                if (inherited != null) null
+                                else
+                                    { sources, roots ->
+                                        onSourcesResolvedForRuntime?.invoke(request, sources, roots)
+                                    },
                         )
                         .runDetailed()
                 operation.checkActive()
+                if (inherited != null) {
+                    check(watcherCoverageValid()) {
+                        "Watcher coverage changed during inherited source capture; retry full refresh"
+                    }
+                }
                 val manifest =
                     execution.manifest
                         ?: throw buildFailure(
@@ -302,24 +413,85 @@ private constructor(
                     observedOverride = observedIncludeDepsOverrideForTests,
                 )
                 val revision = manifest.toWorkspaceRevision()
-                val generation = manifest.toGenerationId(revision)
-                operation.checkActive()
-                publishGenerationOrAbortIfClosed(
-                    manifest.commit,
-                    generation,
-                    revision,
-                    request.scope,
-                    applications,
-                    manifest,
-                    execution.forkBase,
-                    execution.overlayDeltaPath,
-                    execution.tombstonePrefixes,
-                )
-                onRefreshSucceededForRuntime?.invoke(
-                    request,
-                    execution.sources,
-                    execution.topologyRoots,
-                )
+                val linkGeneration =
+                    LinkIndexService(InProcessCacheLayout.cacheRoot(), workspace)
+                        .publishFromConfig()
+                        ?.value
+                val generation = manifest.toGenerationId(revision, linkGeneration)
+                val current =
+                    WorkspaceGenerationManifestStore(
+                            InProcessCacheLayout.cacheRoot(),
+                            InProcessCacheLayout.workspaceId(workspace),
+                        )
+                        .current()
+                if (inherited != null) {
+                    check(
+                        current?.generation == inherited.generation &&
+                            current.origins.all { it.available }
+                    ) {
+                        "Published generation or origin availability changed during inherited capture"
+                    }
+                }
+                if (
+                    !execution.reusedFreshIndex ||
+                        current?.generation != generation.value ||
+                        current.compatibilityManifest?.copy(builtAt = manifest.builtAt) !=
+                            manifest ||
+                        current.basicFactSchemaVersion != BASIC_FACT_SCHEMA_VERSION ||
+                        current.linkGeneration != linkGeneration
+                ) {
+                    progress("index phase=publication state=started")
+                    val publicationStart = System.nanoTime()
+                    operation.commitIfActive {
+                        if (inherited != null) {
+                            check(watcherCoverageValid()) {
+                                "Watcher coverage changed before publication; retry full refresh"
+                            }
+                            check(captureIsPublished(inherited)) {
+                                "Published generation changed before inherited source publication"
+                            }
+                        }
+                        publishGenerationOrAbortIfClosed(
+                            manifest.commit,
+                            generation,
+                            revision,
+                            request.scope,
+                            applications,
+                            manifest,
+                            execution.forkBase,
+                            execution.overlayDeltaPath,
+                            execution.tombstonePrefixes,
+                            linkGeneration,
+                        )
+                    }
+                    val publicationMillis =
+                        TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - publicationStart)
+                    progress(
+                        "index phase=publication state=completed durationMillis=$publicationMillis"
+                    )
+                }
+                if (onSourcesResolvedForRuntime != null) {
+                    execution.topologyResult?.let {
+                        watcherCaptures[request] =
+                            WatcherCapture(
+                                it,
+                                generation.value,
+                                execution.sourceHashes,
+                                execution.sources,
+                                execution.originStates,
+                            )
+                    }
+                }
+                onRefreshSucceededForRuntime?.let { register ->
+                    progress("index phase=watcher-registration state=started")
+                    val registrationStart = System.nanoTime()
+                    register(request, execution.sources, execution.topologyRoots)
+                    val registrationMillis =
+                        TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - registrationStart)
+                    progress(
+                        "index phase=watcher-registration state=completed durationMillis=$registrationMillis"
+                    )
+                }
                 val changedFileCount = execution.changes?.changedSources?.size ?: 0
                 val removedFileCount = execution.changes?.deletedSources?.size ?: 0
                 val result =
@@ -378,9 +550,8 @@ private constructor(
         forkBase: WorktreeForkBase? = null,
         overlayDeltaPath: Path? = null,
         tombstonePrefixes: List<String> = emptyList(),
+        linkGeneration: String? = null,
     ) {
-        val cacheRoot = InProcessCacheLayout.cacheRoot()
-        val linkGeneration = LinkIndexService(cacheRoot, workspace).publishFromConfig()?.value
         val publishedStore =
             publishGenerationStore(
                 commit,
@@ -409,6 +580,7 @@ private constructor(
                     storePath = publishedStore.path,
                     revision = revision,
                     generation = generation,
+                    baseCopy = baseCopyFor(generation),
                 )
             reclaimUnpinnedGenerations()
         }
@@ -588,6 +760,7 @@ private constructor(
         synchronized(generationLock) {
             published = null
             reclaimUnpinnedGenerations()
+            if (snapshotPins.isEmpty()) cacheActivity?.close()
         }
     }
 
@@ -641,11 +814,14 @@ private constructor(
         return WorkspaceRevision(workspaceRevisionFingerprint(), origins)
     }
 
-    private fun IndexManifest.toGenerationId(revision: WorkspaceRevision): WorkspaceGenerationId =
+    private fun IndexManifest.toGenerationId(
+        revision: WorkspaceRevision,
+        linkGeneration: String?,
+    ): WorkspaceGenerationId =
         WorkspaceGenerationId.of(
             sha256(
                 // BasicFactSchemaVersion joins these inputs when the S2 generation manifest lands.
-                listOf(
+                (listOf(
                         revision.fingerprint,
                         BASIC_FACT_SCHEMA_VERSION.toString(),
                         indexerVersion,
@@ -654,7 +830,7 @@ private constructor(
                             (pluginId, coordinate) ->
                             "$pluginId=$coordinate"
                         },
-                    )
+                    ) + listOfNotNull(linkGeneration))
                     .joinToString("\u0000")
             )
         )
@@ -677,6 +853,37 @@ private constructor(
             InProcessCacheLayout.generationStore(workspace, clientId, generation.value)
         WorkspaceRegistryStore(cacheRoot)
             .upsert(workspaceId, workspace, GitWorktreeLayout.commonDir(workspace))
+        val manifests = WorkspaceGenerationManifestStore(cacheRoot, workspaceId)
+        val previous = manifests.readGeneration(generation.value)
+        if (
+            previous?.compatibilityManifest?.copy(builtAt = compatibilityManifest.builtAt) ==
+                compatibilityManifest &&
+                previous.linkGeneration == linkGeneration &&
+                previous.basicFactSchemaVersion == BASIC_FACT_SCHEMA_VERSION
+        ) {
+            // Reverting to known bytes must repoint at the old immutable generation. Replacing its
+            // manifest with an overlay based on itself would create a recursive snapshot.
+            manifests.publish(previous)
+            return PublishedStore(path = clientStorePath, created = false)
+        }
+        val current = manifests.current()
+        if (
+            current?.compatibilityManifest?.copy(builtAt = compatibilityManifest.builtAt) ==
+                compatibilityManifest &&
+                current.basicFactSchemaVersion == BASIC_FACT_SCHEMA_VERSION &&
+                current.generation != generation.value
+        ) {
+            // A changed link generation does not require copying or repacking source facts.
+            manifests.publish(
+                current.copy(generation = generation.value, linkGeneration = linkGeneration)
+            )
+            return PublishedStore(path = clientStorePath, created = false)
+        }
+        check(
+            forkBase?.baseWorkspaceId != workspaceId || forkBase.baseGeneration != generation.value
+        ) {
+            "Cannot publish an overlay that references its own generation"
+        }
         val emptyOriginFingerprint = FileHashProducer.contentHash("")
         val legacyOrigin =
             revision.origins.firstOrNull {
@@ -870,7 +1077,10 @@ private constructor(
             WorkspaceGenerationManifestStore(cacheRoot, InProcessCacheLayout.workspaceId(workspace))
                 .readGeneration(generation.value)
                 ?: error("Missing generation manifest ${generation.value}")
-        return WorktreeOverlayStoreOpener.openForQuery(cacheRoot, workspace, clientId, manifest)
+        return WorktreeOverlayStoreOpener.openForQuery(cacheRoot, workspace, clientId, manifest) {
+            path ->
+            synchronized(generationLock) { baseGenerationRefs.add(path) }
+        }
     }
 
     @OptIn(IndexinoInternalApi::class)
@@ -942,7 +1152,7 @@ private constructor(
                     )
                 },
             )
-        val restored = PublishedGeneration(storePath, revision, generation)
+        val restored = PublishedGeneration(storePath, revision, generation, baseCopyFor(generation))
         generationStores[generation] = storePath
         published = restored
         return restored
@@ -971,13 +1181,22 @@ private constructor(
                 snapshotPins.remove(generation)
             }
             reclaimUnpinnedGenerations()
+            if (closed.get() && snapshotPins.isEmpty()) cacheActivity?.close()
         }
     }
 
     private fun reclaimUnpinnedGenerations() {
+        // The published overlay's next snapshot needs its base; re-materializing a large base
+        // for every unpinned snapshot would make each warm query pay a full unpack.
+        val retainedBase = published?.baseCopy
+        if (snapshotPins.isEmpty()) {
+            baseGenerationRefs.removeAll { it != retainedBase && it.toFile().deleteRecursively() }
+        }
         val current = published?.generation
-        val reclaimable = generationStores.filterKeys { generation ->
-            generation != current && snapshotPins.getOrDefault(generation, 0) == 0
+        val reclaimable = generationStores.filter { (generation, path) ->
+            generation != current &&
+                snapshotPins.getOrDefault(generation, 0) == 0 &&
+                path.parent != retainedBase
         }
         reclaimable.forEach { (generation, path) ->
             if (deleteClientGenerationRef(path)) {
@@ -1014,10 +1233,33 @@ private constructor(
 
     private class PublishedStore(val path: Path, val created: Boolean)
 
+    /**
+     * This client's materialized base copy for an overlay generation, or null. Nested overlay bases
+     * are not retained.
+     */
+    private fun baseCopyFor(generation: WorkspaceGenerationId): Path? {
+        val cacheRoot = InProcessCacheLayout.cacheRoot()
+        val manifest =
+            WorkspaceGenerationManifestStore(cacheRoot, InProcessCacheLayout.workspaceId(workspace))
+                .readGeneration(generation.value)
+        if (manifest?.representation != WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) return null
+        val baseWorkspaceId = manifest.baseWorkspaceId ?: return null
+        val baseGeneration = manifest.baseGeneration ?: return null
+        val baseManifest =
+            WorkspaceGenerationManifestStore(cacheRoot, baseWorkspaceId)
+                .readGeneration(baseGeneration) ?: return null
+        if (baseManifest.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) return null
+        val baseWorkspace =
+            WorkspaceRegistryStore(cacheRoot).entry(baseWorkspaceId)?.path?.let(Path::of)
+                ?: return null
+        return InProcessCacheLayout.generationStore(baseWorkspace, clientId, baseGeneration).parent
+    }
+
     private class PublishedGeneration(
         val storePath: Path,
         val revision: WorkspaceRevision,
         val generation: WorkspaceGenerationId,
+        val baseCopy: Path? = null,
     )
 }
 

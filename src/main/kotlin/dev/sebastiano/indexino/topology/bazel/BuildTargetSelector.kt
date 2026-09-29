@@ -4,7 +4,8 @@ internal object BuildTargetSelector {
     private val RULE_CALL = Regex("""(?m)^\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\(""")
     private val ALIAS_CALL = Regex("""^\s*alias\s*\(""")
     private val NAME_ASSIGNMENT = Regex("""(?<![A-Za-z0-9_])name\s*=\s*["']([^"']+)["']""")
-    private val SOURCE_ATTRIBUTE = Regex("""(?<![A-Za-z0-9_])(?:srcs|resource_files)\s*=""")
+    private val SOURCE_ATTRIBUTE =
+        Regex("""(?<![A-Za-z0-9_])(srcs|resources|resource_files|data)\s*=""")
     private val ACTUAL_ATTRIBUTE = Regex("""(?<![A-Za-z0-9_])actual\s*=""")
     private val ACTUAL_FILE = Regex("""actual\s*=\s*["']([^"']+\.(?:kt|java|xml))["']""")
     private val SOURCE_LABEL = Regex("""["'](?::([^"']+)|//([^:"']*)(?::([^"']+))?)["']""")
@@ -20,26 +21,30 @@ internal object BuildTargetSelector {
                 .toMap()
         check(targetName in rulesByName) { "Target '$targetName' was not found in BUILD file" }
 
-        val selected = linkedMapOf<String, String>()
-        fun addRule(name: String) {
-            if (name in selected) return
+        val selected = linkedMapOf<Pair<String, Boolean>, String>()
+        fun addRule(name: String, isCode: Boolean) {
+            val key = name to isCode
+            if (key in selected) return
             val rule =
                 rulesByName[name]
                     ?: error("Referenced source target ':$name' was not found in BUILD file")
-            selected[name] = rule
-            sourceLabels(rule, packagePath)
-                .filter { label ->
-                    val referencedRule = rulesByName[label]
+            selected[key] = rule
+            sourceLabels(rule, packagePath).forEach { (label, attribute) ->
+                val referencedRule = rulesByName[label]
+                if (
                     referencedRule != null && (isAlias(rule) || isSourceAggregator(referencedRule))
+                ) {
+                    addRule(label, isCode && (isAlias(rule) || attribute == "srcs"))
                 }
-                .forEach(::addRule)
+            }
         }
-        addRule(targetName)
-        return selected.values.joinToString("\n") { rule ->
+        addRule(targetName, isCode = true)
+        return selected.entries.joinToString("\n") { (key, rule) ->
             normalizeFileLabels(
                 TRIPLE_QUOTED_STRING.replace(rule, "\"\""),
                 packagePath,
                 rulesByName.keys,
+                key.second,
             )
         }
     }
@@ -52,7 +57,7 @@ internal object BuildTargetSelector {
         return assignment?.groupValues?.get(1)
     }
 
-    private fun sourceLabels(rule: String, packagePath: String): Sequence<String> =
+    private fun sourceLabels(rule: String, packagePath: String): Sequence<Pair<String, String>> =
         sourceAttributes(rule)
             .filter { match -> isCodeAt(rule, match.range.first, expectedDepth = 1) }
             .flatMap { match ->
@@ -63,8 +68,13 @@ internal object BuildTargetSelector {
                     .filterNot { label ->
                         BuildFileComments.isCommentedOutInBlock(value, label.range.first)
                     }
-                    .mapNotNull { label -> sourceTargetName(label, packagePath) }
+                    .mapNotNull { label ->
+                        sourceTargetName(label, packagePath)?.let { it to attributeName(match) }
+                    }
             }
+
+    private fun attributeName(match: MatchResult): String =
+        match.groupValues.getOrNull(1)?.takeIf(String::isNotEmpty) ?: "actual"
 
     private fun sourceAttributes(rule: String): Sequence<MatchResult> =
         if (isAlias(rule)) {
@@ -89,12 +99,13 @@ internal object BuildTargetSelector {
         rule: String,
         packagePath: String,
         declaredRuleNames: Set<String>,
+        isCode: Boolean,
     ): String {
         val normalized =
             SOURCE_LABEL.replace(rule) { label ->
                 val name = sourceTargetName(label, packagePath)
                 if (name in declaredRuleNames) {
-                    "\"\""
+                    "None"
                 } else {
                     val fileName = label.groupValues[1].ifEmpty { label.groupValues[3] }
                     val canonicalPackage = label.groupValues[2]
@@ -121,10 +132,11 @@ internal object BuildTargetSelector {
             if (actual == null) {
                 normalized
             } else {
-                normalized.replaceRange(actual.range, "srcs = [\"${actual.groupValues[1]}\"]")
+                val attribute = if (isCode) "srcs" else "resources"
+                normalized.replaceRange(actual.range, "$attribute = [\"${actual.groupValues[1]}\"]")
             }
         } else {
-            normalized
+            if (isCode) normalized else SOURCE_ATTRIBUTE.replace(normalized) { "resources =" }
         }
     }
 

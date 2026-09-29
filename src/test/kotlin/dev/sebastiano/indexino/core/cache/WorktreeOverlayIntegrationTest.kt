@@ -3,10 +3,13 @@ package dev.sebastiano.indexino.core.cache
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.api.IndexScope
 import dev.sebastiano.indexino.api.Indexino
+import dev.sebastiano.indexino.api.IndexinoException
 import dev.sebastiano.indexino.api.RefreshRequest
 import dev.sebastiano.indexino.cli.CacheMaintenance
 import dev.sebastiano.indexino.core.BASIC_FACT_SCHEMA_VERSION
+import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.store.WorktreeOverlayIndexStore
+import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.model.CallQuery
 import dev.sebastiano.indexino.model.CheckRequest
 import dev.sebastiano.indexino.model.PluginId
@@ -14,15 +17,18 @@ import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.ReferenceQuery
 import dev.sebastiano.indexino.model.ResourceQuery
 import dev.sebastiano.indexino.model.SymbolQuery
+import dev.sebastiano.indexino.producer.JsonlIndexBuildProgressReporter
 import java.nio.file.Files
 import kotlin.io.path.Path
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.parallel.Execution
@@ -41,6 +47,41 @@ class WorktreeOverlayIntegrationTest {
     fun tearDown() {
         tempDirs.forEach { it.toFile().deleteRecursively() }
         tempDirs.clear()
+    }
+
+    @Test
+    fun `overlay snapshot base copies are reclaimed after their last pin closes`() {
+        val cacheDirectory = createTempDirectory("indexino-overlay-pins-cache-")
+        tempDirs.add(cacheDirectory)
+        val (mainWorkspace, forkWorkspace) = createLinkedWorktrees()
+        val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+        withCache(cacheDirectory) {
+            indexMainAndFork(mainWorkspace, forkWorkspace, request)
+            Indexino.connectBlocking(forkWorkspace).use { fork ->
+                runBlocking {
+                    val first = fork.snapshot()
+                    fork.snapshot().use { second ->
+                        first.close()
+                        assertTrue(
+                            second
+                                .findSymbols(SymbolQuery.named("Panel"), QueryOptions.page(10))
+                                .items
+                                .isNotEmpty()
+                        )
+                    }
+                }
+            }
+            val workspaces = canonicalCacheRoot(cacheDirectory).resolve("workspaces")
+            val remaining =
+                Files.walk(workspaces).use { paths ->
+                    paths
+                        .filter {
+                            Files.isRegularFile(it) && it.any { part -> part.toString() == "refs" }
+                        }
+                        .toList()
+                }
+            assertTrue(remaining.isEmpty(), "Unclosed client base copies: $remaining")
+        }
     }
 
     @Test
@@ -111,6 +152,176 @@ class WorktreeOverlayIntegrationTest {
                 )
             assertTrue(forkManifest.overlayPackKeys.isNotEmpty())
             assertTrue(!forkManifest.baseGeneration.isNullOrBlank())
+        }
+    }
+
+    @Suppress("LongMethod")
+    @Test
+    fun `one edit in the same workspace publishes a delta and keeps the old snapshot pinned`() {
+        val cacheDirectory = createTempDirectory("indexino-same-workspace-delta-")
+        tempDirs.add(cacheDirectory)
+        val (workspace, _) = createLinkedWorktrees()
+        val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+        val source = workspace.resolve("ui/src/main/kotlin/Panel.kt")
+        withCache(cacheDirectory) {
+            Indexino.connectBlocking(workspace).use { index ->
+                runBlocking {
+                    val originalSource = Files.readString(source)
+                    val initial = index.refresh(request).await()
+                    index.snapshot().use { old ->
+                        Files.writeString(
+                            source,
+                            originalSource.replace("ActionButton", "ChangedButton"),
+                        )
+                        val result = index.refresh(request).await()
+                        assertEquals(1, result.changes.changedFileCount)
+                        val current =
+                            checkNotNull(
+                                WorkspaceGenerationManifestStore(
+                                        canonicalCacheRoot(cacheDirectory),
+                                        InProcessCacheLayout.workspaceId(workspace),
+                                    )
+                                    .current()
+                            )
+                        assertEquals(
+                            WorktreeOverlayPolicy.REPRESENTATION_OVERLAY,
+                            current.representation,
+                        )
+                        assertTrue(current.packKeys.isEmpty())
+                        assertEquals(1, current.overlayPackKeys.size)
+                        assertTrue(
+                            old.findSymbols(
+                                    SymbolQuery.named("ActionButton"),
+                                    QueryOptions.page(10),
+                                )
+                                .items
+                                .isNotEmpty()
+                        )
+                        index.snapshot().use { fresh ->
+                            assertTrue(
+                                fresh
+                                    .findSymbols(
+                                        SymbolQuery.named("ChangedButton"),
+                                        QueryOptions.page(10),
+                                    )
+                                    .items
+                                    .isNotEmpty()
+                            )
+                            assertTrue(
+                                fresh
+                                    .findSymbols(
+                                        SymbolQuery.named("ActionButton"),
+                                        QueryOptions.page(10),
+                                    )
+                                    .items
+                                    .isEmpty()
+                            )
+                        }
+                        Files.writeString(
+                            source,
+                            originalSource.replace("ActionButton", "AgainButton"),
+                        )
+                        val diagnostics = mutableListOf<String>()
+                        val second = index.refresh(request, diagnostics::add, null).await()
+                        assertEquals(1, second.changes.changedFileCount)
+                        val started =
+                            diagnostics.indexOf("index phase=overlay-restore state=started")
+                        val completed = diagnostics.indexOfFirst {
+                            it.matches(
+                                Regex(
+                                    "index phase=overlay-restore state=completed durationMillis=\\d+"
+                                )
+                            )
+                        }
+                        assertTrue(started >= 0 && completed > started, "$diagnostics")
+                        index.snapshot().use { fresh ->
+                            assertTrue(
+                                fresh
+                                    .findSymbols(
+                                        SymbolQuery.named("AgainButton"),
+                                        QueryOptions.page(10),
+                                    )
+                                    .items
+                                    .isNotEmpty()
+                            )
+                            assertTrue(
+                                fresh
+                                    .findSymbols(
+                                        SymbolQuery.named("ChangedButton"),
+                                        QueryOptions.page(10),
+                                    )
+                                    .items
+                                    .isEmpty()
+                            )
+                            assertTrue(
+                                fresh
+                                    .findSymbols(
+                                        SymbolQuery.named("ActionButton"),
+                                        QueryOptions.page(10),
+                                    )
+                                    .items
+                                    .isEmpty()
+                            )
+                        }
+                        Files.delete(source)
+                        val deleted = index.refresh(request).await()
+                        assertEquals(1, deleted.changes.removedFileCount)
+                        index.snapshot().use { fresh ->
+                            assertTrue(
+                                fresh
+                                    .findSymbols(
+                                        SymbolQuery.named("AgainButton"),
+                                        QueryOptions.page(10),
+                                    )
+                                    .items
+                                    .isEmpty()
+                            )
+                            assertTrue(
+                                fresh
+                                    .findSymbols(
+                                        SymbolQuery.named("ActionButton"),
+                                        QueryOptions.page(10),
+                                    )
+                                    .items
+                                    .isEmpty()
+                            )
+                        }
+                        Files.writeString(source, originalSource)
+                        val reverted = index.refresh(request).await()
+                        assertEquals(initial.generation, reverted.generation)
+                        val restored =
+                            WorkspaceGenerationManifestStore(
+                                    canonicalCacheRoot(cacheDirectory),
+                                    InProcessCacheLayout.workspaceId(workspace),
+                                )
+                                .current()!!
+                        assertEquals(
+                            WorktreeOverlayPolicy.REPRESENTATION_MATERIALIZED,
+                            restored.representation,
+                        )
+                        index.snapshot().use { fresh ->
+                            assertTrue(
+                                fresh
+                                    .findSymbols(
+                                        SymbolQuery.named("ActionButton"),
+                                        QueryOptions.page(10),
+                                    )
+                                    .items
+                                    .isNotEmpty()
+                            )
+                            assertTrue(
+                                fresh
+                                    .findSymbols(
+                                        SymbolQuery.named("ChangedButton"),
+                                        QueryOptions.page(10),
+                                    )
+                                    .items
+                                    .isEmpty()
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -203,8 +414,9 @@ class WorktreeOverlayIntegrationTest {
                 )
             assertTrue(
                 forkManifest.tombstonePrefixes.contains(
-                    WorktreeOverlayIndexStore.tombstonePrefixForRelativeFile(
-                        "ui/src/main/kotlin/Panel.kt"
+                    WorktreeOverlayIndexStore.tombstonePrefixForSource(
+                        "workspace",
+                        "ui/src/main/kotlin/Panel.kt",
                     )
                 )
             )
@@ -591,6 +803,59 @@ class WorktreeOverlayIntegrationTest {
     }
 
     @Test
+    fun `failed fork producer restores only its writable delta`() {
+        val cacheDirectory = createTempDirectory("indexino-overlay-rollback-cache-")
+        tempDirs.add(cacheDirectory)
+        val (mainWorkspace, forkWorkspace) = createLinkedWorktrees()
+        val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+        withCache(cacheDirectory) {
+            Indexino.connectBlocking(mainWorkspace).use { main ->
+                runBlocking { main.refresh(request).await() }
+                val originalNames = querySymbolNames(main)
+                val source = forkWorkspace.resolve("ui/src/main/kotlin/Panel.kt")
+                Files.writeString(
+                    source,
+                    Files.readString(source).replace("ActionButton", "ForkActionButton"),
+                )
+                val failure = IllegalStateException("after fork producer writes")
+                val reporter = JsonlIndexBuildProgressReporter { event ->
+                    if ("phase_completed" in event && "file-hash" in event) throw failure
+                }
+                Indexino.connectBlocking(forkWorkspace).use { fork ->
+                    val observed =
+                        assertFailsWith<IndexinoException> {
+                            runBlocking { fork.refresh(request, {}, reporter).await() }
+                        }
+                    assertSame(failure, observed.cause)
+                }
+                val delta =
+                    InProcessCacheLayout.overlayBuildDelta(
+                        forkWorkspace,
+                        GitHeadResolver.resolve(forkWorkspace),
+                    )
+                XodusCodeIndexStore.open(delta, readOnly = true).use {
+                    assertFalse(
+                        it.prefixScan("").any(),
+                        "Inherited records must not be copied into the delta",
+                    )
+                }
+                assertEquals(originalNames, querySymbolNames(main))
+                assertNull(
+                    WorkspaceGenerationManifestStore(
+                            canonicalCacheRoot(cacheDirectory),
+                            InProcessCacheLayout.workspaceId(forkWorkspace),
+                        )
+                        .current()
+                )
+                Indexino.connectBlocking(forkWorkspace).use { fork ->
+                    runBlocking { fork.refresh(request).await() }
+                    assertTrue("ForkActionButton" in querySymbolNames(fork))
+                }
+            }
+        }
+    }
+
+    @Test
     fun `failed fork refresh keeps the previous overlay generation current`() {
         val cacheDirectory = createTempDirectory("indexino-overlay-lkg-cache-")
         tempDirs.add(cacheDirectory)
@@ -762,8 +1027,9 @@ class WorktreeOverlayIntegrationTest {
                 )
             assertTrue(
                 forkManifest.tombstonePrefixes.contains(
-                    WorktreeOverlayIndexStore.tombstonePrefixForRelativeFile(
-                        "ui/src/main/kotlin/Panel.kt"
+                    WorktreeOverlayIndexStore.tombstonePrefixForSource(
+                        "workspace",
+                        "ui/src/main/kotlin/Panel.kt",
                     )
                 )
             )

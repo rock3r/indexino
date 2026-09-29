@@ -19,7 +19,7 @@
     },
     {
       "fetchedAt": "2026-06-11",
-      "label": "Compose Pi CI gates, Bugbot/Codex review handling, and watcher script adaptations",
+      "label": "Compose Pi CI gates, Codex/CodeRabbit review handling, and watcher script adaptations",
       "role": "original-content",
       "type": "local-original-content",
       "version": "4f6e94ee2f428ee858a7126950ac28a9a6d3bb67",

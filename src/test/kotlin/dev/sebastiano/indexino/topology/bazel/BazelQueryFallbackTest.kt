@@ -1,11 +1,36 @@
 package dev.sebastiano.indexino.topology.bazel
 
+import java.io.IOException
 import kotlin.io.path.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class BazelQueryFallbackTest {
+    @Test
+    fun `failed role query preserves unknown classification`() {
+        val result =
+            BazelTopology.resolveSources(
+                target = "//pkg:lib",
+                workspace = Path("."),
+                includeDeps = true,
+                processRunner =
+                    BazelProcessRunner { query, _ ->
+                        if (query.startsWith("kind('source file', deps(")) {
+                            BazelQueryOutcome(0, listOf("//pkg:Main.java"))
+                        } else {
+                            BazelQueryOutcome(1, listOf("ERROR"))
+                        }
+                    },
+                onStderr = {},
+            )
+
+        assertEquals(listOf("pkg/Main.java"), result.sourceFiles)
+        assertEquals(null, result.codeSourceFiles)
+    }
+
     @Test
     fun `falls back to labels srcs when deps query fails`() {
         val warnings = mutableListOf<String>()
@@ -56,7 +81,14 @@ class BazelQueryFallbackTest {
                 runner =
                     BazelProcessRunner { query, _ ->
                         check(query.contains("deps("))
-                        BazelQueryOutcome(0, listOf("//plugins/foo/ui:src/main/kotlin/Panel.kt"))
+                        BazelQueryOutcome(
+                            0,
+                            if (query.startsWith("kind('source file'")) {
+                                listOf("//plugins/foo/ui:src/main/kotlin/Panel.kt")
+                            } else {
+                                emptyList()
+                            },
+                        )
                     },
                 onStderr = warnings::add,
             )
@@ -65,7 +97,17 @@ class BazelQueryFallbackTest {
             listOf("plugins/foo/ui/src/main/kotlin/Panel.kt"),
             BazelQueryResultParser.parseKotlinSourcePaths(lines.lines),
         )
-        assertTrue(warnings.isEmpty())
+        assertEquals(
+            listOf(
+                "bazel query index=1 state=started",
+                "bazel query index=1 state=completed exitCode=0",
+                "bazel query index=2 state=started",
+                "bazel query index=2 state=completed exitCode=0",
+                "bazel query index=3 state=started",
+                "bazel query index=3 state=completed exitCode=0",
+            ),
+            warnings.map { it.substringBefore(" durationMillis=") },
+        )
         assertEquals(true, lines.includeDeps)
     }
 
@@ -124,5 +166,49 @@ class BazelQueryFallbackTest {
             ),
             BazelQueryResultParser.parseKotlinSourcePaths(lines.lines).sorted(),
         )
+    }
+
+    @Test
+    fun `query launch failure falls back to BUILD parsing without hiding a client cleanup failure`() {
+        val warnings = mutableListOf<String>()
+        var queries = 0
+        val resolution = runCatching {
+            BazelTopology.resolveSources(
+                target = "//plugins/foo/ui:ui",
+                workspace = Path("src/test/resources/fixtures/bazel"),
+                includeDeps = true,
+                processRunner =
+                    BazelProcessRunner { _, _ ->
+                        queries++
+                        throw IOException("invented missing bazel binary")
+                    },
+                onStderr = warnings::add,
+            )
+        }
+
+        assertEquals(1, queries)
+        assertNull(resolution.exceptionOrNull(), "A missing Bazel executable permits BUILD parsing")
+        val result = resolution.getOrThrow()
+        assertEquals("build-parse", result.topology)
+        assertEquals(false, result.includeDeps)
+        assertEquals(
+            listOf(
+                "plugins/foo/ui/src/main/kotlin/Other.kt",
+                "plugins/foo/ui/src/main/kotlin/Panel.kt",
+            ),
+            result.sourceFiles.sorted(),
+        )
+        assertTrue(warnings.any { it.contains("bazel query unavailable") })
+
+        assertFailsWith<BazelClientCleanupException> {
+            BazelTopology.resolveSources(
+                target = "//plugins/foo/ui:ui",
+                workspace = Path("src/test/resources/fixtures/bazel"),
+                includeDeps = true,
+                processRunner =
+                    BazelProcessRunner { _, _ -> throw BazelClientCleanupException(null) },
+                onStderr = {},
+            )
+        }
     }
 }

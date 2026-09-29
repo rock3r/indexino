@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.producer
 
+import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
@@ -26,6 +27,7 @@ internal object SourceRecordCleanup {
         extension: String,
         affectedSources: Set<IndexedSource>,
     ) {
+        if (affectedSources.isEmpty()) return
         deleteOriginMatching(store, "sym:", language, extension, affectedSources)
         deleteOriginMatching(store, "ref:", language, extension, affectedSources)
         deleteOriginMatching(store, "call:", language, extension, affectedSources)
@@ -40,14 +42,11 @@ internal object SourceRecordCleanup {
     }
 
     fun deleteXmlOriginRecords(store: CodeIndexStore, affectedSources: Set<IndexedSource>) {
+        if (affectedSources.isEmpty()) return
         val affectedKeys = affectedSources.mapTo(mutableSetOf()) { it.originId to it.path }
-        store
-            .prefixScan("sym:")
-            .plus(store.prefixScan("ref:"))
-            .plus(store.prefixScan("res:"))
-            .plus(store.prefixScan("resdef:"))
-            .plus(store.prefixScan("resuse:"))
-            .filter { (_, record) ->
+        for (prefix in listOf("sym:", "ref:", "res:", "resdef:", "resuse:")) {
+            val keys = mutableListOf<CodeIndexKey>()
+            store.forEachWritablePrefix(prefix) { key, record ->
                 val originId: String
                 val relativeFile: String
                 when (record) {
@@ -67,15 +66,20 @@ internal object SourceRecordCleanup {
                         originId = record.originId
                         relativeFile = record.relativeFile
                     }
-                    else -> return@filter false
+                    else -> return@forEachWritablePrefix true
                 }
-                (originId to relativeFile) in affectedKeys
+                if ((originId to relativeFile) in affectedKeys) keys += key
+                true
             }
-            .map { it.first }
-            .toList()
-            .forEach(store::delete)
+            keys.chunked(DELETE_BATCH_SIZE).forEach { batch ->
+                store.transaction { batch.forEach(store::delete) }
+            }
+        }
     }
 
+    private const val DELETE_BATCH_SIZE = 256
+
+    @Suppress("CyclomaticComplexMethod")
     private fun deleteOriginMatching(
         store: CodeIndexStore,
         prefix: String,
@@ -84,20 +88,20 @@ internal object SourceRecordCleanup {
         affectedSources: Set<IndexedSource>,
     ) {
         val affectedKeys = affectedSources.mapTo(mutableSetOf()) { it.originId to it.path }
-        store
-            .prefixScan(prefix)
-            .filter { (_, record) ->
-                val matchesLanguage =
-                    when (record) {
-                        is SymbolRecord ->
-                            record.language == language || record.relativeFile.endsWith(extension)
-                        is ReferenceRecord ->
-                            record.language == language || record.relativeFile.endsWith(extension)
-                        is CallSiteRecord -> record.relativeFile.endsWith(extension)
-                        is ResourceUsageRecord ->
-                            record.language == language || record.relativeFile.endsWith(extension)
-                        else -> false
-                    }
+        val keys = mutableListOf<CodeIndexKey>()
+        store.forEachWritablePrefix(prefix) { key, record ->
+            val matchesLanguage =
+                when (record) {
+                    is SymbolRecord ->
+                        record.language == language || record.relativeFile.endsWith(extension)
+                    is ReferenceRecord ->
+                        record.language == language || record.relativeFile.endsWith(extension)
+                    is CallSiteRecord -> record.relativeFile.endsWith(extension)
+                    is ResourceUsageRecord ->
+                        record.language == language || record.relativeFile.endsWith(extension)
+                    else -> false
+                }
+            if (
                 matchesLanguage &&
                     when (record) {
                         is SymbolRecord -> (record.originId to record.relativeFile) in affectedKeys
@@ -109,10 +113,13 @@ internal object SourceRecordCleanup {
                             (record.originId to record.relativeFile) in affectedKeys
                         else -> false
                     }
-            }
-            .map { it.first }
-            .toList()
-            .forEach(store::delete)
+            )
+                keys += key
+            true
+        }
+        keys.chunked(DELETE_BATCH_SIZE).forEach { batch ->
+            store.transaction { batch.forEach(store::delete) }
+        }
     }
 
     private fun deleteMatching(

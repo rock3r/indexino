@@ -9,8 +9,84 @@ import kotlin.io.path.createTempDirectory
 import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 
 class BazelTopologyTest {
+    @Test
+    fun `dependency role query excludes resource-only filegroup srcs`() {
+        val queries = mutableListOf<String>()
+        val inventory = listOf("//pkg:Main.java", "//pkg:config/preview.java", "//pkg:Dual.java")
+        val result =
+            BazelTopology.queryWithFallback(
+                target = "//pkg:lib",
+                workspace = Path("."),
+                includeDeps = true,
+                runner =
+                    BazelProcessRunner { query, _ ->
+                        queries += query
+                        when {
+                            query == "kind('source file', deps(//pkg:lib))" ->
+                                BazelQueryOutcome(0, inventory)
+                            query.startsWith("kind('source file', labels(srcs") ->
+                                BazelQueryOutcome(0, listOf("//pkg:Main.java", "//pkg:Dual.java"))
+                            query.contains("kind('filegroup rule'") ||
+                                query.contains("kind('alias rule'") ->
+                                BazelQueryOutcome(0, emptyList())
+                            else -> error("unexpected query: $query")
+                        }
+                    },
+                onStderr = {},
+            )
+
+        assertEquals(inventory, result.lines)
+        assertEquals(listOf("//pkg:Main.java", "//pkg:Dual.java"), result.codeLines)
+        assertEquals(
+            false,
+            queries.any { it == "kind('source file', labels(srcs, deps(//pkg:lib)))" },
+        )
+    }
+
+    @Test
+    fun `live target query classifies srcs independently from resources`() {
+        val source = "//pkg:src/Main.java"
+        val resourceNamedJava = "//pkg:resources/config/preview.java"
+        val dualRole = "//pkg:src/Dual.java"
+        val result =
+            BazelTopology.resolveSources(
+                target = "//pkg:lib",
+                workspace = Path("."),
+                includeDeps = false,
+                processRunner =
+                    BazelProcessRunner { query, _ ->
+                        when {
+                            query == "kind('alias rule', //pkg:lib)" ->
+                                BazelQueryOutcome(0, emptyList())
+                            query.contains("filegroup rule") -> BazelQueryOutcome(0, emptyList())
+                            query.contains("labels(srcs, //pkg:lib)") &&
+                                !query.contains("resource_files") ->
+                                BazelQueryOutcome(0, listOf(source, dualRole))
+                            query.contains("labels(srcs, //pkg:lib)") ->
+                                BazelQueryOutcome(0, listOf(source, resourceNamedJava, dualRole))
+                            else -> error("unexpected query: $query")
+                        }
+                    },
+                onStderr = {},
+            )
+
+        assertEquals(setOf("pkg/src/Main.java", "pkg/src/Dual.java"), codeSourceFiles(result))
+        assertEquals(
+            listOf("pkg/src/Main.java", "pkg/resources/config/preview.java", "pkg/src/Dual.java"),
+            result.sourceFiles,
+        )
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun codeSourceFiles(result: Any): Set<String> {
+        val getter =
+            assertNotNull(result.javaClass.methods.singleOrNull { it.name == "getCodeSourceFiles" })
+        return assertNotNull(getter.invoke(result) as Set<String>?)
+    }
+
     @Test
     fun `mock query executor resolves kotlin source paths`() {
         val workspace = Path("src/test/resources/fixtures/bazel")
@@ -54,6 +130,50 @@ class BazelTopologyTest {
     }
 
     @Test
+    fun `build parse uses BUILD roles rather than java filename for classification`() {
+        val workspace = createTempDirectory("bazel-role-fallback-")
+        val packageDir = workspace.resolve("pkg")
+        Files.createDirectories(packageDir.resolve("src"))
+        Files.createDirectories(
+            packageDir.resolve("resources/codeVisionProviders/java.configuration")
+        )
+        packageDir.resolve("src/Main.java").writeText("class Main {}")
+        packageDir
+            .resolve("resources/codeVisionProviders/java.configuration/preview.java")
+            .writeText("java=21.0.1-tem")
+        packageDir
+            .resolve("BUILD.bazel")
+            .writeText(
+                """
+                jvm_library(
+                    name = "lib",
+                    srcs = glob(["src/**/*.java"]),
+                    resources = glob(["resources/**/*"]),
+                )
+                """
+                    .trimIndent()
+            )
+
+        val result =
+            BazelTopology.resolveSources(
+                target = "//pkg:lib",
+                workspace = workspace,
+                includeDeps = false,
+                processRunner = BazelProcessRunner { _, _ -> BazelQueryOutcome(1, emptyList()) },
+                onStderr = {},
+            )
+
+        assertEquals(
+            listOf(
+                "pkg/src/Main.java",
+                "pkg/resources/codeVisionProviders/java.configuration/preview.java",
+            ),
+            result.sourceFiles,
+        )
+        assertEquals(setOf("pkg/src/Main.java"), result.codeSourceFiles)
+    }
+
+    @Test
     fun `topology request without dependencies queries target source set`() {
         val queries = mutableListOf<String>()
 
@@ -73,11 +193,21 @@ class BazelTopologyTest {
             listOf(
                 "kind('alias rule', //plugins/foo/ui:ui)",
                 "kind('source file', labels(srcs, //plugins/foo/ui:ui)) union " +
-                    "kind('source file', labels(resource_files, //plugins/foo/ui:ui))",
+                    "kind('source file', labels(resources, //plugins/foo/ui:ui)) union " +
+                    "kind('source file', labels(resource_files, //plugins/foo/ui:ui)) union " +
+                    "kind('source file', labels(data, //plugins/foo/ui:ui))",
                 "kind('filegroup rule', labels(srcs, //plugins/foo/ui:ui)) union " +
                     "kind('alias rule', labels(srcs, //plugins/foo/ui:ui)) union " +
+                    "kind('filegroup rule', labels(resources, //plugins/foo/ui:ui)) union " +
+                    "kind('alias rule', labels(resources, //plugins/foo/ui:ui)) union " +
                     "kind('filegroup rule', labels(resource_files, //plugins/foo/ui:ui)) union " +
-                    "kind('alias rule', labels(resource_files, //plugins/foo/ui:ui))",
+                    "kind('alias rule', labels(resource_files, //plugins/foo/ui:ui)) union " +
+                    "kind('filegroup rule', labels(data, //plugins/foo/ui:ui)) union " +
+                    "kind('alias rule', labels(data, //plugins/foo/ui:ui))",
+                "kind('alias rule', //plugins/foo/ui:ui)",
+                "kind('source file', labels(srcs, //plugins/foo/ui:ui))",
+                "kind('filegroup rule', labels(srcs, //plugins/foo/ui:ui)) union " +
+                    "kind('alias rule', labels(srcs, //plugins/foo/ui:ui))",
             ),
             queries,
         )
@@ -100,7 +230,10 @@ class BazelTopologyTest {
                 bazelProcessRunner = successfulRunner(queries),
             )
 
-        assertEquals(listOf("kind('source file', deps(//plugins/foo/ui:ui))"), queries)
+        assertEquals("kind('source file', deps(//plugins/foo/ui:ui))", queries.first())
+        assertEquals(3, queries.size)
+        assertEquals(true, queries[1].contains("except kind('filegroup rule'"))
+        assertEquals(true, queries[1].contains("except kind('alias rule'"))
         assertEquals(true, result.includeDeps)
     }
 
@@ -140,7 +273,7 @@ class BazelTopologyTest {
             listOf("plugins/foo/ui/src/main/kotlin/Panel.kt"),
             BazelQueryResultParser.parseKotlinSourcePaths(result.lines),
         )
-        assertEquals(6, queries.size)
+        assertEquals(12, queries.size)
         assertEquals(false, queries.any { it.contains("deps(") })
     }
 

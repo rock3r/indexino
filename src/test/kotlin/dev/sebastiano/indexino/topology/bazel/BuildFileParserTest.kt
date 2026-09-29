@@ -8,6 +8,43 @@ import kotlin.test.assertEquals
 
 class BuildFileParserTest {
     @Test
+    fun `target selection preserves resource filegroup role and dual role through aliases`() {
+        val workspace = createTempDirectory("build-file-parser-role-graph-")
+        val packageDir = workspace.resolve("app")
+        packageDir.resolve("config/preview.java").toFile().apply {
+            parentFile.mkdirs()
+            writeText("java=21")
+        }
+        packageDir.resolve("src/Dual.java").toFile().apply {
+            parentFile.mkdirs()
+            writeText("class Dual {}")
+        }
+        packageDir
+            .resolve("BUILD.bazel")
+            .toFile()
+            .writeText(
+                """
+                filegroup(name = "resource_files", srcs = ["config/preview.java"])
+                alias(name = "resource_alias", actual = ":resource_files")
+                filegroup(name = "dual", srcs = ["src/Dual.java"])
+                alias(name = "dual_alias", actual = ":dual")
+                java_library(
+                    name = "lib",
+                    srcs = [":dual_alias"],
+                    resources = [":resource_alias", ":dual_alias"],
+                )
+                """
+                    .trimIndent()
+            )
+
+        val result =
+            BuildFileParser.parseKotlinSources(packageDir.resolve("BUILD.bazel"), workspace, "lib")
+
+        assertEquals(listOf("app/config/preview.java", "app/src/Dual.java"), result.paths.sorted())
+        assertEquals(setOf("app/src/Dual.java"), result.codePaths)
+    }
+
+    @Test
     fun `parses Java and XML files from source attributes`() {
         val workspace = createTempDirectory("build-file-parser-languages-")
         val packageDir = workspace.resolve("app")
@@ -420,7 +457,7 @@ class BuildFileParserTest {
     }
 
     @Test
-    fun `non-srcs globs are not indexed as sources`() {
+    fun `data globs remain captured but are not code sources`() {
         val workspace = createTempDirectory("build-file-parser-non-srcs-glob-")
         val packageDir = workspace.resolve("pkg")
         packageDir.toFile().mkdirs()
@@ -447,7 +484,8 @@ class BuildFileParserTest {
 
         val result =
             BuildFileParser.parseKotlinSources(packageDir.resolve("BUILD.bazel"), workspace)
-        assertEquals(listOf("pkg/src/main/kotlin/Main.kt"), result.paths)
+        assertEquals(listOf("pkg/src/main/kotlin/Main.kt", "pkg/resources/Extra.kt"), result.paths)
+        assertEquals(setOf("pkg/src/main/kotlin/Main.kt"), result.codePaths)
     }
 
     @Test
@@ -638,7 +676,7 @@ class BuildFileParserTest {
     }
 
     @Test
-    fun `concat glob in non-srcs attribute is not indexed`() {
+    fun `concat glob in data remains captured but is not code`() {
         val workspace = createTempDirectory("build-file-parser-concat-non-srcs-")
         val packageDir = workspace.resolve("pkg")
         packageDir.toFile().mkdirs()
@@ -662,7 +700,8 @@ class BuildFileParserTest {
 
         val result =
             BuildFileParser.parseKotlinSources(packageDir.resolve("BUILD.bazel"), workspace)
-        assertEquals(listOf("pkg/Main.kt"), result.paths)
+        assertEquals(listOf("pkg/Main.kt", "pkg/resources/Extra.kt", "pkg/README"), result.paths)
+        assertEquals(setOf("pkg/Main.kt"), result.codePaths)
     }
 
     @Test

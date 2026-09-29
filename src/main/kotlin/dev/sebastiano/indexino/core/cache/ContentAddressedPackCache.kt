@@ -85,15 +85,11 @@ internal class ContentAddressedPackCache(
                 }
             }
             try {
-                Files.move(staging, destination, StandardCopyOption.ATOMIC_MOVE)
-            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
-                try {
-                    Files.move(staging, destination)
-                } catch (_: java.nio.file.FileAlreadyExistsException) {
-                    // Another client materialized the immutable pack first.
-                }
-            } catch (_: java.nio.file.FileAlreadyExistsException) {
-                // Another client materialized the immutable pack first.
+                moveDirectoryAction(staging, destination)
+            } catch (failure: java.nio.file.FileSystemException) {
+                // Atomic rename can report EEXIST or ENOTEMPTY when another materializer wins.
+                // Destinations identify immutable packs; only a completed directory is usable.
+                if (!Files.isDirectory(destination)) throw failure
             }
         } finally {
             if (Files.exists(staging)) staging.toFile().deleteRecursively()

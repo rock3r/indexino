@@ -21,6 +21,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.runBlocking
@@ -65,7 +66,7 @@ internal class RuntimeRefreshClient(private val connection: RuntimeConnection) {
 
 internal class RuntimeRefreshDispatcher(
     private val owner: Indexino,
-    private val refreshStarted: (RefreshRequest, RefreshHandle) -> Unit = { _, _ -> },
+    private val refreshStarted: (RefreshRequest, RefreshHandle, Boolean) -> Unit = { _, _, _ -> },
 ) {
     private val handles = ConcurrentHashMap<String, RefreshHandle>()
     private val journals = ConcurrentHashMap<String, RuntimeRefreshProgress>()
@@ -75,7 +76,37 @@ internal class RuntimeRefreshDispatcher(
     }
 
     @OptIn(IndexinoInternalApi::class)
-    fun refresh(request: RefreshRequest): RefreshHandle {
+    fun refresh(request: RefreshRequest): RefreshHandle = refresh(request, null, automatic = false)
+
+    fun refreshAutomatic(request: RefreshRequest): RefreshHandle =
+        refresh(request, null, automatic = true)
+
+    @OptIn(IndexinoInternalApi::class)
+    fun refreshWithTopology(
+        request: RefreshRequest,
+        topology: dev.sebastiano.indexino.topology.TopologyResult,
+        hintedPaths: Set<Path>,
+        coverageValid: () -> Boolean,
+        recursiveWatchRoot: Path?,
+    ): RefreshHandle =
+        refresh(
+            request,
+            topology,
+            automatic = true,
+            hintedPaths = hintedPaths,
+            coverageValid = coverageValid,
+            recursiveWatchRoot = recursiveWatchRoot,
+        )
+
+    @OptIn(IndexinoInternalApi::class)
+    private fun refresh(
+        request: RefreshRequest,
+        topology: dev.sebastiano.indexino.topology.TopologyResult?,
+        automatic: Boolean,
+        hintedPaths: Set<Path> = emptySet(),
+        coverageValid: () -> Boolean = { true },
+        recursiveWatchRoot: Path? = null,
+    ): RefreshHandle {
         val text = CopyOnWriteArrayList<String>()
         val machine = CopyOnWriteArrayList<String>()
         val handle = runBlocking {
@@ -83,11 +114,16 @@ internal class RuntimeRefreshDispatcher(
                 request,
                 progress = text::add,
                 machineProgress = JsonlIndexBuildProgressReporter(machine::add),
+                topologyOverride = topology,
+                hintedPaths = hintedPaths,
+                watcherCoverageValid = coverageValid,
+                recursiveWatchRoot = recursiveWatchRoot,
             )
         }
         handles[handle.id.value] = handle
-        journals[handle.id.value] = RuntimeRefreshProgress(text, machine)
-        refreshStarted(request, handle)
+        // A joined refresh reports progress only through the journal of the call that started it.
+        journals.putIfAbsent(handle.id.value, RuntimeRefreshProgress(text, machine))
+        refreshStarted(request, handle, automatic)
         return handle
     }
 
@@ -251,10 +287,13 @@ internal object RuntimeRefreshProtocol {
         }
 
     fun progressResponse(progress: RuntimeRefreshProgress): ByteArray = bytes {
-        writeInt(progress.text.size)
-        progress.text.forEach(::writeUTF)
-        writeInt(progress.machine.size)
-        progress.machine.forEach(::writeUTF)
+        // A running refresh keeps appending; count and lines must come from one snapshot.
+        val text = progress.text.toList()
+        val machine = progress.machine.toList()
+        writeInt(text.size)
+        text.forEach(::writeUTF)
+        writeInt(machine.size)
+        machine.forEach(::writeUTF)
     }
 
     fun decodeProgressResponse(response: ByteArray): RuntimeRefreshProgress =

@@ -1,10 +1,13 @@
 package dev.sebastiano.indexino.producer.kotlinpsi
 
+import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.CallSiteRecord
+import dev.sebastiano.indexino.core.record.CodeIndexRecord
 import dev.sebastiano.indexino.core.record.CodeIndexRecordCodec
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.ResourceUsageRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
+import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.producer.IndexBuildContext
 import dev.sebastiano.indexino.producer.IndexedSource
@@ -16,9 +19,109 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class KotlinPsiSymbolProducerTest {
+    @Test
+    fun `Java-only edit does not initialize the Kotlin parser`() {
+        val keys =
+            listOf(
+                "idea.home.path",
+                "idea.config.path",
+                "idea.system.path",
+                "idea.plugins.path",
+                "user.home",
+            )
+        val saved = keys.associateWith(System::getProperty)
+        try {
+            keys.forEach(System::clearProperty)
+            System.setProperty("user.home", tempDir.toString())
+            KotlinPsiSymbolProducer()
+                .produce(
+                    IndexBuildContext.forInlineSources(
+                        store,
+                        "java-only",
+                        mapOf("Panel.java" to "class Panel {}"),
+                    ),
+                    store,
+                )
+            assertNull(System.getProperty("idea.home.path"))
+        } finally {
+            for ((key, value) in saved) {
+                if (value == null) System.clearProperty(key) else System.setProperty(key, value)
+            }
+        }
+    }
+
+    @Test
+    fun `batches Kotlin writes per file while preserving forward calls`() {
+        var depth = 0
+        var unbatched = 0
+        var batches = 0
+        val tracked =
+            object : CodeIndexStore by store {
+                override fun put(key: CodeIndexKey, record: CodeIndexRecord) {
+                    if (depth == 0) unbatched++
+                    store.put(key, record)
+                }
+
+                override fun <T> transaction(block: () -> T): T = store.transaction {
+                    batches++
+                    depth++
+                    try {
+                        block()
+                    } finally {
+                        depth--
+                    }
+                }
+            }
+        KotlinPsiSymbolProducer()
+            .produce(
+                IndexBuildContext.forInlineSources(
+                    tracked,
+                    "batched-kotlin",
+                    linkedMapOf(
+                        "Caller.kt" to "package sample\nfun caller() = target(37)",
+                        "Target.kt" to "package sample\nfun target(expected: Int) = expected",
+                    ),
+                ),
+                tracked,
+            )
+        val call =
+            store.prefixScan("call:").map { it.second }.filterIsInstance<CallSiteRecord>().single()
+        assertEquals(listOf("sample.target"), call.candidateSymbolFqns)
+        assertEquals("expected", call.arguments.single().resolvedName)
+        assertEquals(0, unbatched, "Every fact write must join its file transaction")
+        assertEquals(2, batches, "Keep transaction scope bounded to one file")
+    }
+
+    @Test
+    fun `symbol locations exclude leading comments but retain declaration modifiers`() {
+        val source =
+            "package sample\n// Class documentation\n    class Marker\n" +
+                "/** Function documentation */\n  private fun helper() = Unit\n" +
+                "// Property documentation\n val value = 1\n"
+        val context =
+            IndexBuildContext.forInlineSources(
+                store = store,
+                commitHash = "comment-locations",
+                sourceFiles = mapOf("Comments.kt" to source),
+            )
+        checkNotNull(ProducerRegistry.get("kotlin-psi-symbols")).produce(context, store)
+
+        val locations =
+            store
+                .prefixScan("sym:")
+                .map { it.second }
+                .filterIsInstance<SymbolRecord>()
+                .associate { it.name to (it.line to it.column) }
+        assertEquals(
+            mapOf("Marker" to (3 to 5), "helper" to (5 to 3), "value" to (7 to 2)),
+            locations,
+        )
+    }
+
     @Test
     fun `preserves one based declaration columns for Kotlin symbols`() {
         val source =
@@ -121,6 +224,112 @@ class KotlinPsiSymbolProducerTest {
                 .filterIsInstance<CallSiteRecord>()
                 .single { it.relativeFile.endsWith("Caller.kt") }
         assertEquals("content", call.arguments.single().resolvedName)
+    }
+
+    @Test
+    fun `parameter lookup preserves overload ambiguity and same origin preference`() {
+        val sources =
+            mapOf(
+                "First.kt" to
+                    """
+                    package sample
+                    fun choose(alpha: Int) {}
+                    fun choose(beta: Int, gamma: Int) {}
+                    fun first() { choose(1); choose(2, 3) }
+                    """
+                        .trimIndent(),
+                "Second.kt" to
+                    """
+                    package sample
+                    fun choose(other: Int, extra: Int) {}
+                    fun second() { choose(4, 5) }
+                    """
+                        .trimIndent(),
+            )
+        val context =
+            IndexBuildContext(
+                store = store,
+                commitHash = "overloads",
+                sourceFiles = sources.keys.toList(),
+                sourceContentOverrides = sources,
+                sources =
+                    listOf(
+                        IndexedSource("git:first", tempDir, "First.kt"),
+                        IndexedSource("git:second", tempDir, "Second.kt"),
+                    ),
+            )
+        checkNotNull(ProducerRegistry.get("kotlin-psi-symbols")).produce(context, store)
+
+        val arguments =
+            store
+                .prefixScan("call:")
+                .map { it.second }
+                .filterIsInstance<CallSiteRecord>()
+                .filter { it.calleeName == "choose" }
+                .associate {
+                    (it.originId to it.arguments.size) to
+                        it.arguments.map { arg -> arg.resolvedName }
+                }
+        assertEquals(
+            mapOf(
+                ("git:first" to 1) to listOf(null),
+                ("git:first" to 2) to listOf("beta", "gamma"),
+                ("git:second" to 2) to listOf("other", "extra"),
+            ),
+            arguments,
+        )
+    }
+
+    @Test
+    fun `project lookup preserves owners nested constructors and imported aliases`() {
+        val sources =
+            mapOf(
+                "Owners.kt" to
+                    """
+                    package sample
+                    class First {
+                        class Nested
+                        fun work(first: Int) {}
+                        fun call() { work(1); Nested() }
+                    }
+                    class Second {
+                        fun work(second: Int) {}
+                        fun call() { work(2) }
+                    }
+                    fun helper(top: Int) {}
+                    """
+                        .trimIndent(),
+                "Alias.kt" to
+                    """
+                    package consumer
+                    import sample.helper as renamed
+                    fun use() { renamed(3) }
+                    """
+                        .trimIndent(),
+            )
+        checkNotNull(ProducerRegistry.get("kotlin-psi-symbols"))
+            .produce(IndexBuildContext.forInlineSources(store, "lookup", sources), store)
+
+        val calls =
+            store
+                .prefixScan("call:")
+                .map { it.second }
+                .filterIsInstance<CallSiteRecord>()
+                .associate {
+                    (checkNotNull(it.enclosingSymbolFqn) to it.calleeName) to
+                        (it.candidateSymbolFqns to it.arguments.map { arg -> arg.resolvedName })
+                }
+        assertEquals(
+            mapOf(
+                ("sample.First#call" to "work") to (listOf("sample.First#work") to listOf("first")),
+                ("sample.First#call" to "Nested") to (listOf("sample.First.Nested") to emptyList()),
+                ("sample.Second#call" to "work") to
+                    (listOf("sample.Second#work") to listOf("second")),
+                ("consumer.use" to "renamed") to
+                    (listOf("sample.helper", "sample#helper") to listOf("top")),
+            ),
+            calls,
+        )
     }
 
     @Test

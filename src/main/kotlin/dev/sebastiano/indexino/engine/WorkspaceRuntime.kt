@@ -27,8 +27,8 @@ private constructor(
 ) : AutoCloseable {
     private lateinit var autoRefreshController: AutoRefreshController
     private val refreshDispatcher =
-        RuntimeRefreshDispatcher(owner) { request, handle ->
-            autoRefreshController.onRefreshStarted(request, handle)
+        RuntimeRefreshDispatcher(owner) { request, handle, automatic ->
+            autoRefreshController.onRefreshStarted(request, handle, automatic)
         }
     private val snapshotDispatcher =
         RuntimeSnapshotDispatcher(
@@ -189,11 +189,26 @@ private constructor(
                 AutoRefreshController(
                     canonicalWorkspace,
                     autoRefreshMode,
-                    runtime.refreshDispatcher::refresh,
+                    runtime.refreshDispatcher::refreshAutomatic,
                     maxWatchedDirectoriesForTests ?: Int.MAX_VALUE,
                     reconciliationIntervalMillisForTests ?: DEFAULT_RECONCILIATION_INTERVAL_MILLIS,
+                    topologyProvider = owner::topologyForWatch,
+                    refreshWithTopology = {
+                        request,
+                        topology,
+                        hintedPaths,
+                        coverageValid,
+                        recursiveWatchRoot ->
+                        runtime.refreshDispatcher.refreshWithTopology(
+                            request,
+                            topology,
+                            hintedPaths,
+                            coverageValid,
+                            recursiveWatchRoot,
+                        )
+                    },
                 )
-            owner.onRefreshSucceededForRuntime = runtime.autoRefreshController::register
+            owner.onSourcesResolvedForRuntime = runtime.autoRefreshController::register
             val start =
                 RuntimeDaemon.start(
                     cacheRoot = cacheRoot,

@@ -1,273 +1,72 @@
 ---
 name: babysit-pr
 description: >
-  Babysit a GitHub pull request after creation by continuously polling CI checks/workflow
-  runs, new review comments, and mergeability state until the PR is ready to merge (or
-  merged/closed). Diagnose failures, retry likely flaky failures up to 3 times, auto-fix
-  and push branch-related issues when appropriate, and stop only when user help is required
-  (e.g. CI infrastructure issues, exhausted flaky retries, or ambiguous/blocking review
-  feedback). Use when the user asks to monitor a PR, watch CI, handle review comments, or
-  keep an eye on failures and feedback on an open PR.
+  Babysits a GitHub pull request by polling CI, Codex and conditional CodeRabbit review activity,
+  trusted-human feedback, and mergeability until action or merge readiness. Use when asked to
+  monitor a PR, watch CI, handle review comments, or respond to failures.
 allowed-tools: Bash(python3 */skills/babysit-pr/scripts/*), Bash(gh pr *), Bash(gh run *), Bash(gh api *), Bash(git fetch *), Bash(git rebase *), Bash(git merge *), Bash(git checkout *), Bash(git switch *), Bash(git push *), Bash(git commit *), Bash(git diff *), Bash(git log *), Bash(git status), Bash(git branch *), Bash(git worktree *), Bash(./gradlew check *), Read, Edit
 ---
 
 # PR Babysitter
 
-Monitor a PR persistently until one of the terminal states is reached:
-- PR merged or closed
-- CI fully green, no unaddressed review comments, no merge conflicts
-- A situation requiring user intervention
+Monitor a PR until it is merged/closed, merge-ready, or needs user intervention.
 
-## Inputs
+## Workflow
 
-- No PR argument — infer from current branch (`--pr auto`)
-- PR number — e.g. `123`
-- PR URL — e.g. `https://github.com/<owner>/<repo>/pull/123`
+1. Resolve the PR and tell the user which PR is being tracked.
+2. Run `python3 .agents/skills/babysit-pr/scripts/gh_pr_watch.py --pr auto --once`.
+3. Act on the returned `actions`; use `--snapshot` for immediate inspection and `--watch` only
+   when the harness streams output.
+4. Diagnose deterministic failures and batch fixes. Use `--retry-failed-now` only for eligible
+   flaky workflows (currently E2E), up to the per-SHA retry budget.
+5. Process actionable comments from Codex, active CodeRabbit, and trusted humans (`OWNER`,
+   `MEMBER`, or `COLLABORATOR`). Resolve addressed review threads.
+6. Run `./gradlew check` before one batched push, then resume watching.
 
-## Core workflow
+## Gates and actions
 
-0. **Before running any script**, output a single line so the user knows which PR this conversation is tracking — e.g. `Babysitting PR [#123](https://github.com/<owner>/<repo>/pull/123)`. Resolve the PR number/URL from the user's input or the current branch first if needed.
-1. Start with `--once` (default) — it blocks until something needs your attention, then returns.
-2. Run the watcher to snapshot PR/CI/review state.
-3. Inspect the `actions` list in the JSON output.
-4. Diagnose CI failures — classify as branch-related (fix and push) vs. flaky (retry).
-5. Process actionable review comments from trusted humans, Bugbot, and Codex.
-6. Verify mergeability on each loop.
-7. After any push, relaunch `--watch` in the same turn.
-8. Continue until a terminal stop condition is reached.
+Codex review is mandatory. A 👀 reaction from `chatgpt-codex-connector[bot]` produces
+`wait_codex`; do not push or merge until it disappears and all Codex comments are addressed.
 
-## Key commands
+CodeRabbit is presence-conditional. It gates only when a CodeRabbit check, reaction, or authored
+comment establishes activity. While its check is pending or its 👀 reaction is present, the
+watcher emits `wait_coderabbit`. Dormant CodeRabbit does not block readiness.
 
-```bash
-# Wait until something needs attention, then return one snapshot (default)
-python3 .agents/skills/babysit-pr/scripts/gh_pr_watch.py --pr auto --once
+All CI checks must be terminal and successful. Skipped/neutral checks require diagnosis. The
+watcher preserves a short terminal-check grace period so late review comments are collected.
 
-# Instant snapshot of current state (no waiting)
-python3 .agents/skills/babysit-pr/scripts/gh_pr_watch.py --pr auto --snapshot
-
-# Continuously poll, emitting JSONL snapshots (for streaming-capable consumers)
-python3 .agents/skills/babysit-pr/scripts/gh_pr_watch.py --pr auto --watch
-
-# Trigger a rerun of failed jobs for the current SHA
-python3 .agents/skills/babysit-pr/scripts/gh_pr_watch.py --pr auto --retry-failed-now
-
-# Explicit PR number or URL
-python3 .agents/skills/babysit-pr/scripts/gh_pr_watch.py --pr 42 --once
-python3 .agents/skills/babysit-pr/scripts/gh_pr_watch.py --pr https://github.com/<owner>/<repo>/pull/42 --snapshot
-```
-
-## Stop conditions
-
-| `actions` value | Meaning |
+| Action | Meaning |
 |---|---|
-| `stop_pr_closed` | PR was merged or closed — done |
-| `stop_ready_to_merge` | CI green, no blocking reviews, no conflicts |
-| `stop_exhausted_retries` | Flaky reruns hit the retry limit — user must investigate |
-| `stop_non_retryable_failure` | Terminal failure is not in retry-eligible workflows — diagnose/fix before continuing |
-| `stop_bugbot_not_green` | Cursor Bugbot is not SUCCESS (`neutral`, `skipped`, `failure`, or missing) — do not merge |
-| `stop_session_timeout` | `--max-session-minutes` elapsed (default 90 min) — stop and report |
-| `diagnose_hung_check` | A pending check has exceeded its hung threshold (Bugbot: 20 min, CI/E2E: 30 min) — stop and report |
-| `diagnose_merge_conflict` | PR is merge-conflicted (`CONFLICTING` / `DIRTY`) — resolve conflicts before waiting on checks |
-| `diagnose_skipping_checks` | One or more checks completed with `neutral`/`skipping` — investigate why |
-| `wait_codex` | Codex is still reviewing (👀 reaction present on the PR) — do not push or merge |
-| `wait_coderabbit` | CodeRabbit is active and still reviewing (its check is pending, or a 👀 reaction is present) — do not push or merge |
+| `stop_pr_closed` | PR merged or closed |
+| `stop_ready_to_merge` | CI and review gates clear; no conflicts or blocking comments |
+| `stop_exhausted_retries` | Flaky retry budget exhausted |
+| `stop_non_retryable_failure` | Diagnose and fix a deterministic failure |
+| `stop_session_timeout` | Session timeout reached |
+| `diagnose_hung_check` | A check exceeded the 30-minute threshold |
+| `diagnose_merge_conflict` | Resolve a `CONFLICTING`/`DIRTY` PR |
+| `diagnose_skipping_checks` | Investigate skipped/neutral checks |
+| `wait_codex` | Mandatory Codex review is active |
+| `wait_coderabbit` | Active CodeRabbit review is still running |
 
-Keep polling when CI is running (`idle`), when new review items arrive (`process_review_comment`),
-when Bugbot is still running (`wait_bugbot`), when Codex is still reviewing (`wait_codex`),
-when CodeRabbit is still reviewing (`wait_coderabbit`), or when CI is green, but the PR is awaiting approval.
+## Push discipline
 
-## Post-merge cleanup (when `stop_pr_closed` and PR is merged)
+Start fixing known branch failures immediately, but delay pushing until checks and active review
+bots finish so all feedback can be included. Batch CI fixes, review feedback, and conflict
+resolution into one tested push. Never push speculatively. See `references/heuristics.md`.
 
-After a PR is merged, clean up the local environment automatically:
+## Output
 
-1. **If currently on the PR branch, switch away first** (for example to `main`):
-   ```bash
-   git checkout main
-   ```
+All modes emit JSONL. Snapshots include `pr`, `checks`, `failed_runs`, `codex_gate`,
+`coderabbit_gate`, `hung_checks`, review item lists, `actions`, retry state, and terminal-check
+elapsed time. `--watch` wraps snapshots in event envelopes.
 
-2. **Delete the local branch** (squash merges leave it unmerged by default):
-   ```bash
-   git branch -D <head_branch>
-   ```
+`blocking_review_items` contains actionable unresolved inline comments. If thread lookup is
+unavailable, blocking falls back to a 30-minute freshness heuristic.
 
-3. **Remove the git worktree**, if the branch was checked out in one:
-   ```bash
-   # Find worktrees for this branch
-   git worktree list
-   # Remove if found (adjust path as needed)
-   git worktree remove /path/to/worktree
-   ```
+## Cleanup
 
-**How to detect a worktree:** run `git worktree list` and check if any entry's branch matches the PR's `head_branch`. If the current working directory IS the worktree, `cd` to the main checkout first before removing it.
+After a merged `stop_pr_closed`, switch away from the PR branch, remove its local branch and
+worktree if present, and do not alter the remote branch.
 
-**Only delete the local branch and worktree** — never touch remote branches (the remote is already deleted by GitHub's "delete branch on merge" setting or the `--delete-branch` flag used at merge time).
-
-Skip silently if the branch or worktree doesn't exist locally.
-
-## Push discipline — batch all fixes before pushing (cost control)
-
-Each push triggers new Bugbot + Codex runs. **Never push until all of the following are true:**
-
-1. `./gradlew check` passes locally (no CI failures to fix after the push).
-2. Neither Bugbot nor Codex is still `IN_PROGRESS` — wait for both to finish so their comments, if any, can be collected and fixed in the same push.
-3. You have incorporated all currently visible actionable Bugbot and Codex comments into the pending local fix batch.
-
-After pushing the fix batch, resolve all bot threads on GitHub (or reply + resolve when no code change is needed). No open bot threads should remain when the PR is merged.
-
-**Workflow when fixes are needed:**
-
-1. Collect all outstanding issues: failed CI logs + any Bugbot/Codex comments already posted.
-2. Fix everything locally in one pass.
-3. Run `./gradlew check` to confirm green.
-4. Only then push — one push per fix cycle.
-
-If either bot finishes while you are mid-fix and posts new comments, incorporate those fixes into the same commit before pushing.
-
-## Conflict + Bugbot batching strategy (use this when PR shows `CONFLICTING`/`DIRTY`)
-
-When GitHub reports merge conflicts while Bugbot/Codex/CI is still running:
-
-1. **Do not push immediately.** Wait until neither Bugbot nor Codex is `IN_PROGRESS`.
-2. Snapshot latest status/comments.
-3. If conflict remains, rebase branch onto `origin/main` (or merge main if repo policy prefers).
-4. Resolve conflicts and **in the same fix cycle** apply all actionable Bugbot/Codex comments.
-5. Run `./gradlew check`.
-6. Push once.
-
-Rationale: this avoids paying for multiple Bugbot/Codex reruns and prevents a ping-pong where a conflict-fix push is immediately followed by a second bot-fix push.
-
-## Bugbot + Codex merge gate (mandatory)
-
-**Never merge until both Cursor Bugbot and Codex report clean.**
-
-### Bugbot (CI check)
-
-For Bugbot, only `SUCCESS` is a green gate.
-
-- If Bugbot is still `IN_PROGRESS` → keep polling, do not push.
-- If Bugbot conclusion is `NEUTRAL` → it found potential issues. Read the inline PR review comments left by `cursor[bot]`, fix every reported issue locally, run `./gradlew check`, then push once (see push discipline above).
-- If Bugbot conclusion is `SKIPPING` → treat as **not green**. Bugbot may have posted review comments before skipping. Always check `gh api repos/{owner}/{repo}/pulls/{pr}/comments` for `cursor[bot]` comments. If comments exist, fix them before merging. If no comments exist, re-request review or ask the user.
-- If Bugbot conclusion is `SUCCESS` → proceed (Bugbot gate is clear).
-- Do **not** merge on NEUTRAL or SKIPPING, even if all other checks pass.
-
-### Codex (emoji reaction)
-
-Codex does **not** use a CI check. Instead it uses emoji reactions on the PR:
-
-- **👀 reaction present** from `chatgpt-codex-connector[bot]` → Codex is actively reviewing. The `codex_gate.reviewing` field will be `true` and a `wait_codex` action will be emitted. Do not push or merge.
-- **👀 reaction removed, no new review comments** → Codex is satisfied. Proceed.
-- **👀 reaction removed, review comments posted** → Codex found issues. Fix them the same way as Bugbot comments (see push discipline).
-
-The watcher automatically detects the 👀 reaction via the PR reactions API and surfaces `codex_gate` in the snapshot.
-
-### CodeRabbit (conditional)
-
-CodeRabbit is a **presence-conditional** gate — it only applies when CodeRabbit is active on the PR.
-When active, do not merge while `coderabbit_gate.reviewing` is `true` (a `wait_coderabbit` action is
-emitted), and address its inline comments like Bugbot's before merging. When CodeRabbit shows no signs
-of life, it is not a gate at all. See [CodeRabbit (presence-conditional gate)](#coderabbit-presence-conditional-gate)
-for the full rules.
-
-## Decision rules
-
-See `references/heuristics.md` for the full classification checklist:
-- **Branch-related failure**: edit the code, collect all other pending issues (Bugbot, Codex, human reviews), fix everything, run `./gradlew check`, then push once.
-- **Likely flaky/unrelated**: rerun via `--retry-failed-now`; retry budget defaults to 3 per SHA.
-  - The watcher only auto-reruns retry-eligible workflows (currently E2E-style workflows).
-  - CI/check workflow failures are treated as diagnose/fix-first by default.
-- **Ambiguous or requires product decision**: stop and ask the user.
-
-## Review bots
-
-The watcher surfaces feedback from:
-- **cursor[bot]** — Cursor Bugbot (CI check-based code review; always a merge gate)
-- **chatgpt-codex-connector[bot]** — OpenAI Codex (emoji reaction-based code review; always a merge gate)
-- **coderabbitai[bot]** — CodeRabbit (CI check + inline review comments; a **presence-conditional** gate, see below)
-- Trusted humans: authors with `OWNER`, `MEMBER`, or `COLLABORATOR` association
-
-### CodeRabbit (presence-conditional gate)
-
-CodeRabbit is **not assumed to be present**. It only gates a PR when it shows signs of life on
-that PR — a CodeRabbit CI check (`CodeRabbit`), a reaction from `coderabbitai[bot]`, or an authored
-comment. When CodeRabbit is dormant the gate is inert and the watcher behaves as a bugbot+codex-only
-gate, so nothing breaks if CodeRabbit is later removed from the repo.
-
-- The watcher emits `wait_coderabbit` (and withholds `stop_ready_to_merge`) only while CodeRabbit is
-  **active and still reviewing**: its check is pending, or it has a live 👀 reaction on the PR. The
-  `coderabbit_gate` snapshot field exposes `active`, `present_check`, `reviewing`, and `status`.
-- CodeRabbit's inline review comments are surfaced like any other review bot's: as `new_review_items`
-  / `blocking_review_items` (`process_review_comment`). Address and resolve them before merge.
-- CodeRabbit reports a zero-time `startedAt` (`0001-01-01T00:00:00Z`) on its check while queued; the
-  hung-check detector ignores non-positive start timestamps and falls back to first-seen tracking, so
-  a freshly queued CodeRabbit check never trips a false `diagnose_hung_check`.
-
-> **Note**: if additional review bots are enabled on the repo (e.g. GitHub Actions summary
-> bots), add their login keyword to `REVIEW_BOT_LOGIN_KEYWORDS` in `scripts/gh_pr_watch.py`. To
-> make a bot a gate (not just surface its comments), wire a dedicated gate like `coderabbit_gate` —
-> and prefer a presence-conditional one unless the bot is guaranteed to run on every PR.
-
-## Worktree gotchas
-
-When working from a git worktree, watch out for ktfmt CLI vs Gradle plugin version
-mismatches and rebases silently reverting fixes. Always run `./gradlew check`
-before pushing. See [docs/WORKTREE-GRADLE-PITFALLS.md](../../../docs/WORKTREE-GRADLE-PITFALLS.md)
-for details and a pre-push checklist.
-
-## Choosing a mode based on harness capabilities
-
-The right mode depends on whether the harness can stream bash tool stdout back to the
-model while the command is still running, or only delivers the final output after exit.
-
-### Harness streams tool output to the model (e.g. Claude Code subagents)
-
-Use `--watch`. The script runs continuously, emitting JSONL snapshots as events. The
-model sees each snapshot as it arrives and can act on it (retry, fix, merge) without
-waiting for the script to exit. The script exits on terminal stop conditions.
-
-### Harness only returns output after tool exit (e.g. Pi, most tool-use loops)
-
-Use `--once` (the default). The script blocks internally, polling every 30 seconds,
-and only returns to the model when something needs agent attention — a CI failure to
-diagnose, a review comment to process, a merge readiness signal, etc. The model never
-sleeps blindly; the script handles all waiting. After acting on the result, the model
-calls `--once` again to wait for the next event.
-
-Typical agent loop:
-1. Run `--once` → script blocks until CI finishes, review arrives, etc.
-2. Model reads the snapshot, acts on `actions` (fix code, retry, merge).
-3. If not terminal, run `--once` again → repeat.
-
-### Quick debugging / one-off inspection
-
-Use `--snapshot` for an instant point-in-time view with no waiting.
-
-## Output format
-
-All modes emit newline-delimited JSON.
-
-- `--once` / `--snapshot` / `--retry-failed-now`: emit a top-level snapshot/result object where `actions` is directly available.
-- `--watch`: emits event envelopes:
-  - `{"event":"snapshot","payload":{"snapshot":{...},"state_file":"...","next_poll_seconds":30}}`
-  - `{"event":"stop","payload":{...}}`
-
-In `--watch`, read actions from `payload.snapshot.actions` for `snapshot` events and `payload.actions` for `stop` events.
-
-`blocking_review_items` contains actionable unresolved inline review comments. When thread-resolution lookup is unavailable, inline blocking falls back to a 30-minute freshness heuristic. While non-empty, `stop_ready_to_merge` is not emitted.
-
-Example snapshot payload shape (`--once` / `--snapshot`, or `--watch` under `payload.snapshot`):
-
-```json
-{
-  "pr": { "number": 42, "head_sha": "abc123", "mergeable": "MERGEABLE", ... },
-  "checks": { "pending_count": 0, "failed_count": 1, "passed_count": 8, "skipping_count": 0, "all_terminal": true },
-  "failed_runs": [{ "run_id": 123, "workflow_name": "CI", "conclusion": "failure", "retry_eligible": false, ... }],
-  "bugbot_gate": { "status": "completed", "conclusion": "success", "is_success": true, ... },
-  "codex_gate": { "reviewing": false, "status": "idle" },
-  "coderabbit_gate": { "active": true, "present_check": true, "reviewing": false, "status": "active" },
-  "hung_checks": [{ "name": "CI", "elapsed_seconds": 1920, "threshold_seconds": 1800 }],
-  "new_review_items": [],
-  "blocking_review_items": [],
-  "actions": ["diagnose_ci_failure", "stop_non_retryable_failure"],
-  "retry_state": { "current_sha_retries_used": 0, "max_flaky_retries": 3 }
-}
-```
+When using worktrees, run `./gradlew check` before pushing; see
+`docs/WORKTREE-GRADLE-PITFALLS.md`.
