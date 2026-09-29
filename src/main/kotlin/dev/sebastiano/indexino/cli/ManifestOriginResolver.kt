@@ -47,6 +47,7 @@ internal object ManifestOriginResolver {
      * provably unchanged and the recursive watcher saw nothing but [OriginIncrementalHint] sources
      * change; every other origin runs the full whole-repository Git reads.
      */
+    @Suppress("CyclomaticComplexMethod")
     fun resolveWithState(
         workspace: Path,
         sources: List<IndexedSource>,
@@ -73,60 +74,78 @@ internal object ManifestOriginResolver {
                 onPhaseForTests?.invoke(originId, phase, true)
             }
         }
+        fun resolveState(
+            originId: String,
+            originRoot: Path,
+            externalExpectedRevision: String?,
+        ): OriginGitState =
+            measured(originId, "git-state") {
+                hint
+                    ?.let {
+                        incrementalState(
+                            workspace,
+                            originId,
+                            originRoot,
+                            externalExpectedRevision,
+                            it,
+                        )
+                    }
+                    ?.also { incrementalCount.incrementAndGet() }
+                    ?: fullState(workspace, originRoot, externalExpectedRevision, captureState)
+            }
+        fun withFingerprint(
+            originId: String,
+            originRoot: Path,
+            sourceFingerprint: String,
+            state: OriginGitState,
+        ): Pair<IndexManifestOrigin, OriginGitState> {
+            return measured(originId, "manifest-fingerprint") {
+                originFrom(originId, originRoot, sourceFingerprint, state)
+            } to state
+        }
         fun resolveOrigin(
             originId: String,
             originRoot: Path,
             sourceFingerprint: String,
             externalExpectedRevision: String?,
-        ): Pair<IndexManifestOrigin, OriginGitState> {
-            val state =
-                measured(originId, "git-state") {
-                    hint
-                        ?.let {
-                            incrementalState(
-                                workspace,
-                                originId,
-                                originRoot,
-                                externalExpectedRevision,
-                                it,
-                            )
-                        }
-                        ?.also { incrementalCount.incrementAndGet() }
-                        ?: fullState(workspace, originRoot, externalExpectedRevision, captureState)
-                }
-            return measured(originId, "manifest-fingerprint") {
-                originFrom(originId, originRoot, sourceFingerprint, state)
-            } to state
-        }
+        ): Pair<IndexManifestOrigin, OriginGitState> =
+            withFingerprint(
+                originId,
+                originRoot,
+                sourceFingerprint,
+                resolveState(originId, originRoot, externalExpectedRevision),
+            )
         val sourceOrigins =
             sources
                 .groupBy { it.originId to it.originRoot }
                 .map { (identity, originSources) ->
                     val (originId, originRoot) = identity
                     async {
-                        resolveOrigin(
-                            originId = originId,
-                            originRoot = originRoot,
-                            sourceFingerprint =
-                                measured(originId, "source-fingerprint") {
-                                    FileHashProducer.contentHash(
-                                        originSources
-                                            .sortedBy { it.path }
-                                            .joinToString("\n") { source ->
-                                                val hash =
-                                                    sourceSnapshot?.contentHash(source)
-                                                        ?: FileHashProducer.contentHash(
-                                                            source.originRoot
-                                                                .resolve(source.path)
-                                                                .readText()
-                                                        )
-                                                "${source.path}:$hash"
-                                            }
-                                    )
-                                },
-                            externalExpectedRevision =
-                                externalOriginMetadata[originRoot.toRealPath()]?.second,
-                        )
+                        val expectedRevision =
+                            externalOriginMetadata[originRoot.toRealPath()]?.second
+                        val fingerprint = {
+                            measured(originId, "source-fingerprint") {
+                                FileHashProducer.contentHash(
+                                    originSources
+                                        .sortedBy { it.path }
+                                        .joinToString("\n") { source ->
+                                            val hash =
+                                                sourceSnapshot?.contentHash(source)
+                                                    ?: FileHashProducer.contentHash(
+                                                        source.originRoot
+                                                            .resolve(source.path)
+                                                            .readText()
+                                                    )
+                                            "${source.path}:$hash"
+                                        }
+                                )
+                            }
+                        }
+                        val (capturedFingerprint, state) =
+                            sourceFingerprintAndGitState(sourceSnapshot, fingerprint) {
+                                resolveState(originId, originRoot, expectedRevision)
+                            }
+                        withFingerprint(originId, originRoot, capturedFingerprint, state)
                     }
                 }
                 .map { it.join() }
@@ -171,6 +190,22 @@ internal object ManifestOriginResolver {
                 } else emptyMap(),
             incremental = incrementalCount.get(),
         )
+    }
+
+    private fun sourceFingerprintAndGitState(
+        snapshot: SourceContentSnapshot?,
+        fingerprint: () -> String,
+        gitState: () -> OriginGitState,
+    ): Pair<String, OriginGitState> {
+        if (snapshot == null) return fingerprint() to gitState()
+        val runningGit = async(gitState)
+        val captured = runCatching(fingerprint)
+        val state = runCatching { runningGit.join() }
+        captured.exceptionOrNull()?.let { failure ->
+            state.exceptionOrNull()?.let(failure::addSuppressed)
+            throw failure
+        }
+        return captured.getOrThrow() to state.getOrThrow()
     }
 
     private fun originFrom(

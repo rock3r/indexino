@@ -154,6 +154,9 @@ their path hints and can reuse topology and unchanged hashes; unknown paths, ove
 refreshes and lost coverage still force full reconciliation.
 Origin reads never write the user's index: `status` runs with optional locks disabled and daemon
 `diff` reads a private copy of the index, because `git diff` otherwise refreshes the index.
+For a captured source snapshot, each origin computes its source fingerprint alongside its Git
+state, then joins both before constructing provenance. Callers without a captured snapshot retain
+sequential reads so a live source read does not race with its Git-state observation.
 
 Daemon close excludes overlapping cleanup attempts. A failed lease release remains retryable without
 closing an already stopped handshake server again; identity checks still protect successor leases.

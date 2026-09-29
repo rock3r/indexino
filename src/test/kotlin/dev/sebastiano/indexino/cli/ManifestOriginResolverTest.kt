@@ -2,12 +2,20 @@ package dev.sebastiano.indexino.cli
 
 import dev.sebastiano.indexino.core.manifest.IndexManifestOrigin
 import dev.sebastiano.indexino.producer.IndexedSource
+import dev.sebastiano.indexino.producer.SourceContentSnapshot
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.io.TempDir
 
@@ -73,15 +81,21 @@ class ManifestOriginResolverTest {
             git(repository, "commit", "-m", "base")
         }
         Files.writeString(nested.resolve("untracked.txt"), "new\n")
-        val origins =
-            ManifestOriginResolver.resolve(
-                workspace,
-                listOf(
-                    IndexedSource("workspace", workspace.toRealPath(), "A.java"),
-                    IndexedSource("git:nested", nested.toRealPath(), "B.java"),
-                ),
-                emptyMap(),
+        val sources =
+            listOf(
+                IndexedSource("workspace", workspace.toRealPath(), "A.java"),
+                IndexedSource("git:nested", nested.toRealPath(), "B.java"),
             )
+        val origins = ManifestOriginResolver.resolve(workspace, sources, emptyMap())
+        val capturedOrigins =
+            ManifestOriginResolver.resolveWithState(
+                    workspace,
+                    sources,
+                    emptyMap(),
+                    sourceSnapshot = SourceContentSnapshot.capture(sources),
+                )
+                .origins
+        assertEquals(origins, capturedOrigins)
         assertEquals(listOf("git:nested", "workspace"), origins.map { it.originId })
         assertTrue(origins.single { it.originId == "git:nested" }.dirty, "$origins")
         assertFalse(origins.single { it.originId == "workspace" }.dirty, "$origins")
@@ -111,10 +125,12 @@ class ManifestOriginResolverTest {
             Files.writeString(workspace.resolve(path), content)
             val hinted = sources.filter { it.path == path }
             val incremental =
-                resolveWithState(
+                ManifestOriginResolver.resolveWithState(
                     workspace,
                     sources,
-                    OriginIncrementalHint(states.states, hinted, workspace.toRealPath()),
+                    emptyMap(),
+                    sourceSnapshot = SourceContentSnapshot.capture(sources),
+                    hint = OriginIncrementalHint(states.states, hinted, workspace.toRealPath()),
                 )
             val full = resolveWithState(workspace, sources)
             assertEquals(full.origins, incremental.origins, "after editing $path")
@@ -155,6 +171,87 @@ class ManifestOriginResolverTest {
                 assertTrue(match != null, line)
                 match.groupValues[1]
             },
+        )
+    }
+
+    @Test
+    fun `git state completes while the same origin source fingerprint is blocked`() {
+        val workspace = committedWorkspace("overlapping-origin")
+        val sources = sources(workspace, "src/A.java", "src/B.kt")
+        val snapshot = SourceContentSnapshot.capture(sources)
+        val expected =
+            ManifestOriginResolver.resolveWithState(
+                    workspace,
+                    sources,
+                    emptyMap(),
+                    sourceSnapshot = snapshot,
+                )
+                .origins
+        val fingerprintStarted = CountDownLatch(1)
+        val releaseFingerprint = CountDownLatch(1)
+        val gitFinished = CountDownLatch(1)
+        val result = CompletableFuture.supplyAsync {
+            ManifestOriginResolver.resolveWithState(
+                workspace,
+                sources,
+                emptyMap(),
+                sourceSnapshot = snapshot,
+                onPhaseForTests = { origin, phase, completed ->
+                    if (origin == "workspace" && phase == "source-fingerprint" && !completed) {
+                        fingerprintStarted.countDown()
+                        check(releaseFingerprint.await(15, TimeUnit.SECONDS))
+                    }
+                    if (origin == "workspace" && phase == "git-state" && completed) {
+                        gitFinished.countDown()
+                    }
+                },
+            )
+        }
+        val overlapped =
+            try {
+                assertTrue(fingerprintStarted.await(5, TimeUnit.SECONDS))
+                gitFinished.await(3, TimeUnit.SECONDS)
+            } finally {
+                releaseFingerprint.countDown()
+                result.get(15, TimeUnit.SECONDS)
+            }
+        assertTrue(overlapped, "Git state must finish before the fingerprint is unblocked")
+        assertEquals(expected, result.get(15, TimeUnit.SECONDS).origins)
+    }
+
+    @Test
+    fun `failed fingerprint waits for its in-flight git state`() {
+        val workspace = committedWorkspace("failed-fingerprint")
+        val sources = sources(workspace, "src/A.java")
+        val releaseGit = CountDownLatch(1)
+        val fingerprintFailed = CountDownLatch(1)
+        val failure = IllegalStateException("fingerprint failed")
+        val result = CompletableFuture.supplyAsync {
+            ManifestOriginResolver.resolveWithState(
+                workspace,
+                sources,
+                emptyMap(),
+                sourceSnapshot = SourceContentSnapshot.capture(sources),
+                onPhaseForTests = { origin, phase, completed ->
+                    if (origin == "workspace" && phase == "git-state" && !completed) {
+                        check(releaseGit.await(15, TimeUnit.SECONDS))
+                    }
+                    if (origin == "workspace" && phase == "source-fingerprint" && !completed) {
+                        fingerprintFailed.countDown()
+                        throw failure
+                    }
+                },
+            )
+        }
+        try {
+            assertTrue(fingerprintFailed.await(5, TimeUnit.SECONDS))
+            assertFailsWith<TimeoutException> { result.get(100, TimeUnit.MILLISECONDS) }
+        } finally {
+            releaseGit.countDown()
+        }
+        assertSame(
+            failure,
+            assertFailsWith<ExecutionException> { result.get(15, TimeUnit.SECONDS) }.cause,
         )
     }
 
