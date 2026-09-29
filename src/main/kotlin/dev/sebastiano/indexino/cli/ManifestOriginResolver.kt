@@ -56,17 +56,21 @@ internal object ManifestOriginResolver {
         captureState: Boolean = true,
         hint: OriginIncrementalHint? = null,
         progress: ((String) -> Unit)? = null,
+        onPhaseForTests: ((originId: String, phase: String, completed: Boolean) -> Unit)? = null,
     ): OriginResolution {
         val incrementalCount = AtomicInteger()
         val timings = ConcurrentLinkedQueue<String>()
         fun <T> measured(originId: String, phase: String, action: () -> T): T {
-            if (progress == null) return action()
+            onPhaseForTests?.invoke(originId, phase, false)
+            if (progress == null && onPhaseForTests == null) return action()
             val started = System.nanoTime()
             return action().also {
-                timings.add(
-                    "index origin=$originId phase=$phase durationMillis=" +
-                        TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
-                )
+                if (progress != null)
+                    timings.add(
+                        "index origin=$originId phase=$phase durationMillis=" +
+                            TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+                    )
+                onPhaseForTests?.invoke(originId, phase, true)
             }
         }
         fun resolveOrigin(
