@@ -259,8 +259,12 @@ source capture began, even if the handle was already active. Events after that b
 their latest per-path epoch and drive a successor; a failed refresh does not discard hints.
 The first published generation may reflect only an early part of a long write burst; readers must
 wait for the successor and verify its facts before treating the whole burst as indexed.
-Even on the hinted path, source preview and change detection visit the in-memory inventory,
-post-processors run their declared scope, and cumulative delta materialization has a cost.
+Even on the hinted path, source preview visits the in-memory inventory. Change detection checks
+the complete source identity set (including analysis roles) against the published capture, then
+compares only re-read sources when they match under continuous recursive watcher coverage. Its
+per-file progress total is the re-read count in that case. An inventory mismatch falls back to
+full comparison, including deletions. Post-processors still run their declared scope, and
+cumulative delta materialization has a cost.
 For a changed captured source with unchanged topology and the exact prior origin IDs, origin
 provenance may resolve concurrently with staging-store mutation. The full origin result joins
 inside the checkpoint before writing the compatibility manifest; failure restores the previous

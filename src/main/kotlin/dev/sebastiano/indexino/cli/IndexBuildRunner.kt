@@ -685,7 +685,17 @@ internal class IndexBuildRunner(
         sourceSnapshot: SourceContentSnapshot,
         forceFullRebuild: Boolean,
     ): SourceChangeSet {
-        machineProgress?.phaseStarted(SOURCE_CHANGE_DETECTION_PHASE, sources.size)
+        // A covered watcher edit reuses the published source inventory. Confirm that both
+        // snapshots contain exactly the same origin, path, root, and analysis-role identities.
+        val knownInventory =
+            inheritedSources === sources &&
+                recursiveWatchRoot != null &&
+                hintedPaths.isNotEmpty() &&
+                inheritedSourceHashes.isNotEmpty() &&
+                sources.size == latestSourceHashes.size &&
+                inheritedSourceHashes.keys == latestSourceHashes.keys
+        val phaseTotal = if (knownInventory) sourceSnapshot.capturedSources.size else sources.size
+        machineProgress?.phaseStarted(SOURCE_CHANGE_DETECTION_PHASE, phaseTotal)
         val report: (Int, Int, IndexedSource) -> Unit = { index, total, source ->
             machineProgress?.fileProgress(
                 SOURCE_CHANGE_DETECTION_PHASE,
@@ -696,10 +706,17 @@ internal class IndexBuildRunner(
             )
         }
         val detectedChanges =
-            if (inheritedSourceHashes.isEmpty())
+            if (knownInventory)
+                SourceChangeDetector.detectCaptured(
+                    inheritedSourceHashes,
+                    latestSourceHashes,
+                    sourceSnapshot.capturedSources,
+                    report,
+                )
+            else if (inheritedSourceHashes.isEmpty())
                 SourceChangeDetector.detect(store, sources, sourceSnapshot, report)
             else SourceChangeDetector.detect(inheritedSourceHashes, sources, sourceSnapshot, report)
-        machineProgress?.phaseCompleted(SOURCE_CHANGE_DETECTION_PHASE, sources.size)
+        machineProgress?.phaseCompleted(SOURCE_CHANGE_DETECTION_PHASE, phaseTotal)
         val changes =
             if (forceFullRebuild) {
                 SourceChangeSet(

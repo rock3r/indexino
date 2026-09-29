@@ -5,7 +5,10 @@ import kotlin.text.Charsets
 
 /** Consistent source hashes and lazily verified bytes inherited from an immutable generation. */
 internal class SourceContentSnapshot
-private constructor(private val entries: Map<IndexedSource, Entry>) {
+private constructor(
+    private val entries: Map<IndexedSource, Entry>,
+    val capturedSources: List<IndexedSource>,
+) {
     internal class Entry(var bytes: ByteArray?, val contentHash: String)
 
     fun content(source: IndexedSource): String = contentBytes(source).toString(Charsets.UTF_8)
@@ -50,20 +53,22 @@ private constructor(private val entries: Map<IndexedSource, Entry>) {
             sources: List<IndexedSource>,
             inheritedHashes: Map<IndexedSource, String> = emptyMap(),
             hintedPaths: Set<java.nio.file.Path> = emptySet(),
-        ): SourceContentSnapshot =
-            SourceContentSnapshot(
-                sources.associateWith { source ->
-                    val previous = inheritedHashes[source]
-                    if (
-                        previous != null &&
-                            source.originRoot.resolve(source.path).normalize() !in hintedPaths
-                    )
-                        Entry(bytes = null, contentHash = previous)
-                    else {
-                        val bytes = Files.readAllBytes(source.originRoot.resolve(source.path))
-                        Entry(bytes = bytes, contentHash = FileHashProducer.contentHash(bytes))
-                    }
+        ): SourceContentSnapshot {
+            val captured = mutableListOf<IndexedSource>()
+            val entries = sources.associateWith { source ->
+                val previous = inheritedHashes[source]
+                if (
+                    previous != null &&
+                        source.originRoot.resolve(source.path).normalize() !in hintedPaths
+                )
+                    Entry(bytes = null, contentHash = previous)
+                else {
+                    captured += source
+                    val bytes = Files.readAllBytes(source.originRoot.resolve(source.path))
+                    Entry(bytes = bytes, contentHash = FileHashProducer.contentHash(bytes))
                 }
-            )
+            }
+            return SourceContentSnapshot(entries, captured)
+        }
     }
 }

@@ -217,6 +217,7 @@ class IndexBuildRunnerTest {
                 scope = "//:main",
             )
         val store = tempDir.resolve("hinted-capture-store")
+        val events = mutableListOf<String>()
         fun run(previous: IndexBuildExecution? = null): IndexBuildExecution =
             IndexBuildRunner(
                     project = workspace,
@@ -227,19 +228,30 @@ class IndexBuildRunnerTest {
                         BazelQueryExecutor { _, _ -> error("Unexpected Bazel query") },
                     bazelProcessRunner = null,
                     progress = {},
-                    machineProgress = null,
+                    machineProgress = JsonlIndexBuildProgressReporter(events::add),
                     storeRootOverride = store,
                     topologyOverride = topology,
                     inheritedSourceHashes = previous?.sourceHashes.orEmpty(),
+                    inheritedSources = previous?.sources,
+                    recursiveWatchRoot = workspace.takeIf { previous != null },
                     hintedPaths = if (previous == null) emptySet() else setOf(edited),
                 )
                 .runDetailed()
         val first = run()
         assertEquals(CliExitCodes.SUCCESS, first.exitCode)
         Files.writeString(edited, "class After")
+        events.clear()
         val second = run(first)
         assertEquals(CliExitCodes.SUCCESS, second.exitCode)
         assertEquals(1, second.changes?.changedSources?.size)
+        assertTrue(
+            events.any {
+                "\"event\":\"phase_started\"" in it &&
+                    "\"phase\":\"source-change-detection\"" in it &&
+                    "\"phaseTotal\":1" in it
+            },
+            "Only the re-read source needs change detection: $events",
+        )
         assertEquals(
             first.sourceHashes.entries.single { it.key.path.endsWith("Unchanged.kt") }.value,
             second.sourceHashes.entries.single { it.key.path.endsWith("Unchanged.kt") }.value,
@@ -251,6 +263,73 @@ class IndexBuildRunnerTest {
             .use {
                 assertEquals(
                     setOf("Unchanged", "After"),
+                    it.prefixScan("sym:").map { row -> (row.second as SymbolRecord).name }.toSet(),
+                )
+            }
+    }
+
+    @Test
+    fun `changed source role prevents hinted-only change detection`() {
+        val workspace = tempDir.resolve("hinted-role-workspace")
+        Files.createDirectories(workspace)
+        Files.writeString(workspace.resolve("Code.java"), "class Code {}")
+        Files.writeString(workspace.resolve("Other.java"), "class Other {}")
+        val sources =
+            listOf("Code.java", "Other.java").map { IndexedSource.workspace(workspace, it) }
+        val topology =
+            TopologyResult(
+                sourceFiles = sources.map { it.path },
+                topology = "bazel-query",
+                includeDeps = false,
+                scope = "//:main",
+            )
+        val events = mutableListOf<String>()
+        val store = tempDir.resolve("hinted-role-store")
+        fun run(
+            inherited: List<IndexedSource>? = null,
+            hashes: Map<IndexedSource, String> = emptyMap(),
+        ): IndexBuildExecution =
+            IndexBuildRunner(
+                    project = workspace,
+                    topologyRequest =
+                        TopologyRequest(buildSystem = BuildSystem.BAZEL, bazelTarget = "//:main"),
+                    applications = emptyList(),
+                    bazelQueryExecutor = null,
+                    bazelProcessRunner = null,
+                    progress = {},
+                    machineProgress = JsonlIndexBuildProgressReporter(events::add),
+                    storeRootOverride = store,
+                    topologyOverride = topology,
+                    inheritedSourceHashes = hashes,
+                    inheritedSources = inherited,
+                    recursiveWatchRoot = workspace.takeIf { inherited != null },
+                    hintedPaths =
+                        if (inherited == null) emptySet() else setOf(workspace.resolve("Code.java")),
+                )
+                .runDetailed()
+        val first = run()
+        assertEquals(CliExitCodes.SUCCESS, first.exitCode)
+        events.clear()
+        val nonCode = first.sources.first().copy(isCode = false)
+        val second = run(listOf(nonCode, first.sources.last()), first.sourceHashes)
+
+        assertEquals(CliExitCodes.SUCCESS, second.exitCode)
+        assertEquals(setOf(nonCode), second.changes?.changedSources)
+        assertTrue(
+            events.any {
+                "\"event\":\"phase_started\"" in it &&
+                    "\"phase\":\"source-change-detection\"" in it &&
+                    "\"phaseTotal\":2" in it
+            },
+            "A role change must compare the full inventory: $events",
+        )
+        val commit = dev.sebastiano.indexino.core.git.GitHeadResolver.resolve(workspace)
+        XodusCodeIndexStore.open(
+                IndexPathResolver(workspace, storeRootOverride = store).resolveBaseStore(commit)
+            )
+            .use {
+                assertEquals(
+                    setOf("Other"),
                     it.prefixScan("sym:").map { row -> (row.second as SymbolRecord).name }.toSet(),
                 )
             }

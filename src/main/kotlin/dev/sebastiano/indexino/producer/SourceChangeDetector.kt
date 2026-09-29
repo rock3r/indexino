@@ -50,6 +50,22 @@ internal object SourceChangeDetector {
             onFileProcessed,
         )
 
+    /** Requires identical complete source identities and continuous watcher coverage. */
+    fun detectCaptured(
+        previous: Map<IndexedSource, String>,
+        current: Map<IndexedSource, String>,
+        capturedSources: List<IndexedSource>,
+        onFileProcessed: ((index: Int, total: Int, source: IndexedSource) -> Unit)? = null,
+    ): SourceChangeSet =
+        SourceChangeSet(
+            changedSources =
+                capturedSources.filterIndexedTo(linkedSetOf()) { index, source ->
+                    onFileProcessed?.invoke(index + 1, capturedSources.size, source)
+                    previous.getValue(source) != current.getValue(source)
+                },
+            deletedSources = emptySet(),
+        )
+
     private fun compareHashes(
         previousHashes: Map<Pair<String, String>, Pair<String, Boolean>>,
         sources: List<IndexedSource>,

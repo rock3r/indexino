@@ -31,12 +31,47 @@ class SourceChangeDetectorTest {
             val sources = listOf(a, b, added)
             val snapshot =
                 SourceContentSnapshot.capture(sources, previous, setOf(first.resolve(a.path)))
+            snapshot.content(b)
+            assertEquals(listOf(a, added), snapshot.capturedSources)
             val changes = SourceChangeDetector.detect(previous, sources, snapshot)
             assertEquals(setOf(a, added), changes.changedSources)
             assertEquals(setOf(deleted.copy(originRoot = Path.of("."))), changes.deletedSources)
         } finally {
             first.toFile().deleteRecursively()
             second.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `known inventory compares re-read hashes instead of marking every hinted path changed`() {
+        val root = createTempDirectory("indexino-known-hashes-")
+        try {
+            val edited = IndexedSource.workspace(root, "Edited.kt")
+            val unchanged = IndexedSource.workspace(root, "Unchanged.kt")
+            root.resolve(edited.path).writeText("class Edited")
+            root.resolve(unchanged.path).writeText("class Unchanged")
+            val sources = listOf(edited, unchanged)
+            val previous = SourceContentSnapshot.capture(sources).hashes()
+            val snapshot =
+                SourceContentSnapshot.capture(sources, previous, setOf(root.resolve(edited.path)))
+            snapshot.content(unchanged)
+            val processed = mutableListOf<IndexedSource>()
+
+            val changes =
+                SourceChangeDetector.detectCaptured(
+                    previous,
+                    snapshot.hashes(),
+                    snapshot.capturedSources,
+                ) { index, total, source ->
+                    assertEquals(1 to 1, index to total)
+                    processed += source
+                }
+
+            assertEquals(listOf(edited), processed)
+            assertEquals(emptySet(), changes.changedSources)
+            assertEquals(emptySet(), changes.deletedSources)
+        } finally {
+            root.toFile().deleteRecursively()
         }
     }
 
