@@ -234,6 +234,20 @@ class WorktreeOverlayIntegrationTest {
                             )
                         }
                         assertTrue(started >= 0 && completed > started, "$diagnostics")
+                        val openStarted =
+                            diagnostics.indexOf("index phase=store-open state=started")
+                        val openCompleted = diagnostics.indexOfFirst {
+                            it.matches(
+                                Regex("index phase=store-open state=completed durationMillis=\\d+")
+                            )
+                        }
+                        assertTrue(
+                            completed < openStarted &&
+                                openStarted < openCompleted &&
+                                openCompleted <
+                                    diagnostics.indexOf("index phase=checkpoint state=started"),
+                            "$diagnostics",
+                        )
                         index.snapshot().use { fresh ->
                             assertTrue(
                                 fresh

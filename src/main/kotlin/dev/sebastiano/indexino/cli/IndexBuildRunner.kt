@@ -545,6 +545,8 @@ internal class IndexBuildRunner(
                 }
             }
         }
+        progress("index phase=store-open state=started")
+        val storeOpenStart = System.nanoTime()
         val writableStore: XodusCodeIndexStore
         val store =
             if (forkBase != null) {
@@ -583,6 +585,10 @@ internal class IndexBuildRunner(
             }
         }
         timedClose.use {
+            progress(
+                "index phase=store-open state=completed durationMillis=" +
+                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - storeOpenStart)
+            )
             BuildStoreCheckpoint(writableStore, resolver.resolveManifest(commit), progress).use {
                 checkpoint ->
                 checkpoint.run {

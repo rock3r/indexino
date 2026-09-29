@@ -297,9 +297,10 @@ a fresh compatibility index.
 The diagnostic `checkpoint` phase measures this record-copy capture separately from change
 detection and producers. `checkpoint-release` includes `checkpoint-backup-close` and
 `checkpoint-delete`.
-`store-close` measures closing the writable store after the build. When a prior overlay delta
-exists, `overlay-restore` measures unpacking it before opening the store. These nested phases
-separate otherwise hidden costs within `store-build`; they do not change rollback semantics.
+`store-open` measures opening the writable store (and the immutable base for overlays) before the
+checkpoint; `store-close` measures closing the store after the build. When a prior overlay delta
+exists, `overlay-restore` measures unpacking it before `store-open`. These nested phases separate
+otherwise hidden costs within `store-build`; they do not change rollback semantics.
 This is recovery for mutable staging, not a crash-atomic transaction or an automatic crash-recovery
 service. Preserve retained checkpoints for investigation; removing only the checkpoint can expose
 partially restored staging as valid. Published generation manifests and immutable packs are not

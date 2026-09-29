@@ -484,6 +484,48 @@ class IndexBuildRunnerTest {
     }
 
     @Test
+    fun `store open completion failure closes the opened store`() {
+        val workspace = tempDir.resolve("store-open-cancel")
+        val source = workspace.resolve("Panel.java")
+        Files.createDirectories(workspace)
+        Files.writeString(source, "class Panel {}")
+        val progress = mutableListOf<String>()
+        val failure = IllegalStateException("stop after store open")
+        assertSame(
+            failure,
+            assertFailsWith<IllegalStateException> {
+                IndexBuildRunner(
+                        project = workspace,
+                        topologyRequest =
+                            TopologyRequest(
+                                buildSystem = BuildSystem.BAZEL,
+                                bazelTarget = "//:main",
+                            ),
+                        applications = emptyList(),
+                        bazelQueryExecutor = null,
+                        bazelProcessRunner = null,
+                        progress = { message ->
+                            progress += message
+                            if (message.startsWith("index phase=store-open state=completed"))
+                                throw failure
+                        },
+                        machineProgress = null,
+                        storeRootOverride = tempDir.resolve("store-open-cancel-store"),
+                        topologyOverride =
+                            TopologyResult(
+                                sourceFiles = listOf("Panel.java"),
+                                topology = "bazel-query",
+                                includeDeps = false,
+                                scope = "//:main",
+                            ),
+                    )
+                    .runDetailed()
+            },
+        )
+        assertContains(progress, "index phase=store-close state=started")
+    }
+
+    @Test
     fun `indexes external included build sources in composite manifest`() {
         val root = tempDir.resolve("included")
         val workspace = root.resolve("app")
@@ -539,6 +581,7 @@ class IndexBuildRunnerTest {
                 "source-preview",
                 "origin-resolution",
                 "store-build",
+                "store-open",
                 "checkpoint",
                 "checkpoint-release",
                 "checkpoint-backup-close",
@@ -553,6 +596,15 @@ class IndexBuildRunnerTest {
             }
             assertTrue(started >= 0 && completed > started, "$phase: $diagnosticProgress")
         }
+        val openCompleted = diagnosticProgress.indexOfFirst {
+            it.matches(Regex("index phase=store-open state=completed durationMillis=\\d+"))
+        }
+        assertTrue(
+            diagnosticProgress.indexOf("index phase=store-build state=started") <
+                diagnosticProgress.indexOf("index phase=store-open state=started") &&
+                openCompleted < diagnosticProgress.indexOf("index phase=checkpoint state=started"),
+            "$diagnosticProgress",
+        )
         assertContains(diagnosticProgress, "index store=writer")
         assertContains(diagnosticProgress, "index changes changed=3 deleted=0 full=true")
         assertContains(

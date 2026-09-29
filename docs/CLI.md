@@ -120,7 +120,7 @@ measurement, not this compatibility projection.
 
 Progress lines (producer names and `[N/M] file` per source file) go to stderr. Text progress also
 marks topology, source resolution, source capture, aggregate source preview, origin resolution
-(Git revision and working-tree fingerprints), store build, its checkpoint copy,
+(Git revision and working-tree fingerprints), store build, `store-open`, checkpoint copy,
 change detection, plugins, each producer, generation publication and runtime watcher registration as
 `index phase=<name> state=started` followed on success by
 `index phase=<name> state=completed durationMillis=<elapsed>`. These coarse monotonic timings are
