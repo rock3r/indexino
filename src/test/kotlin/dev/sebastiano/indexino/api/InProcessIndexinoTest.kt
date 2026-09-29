@@ -7,6 +7,10 @@ import dev.sebastiano.indexino.model.SourceFile
 import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.SymbolQuery
 import java.nio.file.Files
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.io.path.Path
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
@@ -160,19 +164,45 @@ class InProcessIndexinoTest {
                 runSuspend { index.refresh(request).await() }
                 val topology = checkNotNull(index.topologyForWatch(request))
                 Files.writeString(edited, "package sample\nclass IncrementalOrigins\n")
-                val progress = mutableListOf<String>()
-                val hinted = runSuspend {
-                    index
-                        .refresh(
-                            request,
-                            progress::add,
-                            null,
-                            topology,
-                            setOf(edited),
-                            recursiveWatchRoot = workspace.toRealPath(),
-                        )
-                        .await()
+                val progress = CopyOnWriteArrayList<String>()
+                val originStarted = CountDownLatch(1)
+                val releaseOrigin = CountDownLatch(1)
+                val storeStarted = CountDownLatch(1)
+                val hintedRun = CompletableFuture.supplyAsync {
+                    runSuspend {
+                        index
+                            .refresh(
+                                request,
+                                { message ->
+                                    progress.add(message)
+                                    when (message) {
+                                        "index phase=origin-resolution state=started" -> {
+                                            originStarted.countDown()
+                                            check(releaseOrigin.await(20, TimeUnit.SECONDS))
+                                        }
+                                        "index phase=store-build state=started" ->
+                                            storeStarted.countDown()
+                                    }
+                                },
+                                null,
+                                topology,
+                                setOf(edited),
+                                recursiveWatchRoot = workspace.toRealPath(),
+                            )
+                            .await()
+                    }
                 }
+                try {
+                    assertTrue(originStarted.await(10, TimeUnit.SECONDS))
+                    assertTrue(
+                        storeStarted.await(10, TimeUnit.SECONDS),
+                        "published writer must overlap",
+                    )
+                    assertFalse(hintedRun.isDone, "provenance must join before publication")
+                } finally {
+                    releaseOrigin.countDown()
+                }
+                val hinted = hintedRun.get(30, TimeUnit.SECONDS)
                 assertEquals(RefreshOutcome.UPDATED, hinted.outcome)
                 assertTrue(progress.contains("index origins incremental=1 full=0"), "$progress")
                 for (phase in listOf("refresh-queue", "refresh")) {
