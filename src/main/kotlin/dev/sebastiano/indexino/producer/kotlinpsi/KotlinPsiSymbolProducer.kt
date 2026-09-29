@@ -14,6 +14,7 @@ import dev.sebastiano.indexino.producer.IndexProducer
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.SourceRecordCleanup
 import dev.sebastiano.indexino.producer.xml.ResourceMetadata
+import java.util.concurrent.TimeUnit
 import org.jetbrains.kotlin.com.intellij.psi.PsiElement
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.KtBinaryExpression
@@ -58,33 +59,62 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             ((context.changedSources + context.deletedSources).filter { it.path.endsWith(".kt") } +
                     metadataDependentSources(context, ".kt"))
                 .distinctBy { it.originId to it.path }
-        SourceRecordCleanup.deleteLanguageOriginRecords(
-            store,
-            LANGUAGE,
-            ".kt",
-            affectedSources.toSet(),
-        )
-        val ktFiles = sourceFilesToProcess(context, ".kt")
-        if (ktFiles.isEmpty()) return
-        KotlinPsiParser().use { parser ->
-            val indexedFiles = ktFiles.mapIndexed { index, source ->
-                context.reportFileProgress(index + 1, ktFiles.size, source)
-                val file = parser.parseFile(source.path, context.readSource(source))
-                IndexedKotlinFile(
-                    source.originId,
-                    source.path,
-                    ResourceMetadata.resourcePackage(context, source),
-                    collectSymbols(file).map { it.copy(originId = source.originId) },
+        if (affectedSources.isNotEmpty()) {
+            timedPhase(context, "kotlin-cleanup") {
+                SourceRecordCleanup.deleteLanguageOriginRecords(
+                    store,
+                    LANGUAGE,
+                    ".kt",
+                    affectedSources.toSet(),
                 )
             }
-            val projectSymbols = ProjectSymbols(indexedFiles.flatMap { it.symbols })
-            // Keep declaration metadata across files, not the entire project's syntax trees.
-            // Both passes read the same immutable refresh snapshot.
-            ktFiles.forEachIndexed { index, source ->
-                val file = parser.parseFile(source.path, context.readSource(source))
-                store.transaction { indexFile(indexedFiles[index], file, projectSymbols, store) }
+        }
+        val ktFiles = sourceFilesToProcess(context, ".kt")
+        if (ktFiles.isEmpty()) return
+        timedPhase(context, "kotlin-parser") {
+            KotlinPsiParser().use { parser ->
+                val indexedFiles =
+                    timedPhase(context, "kotlin-declarations") {
+                        ktFiles.mapIndexed { index, source ->
+                            context.reportFileProgress(index + 1, ktFiles.size, source)
+                            val file = parser.parseFile(source.path, context.readSource(source))
+                            IndexedKotlinFile(
+                                source.originId,
+                                source.path,
+                                ResourceMetadata.resourcePackage(context, source),
+                                collectSymbols(file).map { it.copy(originId = source.originId) },
+                            )
+                        }
+                    }
+                val projectSymbols = ProjectSymbols(indexedFiles.flatMap { it.symbols })
+                // Keep declaration metadata across files, not the entire project's syntax trees.
+                // Both passes read the same immutable refresh snapshot.
+                timedPhase(context, "kotlin-fact-write") {
+                    ktFiles.forEachIndexed { index, source ->
+                        val file = parser.parseFile(source.path, context.readSource(source))
+                        store.transaction {
+                            indexFile(indexedFiles[index], file, projectSymbols, store)
+                        }
+                    }
+                }
             }
         }
+    }
+
+    private inline fun <T> timedPhase(
+        context: IndexBuildContext,
+        phase: String,
+        block: () -> T,
+    ): T {
+        val progress = context.progress ?: return block()
+        progress("index phase=$phase state=started")
+        val started = System.nanoTime()
+        val result = block()
+        progress(
+            "index phase=$phase state=completed durationMillis=" +
+                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+        )
+        return result
     }
 
     private fun sourceFilesToProcess(

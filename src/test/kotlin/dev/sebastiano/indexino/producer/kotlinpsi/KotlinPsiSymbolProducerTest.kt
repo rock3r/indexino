@@ -24,6 +24,36 @@ import kotlin.test.assertTrue
 
 class KotlinPsiSymbolProducerTest {
     @Test
+    fun `Kotlin producer reports cleanup parser and fact-write durations for changed sources`() {
+        val diagnostics = mutableListOf<String>()
+        KotlinPsiSymbolProducer()
+            .produce(
+                IndexBuildContext.forInlineSources(
+                        store,
+                        "timed-kotlin",
+                        mapOf("Panel.kt" to "package sample\nclass Panel { fun show() = Unit }"),
+                    )
+                    .copy(progress = diagnostics::add),
+                store,
+            )
+        for (phase in
+            listOf("kotlin-cleanup", "kotlin-parser", "kotlin-declarations", "kotlin-fact-write")) {
+            val started = diagnostics.indexOf("index phase=$phase state=started")
+            val completed = diagnostics.indexOfFirst {
+                it.matches(Regex("index phase=$phase state=completed durationMillis=\\d+"))
+            }
+            assertTrue(started >= 0 && completed > started, "$phase: $diagnostics")
+        }
+        assertTrue(
+            diagnostics.indexOf("index phase=kotlin-parser state=started") <
+                diagnostics.indexOf("index phase=kotlin-declarations state=started")
+        )
+        assertTrue(
+            store.prefixScan("sym:").any { (_, record) -> (record as SymbolRecord).name == "Panel" }
+        )
+    }
+
+    @Test
     fun `Java-only edit does not initialize the Kotlin parser`() {
         val keys =
             listOf(
