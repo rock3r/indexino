@@ -72,7 +72,8 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         val ktFiles = sourceFilesToProcess(context, ".kt")
         if (ktFiles.isEmpty()) return
         timedPhase(context, "kotlin-parser") {
-            KotlinPsiParser().use { parser ->
+            val parser = timedPhase(context, "kotlin-parser-setup") { KotlinPsiParser() }
+            parser.use { parser ->
                 val indexedFiles =
                     timedPhase(context, "kotlin-declarations") {
                         ktFiles.mapIndexed { index, source ->
@@ -87,7 +88,8 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                         }
                     }
                 val projectSymbols = ProjectSymbols(indexedFiles.flatMap { it.symbols })
-                // Keep declaration metadata across files, not the entire project's syntax trees.
+                // Keep declaration metadata across files, not the entire project's syntax
+                // trees.
                 // Both passes read the same immutable refresh snapshot.
                 timedPhase(context, "kotlin-fact-write") {
                     ktFiles.forEachIndexed { index, source ->

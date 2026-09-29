@@ -37,7 +37,13 @@ class KotlinPsiSymbolProducerTest {
                 store,
             )
         for (phase in
-            listOf("kotlin-cleanup", "kotlin-parser", "kotlin-declarations", "kotlin-fact-write")) {
+            listOf(
+                "kotlin-cleanup",
+                "kotlin-parser",
+                "kotlin-parser-setup",
+                "kotlin-declarations",
+                "kotlin-fact-write",
+            )) {
             val started = diagnostics.indexOf("index phase=$phase state=started")
             val completed = diagnostics.indexOfFirst {
                 it.matches(Regex("index phase=$phase state=completed durationMillis=\\d+"))
@@ -46,7 +52,12 @@ class KotlinPsiSymbolProducerTest {
         }
         assertTrue(
             diagnostics.indexOf("index phase=kotlin-parser state=started") <
-                diagnostics.indexOf("index phase=kotlin-declarations state=started")
+                diagnostics.indexOf("index phase=kotlin-parser-setup state=started")
+        )
+        assertTrue(
+            diagnostics.indexOfFirst {
+                it.startsWith("index phase=kotlin-parser-setup state=completed")
+            } < diagnostics.indexOf("index phase=kotlin-declarations state=started")
         )
         assertTrue(
             store.prefixScan("sym:").any { (_, record) -> (record as SymbolRecord).name == "Panel" }

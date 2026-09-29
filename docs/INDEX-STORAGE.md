@@ -273,9 +273,10 @@ retain sequential provenance checks before any reuse decision.
 The Kotlin producer skips PSI environment initialization when no Kotlin source needs analysis, after
 performing any required cleanup for deleted Kotlin sources. Its diagnostic `kotlin-cleanup` phase
 measures writable-store record removal; `kotlin-parser` encloses parser initialization, both passes,
-and disposal. Within it, `kotlin-declarations` measures the first parse and symbol collection,
-while `kotlin-fact-write` measures the second parse and transactional fact writes. These durations
-are nested, not additive; the remainder of `kotlin-parser` includes PSI setup and disposal.
+and disposal. Within it, `kotlin-parser-setup` measures PSI environment construction,
+`kotlin-declarations` measures the first parse and symbol collection, and `kotlin-fact-write`
+measures the second parse and transactional fact writes. These durations are nested, not additive;
+the remaining `kotlin-parser` time includes project-symbol assembly and PSI disposal.
 The legacy CLI `index` projection
 described in [CLI.md](CLI.md) materializes the merged store after
 publication. These remaining whole-scope costs need measurement and reduction before promising
