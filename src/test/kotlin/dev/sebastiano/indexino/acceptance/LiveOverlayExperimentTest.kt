@@ -26,6 +26,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.io.TempDir
@@ -152,33 +153,7 @@ internal class LiveOverlayExperimentTest {
                 )
             LiveOverlayCorpusProbe.main(if (run == 1) args + "repeat" else args)
             val javaResult = Json.parseToJsonElement(Files.readString(javaReport)).jsonObject
-            assertEquals("passed", javaResult.getValue("status").jsonPrimitive.content)
-            assertEquals(
-                "true",
-                javaResult.getValue("oldPinAndUnchangedVerified").jsonPrimitive.content,
-            )
-            assertEquals("true", javaResult.getValue("publicQueriesVerified").jsonPrimitive.content)
-            if (run == 1) {
-                assertEquals(
-                    "true",
-                    javaResult.getValue("repeat_oldPinAndUnchangedVerified").jsonPrimitive.content,
-                )
-                assertEquals(
-                    "true",
-                    javaResult.getValue("repeat_publicQueriesVerified").jsonPrimitive.content,
-                )
-                assertTrue(
-                    javaResult
-                        .getValue("repeat_liveJavaProducerNanos")
-                        .jsonPrimitive
-                        .content
-                        .toLong() > 0
-                )
-                assertTrue(
-                    javaResult.getValue("repeat_durableReadyNanos").jsonPrimitive.content.toLong() >
-                        0
-                )
-            }
+            assertJavaReport(javaResult, run == 1)
             assertEquals(
                 "package sample; class Helper {}\n",
                 Files.readString(workspace.resolve(helper)),
@@ -221,6 +196,42 @@ internal class LiveOverlayExperimentTest {
             Files.readString(workspace.resolve(caller)),
         )
         println("live-overlay-disposable-fixture: $result")
+    }
+
+    private fun assertJavaReport(report: JsonObject, repeated: Boolean) {
+        assertEquals("passed", report.getValue("status").jsonPrimitive.content)
+        assertEquals("DISABLED", report.getValue("runtimeAutoRefreshMode").jsonPrimitive.content)
+        assertEquals("true", report.getValue("oldPinAndUnchangedVerified").jsonPrimitive.content)
+        assertEquals("true", report.getValue("publicQueriesVerified").jsonPrimitive.content)
+        for (prefix in if (repeated) listOf("", "repeat_") else listOf("")) {
+            val requested =
+                report
+                    .getValue("${prefix}durableRefreshRequestNanos")
+                    .jsonPrimitive
+                    .content
+                    .toLong()
+            val awaited =
+                report.getValue("${prefix}durableRefreshAwaitNanos").jsonPrimitive.content.toLong()
+            val ready = report.getValue("${prefix}durableReadyNanos").jsonPrimitive.content.toLong()
+            assertTrue(requested in 0..awaited, prefix)
+            assertTrue(awaited < ready, prefix)
+        }
+        if (repeated) {
+            assertEquals(
+                "true",
+                report.getValue("repeat_oldPinAndUnchangedVerified").jsonPrimitive.content,
+            )
+            assertEquals(
+                "true",
+                report.getValue("repeat_publicQueriesVerified").jsonPrimitive.content,
+            )
+            assertTrue(
+                report.getValue("repeat_liveJavaProducerNanos").jsonPrimitive.content.toLong() > 0
+            )
+            assertTrue(
+                report.getValue("repeat_durableReadyNanos").jsonPrimitive.content.toLong() > 0
+            )
+        }
     }
 
     private fun produce(

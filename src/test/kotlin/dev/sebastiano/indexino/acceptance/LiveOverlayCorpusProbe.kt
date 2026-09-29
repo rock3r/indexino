@@ -16,6 +16,8 @@ import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.CodeIndexRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.store.WorktreeOverlayIndexStore
+import dev.sebastiano.indexino.engine.RuntimeLeaseStore
+import dev.sebastiano.indexino.engine.RuntimePaths
 import dev.sebastiano.indexino.model.IndexinoInternalApi
 import dev.sebastiano.indexino.model.SourceOriginRevision
 import dev.sebastiano.indexino.model.WorkspaceGenerationId
@@ -46,8 +48,10 @@ import kotlinx.serialization.json.put
  * Private opt-in corpus experiment, not a runtime feature. Compares a complete one-file fact delta
  * queried through the real IndexSnapshot implementation with the daemon's durable publication on
  * the same saved edit. Optional `manual repeat` reverts the edited file in the same connected
- * runtime and reports those phase times with a `repeat_` prefix. The live revision is deliberately
- * experimental, not Git provenance.
+ * runtime and reports those phase times with a `repeat_` prefix. Manual mode disables auto-refresh
+ * and reports write-relative refresh request/await and public query readiness separately; watcher
+ * mode leaves auto-refresh enabled. The live revision is deliberately experimental, not Git
+ * provenance.
  */
 @OptIn(IndexinoInternalApi::class)
 internal object LiveOverlayCorpusProbe {
@@ -116,9 +120,23 @@ internal object LiveOverlayCorpusProbe {
         val configuration =
             IndexinoConfiguration.forWorkspace(workspace)
                 .withRuntimeAttach(RuntimeAttachMode.PREFER_DAEMON)
-                .withAutoRefresh(AutoRefreshMode.ENABLED)
+                .withAutoRefresh(
+                    if (durableMode == "manual") AutoRefreshMode.DISABLED
+                    else AutoRefreshMode.ENABLED
+                )
         Indexino.connect(configuration).use { index ->
             try {
+                val lease =
+                    checkNotNull(
+                        RuntimeLeaseStore.read(
+                            RuntimePaths.leasePath(
+                                InProcessCacheLayout.cacheRoot(),
+                                InProcessCacheLayout.workspaceId(workspace),
+                            )
+                        )
+                    )
+                check(lease.autoRefreshMode == configuration.autoRefreshMode)
+                report["runtimeAutoRefreshMode"] = lease.autoRefreshMode.name
                 withTimeout(20.minutes) { index.refresh(request).await() }
                 index.snapshot().use { old ->
                     check(workload.matches(old, workload.sources, 0))
@@ -259,7 +277,13 @@ internal object LiveOverlayCorpusProbe {
                         val durableObserved =
                             async(observer) {
                                 withTimeout(3.minutes) {
-                                    if (durableMode == "manual") index.refresh(request).await()
+                                    var refreshRequested: Long? = null
+                                    var refreshAwaited: Long? = null
+                                    if (durableMode == "manual") {
+                                        refreshRequested = System.nanoTime() - written
+                                        index.refresh(request).await()
+                                        refreshAwaited = System.nanoTime() - written
+                                    }
                                     while (true) {
                                         val matched =
                                             index.snapshot().use { durable ->
@@ -273,7 +297,11 @@ internal object LiveOverlayCorpusProbe {
                                         if (matched) break
                                         delay(50)
                                     }
-                                    System.nanoTime() - written
+                                    DurableObservation(
+                                        refreshRequested,
+                                        refreshAwaited,
+                                        System.nanoTime() - written,
+                                    )
                                 }
                             }
                         try {
@@ -294,7 +322,14 @@ internal object LiveOverlayCorpusProbe {
                                     (System.nanoTime() - queryStarted).toString()
                                 report["liveReadyNanos"] = (System.nanoTime() - written).toString()
                                 check(workload.matches(old, listOf(source), 1 - version))
-                                report["durableReadyNanos"] = durableObserved.await().toString()
+                                val observed = durableObserved.await()
+                                report["durableReadyNanos"] = observed.readyNanos.toString()
+                                observed.refreshRequestNanos?.let { elapsed ->
+                                    report["durableRefreshRequestNanos"] = elapsed.toString()
+                                }
+                                observed.refreshAwaitNanos?.let { elapsed ->
+                                    report["durableRefreshAwaitNanos"] = elapsed.toString()
+                                }
                                 index.snapshot().use { durable ->
                                     check(durable.generation != old.generation)
                                     check(workload.matches(durable, listOf(source), version))
@@ -325,6 +360,12 @@ internal object LiveOverlayCorpusProbe {
                     }
                 }
             }
+
+    private class DurableObservation(
+        val refreshRequestNanos: Long?,
+        val refreshAwaitNanos: Long?,
+        val readyNanos: Long,
+    )
 
     private fun buildLiveSnapshot(
         base: CodeIndexStore,
