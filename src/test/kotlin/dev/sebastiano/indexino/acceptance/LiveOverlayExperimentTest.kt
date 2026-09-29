@@ -215,6 +215,23 @@ internal class LiveOverlayExperimentTest {
             val ready = report.getValue("${prefix}durableReadyNanos").jsonPrimitive.content.toLong()
             assertTrue(requested in 0..awaited, prefix)
             assertTrue(awaited < ready, prefix)
+            for (phase in
+                listOf(
+                    "source-capture",
+                    "origin-resolution",
+                    "store-build",
+                    "publication",
+                    "refresh",
+                )) {
+                assertTrue(
+                    report
+                        .getValue("${prefix}durablePhase_${phase}Millis")
+                        .jsonPrimitive
+                        .content
+                        .toLong() >= 0,
+                    "$prefix$phase",
+                )
+            }
         }
         if (repeated) {
             assertEquals(

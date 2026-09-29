@@ -49,9 +49,9 @@ import kotlinx.serialization.json.put
  * queried through the real IndexSnapshot implementation with the daemon's durable publication on
  * the same saved edit. Optional `manual repeat` reverts the edited file in the same connected
  * runtime and reports those phase times with a `repeat_` prefix. Manual mode disables auto-refresh
- * and reports write-relative refresh request/await and public query readiness separately; watcher
- * mode leaves auto-refresh enabled. The live revision is deliberately experimental, not Git
- * provenance.
+ * and reports write-relative refresh request/await, public query readiness, and the completed
+ * refresh's phase journal separately; watcher mode leaves auto-refresh enabled. The live revision
+ * is deliberately experimental, not Git provenance.
  */
 @OptIn(IndexinoInternalApi::class)
 internal object LiveOverlayCorpusProbe {
@@ -276,33 +276,16 @@ internal object LiveOverlayCorpusProbe {
                         report["writeNanos"] = (written - edited).toString()
                         val durableObserved =
                             async(observer) {
-                                withTimeout(3.minutes) {
-                                    var refreshRequested: Long? = null
-                                    var refreshAwaited: Long? = null
-                                    if (durableMode == "manual") {
-                                        refreshRequested = System.nanoTime() - written
-                                        index.refresh(request).await()
-                                        refreshAwaited = System.nanoTime() - written
-                                    }
-                                    while (true) {
-                                        val matched =
-                                            index.snapshot().use { durable ->
-                                                durable.generation != old.generation &&
-                                                    workload.matches(
-                                                        durable,
-                                                        listOf(source),
-                                                        version,
-                                                    )
-                                            }
-                                        if (matched) break
-                                        delay(50)
-                                    }
-                                    DurableObservation(
-                                        refreshRequested,
-                                        refreshAwaited,
-                                        System.nanoTime() - written,
-                                    )
-                                }
+                                observeDurable(
+                                    index,
+                                    request,
+                                    old,
+                                    workload,
+                                    source,
+                                    durableMode,
+                                    version,
+                                    written,
+                                )
                             }
                         try {
                             val live =
@@ -329,6 +312,20 @@ internal object LiveOverlayCorpusProbe {
                                 }
                                 observed.refreshAwaitNanos?.let { elapsed ->
                                     report["durableRefreshAwaitNanos"] = elapsed.toString()
+                                }
+                                observed.refreshId?.let { id ->
+                                    val phases =
+                                        IncrementalAcceptanceDriver.RefreshEvidence.summarize(
+                                                id,
+                                                index.refreshProgress(id).text,
+                                                workspace.parent.toString(),
+                                            )
+                                            .getValue("phaseMillis")
+                                            .jsonObject
+                                    phases.forEach { (phase, millis) ->
+                                        report["durablePhase_${phase}Millis"] =
+                                            millis.jsonPrimitive.content
+                                    }
                                 }
                                 index.snapshot().use { durable ->
                                     check(durable.generation != old.generation)
@@ -361,10 +358,52 @@ internal object LiveOverlayCorpusProbe {
                 }
             }
 
+    private suspend fun observeDurable(
+        index: Indexino,
+        request: RefreshRequest,
+        old: IndexSnapshot,
+        workload: IncrementalWorkload,
+        source: IncrementalWorkload.Source,
+        durableMode: String,
+        version: Int,
+        written: Long,
+    ): DurableObservation =
+        withTimeout(3.minutes) {
+            var refreshRequested: Long? = null
+            var refreshAwaited: Long? = null
+            var refreshId: String? = null
+            var awaitedGeneration: WorkspaceGenerationId? = null
+            if (durableMode == "manual") {
+                refreshRequested = System.nanoTime() - written
+                val handle = index.refresh(request)
+                refreshId = handle.id.value
+                awaitedGeneration = handle.await().generation
+                refreshAwaited = System.nanoTime() - written
+            }
+            while (true) {
+                val matched =
+                    index.snapshot().use { durable ->
+                        durable.generation != old.generation &&
+                            (awaitedGeneration == null ||
+                                durable.generation == awaitedGeneration) &&
+                            workload.matches(durable, listOf(source), version)
+                    }
+                if (matched) break
+                delay(50)
+            }
+            DurableObservation(
+                refreshRequested,
+                refreshAwaited,
+                System.nanoTime() - written,
+                refreshId,
+            )
+        }
+
     private class DurableObservation(
         val refreshRequestNanos: Long?,
         val refreshAwaitNanos: Long?,
         val readyNanos: Long,
+        val refreshId: String?,
     )
 
     private fun buildLiveSnapshot(
