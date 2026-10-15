@@ -15,6 +15,8 @@ the index supplies **facts** from a persistent cache outside the repository chec
 Indexino resolves the cache root from `$INDEXINO_CACHE_DIR`, then `$XDG_CACHE_HOME/indexino`,
 then `~/Library/Caches/indexino` on macOS or `~/.cache/indexino` elsewhere.
 See [Index storage](../../../docs/INDEX-STORAGE.md) for the cache layout.
+The current CLI also creates a project-local compatibility copy after `index`.
+See [CLI storage](../../../docs/CLI.md#storage) for that transitional behavior.
 
 ## Prerequisites
 

@@ -5,9 +5,12 @@ described in [PUBLIC-API-DESIGN.html](PUBLIC-API-DESIGN.html) (Accepted 2026-07-
 
 ## Storage
 
-The CLI stores its cache outside the checkout. See [INDEX-STORAGE.md](INDEX-STORAGE.md) for
-the user-local cache root and layout. Delete and rebuild any historical project-local
-`.indexino/index/<commit>/` store; Indexino does not migrate it.
+The product cache lives under the user-local root described in [INDEX-STORAGE.md](INDEX-STORAGE.md).
+The current CLI also writes a compatibility copy after each successful `index` command:
+`<project>/.indexino/index/<commit>/base.xodus` and `manifest.json`.
+`IndexCommand.materializeCliCompatibilityProjection` creates this copy from the published generation.
+Deleting the copy does not delete the user-local cache; the next successful `index` recreates it.
+Do not extend this transitional layout or use it as the product cache contract.
 
 ## Lifecycle commands (product surface)
 
