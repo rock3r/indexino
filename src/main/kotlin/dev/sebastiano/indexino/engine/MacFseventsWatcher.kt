@@ -104,7 +104,7 @@ internal class MacFseventsWatcher(
                     paths,
                     SINCE_NOW,
                     LATENCY_SECONDS,
-                    FILE_EVENTS,
+                    FILE_EVENTS or NO_DEFER,
                 )
                     as MemorySegment
             check(stream != NULL) { "FSEventStreamCreate returned null" }
@@ -167,6 +167,7 @@ internal class MacFseventsWatcher(
     private companion object {
         private const val UTF8 = 0x08000100
         private const val FILE_EVENTS = 0x00000010
+        private const val NO_DEFER = 0x00000002
         private const val OVERFLOW_FLAGS = 0x0000000F
         private const val SINCE_NOW = -1L
         private const val LATENCY_SECONDS = 0.1

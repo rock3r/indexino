@@ -131,6 +131,9 @@ the worker's handle is registered.
 
 On macOS a recursive FSEvents stream covers the workspace, so only directories outside it (for
 example external included builds) are registered with the JDK `WatchService`, which polls there.
+The stream uses NoDefer to deliver the first event after a quiet period without waiting for the
+100 ms native coalescing window; later events still coalesce, and the controller's 150 ms debounce
+still applies before a refresh starts.
 Paths inside `.git` directories and the Indexino cache are ignored on every transport: Git's index
 bookkeeping during origin resolution is not a source edit and must not schedule another refresh.
 A `.git` entry being created or removed still re-resolves topology; a polled modification of that
