@@ -73,9 +73,10 @@ types. Host constructs SPI contexts with public constructors annotated `@Indexin
 
 ### Refresh and publication boundaries
 
-The internal `IndexingCoordinator` owns refresh orchestration below both the facade and CLI.
-The CLI acts as an adapter over the coordinator.
-The coordinator must return the exact manifest,
+The in-process facade still constructs `cli/IndexBuildRunner` in `Indexino.runRefresh`.
+`IndexingCoordinator` deduplicates active refresh requests and runs their tasks.
+Moving build orchestration below both the facade and CLI remains planned work.
+The planned coordinator must return the exact manifest,
 changes, and outcome used by the completed run; callers must not re-resolve `HEAD` or re-derive a
 result from mutable storage.
 
