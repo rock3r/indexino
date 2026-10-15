@@ -49,7 +49,7 @@ worktree for product storage.
     source-links/registry.json           # dependency-to-source link registry snapshot
     source-links/generations/<link-generation>/snapshot.json
     change-journal
-    legacy-store/                      # S1 bridge; removed as one unit in S2
+    legacy-store/                      # historical bridge; absent from the current layout
       index/<commit>/                  # mutable incremental writer
       clients/<client-id>/generations/<generation-id>/store/ # per-client immutable snapshot copy
   registry/workspaces.json             # path → fs identity, generations, last-used
@@ -71,7 +71,7 @@ doc). Payload values use the durable `PluginFactValue` model in `indexino-model`
 ### Workspace identity
 
 - `<workspace-id>` is the first 16 hexadecimal characters of SHA-256 over the canonical workspace
-  path. The fixed 64-bit identifier keeps the S6 runtime socket below macOS's 102-character budget.
+  path. The fixed 64-bit identifier keeps the runtime socket below macOS's 102-character budget.
 - **Not** “one Git commit = one store directory”.
 - A workspace generation is a **composite** manifest pinning topology + origin shards + link
   generation (public types are composite even when the first engine is one-shard).
@@ -94,7 +94,7 @@ Logical key prefixes remain useful for mental models and generation-local indexe
 | Prefix / family | Owner | Purpose |
 |-----------------|-------|---------|
 | symbols / calls / refs | Core | Kotlin/Java definitions, call graph, references |
-| resources | Core (S10) | Android/CMP resource identity (deferred public API) |
+| resources | Core | Android/Compose Multiplatform resource identity |
 | file hashes | Core | Content-key inputs for packs |
 | plugin namespaces | Plugins | Namespaced facts under plugin ID + `PluginFactSchemaVersion` |
 | meta | Core | Indexer / schema versions, generation metadata |
@@ -140,7 +140,7 @@ different read of the file.
 CLI-only operators: `indexino cache status|gc|forget` and `daemon stop --purge`. Explicit
 last-used in the registry (not filesystem `atime`). GC grace window + re-verify before unlink.
 
-## S2 implementation layout
+## Current implementation layout
 
 Refresh writes mutable incremental output only beneath
 `workspaces/<workspace-id>/staging/in-process-writer/`. On a completed refresh, indexino installs an

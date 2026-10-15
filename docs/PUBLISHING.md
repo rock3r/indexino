@@ -10,7 +10,7 @@ native-packaging input. Both are deliberately excluded from Maven publication.
 
 ## API publication state
 
-No version has been published. The current snapshot exposes the reviewed S1 API from
+The published artifacts expose the reviewed embedded API from
 `indexino-model` and `dev.sebastiano.indexino.api`; implementation packages remain unsupported.
 Metalava signature dumps under `api/<artifact>/`, detekt declaration rules, and external consumer
 fixtures enforce that boundary. See [API-STABILITY.md](API-STABILITY.md) and
