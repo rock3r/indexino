@@ -1,8 +1,8 @@
 # API stability
 
-Indexino has not published a release. The reviewed embedded API is landing incrementally through
-the tracer-bullet slices in [PUBLIC-API-DESIGN.html](PUBLIC-API-DESIGN.html), starting with the S1
-model and in-process facade. CLI, Xodus, topology, parser, producer, and persistence implementation
+Indexino publishes the reviewed embedded API described in
+[PUBLIC-API-DESIGN.html](PUBLIC-API-DESIGN.html), including the shared model and client facade.
+CLI, Xodus, topology, parser, producer, and persistence implementation
 types remain outside the compatibility boundary.
 
 ## Current boundary
@@ -10,7 +10,7 @@ types remain outside the compatibility boundary.
 - Public declarations exist only in the packages and artifacts listed below; other production
   declarations remain `internal`.
 - Strict Kotlin explicit API mode is enabled.
-- `dev.sebastiano.indexino.model` and `dev.sebastiano.indexino.api` are the supported S1 embedding
+- `dev.sebastiano.indexino.model` and `dev.sebastiano.indexino.api` are the supported embedding
   packages.
 - CLI JSONL protocols and the on-disk schema are separate contracts documented in
   [CLI.md](CLI.md) and [INDEX-STORAGE.md](INDEX-STORAGE.md).

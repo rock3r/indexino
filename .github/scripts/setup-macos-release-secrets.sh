@@ -2,7 +2,7 @@
 # Populate Indexino GitHub Actions secrets for macOS codesign + notarization.
 #
 # Source items (1Password):
-#   - "Compose Pi Apple signing cert" — credential (app-specific password) and attached
+#   - the item named by $OP_APPLE_ITEM — credential (app-specific password) and attached
 #     developerID_application.cer + developer_id_application.key → MACOS_CERTIFICATE_P12
 #   - "Apple ID" — username (email) → APPLE_ID; team ID → APPLE_TEAM_ID
 #
@@ -11,22 +11,27 @@
 # password stored on this item (matching notarytool's --apple-id flow).
 #
 # Usage:
-#   .github/scripts/setup-macos-release-secrets.sh [owner/repo]
+#   OP_APPLE_ITEM='<item title>' .github/scripts/setup-macos-release-secrets.sh [owner/repo]
+#
+# Required:
+#   OP_APPLE_ITEM         title of the 1Password item that holds the signing cert
 #
 # Optional:
 #   P12_EXPORT_PASSWORD   password for the generated .p12 (random if unset)
-#   OP_APPLE_ITEM         override 1Password item title
 
 set -euo pipefail
 
 REPO="${1:-rock3r/indexino}"
-ITEM="${OP_APPLE_ITEM:-Compose Pi Apple signing cert}"
 VAULT="${OP_APPLE_VAULT:-Private}"
 
 fail() {
   echo "setup-macos-release-secrets: $*" >&2
   exit 1
 }
+
+ITEM="${OP_APPLE_ITEM:-}"
+[[ -n "$ITEM" ]] || \
+  fail "set OP_APPLE_ITEM to the title of the 1Password item that holds the Developer ID signing cert"
 
 command -v op >/dev/null 2>&1 || fail "1Password CLI 'op' is required"
 command -v gh >/dev/null 2>&1 || fail "GitHub CLI 'gh' is required"

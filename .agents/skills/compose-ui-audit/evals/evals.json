@@ -3,8 +3,8 @@
   "evals": [
     {
       "id": 0,
-      "prompt": "Audit this hypothetical Compose Pi UI surface and return a concise report. Surface: ChatPanel collects raw SessionState plus workspaceRoot plus modelDiscovery in separate collectAsState calls; a LaunchedEffect(Unit) parses permission payload JSON and updates local mutable state; LazyColumn items use mixed row types without contentType; rows use index keys. Report the top findings and top fixes.",
-      "expected_output": "An evidence-style audit report with severity-ranked findings, Compose Pi-specific categories, top three fixes, and no Android lifecycle/Material/Navigation scoring assumptions.",
+      "prompt": "Audit this hypothetical Compose Desktop UI surface and return a concise report. Surface: ChatPanel collects raw SessionState plus workspaceRoot plus modelDiscovery in separate collectAsState calls; a LaunchedEffect(Unit) parses permission payload JSON and updates local mutable state; LazyColumn items use mixed row types without contentType; rows use index keys. Report the top findings and top fixes.",
+      "expected_output": "An evidence-style audit report with severity-ranked findings, project-specific categories, top three fixes, and no Android lifecycle/Material/Navigation scoring assumptions.",
       "files": [],
       "expectations": [
         "Uses severity-ranked findings or top findings rather than default Android-style numeric scoring.",
@@ -17,7 +17,7 @@
     },
     {
       "id": 1,
-      "prompt": "Give a focused audit of a Compose Pi desktop interop change. Surface: a reusable ProviderRow composable directly opens JFileChooser, writes AppState settings, calls Desktop.getDesktop().browse, and has a global shortcut handler that bypasses the same presenter method used by the button. Produce a concise audit with top fixes.",
+      "prompt": "Give a focused audit of a Compose Desktop interop change. Surface: a reusable ProviderRow composable directly opens JFileChooser, writes AppState settings, calls Desktop.getDesktop().browse, and has a global shortcut handler that bypasses the same presenter method used by the button. Produce a concise audit with top fixes.",
       "expected_output": "A desktop-specific audit that identifies interop leakage, direct app-state mutation from UI, shortcut/button path divergence, and recommends helper/callback seams and presenter-owned state mutations.",
       "files": [],
       "expectations": [
@@ -31,7 +31,7 @@
     },
     {
       "id": 2,
-      "prompt": "The user says: 'I finished the UI changes; run a quick review pass and clean up anything obvious.' Decide which Compose Pi review workflow or skill should be used, and explain the routing briefly.",
+      "prompt": "The user says: 'I finished the UI changes; run a quick review pass and clean up anything obvious.' Decide which project review workflow or skill should be used, and explain the routing briefly.",
       "expected_output": "A routing answer that prefers review-workflow-guidance/Kondo Pass for cleanup-oriented post-change review, not compose-ui-audit as a replacement for built-in review workflows.",
       "files": [],
       "expectations": [
@@ -43,9 +43,9 @@
     },
     {
       "id": 3,
-      "prompt": "Give a focused audit of ProviderHeaderContent.kt's architecture shape: local hover state, FocusRequester + LaunchedEffect(Unit), TextFieldState for API key editing, and callbacks for save/remove/login/logout. Do not nitpick Jewel component choice.",
+      "prompt": "Give a focused audit of a hypothetical ProviderHeaderContent.kt with this architecture shape: local hover state, FocusRequester + LaunchedEffect(Unit), TextFieldState for API key editing, and callbacks for save/remove/login/logout. Do not nitpick Jewel component choice.",
       "expected_output": "A healthy or low-finding audit that preserves UI-local hover/focus/editing state, notes callbacks keep app behavior out of the leaf component, and avoids forced findings.",
-      "files": ["src/main/kotlin/com/composepi/ui/screens/ProviderHeaderContent.kt"],
+      "files": [],
       "expectations": [
         "Reports no critical/high architecture issue or says the shape is broadly healthy.",
         "Treats hover/focus/editing state as acceptable UI-local state.",
@@ -56,12 +56,12 @@
     },
     {
       "id": 4,
-      "prompt": "Give this hypothetical surface a numeric Compose Pi UI architecture score: a screen collects one presenter-owned ScreenState, uses stable LazyColumn key/contentType, has one local expanded boolean for UI only, and opens URLs through an injected onOpenUrl callback. Include the number and caveats.",
-      "expected_output": "A heuristic score using Compose Pi-specific categories, likely high, with caveats that scoring is source-review confidence and findings still matter more than the number.",
+      "prompt": "Give this hypothetical surface a numeric UI architecture score: a screen collects one presenter-owned ScreenState, uses stable LazyColumn key/contentType, has one local expanded boolean for UI only, and opens URLs through an injected onOpenUrl callback. Include the number and caveats.",
+      "expected_output": "A heuristic score using project-specific categories, likely high, with caveats that scoring is source-review confidence and findings still matter more than the number.",
       "files": [],
       "expectations": [
         "Labels numeric scoring as heuristic rather than measured runtime truth.",
-        "Uses Compose Pi-specific categories or explains them instead of Android release/app metrics.",
+        "Uses project-specific categories or explains them instead of Android release/app metrics.",
         "Gives a high score or healthy assessment based on the described good patterns.",
         "Does not mention Android baseline profiles, R8, Material, Navigation, or collectAsStateWithLifecycle.",
         "Still prioritizes findings/caveats over the number."

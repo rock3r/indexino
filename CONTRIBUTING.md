@@ -35,7 +35,7 @@ required in CI — tests use fixture data under `src/test/resources/fixtures/`.
 Agents working in this repo should read [AGENTS.md](AGENTS.md) and follow TDD
 (test-first) for production changes. For open PRs, use the
 [babysit-pr](.agents/skills/babysit-pr/SKILL.md) skill to poll CI, address review
-comments, and merge only when checks (including Bugbot/Codex when enabled) are green.
+comments, and merge only when checks (including Codex review when enabled) are green.
 
 ## Commit and PR hygiene
 

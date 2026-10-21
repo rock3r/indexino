@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "local_gate": null,
+  "expected_skipped_checks": [],
+  "required_checks": [],
+  "retry_eligible_workflow_keywords": ["e2e"],
+  "hung_check_minutes": 30,
+  "trusted_author_associations": ["OWNER", "MEMBER", "COLLABORATOR"],
+  "review_bot_login_keywords": ["codex"],
+  "max_session_minutes": 90,
+  "require_up_to_date": "auto",
+  "codex": {
+    "enabled": true,
+    "required": false,
+    "idle_wait_minutes": 10
+  },
+  "pr_af": {
+    "enabled": false,
+    "label": "pr-af",
+    "workflow_names": [],
+    "check_names": [],
+    "review_body_markers": [],
+    "review_author_login": "github-actions[bot]",
+    "missing_check_grace_minutes": 5
+  },
+  "cleanup": {
+    "branch_delete_requires_approval": false
+  },
+  "sync": {
+    "keep": []
+  }
+}

@@ -2,16 +2,7 @@
 
 [![check](https://github.com/rock3r/indexino/actions/workflows/check.yml/badge.svg)](https://github.com/rock3r/indexino/actions/workflows/check.yml)
 
-> **Pre-release** — the embedded API is published as an experimental 0.x release train. Its
-> public artifacts are compatibility-gated, while APIs explicitly marked experimental may change in
-> a minor release. CLI and storage contracts remain pre-release.
-
-> **Personal experiment only** — Indexino is a personal experimentation project, not a product or
-> supported tool. It is not production-ready and carries no commitment to stability, maintenance,
-> security fixes, compatibility, releases, or fitness for any use. Do not depend on it for
-> important work; it may change radically or be abandoned without notice.
-
-Standalone Kotlin CLI and embeddable library that builds a **persistent** local code index in a
+Indexino is a standalone Kotlin CLI and embeddable library that builds a **persistent** local code index in a
 user-local content-addressed cache (never under the target worktree) for agent audit tools.
 Detekt-independent, Bazel-first (Gradle secondary), and ships as a fat compatibility JAR with no
 target-repo build coupling. A separate R8-shrunk JAR is the internal native-distribution input.
@@ -22,6 +13,12 @@ DisableSelection facts at composable call sites for Compose/Jewel UI audits.
 The core index also extracts Kotlin and Java declarations/references plus Android XML resources.
 Java uses the JDK compiler tree API, Kotlin uses embedded PSI, and XML uses secure JDK StAX
 parsing; no language-server or parser daemon is required.
+
+> **Experimental and unsupported** — Indexino is a personal experiment. Do not use it for
+> production or important work. The project makes no commitment to maintenance, security fixes,
+> future releases, stability, compatibility, or fitness for any use. It may change or stop without
+> notice. The published 0.x artifacts have compatibility checks; explicitly experimental APIs may
+> change in a minor release. CLI and storage contracts remain pre-release.
 
 Licensed under the [Unenshittifiable License (UEL) v1.0](https://uelicense.eu/) — see
 [LICENSE](LICENSE).

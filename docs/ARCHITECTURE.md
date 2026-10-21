@@ -9,9 +9,9 @@
 - thin Maven artifacts for embedding (`indexino-model`, `indexino`, `indexino-plugin-api`,
   optional `indexino-script-host`, `indexino-compose-decoration`).
 
-It is not a SelectionContainer one-off — **selection-context** is the first **compiled plugin** on
-shared storage and topology; **compose-decoration** (S11) derives ordered modifier chains from
-generic call/argument facts. Binding product design:
+The **selection-context** compiled plugin uses shared storage and topology.
+The **compose-decoration** plugin derives ordered modifier chains from generic call/argument facts.
+Binding product design:
 [PUBLIC-API-DESIGN.html](PUBLIC-API-DESIGN.html) (Accepted 2026-07-25).
 
 ```
@@ -51,7 +51,7 @@ generic call/argument facts. Binding product design:
 | `indexino` (`…api`) | Client facade: connect, refresh, snapshot, status, diagnostics |
 | `indexino-plugin-api` | Versioned SPI: analyzers, post-processors, checks, fact sink/view |
 | `indexino-selection-context` | SelectionContainer / DisableSelection compiled plugin |
-| `indexino-compose-decoration` | Compose modifier-chain decoration compiled plugin (S11) |
+| `indexino-compose-decoration` | Compose modifier-chain decoration compiled plugin |
 | `indexino-script-host` | Optional Alpha `.indexino.kts` (non-suspend DSL) |
 | `engine` (internal) | Workspace runtime, refresh registry, coordinator, pack cache, GC |
 | `cli` (internal) | Clikt, daemon/cache commands, JSONL, exit codes |
@@ -71,16 +71,16 @@ script-host ──► indexino + model
 **Never** `indexino-plugin-api` → `indexino` or `indexino` → `api(indexino-plugin-api)` for shared
 types. Host constructs SPI contexts with public constructors annotated `@IndexinoInternalApi`.
 
-### S1 transitional boundaries
+### Refresh and publication boundaries
 
-The S1 in-process facade delegates refresh orchestration to internal `cli/IndexBuildRunner`. This is
-a tracer shortcut, not the target dependency direction. S3 extracts that orchestration into an
-internal `IndexingCoordinator` owned below both facade and CLI when the refresh registry lands; the
-CLI then becomes an adapter over the coordinator. The coordinator must return the exact manifest,
+The in-process facade still constructs `cli/IndexBuildRunner` in `Indexino.runRefresh`.
+`IndexingCoordinator` deduplicates active refresh requests and runs their tasks.
+Moving build orchestration below both the facade and CLI remains planned work.
+The planned coordinator must return the exact manifest,
 changes, and outcome used by the completed run; callers must not re-resolve `HEAD` or re-derive a
 result from mutable storage.
 
-S2 publishes refresh output as immutable content-addressed packs with generation manifests and an
+The storage layer publishes refresh output as immutable content-addressed packs with generation manifests and an
 atomic workspace `current` pointer. Mutable incremental writer state is confined to workspace
 `staging/in-process-writer`; each client atomically materializes a referenced pack into its own
 on-disk `refs/<client>/<generation>/store` snapshot directory. Snapshot pins reclaim only those
@@ -90,9 +90,9 @@ The thin `indexino` POM deliberately omits CLI-only Clikt, JNA, and `slf4j-nop`;
 Metadata is disabled for that artifact so Gradle consumers resolve the filtered POM rather than an
 unfiltered `.module` graph. The fat CLI distribution still contains its runtime dependencies.
 
-S5 publishes a complete signed Central release train: `indexino-bom`, `indexino-model`, `indexino`,
-`indexino-plugin-api`, `indexino-selection-context`, and `indexino-compose-decoration`. S8 adds the optional Alpha
-`indexino-script-host` artifact to that aligned train. The BOM aligns those coordinates for
+The signed Central release includes `indexino-bom`, `indexino-model`, `indexino`,
+`indexino-plugin-api`, `indexino-selection-context`, and `indexino-compose-decoration`.
+The optional Alpha `indexino-script-host` artifact shares that release version. The BOM aligns those coordinates for
 Gradle and Maven consumers, and the tag workflow uploads every artifact together. Maven Local
 remains available for dogfooding, but is no longer the only publication path.
 
@@ -119,20 +119,20 @@ See [INDEX-STORAGE.md](INDEX-STORAGE.md). Commit is provenance, not the primary 
 ## Workspace runtime
 
 A long-lived **local** workspace runtime (normally a daemon) owns refresh work, watchers, plugin
-classloaders, and budgets. CLI and embedded clients attach over AF_UNIX. Early tracer slices may
-run in-process with the same public types. This is **not** an IDE/MCP requirement — it is a local
-process for durable indexing.
+classloaders, and budgets. CLI and embedded clients attach over AF_UNIX. Clients can also
+run in-process with the same public types. The runtime runs locally and does not require an IDE
+or Model Context Protocol (MCP) server.
 
 ## selection-context
 
 Lexical PSI walk at index time → plugin-namespaced facts. Queries use checks / typed wrappers, not
-source tree walks. Extraction to `indexino-selection-context` is slice S4.
+source tree walks. The `indexino-selection-context` artifact contains this plugin.
 
 ## Topology
 
 - **Primary:** Bazel — [BAZEL-TOPOLOGY.md](BAZEL-TOPOLOGY.md)
 - **Secondary:** Gradle — [GRADLE-TOPOLOGY.md](GRADLE-TOPOLOGY.md)
-- Public scopes: `IndexScope.bazel` / `gradle` (+ `includingDependencies`); non-Git single root from S2
+- Public scopes: `IndexScope.bazel` / `gradle` (+ `includingDependencies`); single-root non-Git workspaces are also supported
 
 ## Technology
 
@@ -168,8 +168,6 @@ build cache is disabled because Gradle content snapshots do not detect metadata-
 would invalidate AOT. Construo is configured to consume this exact normalized output.
 
 Each native target uses checked-in JBR and Roast digests. Construo verifies those archives before
-extraction, runs `jlink`, `jdeps`, and `javap` from the matching target JBRSDK 25, and emits one
-target-specific archive. Construo verifies those archives before
 extraction, runs `jlink`, `jdeps`, and `javap` from the matching target JBRSDK 25, and emits one
 target-specific archive. The shipped jlink image omits the standalone `java` launcher from the
 default Roast runtime layout, but native ZIPs restore `runtime/bin/java` (or `java.exe`) from the
@@ -234,8 +232,9 @@ the finalized ZIP, checksum, reports, test results, and console log for seven da
 
 ## Phased delivery
 
-Tracer-bullet slices **S0–S11** in [PUBLIC-API-DESIGN.html](PUBLIC-API-DESIGN.html). Historical
-C*/A* labels in older plan notes are superseded for product delivery planning.
+The delivery plan in [PUBLIC-API-DESIGN.html](PUBLIC-API-DESIGN.html) covers the embedded API,
+storage, refresh, plugins, publication, daemon, topology, scripts, resources, and Compose decoration.
+It replaces the older plans under `.plans/`.
 
 ## Out of scope
 
