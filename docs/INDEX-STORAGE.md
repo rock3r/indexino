@@ -235,7 +235,10 @@ the origin and relative path so a deleted/changed file cannot expose inherited f
 different origin. Repeated edits reload the prior delta into the staging writer, remove obsolete
 delta facts, and publish a new immutable delta. Readers pin the previous generation while the
 new one is built. A byte-for-byte revert to an existing generation repoints to its original
-manifest; unchanged refreshes do not reinstall the writer pack. File analyzers process changed
+manifest only while all referenced packs remain present, including overlay deltas and recursively
+referenced bases. Historical manifests can outlive packs reclaimed by GC; in that case publication
+uses the rebuilt representation instead of reviving missing content. Unchanged refreshes do not
+reinstall the writer pack. File analyzers process changed
 sources; post-processors still recompute their declared scope. Physical cleanup scans the delta
 for invalidated records rather than streaming the inherited base.
 

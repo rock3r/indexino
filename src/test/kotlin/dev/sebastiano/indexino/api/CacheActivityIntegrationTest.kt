@@ -3,6 +3,7 @@ package dev.sebastiano.indexino.api
 import dev.sebastiano.indexino.cli.CacheMaintenance
 import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
+import dev.sebastiano.indexino.model.PluginId
 import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.SymbolQuery
 import java.nio.file.Files
@@ -122,6 +123,58 @@ internal class CacheActivityIntegrationTest {
             }
             CacheMaintenance.gc(cache)
             assertFalse(Files.exists(orphan), "Completed refresh must release GC exclusion")
+        }
+    }
+
+    @Test
+    fun `reverting after gc rebuilds historical packs for a fresh client`() = runBlocking {
+        withIndex { first, workspace, cache ->
+            val configuration =
+                IndexinoConfiguration.forWorkspace(workspace)
+                    .withRuntimeAttach(RuntimeAttachMode.IN_PROCESS)
+                    .withAutoRefresh(AutoRefreshMode.DISABLED)
+            val request = RefreshRequest.forScope(IndexScope.gradle(":").includingDependencies())
+            val generationA = first.refresh(request).await().generation
+            val manifests =
+                WorkspaceGenerationManifestStore(cache, InProcessCacheLayout.workspaceId(workspace))
+            val packA =
+                ContentAddressedPackCache(cache).packPath(manifests.current()!!.packKeys.single())
+            first.close()
+
+            Files.writeString(workspace.resolve("src/main/kotlin/Marker.kt"), "class Replacement")
+            Indexino.connect(configuration).use { second ->
+                // Different analysis coordinates prevent B from retaining A as an overlay base.
+                second
+                    .refresh(request.withPlugin(PluginId.of("dev.sebastiano.selection-context")))
+                    .await()
+            }
+            assertEquals("materialized", manifests.current()!!.representation)
+            assertTrue(manifests.current()!!.baseGeneration == null)
+            CacheMaintenance.gc(cache)
+            assertFalse(Files.exists(packA), "GC must actually reclaim the historical A pack")
+
+            Files.writeString(workspace.resolve("src/main/kotlin/Marker.kt"), "class Marker")
+            Indexino.connect(configuration).use { reverting ->
+                assertEquals(generationA, reverting.refresh(request).await().generation)
+            }
+            Indexino.connect(configuration).use { fresh ->
+                fresh.snapshot().use { snapshot ->
+                    assertEquals(generationA, snapshot.generation)
+                    assertEquals(
+                        listOf("Marker"),
+                        snapshot
+                            .findSymbols(SymbolQuery.named("Marker"), QueryOptions.page(10))
+                            .items
+                            .map { it.name },
+                    )
+                    assertTrue(
+                        snapshot
+                            .findSymbols(SymbolQuery.named("Replacement"), QueryOptions.page(10))
+                            .items
+                            .isEmpty()
+                    )
+                }
+            }
         }
     }
 

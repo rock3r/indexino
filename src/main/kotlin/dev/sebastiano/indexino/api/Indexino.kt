@@ -859,10 +859,13 @@ private constructor(
             previous?.compatibilityManifest?.copy(builtAt = compatibilityManifest.builtAt) ==
                 compatibilityManifest &&
                 previous.linkGeneration == linkGeneration &&
-                previous.basicFactSchemaVersion == BASIC_FACT_SCHEMA_VERSION
+                previous.basicFactSchemaVersion == BASIC_FACT_SCHEMA_VERSION &&
+                hasReachablePacks(cacheRoot, workspaceId, previous)
         ) {
             // Reverting to known bytes must repoint at the old immutable generation. Replacing its
             // manifest with an overlay based on itself would create a recursive snapshot.
+            // Historical manifests can outlive their packs after GC; those use the rebuilt
+            // representation below.
             manifests.publish(previous)
             return PublishedStore(path = clientStorePath, created = false)
         }
@@ -871,7 +874,8 @@ private constructor(
             current?.compatibilityManifest?.copy(builtAt = compatibilityManifest.builtAt) ==
                 compatibilityManifest &&
                 current.basicFactSchemaVersion == BASIC_FACT_SCHEMA_VERSION &&
-                current.generation != generation.value
+                current.generation != generation.value &&
+                hasReachablePacks(cacheRoot, workspaceId, current)
         ) {
             // A changed link generation does not require copying or repacking source facts.
             manifests.publish(
@@ -922,6 +926,33 @@ private constructor(
             legacyOrigin = legacyOrigin,
             linkGeneration = linkGeneration,
         )
+    }
+
+    @Suppress("ReturnCount")
+    private fun hasReachablePacks(
+        cacheRoot: Path,
+        workspaceId: String,
+        manifest: WorkspaceGenerationManifest,
+        visited: MutableSet<Pair<String, String>> = mutableSetOf(),
+    ): Boolean {
+        if (!visited.add(workspaceId to manifest.generation)) return false
+        val packs = ContentAddressedPackCache(cacheRoot)
+        if (
+            (manifest.packKeys + manifest.overlayPackKeys).any {
+                !Files.isRegularFile(packs.packPath(it))
+            }
+        ) {
+            return false
+        }
+        if (manifest.representation != WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) {
+            return manifest.packKeys.isNotEmpty()
+        }
+        val baseWorkspaceId = manifest.baseWorkspaceId ?: return false
+        val baseGeneration = manifest.baseGeneration ?: return false
+        val base =
+            WorkspaceGenerationManifestStore(cacheRoot, baseWorkspaceId)
+                .readGeneration(baseGeneration) ?: return false
+        return hasReachablePacks(cacheRoot, baseWorkspaceId, base, visited)
     }
 
     private fun publishOverlayGenerationStore(
