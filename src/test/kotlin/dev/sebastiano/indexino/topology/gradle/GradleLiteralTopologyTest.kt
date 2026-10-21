@@ -12,6 +12,50 @@ class GradleLiteralTopologyTest {
     @TempDir lateinit var workspace: Path
 
     @Test
+    fun `colonless Kotlin and Groovy includes resolve remapped app dependency closure`() {
+        val settings =
+            listOf(
+                "settings.gradle.kts" to
+                    """
+                    include("app", "lib")
+                    project(":app").projectDir = file("custom/app")
+                    """
+                        .trimIndent(),
+                "settings.gradle" to
+                    """
+                    include 'app', 'lib'
+                    project(':app').projectDir = file('custom/app')
+                    """
+                        .trimIndent(),
+            )
+        for ((file, content) in settings) {
+            val root = workspace.resolve(file).also { it.createDirectories() }
+            root.resolve(file).writeText(content)
+            root.resolve("custom/app/src/main/kotlin").createDirectories()
+            root.resolve("custom/app/src/main/kotlin/App.kt").writeText("class App")
+            root.resolve("custom/app/build.gradle.kts").writeText("api(project(\":lib\"))")
+            root.resolve("lib/src/main/java").createDirectories()
+            root.resolve("lib/src/main/java/Lib.java").writeText("class Lib {}")
+
+            assertEquals(
+                listOf("custom/app/src/main/kotlin/App.kt", "lib/src/main/java/Lib.java"),
+                GradleTopology.resolveSources(":app", root, includeDeps = true).sourceFiles,
+                file,
+            )
+            assertEquals(
+                listOf("custom/app/src/main/kotlin/App.kt", "lib/src/main/java/Lib.java"),
+                GradleTopology.resolveSources(":", root, includeDeps = true).sourceFiles,
+                "whole-build enumeration: $file",
+            )
+            assertEquals(
+                listOf(":app", ":lib"),
+                SettingsParser.parseIncludes(content + "\ninclude(':lib', ':app')"),
+                file,
+            )
+        }
+    }
+
+    @Test
     fun `Groovy literals exclude comments strings and computed includes`() {
         assertEquals(
             listOf(":shell", ":engine:codec", ":leaf"),

@@ -25,6 +25,11 @@ block comments) and strings containing example declarations are not declarations
     include(project(":shell"))
     project(":engine:wire-codec").projectDir = file("parts/codec")
 
+Project includes may omit the leading colon (`include("app", "lib")` or `include 'app', 'lib'`).
+They are canonicalized to `:app` / `:lib` before deduplication, so mixed spellings identify the same
+module for source discovery, directory remaps, and dependency closure. `includeBuild` arguments
+remain filesystem paths, not project paths.
+
 Literal `projectDir = file(...)` remaps apply to source discovery **and** dependency build-file
 lookup, including modules of included builds. Remaps must remain within their build root after
 normalization and, for existing directories, canonicalization. External remaps fail rather than

@@ -11,6 +11,7 @@ internal object SettingsParser {
         return tokens.indices
             .filter { tokens[it] == name && tokens.getOrNull(it - 1) != "." }
             .flatMap { arguments(GradleScriptTokens.Cursor(tokens, it + 1)) }
+            .map { if (name == "include" && !it.startsWith(":")) ":$it" else it }
             .distinct()
     }
 
