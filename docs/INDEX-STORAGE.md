@@ -328,6 +328,8 @@ Each client materializes a referenced immutable pack atomically into its own
 `workspaces/<workspace-id>/refs/<client-id>/<generation-id>/store/` directory before opening a
 snapshot. Simultaneous snapshots in one client share a reference-counted read-only Xodus environment;
 different clients open their own copies because Xodus locks even read-only environments exclusively.
+Opening and closing an environment is serialized per store directory, so a slow Xodus cleaner
+during snapshot close cannot block a refresh opening an unrelated base or delta store.
 Publication and snapshot restoration may compete to materialize the same immutable destination.
 If another complete directory wins the rename, its copy is reused and the losing staging directory
 is removed. A move failure without a directory at the destination still propagates.

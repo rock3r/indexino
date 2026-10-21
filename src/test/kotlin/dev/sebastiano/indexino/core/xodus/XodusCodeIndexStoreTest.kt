@@ -6,7 +6,11 @@ import dev.sebastiano.indexino.core.record.CodeIndexRecordCodec
 import dev.sebastiano.indexino.core.record.MetaIndexerVersionRecord
 import dev.sebastiano.indexino.core.record.PluginFactRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
+import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.store.SharedReadOnlyStore
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import jetbrains.exodus.ArrayByteIterable
 import jetbrains.exodus.bindings.StringBinding
 import jetbrains.exodus.env.EnvironmentConfig
@@ -175,6 +179,59 @@ class XodusCodeIndexStoreTest {
             assertEquals(listOf(wantedSymbol), symbols)
             assertEquals(listOf(wantedSymbol), fileSymbols)
         }
+    }
+
+    @Test
+    fun `closing one snapshot does not block opening an unrelated store`() {
+        val firstPath = tempDir.resolve("first.xodus")
+        val secondPath = tempDir.resolve("second.xodus")
+        XodusCodeIndexStore.open(firstPath).close()
+        XodusCodeIndexStore.open(secondPath).close()
+        val closeStarted = CountDownLatch(1)
+        val releaseClose = CountDownLatch(1)
+        val openStarted = CountDownLatch(1)
+        val openFinished = CountDownLatch(1)
+        val failure = AtomicReference<Throwable?>()
+        val first =
+            SharedReadOnlyStore.open(firstPath) { path ->
+                val actual = XodusCodeIndexStore.open(path, readOnly = true)
+                object : CodeIndexStore by actual {
+                    override fun close() {
+                        closeStarted.countDown()
+                        check(releaseClose.await(5, TimeUnit.SECONDS))
+                        actual.close()
+                    }
+                }
+            }
+        val closing = Thread {
+            try {
+                first.close()
+            } catch (thrown: Throwable) {
+                failure.set(thrown)
+            }
+        }
+        val opening = Thread {
+            try {
+                openStarted.countDown()
+                SharedReadOnlyStore.open(secondPath).close()
+                openFinished.countDown()
+            } catch (thrown: Throwable) {
+                failure.set(thrown)
+            }
+        }
+        try {
+            closing.start()
+            assertTrue(closeStarted.await(5, TimeUnit.SECONDS))
+            opening.start()
+            assertTrue(openStarted.await(5, TimeUnit.SECONDS))
+            val independentOpenFinished = openFinished.await(1, TimeUnit.SECONDS)
+            assertTrue(independentOpenFinished, "An unrelated store waited for snapshot close")
+        } finally {
+            releaseClose.countDown()
+            closing.join(5_000)
+            opening.join(5_000)
+        }
+        failure.get()?.let { throw it }
     }
 
     @Test
