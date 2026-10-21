@@ -3,7 +3,12 @@ package dev.sebastiano.indexino.producer
 import java.nio.file.Path
 
 /** A source location whose path is relative to its independently owned origin. */
-internal data class IndexedSource(val originId: String, val originRoot: Path, val path: String) {
+internal data class IndexedSource(
+    val originId: String,
+    val originRoot: Path,
+    val path: String,
+    val isCode: Boolean = true,
+) {
     init {
         require(originId.isNotBlank()) { "Source origin ID must not be blank" }
         require(

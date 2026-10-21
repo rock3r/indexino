@@ -3,10 +3,15 @@ package dev.sebastiano.indexino.api
 import dev.sebastiano.indexino.model.PluginId
 import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.ReferenceQuery
+import dev.sebastiano.indexino.model.ResourceQuery
 import dev.sebastiano.indexino.model.SourceFile
 import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.SymbolQuery
 import java.nio.file.Files
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.io.path.Path
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
@@ -26,10 +31,398 @@ class InProcessIndexinoTest {
 
     private val tempDirs = mutableListOf<java.nio.file.Path>()
 
+    @Test
+    fun `unavailable published origin cannot supply a watcher capture`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-origin-watch-")
+        tempDirs.add(cacheDirectory)
+        val prior = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+            Indexino.connectBlocking(workspace).use { index ->
+                index.onSourcesResolvedForRuntime = { _, _, _ -> }
+                runSuspend { index.refresh(request).await() }
+                assertTrue(index.topologyForWatch(request) != null)
+                dev.sebastiano.indexino.core.cache
+                    .WorkspaceGenerationManifestStore(
+                        cacheDirectory,
+                        InProcessCacheLayout.workspaceId(workspace),
+                    )
+                    .markOriginsUnavailable(setOf("workspace"))
+                assertEquals(null, index.topologyForWatch(request))
+            }
+        } finally {
+            if (prior == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", prior)
+        }
+    }
+
+    @Test
+    fun `external publication during hinted refresh invalidates its capture`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-external-publication-")
+        tempDirs.add(cacheDirectory)
+        val prior = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+            val edited = workspace.resolve("ui/src/main/kotlin/Panel.kt")
+            Indexino.connectBlocking(workspace).use { index ->
+                index.onSourcesResolvedForRuntime = { _, _, _ -> }
+                runSuspend { index.refresh(request).await() }
+                val topology = checkNotNull(index.topologyForWatch(request))
+                val manifests =
+                    dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore(
+                        cacheDirectory,
+                        InProcessCacheLayout.workspaceId(workspace),
+                    )
+                val external =
+                    checkNotNull(manifests.current()).copy(generation = "other-publisher")
+                Files.writeString(edited, "package sample\nclass Conflict\n")
+                assertFailsWith<IndexinoException> {
+                    runSuspend {
+                        index
+                            .refresh(
+                                request,
+                                progress = { message ->
+                                    if (message == "index phase=publication state=started") {
+                                        manifests.publish(external)
+                                    }
+                                },
+                                machineProgress = null,
+                                topologyOverride = topology,
+                                hintedPaths = setOf(edited),
+                            )
+                            .await()
+                    }
+                }
+                assertEquals(external.generation, manifests.current()?.generation)
+            }
+        } finally {
+            if (prior == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", prior)
+        }
+    }
+
+    @Test
+    fun `watcher coverage loss during inherited analysis cannot publish`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-watch-coverage-")
+        tempDirs.add(cacheDirectory)
+        val prior = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+            val edited = workspace.resolve("ui/src/main/kotlin/Panel.kt")
+            Indexino.connectBlocking(workspace).use { index ->
+                index.onSourcesResolvedForRuntime = { _, _, _ -> }
+                val first = runSuspend { index.refresh(request).await() }
+                val topology = checkNotNull(index.topologyForWatch(request))
+                Files.writeString(edited, "package sample\nclass BeforeOverflow\n")
+                assertFailsWith<IndexinoException> {
+                    runSuspend {
+                        index
+                            .refresh(
+                                request,
+                                {},
+                                null,
+                                topology,
+                                setOf(edited),
+                                watcherCoverageValid = { false },
+                            )
+                            .await()
+                    }
+                }
+                val manifests =
+                    dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore(
+                        cacheDirectory,
+                        InProcessCacheLayout.workspaceId(workspace),
+                    )
+                assertEquals(first.generation.value, manifests.current()?.generation)
+                val reconciled = runSuspend { index.refresh(request).await() }
+                assertNotEquals(first.generation, reconciled.generation)
+            }
+        } finally {
+            if (prior == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", prior)
+        }
+    }
+
+    @Test
+    fun `covered hinted edit resolves origins incrementally and exactly`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-incremental-origins-")
+        tempDirs.add(cacheDirectory)
+        val prior = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+            val edited = workspace.resolve("ui/src/main/kotlin/Panel.kt")
+            Files.writeString(workspace.resolve("notes.txt"), "untracked non-source\n")
+            Indexino.connectBlocking(workspace).use { index ->
+                index.onSourcesResolvedForRuntime = { _, _, _ -> }
+                runSuspend { index.refresh(request).await() }
+                val topology = checkNotNull(index.topologyForWatch(request))
+                Files.writeString(edited, "package sample\nclass IncrementalOrigins\n")
+                val progress = CopyOnWriteArrayList<String>()
+                val originStarted = CountDownLatch(1)
+                val releaseOrigin = CountDownLatch(1)
+                val storeStarted = CountDownLatch(1)
+                val hintedRun = CompletableFuture.supplyAsync {
+                    runSuspend {
+                        index
+                            .refresh(
+                                request,
+                                { message ->
+                                    progress.add(message)
+                                    when (message) {
+                                        "index phase=origin-resolution state=started" -> {
+                                            originStarted.countDown()
+                                            check(releaseOrigin.await(20, TimeUnit.SECONDS))
+                                        }
+                                        "index phase=store-build state=started" ->
+                                            storeStarted.countDown()
+                                    }
+                                },
+                                null,
+                                topology,
+                                setOf(edited),
+                                recursiveWatchRoot = workspace.toRealPath(),
+                            )
+                            .await()
+                    }
+                }
+                try {
+                    assertTrue(originStarted.await(10, TimeUnit.SECONDS))
+                    assertTrue(
+                        storeStarted.await(10, TimeUnit.SECONDS),
+                        "published writer must overlap",
+                    )
+                    assertFalse(hintedRun.isDone, "provenance must join before publication")
+                } finally {
+                    releaseOrigin.countDown()
+                }
+                val hinted = hintedRun.get(30, TimeUnit.SECONDS)
+                assertEquals(RefreshOutcome.UPDATED, hinted.outcome)
+                assertTrue(progress.contains("index origins incremental=1 full=0"), "$progress")
+                for (phase in listOf("refresh-queue", "refresh")) {
+                    assertTrue(
+                        progress.any {
+                            it.matches(
+                                Regex("index phase=$phase state=completed durationMillis=\\d+")
+                            )
+                        },
+                        "$phase: $progress",
+                    )
+                }
+                // The full whole-repository resolution must agree byte for byte.
+                val full = runSuspend { index.refresh(request).await() }
+                assertEquals(RefreshOutcome.UNCHANGED, full.outcome)
+                assertEquals(hinted.generation, full.generation)
+
+                // Without recursive coverage a hinted edit keeps the full Git reads.
+                Files.writeString(edited, "package sample\nclass UncoveredOrigins\n")
+                progress.clear()
+                val capture = checkNotNull(index.topologyForWatch(request))
+                runSuspend {
+                    index.refresh(request, progress::add, null, capture, setOf(edited)).await()
+                }
+                assertTrue(progress.contains("index origins incremental=0 full=1"), "$progress")
+            }
+        } finally {
+            if (prior == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", prior)
+        }
+    }
+
+    @Test
+    fun `hinted edit inherits only from the generation this runtime captured`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-hinted-capture-")
+        tempDirs.add(cacheDirectory)
+        val prior = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+            val edited = workspace.resolve("ui/src/main/kotlin/Panel.kt")
+            Indexino.connectBlocking(workspace).use { first ->
+                first.onSourcesResolvedForRuntime = { _, _, _ -> }
+                runSuspend { first.refresh(request).await() }
+                val capturedTopology = checkNotNull(first.topologyForWatch(request))
+                Files.writeString(edited, "package sample\nclass WatcherUpdated\n")
+                val progress = mutableListOf<String>()
+                val updated = runSuspend {
+                    first
+                        .refresh(request, progress::add, null, capturedTopology, setOf(edited))
+                        .await()
+                }
+                assertEquals(RefreshOutcome.UPDATED, updated.outcome)
+                assertTrue(
+                    progress.any {
+                        it.matches(Regex("index source-capture read=1 inherited=[1-9]\\d*"))
+                    },
+                    "$progress",
+                )
+                assertTrue(progress.contains("index sources=reused watcher-capture"), "$progress")
+                assertFalse(
+                    progress.contains("index phase=source-resolution state=started"),
+                    "A hinted edit reuses the captured closure instead of re-resolving origins",
+                )
+                runSuspend { first.snapshot() }
+                    .use { snapshot ->
+                        assertTrue(
+                            runSuspend {
+                                    snapshot.findSymbols(
+                                        SymbolQuery.named("WatcherUpdated"),
+                                        QueryOptions.page(limit = 10),
+                                    )
+                                }
+                                .items
+                                .isNotEmpty()
+                        )
+                    }
+                // Another publisher invalidates the in-memory watch capture, even for a known path.
+                Indexino.connectBlocking(workspace).use { other ->
+                    Files.writeString(edited, "package sample\nclass OtherPublisher\n")
+                    runSuspend { other.refresh(request).await() }
+                }
+                Files.writeString(edited, "package sample\nclass AfterOtherPublisher\n")
+                progress.clear()
+                val reconciled = runSuspend {
+                    first
+                        .refresh(request, progress::add, null, capturedTopology, setOf(edited))
+                        .await()
+                }
+                assertEquals(RefreshOutcome.UPDATED, reconciled.outcome)
+                assertFalse(
+                    progress.contains("index topology=reused watcher-source-edit"),
+                    "$progress",
+                )
+                assertTrue(
+                    progress.contains("index phase=source-resolution state=started"),
+                    "$progress",
+                )
+                assertTrue(
+                    progress.any {
+                        it.matches(Regex("index source-capture read=[1-9]\\d* inherited=0"))
+                    },
+                    "$progress",
+                )
+            }
+        } finally {
+            if (prior == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", prior)
+        }
+    }
+
     @AfterTest
     fun tearDown() {
         tempDirs.forEach { it.toFile().deleteRecursively() }
         tempDirs.clear()
+    }
+
+    @Test
+    fun `refresh reports generation publication separately from store build`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-publication-progress-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            Indexino.connectBlocking(workspace).use { index ->
+                val lines = java.util.concurrent.CopyOnWriteArrayList<String>()
+                index.onSourcesResolvedForRuntime = { _, _, _ -> }
+                runSuspend {
+                    index
+                        .refresh(
+                            RefreshRequest.forScope(IndexScope.gradle(":ui")),
+                            progress = lines::add,
+                            machineProgress = null,
+                        )
+                        .await()
+                }
+                val started = lines.indexOf("index phase=publication state=started")
+                assertTrue(started >= 0, "publication missing: $lines")
+                assertTrue(
+                    lines.drop(started + 1).any {
+                        it.matches(
+                            Regex("index phase=publication state=completed durationMillis=\\d+")
+                        )
+                    },
+                    "publication completion missing: $lines",
+                )
+                val watcher = lines.indexOf("index phase=watcher-registration state=started")
+                val capture = lines.indexOf("index phase=source-capture state=started")
+                assertTrue(
+                    watcher >= 0 && watcher < capture && capture < started,
+                    "watcher must arm before capture and publication: $lines",
+                )
+                assertTrue(
+                    lines.subList(watcher + 1, capture).any {
+                        it.matches(
+                            Regex(
+                                "index phase=watcher-registration state=completed durationMillis=\\d+"
+                            )
+                        )
+                    },
+                    "watcher registration completion missing: $lines",
+                )
+            }
+        } finally {
+            if (previousCacheDirectory == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheDirectory)
+        }
+    }
+
+    @Test
+    fun `unchanged refresh reuses current generation without packing the writer again`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-unchanged-publication-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+            Indexino.connectBlocking(workspace).use { first ->
+                val initial = runSuspend { first.refresh(request).await() }
+                val manifests =
+                    dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore(
+                        cacheDirectory,
+                        InProcessCacheLayout.workspaceId(workspace),
+                    )
+                val original = manifests.current()!!
+                assertEquals(initial.generation.value, original.generation)
+                val progress = mutableListOf<String>()
+                Indexino.connectBlocking(workspace).use { second ->
+                    val unchanged = runSuspend {
+                        second.refresh(request, progress::add, null).await()
+                    }
+                    assertEquals(RefreshOutcome.UNCHANGED, unchanged.outcome)
+                    assertEquals(original, manifests.current())
+                    assertFalse(
+                        progress.any { it == "index phase=publication state=started" },
+                        "No-op refresh must not repack the full writable store: $progress",
+                    )
+                    runSuspend { second.snapshot() }
+                        .use { snapshot ->
+                            assertTrue(
+                                runSuspend {
+                                        snapshot.findSymbols(
+                                            SymbolQuery.named("Panel"),
+                                            QueryOptions.page(limit = 10),
+                                        )
+                                    }
+                                    .items
+                                    .isNotEmpty()
+                            )
+                        }
+                }
+            }
+        } finally {
+            if (previousCacheDirectory == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheDirectory)
+        }
     }
 
     @Test
@@ -83,26 +476,22 @@ class InProcessIndexinoTest {
         System.setProperty("indexino.cache.dir", cacheDirectory.toString())
         val indexino = Indexino.connectBlocking(workspace)
         try {
-            runSuspend {
-                indexino
-                    .refresh(
-                        RefreshRequest.forScope(IndexScope.gradle(":ui"))
-                            .withPlugin(PluginId.of("dev.sebastiano.selection-context"))
-                    )
-                    .await()
-            }
+            val request =
+                RefreshRequest.forScope(IndexScope.gradle(":ui"))
+                    .withPlugin(PluginId.of("dev.sebastiano.selection-context"))
+            val check =
+                dev.sebastiano.indexino.model.CheckRequest.of(
+                    PluginId.of("dev.sebastiano.selection-context"),
+                    "interactive-in-selection",
+                )
+            val base = runSuspend { indexino.refresh(request).await() }.generation
             runSuspend { indexino.snapshot() }
                 .use { snapshot ->
-                    val request =
-                        dev.sebastiano.indexino.model.CheckRequest.of(
-                            PluginId.of("dev.sebastiano.selection-context"),
-                            "interactive-in-selection",
-                        )
                     val first = runSuspend {
-                        snapshot.runCheck(request, QueryOptions.page(limit = 1))
+                        snapshot.runCheck(check, QueryOptions.page(limit = 1))
                     }
                     val second = runSuspend {
-                        snapshot.runCheck(request, QueryOptions.page(limit = 1, offset = 1))
+                        snapshot.runCheck(check, QueryOptions.page(limit = 1, offset = 1))
                     }
                     assertEquals(1, first.items.size)
                     assertEquals(first.totalCount, first.items.size + second.items.size)
@@ -112,6 +501,30 @@ class InProcessIndexinoTest {
                         first.items.single().range?.start?.file?.path,
                     )
                     assertTrue(first.items.single().range?.start?.line != null)
+                }
+            val buildScript = workspace.resolve("ui/build.gradle.kts")
+            Files.writeString(
+                buildScript,
+                Files.readString(buildScript) + "\nandroid { namespace = \"test.new\" }\n",
+            )
+            val overlay = runSuspend { indexino.refresh(request).await() }.generation
+            val manifest =
+                dev.sebastiano.indexino.core.cache
+                    .WorkspaceGenerationManifestStore(
+                        cacheDirectory,
+                        InProcessCacheLayout.workspaceId(workspace),
+                    )
+                    .readGeneration(overlay.value)
+            assertEquals(base.value, manifest?.baseGeneration, "$manifest")
+            runSuspend { indexino.snapshot() }
+                .use { snapshot ->
+                    val findings = runSuspend {
+                        snapshot.runCheck(check, QueryOptions.page(limit = 10))
+                    }
+                    assertEquals(
+                        listOf("ActionButton"),
+                        findings.items.map { it.properties["callee"] },
+                    )
                 }
         } finally {
             indexino.close()
@@ -618,7 +1031,10 @@ class InProcessIndexinoTest {
                             .toList()
                     }
                 assertTrue(storeDirs.isNotEmpty())
-                storeDirs.forEach { it.toFile().deleteRecursively() }
+                storeDirs.forEach {
+                    it.toFile().deleteRecursively()
+                    Files.writeString(it, "not a store directory")
+                }
                 val failure =
                     assertFailsWith<IndexinoException> { runSuspend { indexino.snapshot() } }
                 assertEquals("INTERNAL", failure.failure.category.value)
@@ -678,6 +1094,114 @@ class InProcessIndexinoTest {
             } else {
                 System.setProperty("indexino.cache.dir", previousCacheDirectory)
             }
+        }
+    }
+
+    @Test
+    fun `published overlay keeps its base copy between unpinned snapshots`() {
+        val workspace = createGitWorkspace()
+        val cacheDirectory = createTempDirectory("indexino-overlay-base-retention-cache-")
+        tempDirs.add(cacheDirectory)
+        val previousCacheDirectory = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+            val indexino = Indexino.connectBlocking(workspace)
+            val base =
+                try {
+                    val base = runSuspend { indexino.refresh(request).await() }.generation.value
+                    Files.writeString(
+                        workspace.resolve("ui/src/main/kotlin/Panel.kt"),
+                        "package sample\nclass RetainedBasePanel\n",
+                    )
+                    val overlay = runSuspend { indexino.refresh(request).await() }.generation
+                    val manifest =
+                        dev.sebastiano.indexino.core.cache
+                            .WorkspaceGenerationManifestStore(
+                                InProcessCacheLayout.cacheRoot(),
+                                InProcessCacheLayout.workspaceId(workspace.toRealPath()),
+                            )
+                            .readGeneration(overlay.value)
+                    assertEquals(base, manifest?.baseGeneration, "$manifest")
+                    // Unzipping a large base for every new unpinned snapshot defeats warm edits.
+                    assertTrue(generationCopyExists(workspace, base), "Base copy reclaimed")
+                    repeat(2) {
+                        runSuspend { indexino.snapshot() }
+                            .use { snapshot -> assertEquals(overlay, snapshot.generation) }
+                        assertTrue(generationCopyExists(workspace, base), "Base copy reclaimed")
+                    }
+                    base
+                } finally {
+                    indexino.close()
+                }
+            assertFalse(generationCopyExists(workspace, base), "Closed clients keep no copies")
+        } finally {
+            if (previousCacheDirectory == null) {
+                System.clearProperty("indexino.cache.dir")
+            } else {
+                System.setProperty("indexino.cache.dir", previousCacheDirectory)
+            }
+        }
+    }
+
+    @Test
+    fun `namespace edit replaces inherited resource facts in a published overlay`() {
+        val workspace = createTempDirectory("indexino-namespace-overlay-")
+        val cacheDirectory = createTempDirectory("indexino-namespace-cache-")
+        tempDirs.addAll(listOf(workspace, cacheDirectory))
+        val resource = workspace.resolve("app/src/main/res/values/strings.xml")
+        val code = workspace.resolve("app/src/main/kotlin/Screen.kt")
+        Files.createDirectories(resource.parent)
+        Files.createDirectories(code.parent)
+        Files.writeString(workspace.resolve("settings.gradle.kts"), "include(\":app\")\n")
+        val buildScript = workspace.resolve("app/build.gradle.kts")
+        Files.writeString(buildScript, "android { namespace = \"com.example.old\" }\n")
+        Files.writeString(resource, "<resources><string name=\"title\">Hello</string></resources>")
+        Files.writeString(code, "class Screen { val title = R.string.title }\n")
+        runGit(workspace, "init")
+        runGit(workspace, "config", "user.email", "test@example.com")
+        runGit(workspace, "config", "user.name", "Test User")
+        runGit(workspace, "add", ".")
+        runGit(workspace, "commit", "-m", "namespace fixture")
+        val prior = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            Indexino.connectBlocking(workspace).use { index ->
+                val request = RefreshRequest.forScope(IndexScope.gradle(":app"))
+                val base = runSuspend { index.refresh(request).await() }.generation
+                Files.writeString(buildScript, "android { namespace = \"com.example.new\" }\n")
+                val overlay = runSuspend { index.refresh(request).await() }.generation
+                val manifest =
+                    dev.sebastiano.indexino.core.cache
+                        .WorkspaceGenerationManifestStore(
+                            cacheDirectory,
+                            InProcessCacheLayout.workspaceId(workspace),
+                        )
+                        .readGeneration(overlay.value)
+                assertEquals(base.value, manifest?.baseGeneration, "$manifest")
+                runSuspend { index.snapshot() }
+                    .use { snapshot ->
+                        val query =
+                            ResourceQuery.of(packageName = null, type = "string", name = "title")
+                        val definitions = runSuspend {
+                            snapshot.findResources(query, QueryOptions.page(limit = 10))
+                        }
+                        val usages = runSuspend {
+                            snapshot.findResourceUsages(query, QueryOptions.page(limit = 10))
+                        }
+                        assertEquals(
+                            listOf("com.example.new"),
+                            definitions.items.map { it.id.packageName },
+                        )
+                        assertEquals(
+                            listOf("com.example.new"),
+                            usages.items.map { it.id.packageName },
+                        )
+                    }
+            }
+        } finally {
+            if (prior == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", prior)
         }
     }
 
@@ -1159,7 +1683,7 @@ class InProcessIndexinoTest {
     ) {
         assertEquals(result.generation, snapshot.generation)
         assertEquals(result.revision, snapshot.revision)
-        assertEquals(3, snapshot.basicFactSchemaVersion.value)
+        assertEquals(5, snapshot.basicFactSchemaVersion.value)
 
         val sourceFile =
             SourceFile.of(

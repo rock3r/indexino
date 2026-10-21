@@ -19,6 +19,7 @@ internal object SourceOriginResolver {
             require(sourcePath.startsWith(canonicalWorkspace)) {
                 "Topology source path escapes workspace: $sourceFile"
             }
+            if (Files.isDirectory(sourcePath)) return@forEach
             val sourceDirectory = sourcePath.parent
             val gitRoot =
                 cachedGitRoot(sourceDirectory, gitRoots)
@@ -54,6 +55,7 @@ internal object SourceOriginResolver {
             require(sourcePath.startsWith(canonicalMountRoot)) {
                 "External mount source path escapes mount: $sourceFile"
             }
+            if (Files.isDirectory(sourcePath)) return@forEach
             val sourceDirectory = sourcePath.parent
             val gitRoot =
                 cachedGitRoot(sourceDirectory, gitRoots)

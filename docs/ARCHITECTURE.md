@@ -123,6 +123,82 @@ classloaders, and budgets. CLI and embedded clients attach over AF_UNIX. Clients
 run in-process with the same public types. The runtime runs locally and does not require an IDE
 or Model Context Protocol (MCP) server.
 
+Watcher edits for a scope wait for 150 ms of quiet before starting a refresh, capped at 30 seconds
+of continuous changes. Edits during an active refresh queue a successor so a snapshot captured
+mid-burst does not become the last published view of that burst. The controller reserves the
+change epoch before launching a worker; a later edit stays dirty even if its event arrives before
+the worker's handle is registered.
+
+On macOS a recursive FSEvents stream covers the workspace, so only directories outside it (for
+example external included builds) are registered with the JDK `WatchService`, which polls there.
+The stream uses NoDefer to deliver the first event after a quiet period without waiting for the
+100 ms native coalescing window; later events still coalesce, and the controller's 150 ms debounce
+still applies before a refresh starts.
+Native startup failures fall back to scope-derived WatchService keys. Unexpected worker exit
+revokes recursive coverage and in-flight hints, adds fallback keys within the watch budget, and
+keeps scopes uncovered for periodic full reconciliation: macOS polling cannot certify inherited
+source hashes. The controller does not restart the native stream; a runtime restart restores it.
+Paths inside `.git` directories and the Indexino cache are ignored on every transport: Git's index
+bookkeeping during origin resolution is not a source edit and must not schedule another refresh.
+A `.git` entry being created or removed still re-resolves topology; a polled modification of that
+entry (its mtime changes on every index lock) does not.
+An edited build input also re-resolves topology even when the captured inventory lists it as
+resource metadata; its source membership cannot certify an unchanged dependency closure.
+The runtime records a separate topology epoch before resolution starts. Registration just before
+source capture covers earlier source edits, but an unknown path or build-input event after the
+topology epoch still requires a full successor even if the first refresh publishes successfully.
+
+Origin provenance (HEAD, working-tree fingerprint, dirty flag) normally costs whole-repository
+`git diff HEAD`, `git status` and `git ls-files --others` walks, seconds on a large checkout. A
+known-source watcher refresh updates it incrementally only with evidence: the macOS FSEvents stream
+recursively covers the origin (per-directory `WatchService` keys do not), so any other working-tree
+change, overflow or coverage loss already forces a full refresh; and a per-origin stamp proves Git
+state the watcher ignores is unchanged: HEAD and its tree, the owning repository's HEAD, effective
+configuration, the index file identity and ignore, attribute, graft and sparse-checkout files. The
+stamp is taken before and after the reads. Only hinted files are then re-read with
+pathspec-limited `diff` and `status`, and the full diff is rebuilt from per-path sections, so the
+result is byte-identical to a full resolution. Unparseable output (renames, quoted paths, extra
+stderr), too many hints, or a nested origin whose files an enclosing repository tracks fall back to
+the full reads for that origin. Like inherited source hashes, the evidence is only as current as
+event delivery: a change whose event arrives after a refresh started schedules a successor. When
+all intervening events name known sources under continuous recursive coverage, the successor keeps
+their path hints and can reuse topology and unchanged hashes; unknown paths, overflow, failed
+refreshes and lost coverage still force full reconciliation.
+Origin reads never write the user's index: `status` runs with optional locks disabled and daemon
+`diff` reads a private copy of the index, because `git diff` otherwise refreshes the index.
+For a captured source snapshot, each origin computes its source fingerprint alongside its Git
+state, then joins both before constructing provenance. Callers without a captured snapshot retain
+sequential reads so a live source read does not race with its Git-state observation.
+Source-bearing origins are admitted by four workers pulling from the inventory, not one queued
+future per root. Nested Git reads are coroutine children with suspending joins, so waiting parents
+do not occupy a fixed worker pool. One shared four-permit semaphore covers every origin Git
+command (including revision and submodule helpers), from process start through confirmed exit and
+cleanup. Output is merged into a temporary file rather than drained through an interrupt-insensitive
+pipe. Failure cancels sibling reads; interruption cancels the resolution and waits for its children.
+Cleanup terminates observed descendants deepest-first while their parents can still reap them,
+then terminates and reaps Git before returning the permit. Git hooks are trusted local code;
+deliberately daemonized descendants that escape observation are not an OS-sandbox guarantee.
+On a watcher-hinted changed-source refresh with the same topology, origin inventory, applications,
+and current published generation, the store builds from the captured sources while origin
+provenance resolves. The build uses known origin IDs only for fact ownership; resolved provenance
+joins inside the rollback checkpoint before the compatibility manifest is written. An origin
+failure rolls back staging. Fresh/no-op, missing-origin, cold, and fork-reuse decisions still wait
+for origin resolution before building or publishing.
+The overlapped resolver has a dedicated build-owned blocking bridge, not a detached common-pool
+future. Its publication join is interruptible; the build's `finally` interrupts the resolver and
+joins actual worker termination even if the refresh owner was interrupted. The coordinator's
+existing worker interruption therefore reaches Git cleanup, and `RefreshStopped` follows cleanup,
+not merely future cancellation. A producer failure remains the primary failure when it cancels
+still-pending provenance; an origin failure at the publication join still rolls back staging.
+
+Daemon close excludes overlapping cleanup attempts. A failed lease release remains retryable without
+closing an already stopped handshake server again; identity checks still protect successor leases.
+
+Plugin file analyzers and shard/composite post-processors receive cancellation checks backed by
+their contribution coroutine and worker interruption. Cooperative code must call `ensureActive()`
+during long CPU work. This does not forcibly terminate trusted plugins that ignore cancellation;
+the refresh terminal still waits for worker cleanup.
+
 ## selection-context
 
 Lexical PSI walk at index time → plugin-namespaced facts. Queries use checks / typed wrappers, not
@@ -165,7 +241,9 @@ rules under `gradle/r8/`. `normalizedCliJar` atomically copies that R8 output an
 deterministic even-second filesystem mtime plus ordinary-file `0644` permissions on POSIX hosts.
 The task is intentionally never up-to-date and its
 build cache is disabled because Gradle content snapshots do not detect metadata-only changes that
-would invalidate AOT. Construo is configured to consume this exact normalized output.
+would invalidate AOT. Construo is configured to consume this exact normalized output. AOT training,
+Roast staging, and package tasks also track the JAR's SHA-256: the fixed mtime and an unchanged file
+size must not let Gradle reuse a cache trained on older bytes or an obsolete application archive.
 
 Each native target uses checked-in JBR and Roast digests. Construo verifies those archives before
 extraction, runs `jlink`, `jdeps`, and `javap` from the matching target JBRSDK 25, and emits one

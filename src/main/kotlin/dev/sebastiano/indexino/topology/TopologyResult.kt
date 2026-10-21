@@ -5,12 +5,14 @@ import java.nio.file.Path
 internal data class ExternalSourceMount(
     val root: Path,
     val sourceFiles: List<String>,
+    val codeSourceFiles: Set<String>? = null,
     val originId: String? = null,
     val expectedRevision: String? = null,
 )
 
 internal data class TopologyResult(
     val sourceFiles: List<String>,
+    val codeSourceFiles: Set<String>? = null,
     val topology: String,
     val includeDeps: Boolean,
     val scope: String,

@@ -591,9 +591,12 @@
           a no-op refresh runs no analyzers, and an incremental refresh performs work proportional to changed
           inputs and their invalidation closure, not to total repository size. Freshness reconciliation may run
           beside queries, but it must never force a full rebuild merely because a client or daemon restarted.
-          Each refresh analyzes one immutable capture of every discovered source: facts, content keys, source
-          fingerprints, and the published generation must describe those same captured bytes. A concurrent edit
-          may fail or defer to the next refresh, but must never publish a false-fresh generation.
+          Each refresh analyzes a consistent immutable source capture: it reads changed files, and may inherit
+          unchanged facts and hashes from the current published generation only across continuous native watcher
+          coverage established before that generation's capture. Explicit refreshes and uncertain coverage read
+          every discovered source. Facts, content keys, source fingerprints, and the published generation must
+          describe the same captured bytes. A concurrent edit may fail or defer to the next refresh, but must
+          never publish a false-fresh generation.
         </div>
         <div class="table-wrap">
           <table>

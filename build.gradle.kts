@@ -14,6 +14,7 @@ import dev.sebastiano.indexino.buildlogic.Sha256File
 import io.github.fourlastor.construo.Target
 import io.github.fourlastor.construo.task.PackageTask
 import io.github.fourlastor.construo.task.jvm.CreateRuntimeImageTask
+import io.github.fourlastor.construo.task.jvm.RoastTask
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermissions
@@ -74,6 +75,18 @@ tasks.named<Detekt>("detektTest") { setSource(files("src/test/kotlin")) }
 tasks
     .matching { it.name.startsWith("ktfmtCheck") || it.name.startsWith("ktfmtFormat") }
     .configureEach { (this as? org.gradle.api.tasks.SourceTask)?.exclude(*generatedSourceExcludes) }
+
+// The plugin's scripts tasks filter a recursive project-root tree after traversal. Use only
+// root-level scripts so a generated corpus under build/ cannot be followed during that walk.
+listOf("ktfmtCheckScripts", "ktfmtFormatScripts").forEach { taskName ->
+    tasks.named(taskName) {
+        (this as org.gradle.api.tasks.SourceTask).setSource(
+            provider {
+                projectDir.listFiles()?.filter { it.isFile && it.extension == "kts" }.orEmpty()
+            }
+        )
+    }
+}
 
 val generatedVersionDirectory = layout.buildDirectory.dir("generated/sources/version/kotlin")
 
@@ -549,6 +562,35 @@ construo {
     }
 }
 
+// NormalizedJar deliberately gives every output the same mtime. Gradle can otherwise reuse file
+// snapshots when the R8 JAR changes bytes without changing size, leaving AOT training, Construo's
+// staging, and archive tasks up-to-date with an obsolete application JAR.
+val normalizedCliJarSha256 =
+    normalizedCliJar.flatMap(NormalizedJar::getArchiveFile).map { jar ->
+        val digest = MessageDigest.getInstance("SHA-256")
+        jar.asFile.inputStream().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        HexFormat.of().formatHex(digest.digest())
+    }
+
+tasks.withType<RoastTask>().configureEach {
+    inputs.property("normalizedCliJarSha256", normalizedCliJarSha256)
+}
+
+tasks.withType<AotTrainingTask>().configureEach {
+    inputs.property("normalizedCliJarSha256", normalizedCliJarSha256)
+}
+
+tasks.withType<PackageTask>().configureEach {
+    inputs.property("normalizedCliJarSha256", normalizedCliJarSha256)
+}
+
 val finalizedMacArm64Archive by
     tasks.registering(MacDittoArchive::class) {
         group = "distribution"
@@ -715,6 +757,8 @@ val ideaHomeDir =
 
 tasks.test {
     dependsOn(":indexino-compose-decoration:jar", ":indexino-selection-context:jar")
+    val cliRuntimeClasspath = sourceSets.main.get().runtimeClasspath
+    inputs.files(cliRuntimeClasspath).withPropertyName("cliRuntimeClasspath")
     useJUnitPlatform {
         val excludedTags =
             mutableListOf(
@@ -735,6 +779,7 @@ tasks.test {
         ideaHomeDir.resolve("config").mkdirs()
         ideaHomeDir.resolve("system").mkdirs()
         ideaHomeDir.resolve("plugins").mkdirs()
+        systemProperty("indexino.cliRuntimeClasspath", cliRuntimeClasspath.asPath)
     }
     systemProperty("idea.home.path", ideaHomeDir.absolutePath)
     systemProperty("idea.config.path", ideaHomeDir.resolve("config").absolutePath)
@@ -939,6 +984,14 @@ fun registerNativeDistributionVerification(
             "indexino.normalizedApplicationJar",
             normalizedApplicationJar.get().asFile.absolutePath,
         )
+        systemProperty(
+            "indexino.trainedApplicationJar",
+            layout.buildDirectory
+                .file("tmp/trainAot$taskSuffix/staging/indexino-cli.jar")
+                .get()
+                .asFile
+                .absolutePath,
+        )
         systemProperty("indexino.aotCache", aotCache.get().asFile.absolutePath)
         systemProperty("indexino.unshrunkJar", unshrunkApplicationJar.get().asFile.absolutePath)
         systemProperty("indexino.r8Jar", r8ApplicationJar.get().asFile.absolutePath)
@@ -1047,3 +1100,33 @@ val generateBundledDependencyInventory by tasks.registering {
         )
     }
 }
+
+// Test-only acceptance runtime: built once, checksummed, and copied to isolated corpus jobs.
+// It is neither a publication nor part of the CLI/native distribution.
+val publicAcceptanceDriverArchive by
+    tasks.registering(org.gradle.api.tasks.bundling.Zip::class) {
+        group = "verification"
+        description = "Package the typed test-only public acceptance driver and its exact runtime"
+        dependsOn(tasks.testClasses)
+        from(sourceSets.test.map { it.output }) { into("test") }
+        from(sourceSets.main.map { it.output }) { into("main") }
+        // Drivers use production APIs, not JUnit/TestKit; their daemon must not inherit
+        // Gradle's competing logging backend from the test runtime.
+        from(sourceSets.main.map { it.runtimeClasspath.filter { file -> file.isFile } }) {
+            into("lib")
+        }
+        archiveFileName.set("public-acceptance-driver.zip")
+        destinationDirectory.set(layout.buildDirectory.dir("public-acceptance"))
+        isReproducibleFileOrder = true
+        isPreserveFileTimestamps = false
+        duplicatesStrategy = DuplicatesStrategy.FAIL
+    }
+
+val publicAcceptanceDriverChecksum by
+    tasks.registering(Sha256File::class) {
+        group = "verification"
+        inputFile.set(publicAcceptanceDriverArchive.flatMap { it.archiveFile })
+        outputFile.set(
+            layout.buildDirectory.file("public-acceptance/public-acceptance-driver.zip.sha256")
+        )
+    }

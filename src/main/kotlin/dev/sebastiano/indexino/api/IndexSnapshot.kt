@@ -3,8 +3,10 @@
 package dev.sebastiano.indexino.api
 
 import dev.sebastiano.indexino.core.BASIC_FACT_SCHEMA_VERSION
+import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.plugin.StorePluginFactView
 import dev.sebastiano.indexino.core.record.CallSiteRecord
+import dev.sebastiano.indexino.core.record.CodeIndexRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
 import dev.sebastiano.indexino.core.record.ResourceUsageRecord
@@ -72,6 +74,13 @@ private constructor(
     private val closed = AtomicBoolean()
     private val queries = IndexSnapshotQueries(generation)
     private val checkResults = ConcurrentHashMap<CheckRequest, CompletableDeferred<List<Finding>>>()
+    private val fileCallCache =
+        object :
+            LinkedHashMap<SourceFile, List<CallSiteRecord>>(FILE_CALL_CACHE_ENTRIES, 0.75f, true) {
+            override fun removeEldestEntry(
+                eldest: MutableMap.MutableEntry<SourceFile, List<CallSiteRecord>>
+            ): Boolean = size > FILE_CALL_CACHE_ENTRIES
+        }
     private val localStore: CodeIndexStore
         get() = checkNotNull(store)
 
@@ -98,14 +107,7 @@ private constructor(
                         { it.signature.orEmpty() },
                         SymbolRecord::name,
                     ),
-                scan = { accept ->
-                    localStore.forEachPrefix("sym:") { _, record ->
-                        if (record is SymbolRecord && record.matches(query)) {
-                            accept(record)
-                        }
-                        true
-                    }
-                },
+                scan = { accept -> scanSymbols(query, accept) },
                 transform = { records ->
                     val ownerIds = ownerIdsFor(records)
                     records.map { record ->
@@ -264,25 +266,43 @@ private constructor(
         }
         validateQueryOptions(options)
         return mapUnexpectedFailures {
+            val file = query.file
+            if (
+                file != null &&
+                    query.calleeName == null &&
+                    query.callSiteId == null &&
+                    query.enclosingSymbolId == null
+            ) {
+                val offset = parsePageOffset(options)
+                validatePageWindow(offset, options.limit)
+                return@mapUnexpectedFailures pageFromOrdered(fileCalls(file), offset, options) {
+                    records ->
+                    val candidates = callCandidatesFor(records)
+                    records.map { record ->
+                        with(queries) { record.toPublicCallSite(candidates.getValue(record)) }
+                    }
+                }
+            }
             val enclosing = query.enclosingSymbolId?.let(::findSymbolById)
             val unresolvedEnclosingId = query.enclosingSymbolId != null && enclosing == null
             orderedPage(
                 options = options,
-                comparator =
-                    compareBy(
-                        CallSiteRecord::originId,
-                        CallSiteRecord::relativeFile,
-                        CallSiteRecord::startOffset,
-                        CallSiteRecord::endOffset,
-                        CallSiteRecord::calleeName,
-                        CallSiteRecord::identity,
-                    ),
+                comparator = CALL_COMPARATOR,
                 scan = { accept ->
                     if (!unresolvedEnclosingId) {
-                        localStore.forEachPrefix("call:") { _, record ->
-                            if (record is CallSiteRecord && record.matches(query, enclosing))
-                                accept(record)
-                            true
+                        val file = query.file
+                        if (file != null) {
+                            localStore.forEachCallInFile(file.originId.value, file.path) { _, record
+                                ->
+                                if (record.matches(query, enclosing)) accept(record)
+                                true
+                            }
+                        } else {
+                            localStore.forEachPrefix("call:") { _, record ->
+                                if (record is CallSiteRecord && record.matches(query, enclosing))
+                                    accept(record)
+                                true
+                            }
                         }
                     }
                 },
@@ -295,6 +315,27 @@ private constructor(
             )
         }
     }
+
+    @Synchronized
+    private fun fileCalls(file: SourceFile): List<CallSiteRecord> =
+        fileCallCache.getOrPut(file) {
+            val retained =
+                PriorityQueue<CallSiteRecord>(
+                    HOST_QUERY_WINDOW_MAXIMUM + 1,
+                    CALL_COMPARATOR.reversed(),
+                )
+            localStore.forEachCallInFile(file.originId.value, file.path) { _, record ->
+                if (record.originId == file.originId.value && record.relativeFile == file.path) {
+                    if (retained.size <= HOST_QUERY_WINDOW_MAXIMUM) retained.add(record)
+                    else if (CALL_COMPARATOR.compare(record, retained.peek()) < 0) {
+                        retained.remove()
+                        retained.add(record)
+                    }
+                }
+                true
+            }
+            retained.sortedWith(CALL_COMPARATOR)
+        }
 
     @OptIn(IndexinoInternalApi::class)
     public suspend fun runCheck(request: CheckRequest, options: QueryOptions): QueryPage<Finding> {
@@ -420,6 +461,7 @@ private constructor(
     override fun close() {
         if (closed.compareAndSet(false, true)) {
             try {
+                synchronized(this) { fileCallCache.clear() }
                 store?.let { localStore -> mapUnexpectedFailures { localStore.close() } }
             } finally {
                 // Unpin even when store.close fails — a leaked generation pin is worse than a
@@ -437,6 +479,24 @@ private constructor(
                 message = "IndexSnapshot is closed",
                 retryable = false,
             )
+        }
+    }
+
+    private fun scanSymbols(query: SymbolQuery, action: (SymbolRecord) -> Unit) {
+        val accept: (CodeIndexKey, CodeIndexRecord) -> Boolean = { _, record ->
+            if (record is SymbolRecord && record.matches(query)) action(record)
+            true
+        }
+        val name = query.name
+        when {
+            name == null -> localStore.forEachPrefix("sym:", accept)
+            query.match == NameMatchMode.FQN -> {
+                val key = CodeIndexKey.sym(name)
+                localStore.get(key)?.let { accept(key, it) }
+                localStore.forEachPrefix("${key.value}:", accept)
+            }
+            else ->
+                localStore.forEachSymbolMatching(name, query.match == NameMatchMode.PREFIX, accept)
         }
     }
 
@@ -508,19 +568,14 @@ private constructor(
     }
 
     private fun candidatesByName(names: Set<String>): Map<String, List<SymbolRecord>> {
-        if (names.isEmpty()) return emptyMap()
-        val candidates = names.associateWith { mutableListOf<SymbolRecord>() }
-        localStore.forEachPrefix("sym:") { _, record ->
-            if (record is SymbolRecord) {
-                for (name in names) {
-                    if (record.fqn == name || name in record.aliases) {
-                        candidates.getValue(name) += record
-                    }
-                }
+        return names.associateWith { name ->
+            val candidates = mutableListOf<Pair<CodeIndexKey, SymbolRecord>>()
+            localStore.forEachSymbolMatching(name, prefix = false) { key, record ->
+                if (record.fqn == name || name in record.aliases) candidates += key to record
+                true
             }
-            true
+            candidates.sortedBy { it.first.value }.map { it.second }
         }
-        return candidates
     }
 
     private fun callCandidatesFor(
@@ -632,21 +687,17 @@ private constructor(
 
         val candidates: MutableMap<SymbolRecord, OwnerCandidates> =
             symbolsByOwner.values.flatten().associateWith { OwnerCandidates() }.toMutableMap()
-        localStore.forEachPrefix("sym:") { _, record ->
-            if (record is SymbolRecord) {
-                val owners = buildSet {
-                    if (record.fqn in symbolsByOwner) add(record.fqn)
-                    record.aliases.filterTo(this) { it in symbolsByOwner }
-                }
-                for (owner in owners) {
-                    for (symbol in symbolsByOwner.getValue(owner)) {
+        for ((owner, children) in symbolsByOwner) {
+            localStore.forEachSymbolMatching(owner, prefix = false) { key, record ->
+                if (record.fqn == owner || owner in record.aliases) {
+                    for (symbol in children) {
                         candidates
                             .getValue(symbol)
-                            .consider(owner, symbol.originId, symbol.relativeFile, record)
+                            .consider(owner, symbol.originId, symbol.relativeFile, key, record)
                     }
                 }
+                true
             }
-            true
         }
         return symbols.associateWith { symbol ->
             symbol.ownerFqn?.let { owner ->
@@ -658,28 +709,34 @@ private constructor(
     }
 
     private class OwnerCandidates {
-        private var sameFileExact: SymbolRecord? = null
-        private var sameFileAlias: SymbolRecord? = null
-        private var exact: SymbolRecord? = null
-        private var alias: SymbolRecord? = null
+        private var sameFileExact: Pair<CodeIndexKey, SymbolRecord>? = null
+        private var sameFileAlias: Pair<CodeIndexKey, SymbolRecord>? = null
+        private var exact: Pair<CodeIndexKey, SymbolRecord>? = null
+        private var alias: Pair<CodeIndexKey, SymbolRecord>? = null
 
         fun consider(
             owner: String,
             symbolOriginId: String,
             symbolFile: String,
+            key: CodeIndexKey,
             candidate: SymbolRecord,
         ) {
             if (candidate.originId != symbolOriginId) return
+            fun earlier(
+                previous: Pair<CodeIndexKey, SymbolRecord>?
+            ): Pair<CodeIndexKey, SymbolRecord> =
+                if (previous == null || key.value < previous.first.value) key to candidate
+                else previous
             when {
                 candidate.fqn == owner && candidate.relativeFile == symbolFile ->
-                    sameFileExact = sameFileExact ?: candidate
-                candidate.relativeFile == symbolFile -> sameFileAlias = sameFileAlias ?: candidate
-                candidate.fqn == owner -> exact = exact ?: candidate
-                else -> alias = alias ?: candidate
+                    sameFileExact = earlier(sameFileExact)
+                candidate.relativeFile == symbolFile -> sameFileAlias = earlier(sameFileAlias)
+                candidate.fqn == owner -> exact = earlier(exact)
+                else -> alias = earlier(alias)
             }
         }
 
-        fun best(): SymbolRecord? = sameFileExact ?: sameFileAlias ?: exact ?: alias
+        fun best(): SymbolRecord? = (sameFileExact ?: sameFileAlias ?: exact ?: alias)?.second
     }
 
     private suspend fun <T> mapUnexpectedFailuresSuspend(block: suspend () -> T): T =
@@ -809,6 +866,16 @@ private constructor(
             }
         }
         val ordered = retained.sortedWith(comparator)
+        return pageFromOrdered(ordered, offset, options, transform)
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    private fun <T, R> pageFromOrdered(
+        ordered: List<T>,
+        offset: Int,
+        options: QueryOptions,
+        transform: (List<T>) -> List<R>,
+    ): QueryPage<R> {
         val end = minOf(offset + options.limit, ordered.size)
         if (ordered.size > end && end == HOST_QUERY_WINDOW_MAXIMUM) {
             throw indexinoFailure(
@@ -867,7 +934,16 @@ private constructor(
 
     internal companion object {
         private const val CURSOR_PREFIX: String = "indexino:v1:"
-        private const val BASIC_FACT_SCHEMA_VERSION: Int = 3
+        private const val FILE_CALL_CACHE_ENTRIES = 2
+        private val CALL_COMPARATOR =
+            compareBy(
+                CallSiteRecord::originId,
+                CallSiteRecord::relativeFile,
+                CallSiteRecord::startOffset,
+                CallSiteRecord::endOffset,
+                CallSiteRecord::calleeName,
+                CallSiteRecord::identity,
+            )
         // Host policy for this in-process facade. Not a public ABI constant until the owner
         // settles exact default page limits in docs/PUBLIC-API-DESIGN.html.
         private const val HOST_QUERY_LIMIT_MAXIMUM: Int = 10_000

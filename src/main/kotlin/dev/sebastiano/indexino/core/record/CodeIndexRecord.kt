@@ -15,6 +15,7 @@ internal data class FileHashRecord(
     val relativePath: String,
     val contentHash: String,
     val originId: String = "workspace",
+    val isCode: Boolean = true,
 ) : CodeIndexRecord
 
 @Serializable

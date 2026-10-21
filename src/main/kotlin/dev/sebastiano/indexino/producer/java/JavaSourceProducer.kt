@@ -38,6 +38,8 @@ import javax.tools.Diagnostic
 import javax.tools.DiagnosticCollector
 import javax.tools.JavaFileObject
 import javax.tools.SimpleJavaFileObject
+import javax.tools.StandardJavaFileManager
+import javax.tools.StandardLocation
 import javax.tools.ToolProvider
 
 internal class JavaSourceProducer : IndexProducer {
@@ -62,19 +64,30 @@ internal class JavaSourceProducer : IndexProducer {
             affectedSources.toSet(),
         )
         val javaFiles = sourceFilesToProcess(context)
-        // Seed declarations from every changed file before final call materialization. The parser
-        // writes deterministic keys, so the final pass overwrites equivalent symbol/reference facts
-        // while letting caller files resolve parameter names from callees later in source order.
-        javaFiles.forEach { source -> parse(source, context.readSource(source), store, context) }
-        javaFiles.forEachIndexed { index, source ->
-            context.reportFileProgress(index + 1, javaFiles.size, source)
-            parse(source, context.readSource(source), store, context)
+        // Seed declarations before resolving calls to files later in source order. Each pass
+        // emits only its own facts, with one transaction per file rather than per record.
+        val compiler =
+            checkNotNull(ToolProvider.getSystemJavaCompiler()) { "JDK compiler is unavailable" }
+        compiler.getStandardFileManager(null, null, null).use { fileManager ->
+            fileManager.setLocationFromPaths(StandardLocation.CLASS_PATH, emptyList())
+            javaFiles.forEach { source ->
+                store.transaction {
+                    parse(source, context.readSource(source), store, context, true, fileManager)
+                }
+            }
+            javaFiles.forEachIndexed { index, source ->
+                context.reportFileProgress(index + 1, javaFiles.size, source)
+                store.transaction {
+                    parse(source, context.readSource(source), store, context, false, fileManager)
+                }
+            }
         }
     }
 
     private fun sourceFilesToProcess(context: IndexBuildContext): List<IndexedSource> =
         (context.changedSources.filter { it.path.endsWith(".java") } +
                 metadataDependentSources(context))
+            .filter { it.isCode }
             .distinctBy { it.originId to it.path }
 
     private fun metadataDependentSources(context: IndexBuildContext): List<IndexedSource> {
@@ -100,6 +113,8 @@ internal class JavaSourceProducer : IndexProducer {
         source: String,
         store: CodeIndexStore,
         context: IndexBuildContext,
+        declarationsOnly: Boolean,
+        fileManager: StandardJavaFileManager,
     ) {
         val relativePath = indexedSource.path
         val compiler =
@@ -109,7 +124,7 @@ internal class JavaSourceProducer : IndexProducer {
         val task =
             compiler.getTask(
                 null,
-                null,
+                fileManager,
                 diagnostics,
                 listOf("-proc:none"),
                 null,
@@ -125,6 +140,7 @@ internal class JavaSourceProducer : IndexProducer {
                 unit,
                 Trees.instance(task),
                 store,
+                declarationsOnly,
             )
             .scan(unit, Unit)
     }
@@ -145,6 +161,7 @@ internal class JavaSourceProducer : IndexProducer {
         private val unit: CompilationUnitTree,
         private val trees: Trees,
         private val store: CodeIndexStore,
+        private val declarationsOnly: Boolean,
     ) : TreePathScanner<Unit, Unit>() {
         private val packageName = unit.packageName?.toString().orEmpty()
         private val imports = mutableMapOf<String, String>()
@@ -195,14 +212,14 @@ internal class JavaSourceProducer : IndexProducer {
 
         override fun visitMemberSelect(node: MemberSelectTree, data: Unit?) {
             val parent = currentPath.parentPath?.leaf
-            if (parent !is MemberSelectTree || parent.expression != node) {
+            if (!declarationsOnly && (parent !is MemberSelectTree || parent.expression != node)) {
                 resourceUsageIndexer.indexResourceUsage(node, currentPath)
             }
             super.visitMemberSelect(node, data)
         }
 
         override fun visitIdentifier(node: IdentifierTree, data: Unit?) {
-            resourceUsageIndexer.indexStaticResourceUsage(node, currentPath)
+            if (!declarationsOnly) resourceUsageIndexer.indexStaticResourceUsage(node, currentPath)
             super.visitIdentifier(node, data)
         }
 
@@ -364,6 +381,7 @@ internal class JavaSourceProducer : IndexProducer {
         }
 
         override fun visitMethodInvocation(node: MethodInvocationTree, data: Unit?) {
+            if (declarationsOnly) return super.visitMethodInvocation(node, data)
             val target = resolveInvocation(node.methodSelect)
             if (target != null) {
                 reference(
@@ -381,6 +399,7 @@ internal class JavaSourceProducer : IndexProducer {
         }
 
         override fun visitNewClass(node: NewClassTree, data: Unit?) {
+            if (declarationsOnly) return super.visitNewClass(node, data)
             val owner = qualifyConstructorType(node.identifier.toString())
             val target =
                 InvocationTarget(
@@ -629,6 +648,7 @@ internal class JavaSourceProducer : IndexProducer {
             parameterNames: List<String> = emptyList(),
             isVararg: Boolean = false,
         ) {
+            if (!declarationsOnly) return
             val position = position(tree)
             store.put(
                 CodeIndexKey.symbolDefinition(
@@ -665,6 +685,7 @@ internal class JavaSourceProducer : IndexProducer {
             arity: Int? = null,
             candidates: List<String> = listOf(target),
         ) {
+            if (declarationsOnly) return
             val position = position(tree)
             store.put(
                 CodeIndexKey.ref(target, originId, relativePath, position.line, position.column),

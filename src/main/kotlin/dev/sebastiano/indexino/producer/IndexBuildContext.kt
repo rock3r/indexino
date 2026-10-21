@@ -26,7 +26,17 @@ internal data class IndexBuildContext(
     val deletedSourceFiles: Set<String> = emptySet(),
     val changedSourceSet: Set<IndexedSource>? = null,
     val deletedSourceSet: Set<IndexedSource>? = null,
+    val reindexedSources: Set<IndexedSource> = emptySet(),
 ) {
+    private val sourcesByIdentity by lazy {
+        buildMap {
+            sources.forEach { source -> putIfAbsent(source.originId to source.path, source) }
+        }
+    }
+
+    fun findSource(originId: String, path: String): IndexedSource? =
+        sourcesByIdentity[originId to path]
+
     val changedSources: Set<IndexedSource> =
         changedSourceSet
             ?: sources.filterTo(linkedSetOf()) { source ->

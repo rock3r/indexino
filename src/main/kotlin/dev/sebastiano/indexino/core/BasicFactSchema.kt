@@ -1,3 +1,4 @@
 package dev.sebastiano.indexino.core
 
-internal const val BASIC_FACT_SCHEMA_VERSION = 3
+// Source analysis roles participate in hashes and persisted incremental change detection.
+internal const val BASIC_FACT_SCHEMA_VERSION = 5

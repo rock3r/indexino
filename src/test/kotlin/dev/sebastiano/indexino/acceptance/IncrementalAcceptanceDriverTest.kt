@@ -1,0 +1,526 @@
+// SPDX-License-Identifier: UEL-1.0
+package dev.sebastiano.indexino.acceptance
+
+import dev.sebastiano.indexino.api.AutoRefreshMode
+import dev.sebastiano.indexino.api.IndexScope
+import dev.sebastiano.indexino.api.Indexino
+import dev.sebastiano.indexino.api.IndexinoConfiguration
+import dev.sebastiano.indexino.api.IndexinoException
+import dev.sebastiano.indexino.api.RefreshRequest
+import dev.sebastiano.indexino.api.RuntimeAttachMode
+import java.io.ByteArrayOutputStream
+import java.io.PrintStream
+import java.nio.file.Files
+import java.nio.file.Path
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import org.junit.jupiter.api.io.TempDir
+
+internal class IncrementalAcceptanceDriverTest {
+    @TempDir lateinit var temporary: Path
+
+    @Test
+    fun `stage heartbeat remains visible before a sample finishes`() {
+        val lines = CopyOnWriteArrayList<String>()
+        val heartbeat = CountDownLatch(1)
+        IncrementalAcceptanceDriver.Progress(20L) { line ->
+                lines.add(line)
+                if ("source-capture" in line) heartbeat.countDown()
+            }
+            .use { progress ->
+                progress.stage("edit:medium:0")
+                progress.observe("generation-a", 123L, 11, "declaration")
+                progress.refreshProbe = {
+                    buildJsonObject {
+                        put("phaseDetail", "index phase=source-capture state=started")
+                    }
+                }
+                assertTrue(heartbeat.await(2, TimeUnit.SECONDS))
+                val latest = Json.parseToJsonElement(lines.last()).jsonObject
+                assertEquals("edit:medium:0", latest["stage"]?.jsonPrimitive?.content)
+                assertEquals("generation-a", latest["generation"]?.jsonPrimitive?.content)
+                assertEquals("declaration", latest["predicate"]?.jsonPrimitive?.content)
+                assertEquals("11", latest["ordinal"]?.jsonPrimitive?.content)
+                assertTrue(latest["at"]?.jsonPrimitive?.content?.isNotEmpty() == true)
+                assertEquals(
+                    "index phase=source-capture state=started",
+                    latest["refresh"]?.jsonObject?.get("phaseDetail")?.jsonPrimitive?.content,
+                )
+            }
+    }
+
+    @Test
+    fun `slow daemon progress query cannot silence the stage heartbeat`() {
+        val lines = CopyOnWriteArrayList<String>()
+        val blocked = CountDownLatch(1)
+        val beat = CountDownLatch(2)
+        IncrementalAcceptanceDriver.Progress(20L) { line ->
+                lines.add(line)
+                beat.countDown()
+            }
+            .use { progress ->
+                try {
+                    progress.refreshProbe = {
+                        blocked.await(1, TimeUnit.SECONDS)
+                        null
+                    }
+                    assertTrue(beat.await(250, TimeUnit.MILLISECONDS), "$lines")
+                } finally {
+                    blocked.countDown()
+                }
+            }
+    }
+
+    @Test
+    fun `heartbeat selects the current Bazel client and not a completed topology query`() {
+        val topology = "index phase=topology state=started"
+        val journal =
+            listOf(
+                topology,
+                "bazel query index=1 state=completed exitCode=0 durationMillis=50",
+                "bazel query index=2 state=started",
+                "bazel query index=2 state=client-started pid=12345",
+            )
+        assertEquals(
+            "bazel query index=2 state=client-started pid=12345",
+            IncrementalAcceptanceDriver.activeQueryDetail(journal),
+        )
+        assertNull(
+            IncrementalAcceptanceDriver.activeQueryDetail(
+                journal + "index phase=topology state=completed durationMillis=500"
+            )
+        )
+    }
+
+    @Test
+    fun `refresh evidence keeps phase durations and drops private lines`() {
+        val summary =
+            IncrementalAcceptanceDriver.RefreshEvidence.summarize(
+                "refresh-a",
+                listOf(
+                    "index phase=topology state=started",
+                    "gradle-parse: external included build /private/owned/workspace/logic",
+                    "index topology=reused watcher-source-edit",
+                    "index phase=source-capture state=completed durationMillis=7",
+                    "index phase=producer:java-source state=completed durationMillis=5",
+                    "index phase=producer:java-source state=completed durationMillis=6",
+                    "index store=overlay",
+                    "index fresh for /private/owned/workspace",
+                    "[1/2] workspace:A.java",
+                ),
+                "/private/owned",
+            )
+        assertEquals("refresh-a", summary["id"]?.jsonPrimitive?.content)
+        val phases = summary.getValue("phaseMillis").jsonObject
+        assertEquals("7", phases["source-capture"]?.jsonPrimitive?.content)
+        assertEquals("11", phases["producer:java-source"]?.jsonPrimitive?.content)
+        assertEquals(
+            listOf(
+                "index phase=topology state=started",
+                "index topology=reused watcher-source-edit",
+                "index phase=source-capture state=completed durationMillis=7",
+                "index phase=producer:java-source state=completed durationMillis=5",
+                "index phase=producer:java-source state=completed durationMillis=6",
+                "index store=overlay",
+            ),
+            summary.getValue("lines").jsonArray.map { it.jsonPrimitive.content },
+        )
+    }
+
+    @Test
+    fun `edit nonce makes only edited bytes unique per run`() {
+        val workspace = Files.createDirectory(temporary.resolve("nonce"))
+        Files.writeString(workspace.resolve("A.java"), "package p;\nclass A {}\n")
+        Files.writeString(workspace.resolve("B.kt"), "package p\nclass B\n")
+        val plan = buildJsonObject {
+            put(
+                "files",
+                JsonArray(
+                    listOf("A.java", "B.kt").map { path ->
+                        buildJsonObject {
+                            put("path", path)
+                            put("module", ":")
+                            put("package", "p")
+                        }
+                    }
+                ),
+            )
+            put("groups", JsonArray(listOf(group("small", listOf(0, 1)))))
+        }
+        val plain = IncrementalWorkload(workspace, plan)
+        val nonced = IncrementalWorkload(workspace, plan, editNonce = "run-42")
+        plain.sources.zip(nonced.sources).forEach { (before, after) ->
+            assertEquals(before.content(0), after.content(0), "V0 must stay byte-identical")
+            assertFalse("run-42" in before.content(1))
+            assertTrue(after.content(1).startsWith(before.content(1)), after.content(1))
+            assertTrue(after.content(1).endsWith("// indexino-edit-nonce run-42\n"))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            IncrementalWorkload(workspace, plan, editNonce = "bad nonce\n")
+        }
+    }
+
+    @Test
+    fun `edit settling waits for idle clean scope and remains bounded`(): Unit = runBlocking {
+        val observed = mutableListOf<String>()
+        var polls = 0
+        IncrementalAcceptanceDriver.awaitQuiescent(
+            1_000.milliseconds,
+            active = {
+                polls++
+                if (polls <= 2) listOf("background") else emptyList()
+            },
+            dirty = { polls == 3 },
+            onActive = observed::add,
+            pollMillis = 1L,
+        )
+        assertEquals(listOf("background", "background"), observed)
+        assertEquals(5, polls, "Two consecutive idle and clean polls are required")
+
+        assertFailsWith<TimeoutCancellationException> {
+            IncrementalAcceptanceDriver.awaitQuiescent(
+                50.milliseconds,
+                active = { emptyList() },
+                dirty = { true },
+                onActive = {},
+                pollMillis = 1L,
+            )
+        }
+    }
+
+    @Test
+    fun `watcher baseline reset retries a joined stale refresh and remains bounded`(): Unit =
+        runBlocking {
+            var refreshes = 0
+            val failure =
+                runCatching {
+                        IncrementalAcceptanceDriver.awaitRestoredBaseline(
+                            500.milliseconds,
+                            { refreshes++ },
+                        ) {
+                            refreshes >= 2
+                        }
+                    }
+                    .exceptionOrNull()
+            assertNull(failure, "The first joined V1 refresh cannot establish restored V0")
+            assertEquals(2, refreshes, "The first joined V1 refresh cannot establish restored V0")
+
+            assertFailsWith<TimeoutCancellationException> {
+                IncrementalAcceptanceDriver.awaitRestoredBaseline(
+                    100.milliseconds,
+                    { refreshes++ },
+                ) {
+                    false
+                }
+            }
+        }
+
+    @Test
+    fun `failed topology retains structured failure and diagnostic progress`() {
+        val root = Files.createDirectory(temporary.resolve("owned-failure"))
+        Files.writeString(root.resolve(".indexino-benchmark-owned"), "fixture")
+        val workspace = Files.createDirectory(root.resolve("workspace"))
+        Files.writeString(workspace.resolve("settings.gradle.kts"), "rootProject.name = \"empty\"")
+        val source = workspace.resolve("Unindexed.java")
+        Files.writeString(source, "class Unindexed {}")
+        val plan = temporary.resolve("failure-plan.json")
+        Files.writeString(
+            plan,
+            """
+            {"schema":1,"buildSystem":"gradle","target":":","files":[
+            {"path":"Unindexed.java","module":":","package":""}],
+            "groups":[{"id":"small","files":[0]}]}
+            """
+                .trimIndent(),
+        )
+        val output = temporary.resolve("failure-report.json")
+        val previous = System.err
+        val diagnostics = ByteArrayOutputStream()
+        try {
+            PrintStream(diagnostics).use { stream ->
+                System.setErr(stream)
+                assertFailsWith<IndexinoException> {
+                    IncrementalAcceptanceDriver.main(
+                        arrayOf(root.toString(), plan.toString(), "manual", "1", output.toString())
+                    )
+                }
+            }
+        } finally {
+            System.setErr(previous)
+        }
+        val report = Json.parseToJsonElement(Files.readString(output)).jsonObject
+        assertEquals("refresh_failed_3", report["failureCode"]?.jsonPrimitive?.content)
+        assertEquals("TOPOLOGY", report["failureCategory"]?.jsonPrimitive?.content)
+        assertEquals("seed", report["failureStage"]?.jsonPrimitive?.content)
+        assertTrue(diagnostics.toString().contains("topology discovery failed: no source files"))
+        assertEquals("class Unindexed {}", Files.readString(source))
+        assertFalse(Files.readString(output).contains(temporary.toString()))
+
+        val watcherOutput = temporary.resolve("watcher-failure-report.json")
+        diagnostics.reset()
+        try {
+            PrintStream(diagnostics).use { stream ->
+                System.setErr(stream)
+                assertFailsWith<java.util.concurrent.CompletionException> {
+                    IncrementalAcceptanceDriver.main(
+                        arrayOf(
+                            root.toString(),
+                            plan.toString(),
+                            "watcher",
+                            "1",
+                            watcherOutput.toString(),
+                        )
+                    )
+                }
+            }
+        } finally {
+            System.setErr(previous)
+        }
+        val watcherReport = Json.parseToJsonElement(Files.readString(watcherOutput)).jsonObject
+        assertEquals("CompletionException", watcherReport["failureType"]?.jsonPrimitive?.content)
+        assertEquals("seed", watcherReport["failureStage"]?.jsonPrimitive?.content)
+        assertTrue(
+            diagnostics.toString().contains("topology discovery failed: no source files"),
+            "Failed remote refresh must retain its daemon journal before shutdown",
+        )
+        assertTrue(diagnostics.toString().contains("index phase=topology state=started"))
+        assertFalse(Files.readString(watcherOutput).contains(temporary.toString()))
+    }
+
+    @Test
+    fun `readiness rejects updated declarations without updated caller`() = runBlocking {
+        val workspace = Files.createDirectory(temporary.resolve("negative"))
+        Files.writeString(
+            workspace.resolve("settings.gradle.kts"),
+            "rootProject.name = \"negative\"",
+        )
+        val source = workspace.resolve("src/main/java/Seed.java")
+        Files.createDirectories(source.parent)
+        Files.writeString(source, "package fixture; class Seed {}")
+        val plan = buildJsonObject {
+            put(
+                "files",
+                JsonArray(
+                    listOf(
+                        buildJsonObject {
+                            put("path", "src/main/java/Seed.java")
+                            put("module", ":")
+                            put("package", "fixture")
+                        }
+                    )
+                ),
+            )
+            put("groups", JsonArray(listOf(group("small", listOf(0)))))
+        }
+        val workload = IncrementalWorkload(workspace, plan)
+        val previousCache = System.getProperty("indexino.cache.dir")
+        try {
+            System.setProperty("indexino.cache.dir", temporary.resolve("negative-cache").toString())
+            workload.write(workload.sources, 1)
+            Files.writeString(
+                source,
+                Files.readString(source)
+                    .replace("static int caller() { return probe(17, 29); }", ""),
+            )
+            Indexino.connect(
+                    IndexinoConfiguration.forWorkspace(workspace)
+                        .withRuntimeAttach(RuntimeAttachMode.IN_PROCESS)
+                        .withAutoRefresh(AutoRefreshMode.DISABLED)
+                )
+                .use { index ->
+                    index
+                        .refresh(
+                            RefreshRequest.forScope(IndexScope.gradle(":").includingDependencies())
+                        )
+                        .await()
+                    index.snapshot().use {
+                        var mismatch: Pair<Int, String>? = null
+                        assertFalse(
+                            workload.matches(it, workload.sources, 1) { ordinal, predicate ->
+                                mismatch = ordinal to predicate
+                            },
+                            "Missing caller must not be ready",
+                        )
+                        assertEquals(0 to "caller", mismatch)
+                    }
+                }
+        } finally {
+            if (previousCache == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCache)
+        }
+    }
+
+    @Test
+    fun `manual matrix verifies changed declarations signatures and retained snapshots`() {
+        val property = IncrementalAcceptanceDriver.EDIT_NONCE_PROPERTY
+        System.setProperty(property, "matrix-1")
+        try {
+            matrix("manual", seedAndRunMinutes = 2 to 15)
+        } finally {
+            System.clearProperty(property)
+        }
+    }
+
+    @Test
+    fun `watcher matrix verifies changed declarations signatures and retained snapshots`() =
+        matrix("watcher")
+
+    private fun matrix(lane: String, seedAndRunMinutes: Pair<Int, Int>? = null) {
+        val root = Files.createDirectory(temporary.resolve("owned"))
+        Files.writeString(root.resolve(".indexino-benchmark-owned"), "invented-fixture\n")
+        val workspace = Files.createDirectory(root.resolve("workspace"))
+        Files.writeString(
+            workspace.resolve("settings.gradle.kts"),
+            "include(\":alpha\", \":beta\", \":gamma\")\n",
+        )
+        val files =
+            (0..2).flatMap { module ->
+                (0..2).map { number ->
+                    val name = listOf("alpha", "beta", "gamma")[module]
+                    val kind = if (number == 0) "java" else "kotlin"
+                    val extension = if (number == 0) "java" else "kt"
+                    val relative = "$name/src/main/$kind/Seed$number.$extension"
+                    val path = workspace.resolve(relative)
+                    Files.createDirectories(path.parent)
+                    Files.writeString(path, "package fixture.$name;\nclass Seed$number {}\n")
+                    buildJsonObject {
+                        put("path", relative)
+                        put("module", name)
+                        put("package", "fixture.$name")
+                    }
+                }
+            }
+        val plan = temporary.resolve("plan.json")
+        Files.writeString(
+            plan,
+            buildJsonObject {
+                    put("schema", 1)
+                    put("buildSystem", "gradle")
+                    put("target", ":")
+                    put("files", JsonArray(files))
+                    put(
+                        "groups",
+                        JsonArray(
+                            listOf(
+                                group("small", listOf(0)),
+                                group("medium", listOf(0, 1, 2)),
+                                group("large", listOf(0, 3, 6)),
+                            )
+                        ),
+                    )
+                }
+                .toString(),
+        )
+        val output = temporary.resolve("report.json")
+        val bounds =
+            seedAndRunMinutes
+                ?.let { (seed, run) -> arrayOf(seed.toString(), run.toString()) }
+                .orEmpty()
+        IncrementalAcceptanceDriver.main(
+            arrayOf(root.toString(), plan.toString(), lane, "2", output.toString(), *bounds)
+        )
+        val report = Json.parseToJsonElement(Files.readString(output)).jsonObject
+        assertEquals("passed", report.getValue("status").jsonPrimitive.content)
+        assertSeedEvidence(report, seedAndRunMinutes ?: (10 to 10))
+        assertEquals(
+            System.getProperty(IncrementalAcceptanceDriver.EDIT_NONCE_PROPERTY),
+            report["editNonce"]?.jsonPrimitive?.content,
+        )
+        if (lane == "watcher") {
+            assertEquals(
+                "600000",
+                report["watcherWaitMillis"]?.jsonPrimitive?.content,
+                "An incremental stage exceeding ten minutes is a performance failure",
+            )
+        }
+        val samples = report.getValue("samples").jsonArray.map { it.jsonObject }
+        assertEquals(
+            listOf("small", "medium", "large", "small", "medium", "large"),
+            samples.map { it.getValue("scenario").jsonPrimitive.content },
+        )
+        assertEquals(
+            listOf(1, 3, 3, 1, 3, 3),
+            samples.map { it.getValue("changedFiles").jsonPrimitive.content.toInt() },
+        )
+        assertEquals(
+            listOf(1, 1, 3, 1, 1, 3),
+            samples.map { it.getValue("changedModules").jsonPrimitive.content.toInt() },
+        )
+        samples.forEach { assertSampleEvidence(it, lane) }
+        assertEquals(
+            "package fixture.alpha;\nclass Seed0 {}\n",
+            Files.readString(workspace.resolve("alpha/src/main/java/Seed0.java")),
+        )
+        assertFalse(Files.readString(output).contains(temporary.toString()))
+    }
+
+    private fun assertSampleEvidence(sample: JsonObject, lane: String) {
+        assertTrue("refreshes" in sample, "Each sample carries its refresh evidence: $sample")
+        val ready = sample.getValue("readyNanos").jsonPrimitive.content.toLong()
+        if (lane == "watcher") {
+            assertTrue(sample.getValue("preEditSettleNanos").jsonPrimitive.content.toLong() >= 0)
+            val timing = sample.getValue("watcherTiming").jsonObject
+            val visible = timing.getValue("firstNewGenerationNanos").jsonPrimitive.content
+            assertTrue(visible.toLong() in 1..ready, "$timing")
+            assertTrue(timing.getValue("queryPolls").jsonPrimitive.content.toInt() >= 1)
+        } else {
+            assertTrue(
+                sample.getValue("refreshes").jsonArray.any { refresh ->
+                    "change-detection" in refresh.jsonObject.getValue("phaseMillis").jsonObject
+                },
+                "Manual edit evidence names its refresh phases: $sample",
+            )
+        }
+        assertEquals("true", sample.getValue("pinnedVerified").jsonPrimitive.content)
+        assertEquals("true", sample.getValue("queriesVerified").jsonPrimitive.content)
+        assertTrue(ready > 0)
+    }
+
+    private fun assertSeedEvidence(report: JsonObject, seedAndRunMinutes: Pair<Int, Int>) {
+        val (seedMinutes, runMinutes) = seedAndRunMinutes
+        assertEquals(
+            (seedMinutes * 60_000).toString(),
+            report["seedWaitMillis"]?.jsonPrimitive?.content,
+        )
+        assertEquals(
+            (runMinutes * 60_000).toString(),
+            report["runWaitMillis"]?.jsonPrimitive?.content,
+        )
+        assertEquals("600000", report["stageWaitMillis"]?.jsonPrimitive?.content)
+        val seedRefreshes = report.getValue("seedRefreshes").jsonArray.map { it.jsonObject }
+        assertTrue(
+            seedRefreshes.any { "topology" in it.getValue("phaseMillis").jsonObject },
+            "Seed evidence must attribute its phases: $seedRefreshes",
+        )
+        assertEquals(
+            report.getValue("seedReadyNanos").jsonPrimitive.content.toLong(),
+            report.getValue("seedRefreshNanos").jsonPrimitive.content.toLong() +
+                report.getValue("seedVerifyNanos").jsonPrimitive.content.toLong(),
+        )
+        assertEquals(2 * 3, report.getValue("resets").jsonArray.size)
+    }
+
+    private fun group(name: String, files: List<Int>) = buildJsonObject {
+        put("id", name)
+        put("files", JsonArray(files.map(::JsonPrimitive)))
+    }
+}

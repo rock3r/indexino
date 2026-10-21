@@ -44,7 +44,11 @@ internal class RuntimeHandshakeServer(
                 ServerSocketChannel.open(StandardProtocolFamily.UNIX).also { channel ->
                     channel.bind(UnixDomainSocketAddress.of(endpoint))
                 }
-            acceptThread = Thread(::acceptLoop, "indexino-runtime-handshake").also(Thread::start)
+            // Foreground runtime entry points own process lifetime, not this background listener.
+            acceptThread =
+                Thread(::acceptLoop, "indexino-runtime-handshake")
+                    .apply { isDaemon = true }
+                    .also(Thread::start)
         } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
             running.set(false)
             server?.close()

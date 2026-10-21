@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.producer
 
+import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.FileHashRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import java.nio.file.Files
@@ -108,5 +109,57 @@ class FileHashProducerTest {
             FileHashProducer.contentHash("class A { int value; }"),
             records.single().contentHash,
         )
+    }
+
+    @Test
+    fun `refresh checks changed identities once rather than rescanning them per stored file`() {
+        val sources =
+            (0 until 64).map { IndexedSource("workspace", tempDir, "File$it.java") } +
+                IndexedSource("nested", tempDir, "File0.java")
+        val originalHash = FileHashProducer.contentHash("original")
+        sources.forEach { source ->
+            store.put(
+                CodeIndexKey.file("${source.originId}:${source.path}", originalHash),
+                FileHashRecord(source.path, originalHash, source.originId),
+            )
+        }
+        val changed =
+            object : AbstractSet<IndexedSource>() {
+                private val backing = setOf(sources.first())
+                var iterations = 0
+                override val size: Int
+                    get() = backing.size
+
+                override fun iterator(): Iterator<IndexedSource> {
+                    iterations++
+                    return backing.iterator()
+                }
+
+                override fun contains(element: IndexedSource): Boolean = element in backing
+            }
+
+        FileHashProducer()
+            .produce(
+                IndexBuildContext(
+                    store = store,
+                    commitHash = "abc123",
+                    sourceFiles = sources.map(IndexedSource::path),
+                    sources = sources,
+                    changedSourceSet = changed,
+                    sourceContentOverrides = mapOf("File0.java" to "changed"),
+                ),
+                store,
+            )
+
+        assertTrue(changed.iterations <= 2, "Changed identities should not be scanned per file")
+        val hashes =
+            store
+                .prefixScan("file:")
+                .map { it.second as FileHashRecord }
+                .associate { (it.originId to it.relativePath) to it.contentHash }
+        assertEquals(sources.size, hashes.size)
+        assertEquals(FileHashProducer.contentHash("changed"), hashes["workspace" to "File0.java"])
+        assertEquals(originalHash, hashes["nested" to "File0.java"])
+        assertEquals(originalHash, hashes["workspace" to "File1.java"])
     }
 }

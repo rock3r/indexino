@@ -23,7 +23,16 @@ class GradleTopologyTest {
             ),
             result.sourceFiles,
         )
+        assertEquals(
+            setOf("ui/src/main/java/LegacyPanel.java", "ui/src/main/kotlin/Panel.kt"),
+            codeSourceFiles(result),
+        )
     }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun codeSourceFiles(result: Any): Set<String>? =
+        result.javaClass.methods.singleOrNull { it.name == "getCodeSourceFiles" }?.invoke(result)
+            as Set<String>?
 
     @Test
     fun `includes CMP resources and skips test resources`() {

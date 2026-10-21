@@ -15,24 +15,24 @@ internal class FileHashProducer : IndexProducer {
     override val displayName: String = "FileHashProducer"
 
     override val progressTotal: (IndexBuildContext) -> Int = { context ->
-        context.changedSources.size
+        (context.changedSources + context.reindexedSources).size
     }
 
     override fun produce(context: IndexBuildContext, store: CodeIndexStore) {
         val currentFiles = context.sources.map { it.originId to it.path }.toSet()
-        store
-            .prefixScan("file:")
-            .filter { (_, record) ->
+        val files = context.changedSources + context.reindexedSources
+        val changedFiles = files.mapTo(hashSetOf()) { it.originId to it.path }
+        val removedKeys = mutableListOf<CodeIndexKey>()
+        store.forEachWritablePrefix("file:") { key, record ->
+            if (
                 record is FileHashRecord &&
                     (record.originId to record.relativePath !in currentFiles ||
-                        context.changedSources.any {
-                            it.originId == record.originId && it.path == record.relativePath
-                        })
-            }
-            .map { it.first }
-            .toList()
-            .forEach(store::delete)
-        val files = context.changedSources
+                        (record.originId to record.relativePath) in changedFiles)
+            )
+                removedKeys += key
+            true
+        }
+        removedKeys.forEach(store::delete)
         files.forEachIndexed { index, source ->
             context.reportFileProgress(index + 1, files.size, source)
             val hash = context.sourceHash(source)
@@ -42,6 +42,7 @@ internal class FileHashProducer : IndexProducer {
                     relativePath = source.path,
                     contentHash = hash,
                     originId = source.originId,
+                    isCode = source.isCode,
                 ),
             )
         }
@@ -78,7 +79,7 @@ internal class FileHashProducer : IndexProducer {
                                 ?: contentHash(
                                     Files.readAllBytes(source.originRoot.resolve(source.path))
                                 )
-                        "${source.originId}:${source.path}:$hash"
+                        "${source.originId}:${source.path}:${source.isCode}:$hash"
                     }
                     .joinToString("\n")
             )

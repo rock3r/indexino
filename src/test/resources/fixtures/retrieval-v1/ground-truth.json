@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "workspace": "workspace",
+  "cases": [
+    {
+      "id": "kotlin-alias-zero-arity", "kind": "references", "language": "kotlin",
+      "category": "alias-and-overload", "heldOut": false, "contract": "syntactic", "exhaustive": true,
+      "scopeFiles": ["src/main/kotlin/fixture/use/Use.kt"],
+      "symbol": {"fqn": "fixture.library.Ledger#mark", "file": "src/main/kotlin/fixture/library/Ledger.kt", "line": 4},
+      "expected": [{"file": "src/main/kotlin/fixture/use/Use.kt", "line": 7}]
+    },
+    {
+      "id": "kotlin-alias-one-arity", "kind": "references", "language": "kotlin",
+      "category": "alias-and-overload", "heldOut": false, "contract": "syntactic", "exhaustive": true,
+      "scopeFiles": ["src/main/kotlin/fixture/use/Use.kt"],
+      "symbol": {"fqn": "fixture.library.Ledger#mark", "file": "src/main/kotlin/fixture/library/Ledger.kt", "line": 5},
+      "expected": [{"file": "src/main/kotlin/fixture/use/Use.kt", "line": 8}]
+    },
+    {
+      "id": "java-to-kotlin-zero-arity", "kind": "references", "language": "java",
+      "category": "cross-language", "heldOut": false, "contract": "syntactic", "exhaustive": true,
+      "scopeFiles": ["src/main/java/fixture/java/JavaUse.java"],
+      "symbol": {"fqn": "fixture.library.Ledger#mark", "file": "src/main/kotlin/fixture/library/Ledger.kt", "line": 4},
+      "expected": [{"file": "src/main/java/fixture/java/JavaUse.java", "line": 7}]
+    },
+    {
+      "id": "java-to-kotlin-one-arity", "kind": "references", "language": "java",
+      "category": "cross-language", "heldOut": false, "contract": "syntactic", "exhaustive": true,
+      "scopeFiles": ["src/main/java/fixture/java/JavaUse.java"],
+      "symbol": {"fqn": "fixture.library.Ledger#mark", "file": "src/main/kotlin/fixture/library/Ledger.kt", "line": 5},
+      "expected": [{"file": "src/main/java/fixture/java/JavaUse.java", "line": 8}]
+    },
+    {
+      "id": "kotlin-to-java", "kind": "references", "language": "kotlin",
+      "category": "cross-language", "heldOut": false, "contract": "syntactic", "exhaustive": true,
+      "scopeFiles": ["src/main/kotlin/fixture/use/Use.kt"],
+      "symbol": {"fqn": "fixture.java.JavaLedger#ping", "file": "src/main/java/fixture/java/JavaLedger.java", "line": 4},
+      "expected": [{"file": "src/main/kotlin/fixture/use/Use.kt", "line": 9}]
+    },
+    {
+      "id": "shadowed-receiver", "kind": "references", "language": "kotlin",
+      "category": "shadowing", "heldOut": false, "contract": "syntactic", "exhaustive": true,
+      "scopeFiles": ["src/main/kotlin/fixture/use/Use.kt"],
+      "symbol": {"fqn": "fixture.java.JavaLedger#mark", "file": "src/main/java/fixture/java/JavaLedger.java", "line": 5},
+      "expected": [{"file": "src/main/kotlin/fixture/use/Use.kt", "line": 14}]
+    },
+    {
+      "id": "same-name-negative", "kind": "references", "language": "kotlin",
+      "category": "negative-and-ambiguous-names", "heldOut": false, "contract": "syntactic", "exhaustive": true,
+      "scopeFiles": ["src/main/kotlin/fixture/other/Other.kt"],
+      "symbol": {"fqn": "fixture.library.Ledger#mark", "file": "src/main/kotlin/fixture/library/Ledger.kt", "line": 4},
+      "expected": []
+    },
+    {
+      "id": "same-name-positive", "kind": "references", "language": "kotlin",
+      "category": "negative-and-ambiguous-names", "heldOut": false, "contract": "syntactic", "exhaustive": true,
+      "scopeFiles": ["src/main/kotlin/fixture/other/Other.kt"],
+      "symbol": {"fqn": "fixture.other.Ledger#mark", "file": "src/main/kotlin/fixture/other/Other.kt", "line": 4},
+      "expected": [{"file": "src/main/kotlin/fixture/other/Other.kt", "line": 8}]
+    },
+    {
+      "id": "same-arity-candidates", "kind": "references", "language": "kotlin",
+      "category": "ambiguous-candidates", "heldOut": false, "contract": "syntactic", "exhaustive": true,
+      "scopeFiles": ["src/main/kotlin/fixture/use/Use.kt"],
+      "symbol": {"fqn": "fixture.library.Ledger#choose", "file": "src/main/kotlin/fixture/library/Ledger.kt", "line": 6},
+      "expected": [{"file": "src/main/kotlin/fixture/use/Use.kt", "line": 18}, {"file": "src/main/kotlin/fixture/use/Use.kt", "line": 19}]
+    },
+    {
+      "id": "same-arity-int-semantic", "kind": "references", "language": "kotlin",
+      "category": "compiler-resolution-gap", "heldOut": false, "contract": "semantic", "exhaustive": true,
+      "scopeFiles": ["src/main/kotlin/fixture/use/Use.kt"],
+      "symbol": {"fqn": "fixture.library.Ledger#choose", "file": "src/main/kotlin/fixture/library/Ledger.kt", "line": 6},
+      "expected": [{"file": "src/main/kotlin/fixture/use/Use.kt", "line": 18}]
+    },
+    {
+      "id": "same-arity-string-semantic", "kind": "references", "language": "kotlin",
+      "category": "compiler-resolution-gap", "heldOut": false, "contract": "semantic", "exhaustive": true,
+      "scopeFiles": ["src/main/kotlin/fixture/use/Use.kt"],
+      "symbol": {"fqn": "fixture.library.Ledger#choose", "file": "src/main/kotlin/fixture/library/Ledger.kt", "line": 7},
+      "expected": [{"file": "src/main/kotlin/fixture/use/Use.kt", "line": 19}]
+    },
+    {
+      "id": "held-out-alias", "kind": "references", "language": "kotlin",
+      "category": "alias-and-overload", "heldOut": true, "contract": "syntactic", "exhaustive": true,
+      "scopeFiles": ["src/main/kotlin/fixture/heldout/HeldOut.kt"],
+      "symbol": {"fqn": "fixture.library.Ledger#mark", "file": "src/main/kotlin/fixture/library/Ledger.kt", "line": 4},
+      "expected": [{"file": "src/main/kotlin/fixture/heldout/HeldOut.kt", "line": 6}]
+    },
+    {
+      "id": "resource-qualifiers", "kind": "resources", "language": "xml",
+      "category": "qualifiers-and-pagination", "heldOut": false, "contract": "syntactic", "exhaustive": true,
+      "scopeFiles": ["src/main/res/values/strings.xml", "src/main/res/values-fr/strings.xml", "src/main/res/values-night/strings.xml"],
+      "resource": {"namespace": "fixture.resources", "type": "string", "name": "ledger_title"},
+      "expected": [
+        {"file": "src/main/res/values/strings.xml", "line": 2, "qualifiers": []},
+        {"file": "src/main/res/values-fr/strings.xml", "line": 2, "qualifiers": ["fr"]},
+        {"file": "src/main/res/values-night/strings.xml", "line": 2, "qualifiers": ["night"]}
+      ]
+    }
+  ]
+}

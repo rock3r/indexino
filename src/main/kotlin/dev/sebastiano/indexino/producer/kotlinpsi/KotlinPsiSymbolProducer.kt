@@ -14,11 +14,13 @@ import dev.sebastiano.indexino.producer.IndexProducer
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.SourceRecordCleanup
 import dev.sebastiano.indexino.producer.xml.ResourceMetadata
+import java.util.concurrent.TimeUnit
 import org.jetbrains.kotlin.com.intellij.psi.PsiElement
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.KtBinaryExpression
 import org.jetbrains.kotlin.psi.KtBlockExpression
 import org.jetbrains.kotlin.psi.KtCallExpression
+import org.jetbrains.kotlin.psi.KtCallableDeclaration
 import org.jetbrains.kotlin.psi.KtCatchClause
 import org.jetbrains.kotlin.psi.KtClass
 import org.jetbrains.kotlin.psi.KtClassBody
@@ -40,6 +42,7 @@ import org.jetbrains.kotlin.psi.KtSuperExpression
 import org.jetbrains.kotlin.psi.KtSuperTypeCallEntry
 import org.jetbrains.kotlin.psi.KtThisExpression
 import org.jetbrains.kotlin.psi.KtUnaryExpression
+import org.jetbrains.kotlin.psi.psiUtil.startOffsetSkippingComments
 
 @Suppress("TooManyFunctions", "LargeClass")
 internal class KotlinPsiSymbolProducer : IndexProducer {
@@ -56,28 +59,64 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             ((context.changedSources + context.deletedSources).filter { it.path.endsWith(".kt") } +
                     metadataDependentSources(context, ".kt"))
                 .distinctBy { it.originId to it.path }
-        SourceRecordCleanup.deleteLanguageOriginRecords(
-            store,
-            LANGUAGE,
-            ".kt",
-            affectedSources.toSet(),
-        )
-        KotlinPsiParser().use { parser ->
-            val ktFiles = sourceFilesToProcess(context, ".kt")
-            val indexedFiles = ktFiles.mapIndexed { index, source ->
-                context.reportFileProgress(index + 1, ktFiles.size, source)
-                val file = parser.parseFile(source.path, context.readSource(source))
-                IndexedKotlinFile(
-                    source.originId,
-                    source.path,
-                    ResourceMetadata.resourcePackage(context, source),
-                    file,
-                    collectSymbols(file).map { it.copy(originId = source.originId) },
+        if (affectedSources.isNotEmpty()) {
+            timedPhase(context, "kotlin-cleanup") {
+                SourceRecordCleanup.deleteLanguageOriginRecords(
+                    store,
+                    LANGUAGE,
+                    ".kt",
+                    affectedSources.toSet(),
                 )
             }
-            val projectSymbols = indexedFiles.flatMap { it.symbols }
-            indexedFiles.forEach { indexedFile -> indexFile(indexedFile, projectSymbols, store) }
         }
+        val ktFiles = sourceFilesToProcess(context, ".kt")
+        if (ktFiles.isEmpty()) return
+        timedPhase(context, "kotlin-parser") {
+            val parser = timedPhase(context, "kotlin-parser-setup") { KotlinPsiParser() }
+            parser.use { parser ->
+                val indexedFiles =
+                    timedPhase(context, "kotlin-declarations") {
+                        ktFiles.mapIndexed { index, source ->
+                            context.reportFileProgress(index + 1, ktFiles.size, source)
+                            val file = parser.parseFile(source.path, context.readSource(source))
+                            IndexedKotlinFile(
+                                source.originId,
+                                source.path,
+                                ResourceMetadata.resourcePackage(context, source),
+                                collectSymbols(file).map { it.copy(originId = source.originId) },
+                            )
+                        }
+                    }
+                val projectSymbols = ProjectSymbols(indexedFiles.flatMap { it.symbols })
+                // Keep declaration metadata across files, not the entire project's syntax
+                // trees.
+                // Both passes read the same immutable refresh snapshot.
+                timedPhase(context, "kotlin-fact-write") {
+                    ktFiles.forEachIndexed { index, source ->
+                        val file = parser.parseFile(source.path, context.readSource(source))
+                        store.transaction {
+                            indexFile(indexedFiles[index], file, projectSymbols, store)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private inline fun <T> timedPhase(
+        context: IndexBuildContext,
+        phase: String,
+        block: () -> T,
+    ): T {
+        val progress = context.progress ?: return block()
+        progress("index phase=$phase state=started")
+        val started = System.nanoTime()
+        val result = block()
+        progress(
+            "index phase=$phase state=completed durationMillis=" +
+                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+        )
+        return result
     }
 
     private fun sourceFilesToProcess(
@@ -86,6 +125,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
     ): List<IndexedSource> =
         (context.changedSources.filter { it.path.endsWith(extension) } +
                 metadataDependentSources(context, extension))
+            .filter { it.isCode }
             .distinctBy { it.originId to it.path }
 
     private fun metadataDependentSources(
@@ -106,10 +146,10 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
 
     private fun indexFile(
         indexedFile: IndexedKotlinFile,
-        projectSymbols: List<ResolvedSymbol>,
+        file: KtFile,
+        projectSymbols: ProjectSymbols,
         store: CodeIndexStore,
     ) {
-        val file = indexedFile.file
         indexedFile.symbols.forEach { symbol ->
             store.put(
                 CodeIndexKey.symbolDefinition(
@@ -398,7 +438,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         originId: String,
         relativePath: String,
         fileSymbols: List<ResolvedSymbol>,
-        projectSymbols: List<ResolvedSymbol>,
+        projectSymbols: ProjectSymbols,
         imports: Map<String, String>,
         store: CodeIndexStore,
     ) {
@@ -462,26 +502,26 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
     }
 
     private fun sameOriginParameterNames(
-        symbols: List<ResolvedSymbol>,
+        symbols: ProjectSymbols,
         fqn: String,
         originId: String,
         argumentCount: Int,
     ): List<String>? =
-        symbols
+        symbols.byFqn[fqn]
+            .orEmpty()
             .singleOrNull {
-                it.fqn == fqn &&
-                    it.originId == originId &&
-                    (it.arity == null || it.arity >= argumentCount)
+                it.originId == originId && (it.arity == null || it.arity >= argumentCount)
             }
             ?.parameterNames
 
     private fun parameterNames(
-        symbols: List<ResolvedSymbol>,
+        symbols: ProjectSymbols,
         fqn: String,
         argumentCount: Int,
     ): List<String>? =
-        symbols
-            .singleOrNull { it.fqn == fqn && (it.arity == null || it.arity >= argumentCount) }
+        symbols.byFqn[fqn]
+            .orEmpty()
+            .singleOrNull { it.arity == null || it.arity >= argumentCount }
             ?.parameterNames
 
     private fun storedSameOriginParameterNames(
@@ -781,19 +821,15 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         when (receiver) {
             is KtThisExpression -> names.classOwner(useSite)?.let(names::classFqn)
             is KtSuperExpression -> names.superClassFqn(useSite)
-            is KtNameReferenceExpression -> {
-                val name = receiver.getReferencedName()
-                val type =
-                    resolveVariableType(receiver, name) ?: names.resolveTypeOrObject(receiver, name)
-                type?.let { names.qualifyType(it, useSite) }
-            }
+            is KtNameReferenceExpression ->
+                resolveNamedReceiverOwner(receiver, receiver.getReferencedName(), names)
             else -> null
         }
 
     private fun resolveCall(
         file: KtFile,
         call: KtCallExpression,
-        symbols: List<ResolvedSymbol>,
+        symbols: ProjectSymbols,
         imports: Map<String, String>,
         store: CodeIndexStore,
     ): InvocationTarget? {
@@ -808,8 +844,8 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         }
         val classOwner = names.classOwner(call)?.let(names::classFqn)
         if (classOwner != null) {
-            symbols
-                .firstOrNull { it.name == name && it.ownerFqn == classOwner }
+            symbols.byName[name]
+                ?.firstOrNull { it.ownerFqn == classOwner }
                 ?.let {
                     return InvocationTarget(it.fqn, name, null)
                 }
@@ -817,12 +853,12 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         val inheritedTarget = names.superClassFqn(call)?.let { "$it#$name" }
         if (
             inheritedTarget != null &&
-                (symbols.any { it.fqn == inheritedTarget } || store.hasSymbol(inheritedTarget))
+                (symbols.byFqn.containsKey(inheritedTarget) || store.hasSymbol(inheritedTarget))
         ) {
             return InvocationTarget(inheritedTarget, name, null)
         }
         val topLevelTarget = names.qualify(name)
-        if (symbols.any { it.fqn == topLevelTarget } || store.hasSymbol(topLevelTarget)) {
+        if (symbols.byFqn.containsKey(topLevelTarget) || store.hasSymbol(topLevelTarget)) {
             return InvocationTarget(topLevelTarget, name, null)
         }
         imports[name]?.let { imported ->
@@ -844,9 +880,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                 receiver.superTypeQualifier?.text?.let { names.qualifyType(it, call) }
                     ?: names.superClassFqn(call)
             is KtNameReferenceExpression ->
-                resolveVariableType(receiver, receiver.getReferencedName())?.let {
-                    names.qualifyType(it, call)
-                } ?: names.resolveTypeOrObject(call, receiver.getReferencedName())
+                resolveNamedReceiverOwner(receiver, receiver.getReferencedName(), names)
             is KtCallExpression ->
                 (receiver.calleeExpression as? KtSimpleNameExpression)
                     ?.getReferencedName()
@@ -856,79 +890,86 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             else -> names.qualifyType(receiver.text, call)
         }
 
-    private fun resolveVariableType(useSite: KtElement, name: String): String? {
+    private fun resolveNamedReceiverOwner(
+        useSite: KtElement,
+        name: String,
+        names: KotlinSourceNames,
+    ): String? {
         var scope = useSite.parent
         var insideMemberFunction = false
         while (scope != null) {
             if (scope is KtNamedFunction && scope.parent is KtClassBody) {
                 insideMemberFunction = true
             }
-            val type = variableTypeInScope(scope, useSite, name, insideMemberFunction)
-            if (type != null) {
-                return type
+            val binding = variableInScope(scope, useSite, name, insideMemberFunction)
+            if (binding != null) {
+                // An unknown type still shadows outer variables, imports, and objects.
+                return binding.typeReference?.text?.let { names.qualifyType(it, binding) }
+                    ?: localInitializerType(binding, names)
             }
             scope = scope.parent
         }
-        return null
+        return names.resolveTypeOrObject(useSite, name)
     }
 
-    private fun variableTypeInScope(
+    private fun localInitializerType(
+        binding: KtCallableDeclaration,
+        names: KotlinSourceNames,
+    ): String? {
+        val property = (binding as? KtProperty)?.takeIf { it.isLocal } ?: return null
+        val call = property.initializer as? KtCallExpression ?: return null
+        val name =
+            (call.calleeExpression as? KtSimpleNameExpression)?.getReferencedName() ?: return null
+        var scope = call.parent
+        var insideMemberFunction = false
+        while (scope != null) {
+            if (scope is KtNamedFunction && scope.parent is KtClassBody) {
+                insideMemberFunction = true
+            }
+            if (variableInScope(scope, call, name, insideMemberFunction) != null) return null
+            scope = scope.parent
+        }
+        // Use the declaration's scope, not a later use site's potentially shadowed type names.
+        return names.resolveCallReceiverType(call, name)?.let { names.qualifyType(it, call) }
+    }
+
+    private fun variableInScope(
         scope: PsiElement,
         useSite: KtElement,
         name: String,
         insideMemberFunction: Boolean,
-    ): String? =
+    ): KtCallableDeclaration? =
         when (scope) {
-            is KtNamedFunction ->
-                scope.valueParameters.firstOrNull { it.name == name }?.typeReference?.text
-            is KtFunctionLiteral ->
-                scope.valueParameters.firstOrNull { it.name == name }?.typeReference?.text
-            is KtCatchClause ->
-                scope.catchParameter?.takeIf { it.name == name }?.typeReference?.text
-            is KtForExpression ->
-                scope.loopParameter?.takeIf { it.name == name }?.typeReference?.text
+            is KtNamedFunction -> scope.valueParameters.firstOrNull { it.name == name }
+            is KtFunctionLiteral -> scope.valueParameters.firstOrNull { it.name == name }
+            is KtCatchClause -> scope.catchParameter?.takeIf { it.name == name }
+            is KtForExpression -> scope.loopParameter?.takeIf { it.name == name }
             is KtBlockExpression ->
-                scope.statements
-                    .filterIsInstance<KtProperty>()
-                    .lastOrNull { it.name == name && it.textOffset < useSite.textOffset }
-                    ?.typeReference
-                    ?.text
+                scope.statements.filterIsInstance<KtProperty>().lastOrNull {
+                    it.name == name && it.textOffset < useSite.textOffset
+                }
             is KtClass ->
-                scope.declarations
-                    .filterIsInstance<KtProperty>()
-                    .firstOrNull { it.name == name }
-                    ?.typeReference
-                    ?.text
-                    ?: scope.primaryConstructorParameters
-                        .firstOrNull {
-                            it.name == name && (it.hasValOrVar() || !insideMemberFunction)
-                        }
-                        ?.typeReference
-                        ?.text
+                scope.declarations.filterIsInstance<KtProperty>().firstOrNull { it.name == name }
+                    ?: scope.primaryConstructorParameters.firstOrNull {
+                        it.name == name && (it.hasValOrVar() || !insideMemberFunction)
+                    }
             is KtClassOrObject ->
-                scope.declarations
-                    .filterIsInstance<KtProperty>()
-                    .firstOrNull { it.name == name }
-                    ?.typeReference
-                    ?.text
+                scope.declarations.filterIsInstance<KtProperty>().firstOrNull { it.name == name }
             is KtFile ->
-                scope.declarations
-                    .filterIsInstance<KtProperty>()
-                    .firstOrNull { it.name == name }
-                    ?.typeReference
-                    ?.text
+                scope.declarations.filterIsInstance<KtProperty>().firstOrNull { it.name == name }
             else -> null
         }
 
     private fun KtElement.lineNumber(): Int {
         val document = containingFile.viewProvider.document ?: return 1
-        return document.getLineNumber(textRange.startOffset) + 1
+        return document.getLineNumber(startOffsetSkippingComments) + 1
     }
 
     private fun KtElement.columnNumber(): Int {
         val document = containingFile.viewProvider.document ?: return 1
-        val line = document.getLineNumber(textRange.startOffset)
-        return textRange.startOffset - document.getLineStartOffset(line) + 1
+        val offset = startOffsetSkippingComments
+        val line = document.getLineNumber(offset)
+        return offset - document.getLineStartOffset(line) + 1
     }
 
     private fun KtElement.inclusiveEndOffset(): Int =
@@ -963,11 +1004,15 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         val aliases: List<String> = emptyList(),
     )
 
+    private class ProjectSymbols(symbols: List<ResolvedSymbol>) {
+        val byName: Map<String, List<ResolvedSymbol>> = symbols.groupBy { it.name }
+        val byFqn: Map<String, List<ResolvedSymbol>> = symbols.groupBy { it.fqn }
+    }
+
     private data class IndexedKotlinFile(
         val originId: String,
         val relativePath: String,
         val defaultResourcePackage: String?,
-        val file: KtFile,
         val symbols: List<ResolvedSymbol>,
     )
 
