@@ -135,13 +135,19 @@ internal class RuntimeSnapshotDispatcher(
                 val freshness = RuntimeSnapshotProtocol.decodeFreshness(input)
                 beforeAcquire(freshness)
                 val snapshot = runBlocking { owner.snapshot(freshness) }
+                val observed = freshnessOverride(freshness)
                 val id = UUID.randomUUID().toString()
                 snapshots[id] = SessionSnapshot(session.id, snapshot)
                 RuntimeSnapshotProtocol.acquireResponse(
                     id = id,
                     generation = snapshot.generation,
                     revision = snapshot.revision,
-                    freshness = freshnessOverride(freshness) ?: snapshot.freshnessAtAcquisition,
+                    freshness =
+                        when (observed) {
+                            SnapshotFreshness.DIRTY,
+                            SnapshotFreshness.UNKNOWN -> observed
+                            else -> snapshot.freshnessAtAcquisition
+                        },
                 )
             }
             RuntimeSnapshotProtocol.RELEASE -> {
@@ -755,6 +761,7 @@ internal object RuntimeSnapshotProtocol {
         when (value) {
             SnapshotFreshness.CURRENT.value -> SnapshotFreshness.CURRENT
             SnapshotFreshness.DIRTY.value -> SnapshotFreshness.DIRTY
+            SnapshotFreshness.PROVISIONAL.value -> SnapshotFreshness.PROVISIONAL
             SnapshotFreshness.UNKNOWN.value -> SnapshotFreshness.UNKNOWN
             else -> throw RuntimeProtocolException("Unsupported snapshot freshness")
         }

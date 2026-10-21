@@ -1,5 +1,10 @@
 package dev.sebastiano.indexino.api
 
+import dev.sebastiano.indexino.engine.AutoRefreshController
+import dev.sebastiano.indexino.engine.NativeWorkspaceWatcher
+import dev.sebastiano.indexino.engine.RuntimeSession
+import dev.sebastiano.indexino.engine.RuntimeSnapshotDispatcher
+import dev.sebastiano.indexino.engine.RuntimeSnapshotProtocol
 import dev.sebastiano.indexino.model.PluginId
 import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.ReferenceQuery
@@ -8,6 +13,8 @@ import dev.sebastiano.indexino.model.SourceFile
 import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.SymbolQuery
 import java.nio.file.Files
+import java.nio.file.StandardCopyOption.ATOMIC_MOVE
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
@@ -30,6 +37,354 @@ class InProcessIndexinoTest {
     }
 
     private val tempDirs = mutableListOf<java.nio.file.Path>()
+
+    @Test
+    @Suppress("CyclomaticComplexMethod", "LongMethod", "NestedBlockDepth")
+    fun `tentative parent refresh includes a same-length sibling without its own callback`() {
+        val workspace = createGitWorkspace().toRealPath()
+        val source = workspace.resolve("ui/src/main/kotlin/Panel.kt")
+        val sibling = source.resolveSibling("Other.kt")
+        val temporary = source.resolveSibling("atomic.tmp")
+        val remote = workspace.resolve("ui/src/main/kotlin/remote/Remote.kt")
+        Files.createDirectories(remote.parent)
+        Files.writeString(remote, "package sample\nclass RemoteB0\n")
+        Files.writeString(sibling, "package sample\nclass SourceB0\n")
+        val cache = createTempDirectory("indexino-tentative-cache-")
+        tempDirs.add(cache)
+        val priorCache = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cache.toString())
+        try {
+            val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+            Indexino.connectBlocking(workspace).use { index ->
+                lateinit var controller: AutoRefreshController
+                val hinted = CopyOnWriteArrayList<Set<java.nio.file.Path>>()
+                val seeded = CopyOnWriteArrayList<Int>()
+                controller =
+                    AutoRefreshController(
+                        workspace,
+                        AutoRefreshMode.ENABLED,
+                        refresh = { received ->
+                            val handle = runSuspend { index.refresh(received) }
+                            controller.onRefreshStarted(received, handle)
+                            runSuspend { handle.await() }
+                        },
+                        topologyProvider = index::topologyForWatch,
+                        refreshWithTopology = { received, topology, paths, coverage, root, tentative
+                            ->
+                            hinted += paths
+                            val handle = runSuspend {
+                                index.refresh(
+                                    received,
+                                    {},
+                                    null,
+                                    topology,
+                                    paths,
+                                    coverage,
+                                    root,
+                                    tentative,
+                                )
+                            }
+                            controller.onRefreshStarted(received, handle)
+                            runSuspend { handle.await() }
+                        },
+                        nativeWorkspaceWatcher = { _, _, _ ->
+                            object : NativeWorkspaceWatcher {
+                                override val isAlive = true
+
+                                override fun close() = Unit
+                            }
+                        },
+                        tentativeParentHint = index::tentativeParentHint,
+                        nativeFlushForTests = {},
+                    )
+                try {
+                    index.onSourcesResolvedForRuntime = controller::register
+                    index.onNativeFenceForRuntime = controller::beforeDiscoveryFence
+                    index.onBoundedParentInventoryForRuntime = { received, sources ->
+                        controller.captureWarmParents(received, sources).also { seeded += it.size }
+                    }
+                    runSuspend { index.refresh(request).await() }
+                    Files.writeString(source, "package sample\nclass WarmA\n")
+                    controller.onPathChangedForTests(source)
+                    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
+                    while (System.nanoTime() < deadline) {
+                        if (runSuspend { index.snapshot() }.use { symbolCount(it, "WarmA") } == 1)
+                            break
+                        Thread.sleep(25)
+                    }
+                    assertEquals(
+                        1,
+                        runSuspend { index.snapshot() }.use { symbolCount(it, "WarmA") },
+                    )
+                    val settleDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                    while (
+                        controller.freshness(FreshnessPolicy.AWAIT_CURRENT) !=
+                            SnapshotFreshness.CURRENT && System.nanoTime() < settleDeadline
+                    ) Thread.sleep(10)
+                    assertEquals(
+                        SnapshotFreshness.CURRENT,
+                        controller.freshness(FreshnessPolicy.AWAIT_CURRENT),
+                    )
+                    assertTrue((seeded.lastOrNull() ?: 0) > 0, "No pre-capture inventory: $seeded")
+                    val pinned = runSuspend { index.snapshot() }
+                    try {
+                        val originalMtime = Files.getLastModifiedTime(sibling)
+                        Files.writeString(sibling, "package sample\nclass SourceB1\n")
+                        Files.setLastModifiedTime(sibling, originalMtime)
+                        Files.writeString(temporary, "package sample\nclass ChangedA\n")
+                        Files.move(temporary, source, ATOMIC_MOVE, REPLACE_EXISTING)
+                        assertTrue(
+                            index.tentativeParentHint(request, temporary, setOf(source)) != null,
+                            "No same-generation candidate despite seed: $seeded",
+                        )
+                        // Git's index bookkeeping can arrive after the capture fence without
+                        // changing any source or topology input.
+                        controller.onPathChangedForTests(workspace.resolve(".git/index"))
+                        controller.onPathChangedForTests(temporary)
+                        controller.onPathChangedForTests(source)
+                        val changeDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
+                        while (System.nanoTime() < changeDeadline) {
+                            val updated =
+                                runSuspend { index.snapshot() }
+                                    .use {
+                                        symbolCount(it, "ChangedA") == 1 &&
+                                            symbolCount(it, "SourceB1") == 1
+                                    }
+                            if (updated) break
+                            Thread.sleep(25)
+                        }
+                        assertEquals(
+                            1,
+                            runSuspend { index.snapshot() }.use { symbolCount(it, "SourceB1") },
+                        )
+                        assertTrue(
+                            hinted.any { it.containsAll(setOf(source, sibling)) },
+                            "No two-source hint: $hinted",
+                        )
+                        assertEquals(1, symbolCount(pinned, "SourceB0"))
+                        assertEquals(0, symbolCount(pinned, "SourceB1"))
+
+                        // This is deliberately NOT a correctness proof: the vanished alias
+                        // crosses parents and no callback names the target. Mark the published
+                        // snapshot tentative until an independent full audit repairs it.
+                        val tentative = runSuspend { index.snapshot() }
+                        try {
+                            assertEquals("PROVISIONAL", tentative.freshnessAtAcquisition.value)
+                            assertEquals(1, symbolCount(tentative, "RemoteB0"))
+                            // A later ordinary covered edit cannot certify the inherited
+                            // provisional sources outside this parent.
+                            Files.writeString(
+                                source,
+                                "package sample\nclass OrdinaryAfterProvisional\n",
+                            )
+                            controller.onPathChangedForTests(source)
+                            val ordinaryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
+                            while (System.nanoTime() < ordinaryDeadline) {
+                                if (
+                                    runSuspend { index.snapshot() }
+                                        .use { symbolCount(it, "OrdinaryAfterProvisional") } == 1
+                                )
+                                    break
+                                Thread.sleep(25)
+                            }
+                            runSuspend { index.snapshot() }
+                                .use { ordinary ->
+                                    assertEquals(
+                                        1,
+                                        symbolCount(ordinary, "OrdinaryAfterProvisional"),
+                                    )
+                                    assertEquals(
+                                        SnapshotFreshness.PROVISIONAL,
+                                        ordinary.freshnessAtAcquisition,
+                                    )
+                                }
+                            Files.createLink(temporary, remote)
+                            Files.writeString(temporary, "package sample\nclass RemoteB1\n")
+                            Files.delete(temporary)
+                            Files.writeString(temporary, "package sample\nclass ChangedAgain\n")
+                            Files.move(temporary, source, ATOMIC_MOVE, REPLACE_EXISTING)
+                            controller.onPathChangedForTests(temporary)
+                            controller.onPathChangedForTests(source)
+                            val laterDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
+                            while (System.nanoTime() < laterDeadline) {
+                                if (
+                                    runSuspend { index.snapshot() }
+                                        .use { symbolCount(it, "ChangedAgain") } == 1
+                                )
+                                    break
+                                Thread.sleep(25)
+                            }
+                            runSuspend { index.snapshot() }
+                                .use { current ->
+                                    assertEquals(1, symbolCount(current, "ChangedAgain"))
+                                    assertEquals(0, symbolCount(current, "RemoteB1"))
+                                    assertEquals(1, symbolCount(current, "RemoteB0"))
+                                    assertEquals(
+                                        "PROVISIONAL",
+                                        current.freshnessAtAcquisition.value,
+                                    )
+                                }
+                            val unavailable =
+                                assertFailsWith<IndexinoException> {
+                                    runSuspend { index.snapshot(FreshnessPolicy.AWAIT_CURRENT) }
+                                        .close()
+                                }
+                            assertEquals("current_unverified", unavailable.failure.code)
+                            val cleanDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                            while (
+                                controller.freshness(FreshnessPolicy.AWAIT_CURRENT) !=
+                                    SnapshotFreshness.CURRENT && System.nanoTime() < cleanDeadline
+                            ) Thread.sleep(10)
+                            assertEquals(
+                                SnapshotFreshness.CURRENT,
+                                controller.freshness(FreshnessPolicy.AWAIT_CURRENT),
+                            )
+                            RuntimeSnapshotDispatcher(
+                                    index,
+                                    freshnessOverride = controller::freshness,
+                                )
+                                .use { dispatcher ->
+                                    val session = RuntimeSession()
+                                    val response =
+                                        dispatcher.dispatch(
+                                            session,
+                                            RuntimeSnapshotProtocol.acquireCommand(
+                                                FreshnessPolicy.PUBLISHED
+                                            ),
+                                        )
+                                    assertEquals(
+                                        SnapshotFreshness.PROVISIONAL,
+                                        RuntimeSnapshotProtocol.decodeAcquireResponse(response)
+                                            .freshness,
+                                    )
+                                    dispatcher.releaseSession(session)
+                                    RuntimeSnapshotDispatcher(
+                                            index,
+                                            freshnessOverride = { SnapshotFreshness.UNKNOWN },
+                                        )
+                                        .use { uncovered ->
+                                            val degraded =
+                                                uncovered.dispatch(
+                                                    session,
+                                                    RuntimeSnapshotProtocol.acquireCommand(
+                                                        FreshnessPolicy.PUBLISHED
+                                                    ),
+                                                )
+                                            assertEquals(
+                                                SnapshotFreshness.UNKNOWN,
+                                                RuntimeSnapshotProtocol.decodeAcquireResponse(
+                                                        degraded
+                                                    )
+                                                    .freshness,
+                                            )
+                                            uncovered.releaseSession(session)
+                                        }
+                                    assertEquals(
+                                        "current_unverified",
+                                        assertFailsWith<IndexinoException> {
+                                                dispatcher.dispatch(
+                                                    session,
+                                                    RuntimeSnapshotProtocol.acquireCommand(
+                                                        FreshnessPolicy.AWAIT_CURRENT
+                                                    ),
+                                                )
+                                            }
+                                            .failure
+                                            .code,
+                                    )
+                                    dispatcher.releaseSession(session)
+                                }
+                            val full = runSuspend { index.refresh(request).await() }
+                            assertEquals(RefreshOutcome.UPDATED, full.outcome)
+                            runSuspend { index.snapshot(FreshnessPolicy.AWAIT_CURRENT) }
+                                .use { audited ->
+                                    assertEquals("CURRENT", audited.freshnessAtAcquisition.value)
+                                    assertEquals(1, symbolCount(audited, "RemoteB1"))
+                                }
+                            assertEquals(1, symbolCount(tentative, "RemoteB0"))
+                            assertEquals(0, symbolCount(tentative, "RemoteB1"))
+                            assertEquals("PROVISIONAL", tentative.freshnessAtAcquisition.value)
+
+                            // A surviving source changes the closure, even beside an atomic target.
+                            val added = source.resolveSibling("Added.kt")
+                            Files.writeString(added, "package sample\nclass AddedSource\n")
+                            Files.writeString(temporary, "package sample\nclass WithAddedSource\n")
+                            Files.move(temporary, source, ATOMIC_MOVE, REPLACE_EXISTING)
+                            controller.onPathChangedForTests(temporary)
+                            controller.onPathChangedForTests(added)
+                            controller.onPathChangedForTests(source)
+                            val additionDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
+                            while (System.nanoTime() < additionDeadline) {
+                                if (
+                                    runSuspend { index.snapshot() }
+                                        .use {
+                                            symbolCount(it, "WithAddedSource") == 1 &&
+                                                symbolCount(it, "AddedSource") == 1
+                                        }
+                                )
+                                    break
+                                Thread.sleep(25)
+                            }
+                            runSuspend { index.snapshot() }
+                                .use { current ->
+                                    assertEquals(1, symbolCount(current, "WithAddedSource"))
+                                    assertEquals(1, symbolCount(current, "AddedSource"))
+                                }
+                            assertEquals(0, symbolCount(tentative, "AddedSource"))
+                        } finally {
+                            tentative.close()
+                        }
+                    } finally {
+                        pinned.close()
+                    }
+                } finally {
+                    controller.close()
+                }
+            }
+            Indexino.connectBlocking(workspace).use { reopened ->
+                runSuspend { reopened.snapshot(FreshnessPolicy.PUBLISHED) }
+                    .use { restored ->
+                        assertEquals("UNKNOWN", restored.freshnessAtAcquisition.value)
+                    }
+                assertEquals(
+                    "current_unverified",
+                    assertFailsWith<IndexinoException> {
+                            runSuspend { reopened.snapshot(FreshnessPolicy.AWAIT_CURRENT) }.close()
+                        }
+                        .failure
+                        .code,
+                )
+                RuntimeSnapshotDispatcher(reopened).use { dispatcher ->
+                    val session = RuntimeSession()
+                    val response =
+                        dispatcher.dispatch(
+                            session,
+                            RuntimeSnapshotProtocol.acquireCommand(FreshnessPolicy.PUBLISHED),
+                        )
+                    assertEquals(
+                        SnapshotFreshness.UNKNOWN,
+                        RuntimeSnapshotProtocol.decodeAcquireResponse(response).freshness,
+                    )
+                    dispatcher.releaseSession(session)
+                }
+            }
+            // A second restart performs the audit before any snapshot has restored `published`.
+            Indexino.connectBlocking(workspace).use { cold ->
+                assertEquals(
+                    RefreshOutcome.UNCHANGED,
+                    runSuspend { cold.refresh(request).await() }.outcome,
+                )
+                runSuspend { cold.snapshot(FreshnessPolicy.AWAIT_CURRENT) }
+                    .use { audited ->
+                        assertEquals("CURRENT", audited.freshnessAtAcquisition.value)
+                        assertEquals(1, symbolCount(audited, "AddedSource"))
+                    }
+            }
+        } finally {
+            if (priorCache == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", priorCache)
+        }
+    }
 
     @Test
     fun `unavailable published origin cannot supply a watcher capture`() {
@@ -309,6 +664,12 @@ class InProcessIndexinoTest {
                     },
                     "$progress",
                 )
+                runSuspend { first.snapshot(FreshnessPolicy.AWAIT_CURRENT) }
+                    .use { snapshot ->
+                        assertEquals(SnapshotFreshness.CURRENT, snapshot.freshnessAtAcquisition)
+                        assertEquals(1, symbolCount(snapshot, "AfterOtherPublisher"))
+                        assertEquals(0, symbolCount(snapshot, "OtherPublisher"))
+                    }
             }
         } finally {
             if (prior == null) System.clearProperty("indexino.cache.dir")

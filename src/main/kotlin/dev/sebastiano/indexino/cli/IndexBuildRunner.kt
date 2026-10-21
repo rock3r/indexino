@@ -65,6 +65,7 @@ internal class IndexBuildRunner(
     private val captureOriginStates: Boolean = false,
     private val hintedPaths: Set<Path> = emptySet(),
     private val onSourcesResolved: ((List<IndexedSource>, List<Path>) -> Unit)? = null,
+    private val beforeSourceCapture: ((List<IndexedSource>) -> Unit)? = null,
     private val beforeTopologyResolution: (() -> Unit)? = null,
 ) {
     private var latestChanges: SourceChangeSet? = null
@@ -183,6 +184,7 @@ internal class IndexBuildRunner(
         onSourcesResolved?.let { register ->
             timedPhase("watcher-registration") { register(sources, latestTopologyRoots) }
         }
+        beforeSourceCapture?.invoke(sources)
         val sourceSnapshot =
             timedPhase("source-capture") {
                 SourceContentSnapshot.capture(sources, inheritedSourceHashes, hintedPaths)

@@ -88,6 +88,7 @@ internal class RuntimeRefreshDispatcher(
         hintedPaths: Set<Path>,
         coverageValid: () -> Boolean,
         recursiveWatchRoot: Path?,
+        tentative: Boolean,
     ): RefreshHandle =
         refresh(
             request,
@@ -96,6 +97,7 @@ internal class RuntimeRefreshDispatcher(
             hintedPaths = hintedPaths,
             coverageValid = coverageValid,
             recursiveWatchRoot = recursiveWatchRoot,
+            tentative = tentative,
         )
 
     @OptIn(IndexinoInternalApi::class)
@@ -106,6 +108,7 @@ internal class RuntimeRefreshDispatcher(
         hintedPaths: Set<Path> = emptySet(),
         coverageValid: () -> Boolean = { true },
         recursiveWatchRoot: Path? = null,
+        tentative: Boolean = false,
     ): RefreshHandle {
         val text = CopyOnWriteArrayList<String>()
         val machine = CopyOnWriteArrayList<String>()
@@ -118,6 +121,7 @@ internal class RuntimeRefreshDispatcher(
                 hintedPaths = hintedPaths,
                 watcherCoverageValid = coverageValid,
                 recursiveWatchRoot = recursiveWatchRoot,
+                tentative = tentative,
             )
         }
         handles[handle.id.value] = handle

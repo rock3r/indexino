@@ -2,6 +2,7 @@ package dev.sebastiano.indexino.engine
 
 import dev.sebastiano.indexino.api.AutoRefreshMode
 import dev.sebastiano.indexino.api.FreshnessPolicy
+import dev.sebastiano.indexino.api.Indexino
 import dev.sebastiano.indexino.api.RefreshHandle
 import dev.sebastiano.indexino.api.RefreshRequest
 import dev.sebastiano.indexino.api.SnapshotFreshness
@@ -38,7 +39,7 @@ internal interface NativeWorkspaceWatcher : AutoCloseable {
 }
 
 /** Runtime-owned, scope-derived watcher that coalesces filesystem hints into refresh requests. */
-@Suppress("TooManyFunctions")
+@Suppress("TooManyFunctions", "LargeClass")
 internal class AutoRefreshController(
     private val workspace: Path,
     private val mode: AutoRefreshMode,
@@ -52,9 +53,13 @@ internal class AutoRefreshController(
      * the root a recursive native stream covers (null when only per-directory watches exist).
      */
     private val refreshWithTopology:
-        ((RefreshRequest, TopologyResult, Set<Path>, () -> Boolean, Path?) -> Unit)? =
+        ((RefreshRequest, TopologyResult, Set<Path>, () -> Boolean, Path?, Boolean) -> Unit)? =
         null,
     private val nativeWorkspaceWatcher: NativeWorkspaceWatcherFactory? = null,
+    private val tentativeParentHint:
+        ((RefreshRequest, Path, Set<Path>) -> Indexino.TentativeHint?)? =
+        null,
+    private val nativeFlushForTests: (() -> Unit)? = null,
 ) : AutoCloseable {
     private val closed = AtomicBoolean()
     private val watcherKind = AutoRefreshWatcherFactory.configuredKind()
@@ -75,6 +80,22 @@ internal class AutoRefreshController(
     private val pendingRegistration = mutableMapOf<RefreshRequest, CompletableFuture<Unit>>()
     private val hintedPaths = mutableMapOf<RefreshRequest, MutableMap<Path, Long>>()
     private val uncertainTopology = mutableMapOf<RefreshRequest, Long>()
+    private val clusterPaths = mutableMapOf<RefreshRequest, MutableSet<Path>>()
+    private val warmParents = mutableMapOf<RefreshRequest, MutableSet<Path>>()
+
+    private data class PendingParent(val known: Set<Path>, val unknown: Path, val dirtyEpoch: Long)
+
+    private data class LaunchState(
+        val topology: TopologyResult?,
+        val paths: Set<Path>,
+        val coverageEpoch: Long,
+        val parent: PendingParent?,
+    )
+
+    private val pendingParent = mutableMapOf<RefreshRequest, PendingParent>()
+    private val observationLock = Any()
+    private val nativeEvents = ArrayDeque<Pair<Long, Path?>>()
+    private val nativeEpoch = AtomicLong()
     private val registrationEpoch = mutableMapOf<RefreshRequest, Long>()
     private val captureEpoch = mutableMapOf<RefreshRequest, Pair<String, Long>>()
     private val topologyResolutionEpoch = mutableMapOf<RefreshRequest, Pair<String, Long>>()
@@ -118,6 +139,33 @@ internal class AutoRefreshController(
             isDaemon = true
             start()
         }
+    }
+
+    /** Flush outside stateLock before discovery so a seed cannot ignore a delayed old callback. */
+    internal fun beforeDiscoveryFence(): Long? {
+        val flush =
+            (macWatcher as? MacFseventsWatcher)?.let { it::flushForTests }
+                ?: nativeFlushForTests
+                ?: return null
+        return runCatching {
+                flush()
+                nativeEpoch.get()
+            }
+            .getOrNull()
+    }
+
+    /** Called before source bytes are captured, never after the generation is published. */
+    internal fun captureWarmParents(
+        request: RefreshRequest,
+        sources: List<IndexedSource>,
+    ): Map<Path, TentativeParentInventory> {
+        val parents =
+            synchronized(stateLock) { warmParents[request].orEmpty().take(MAX_ACTIVE_PARENTS) }
+        return parents
+            .mapNotNull { parent ->
+                TentativeParentInventory.capture(parent, sources)?.let { parent to it }
+            }
+            .toMap()
     }
 
     init {
@@ -170,7 +218,18 @@ internal class AutoRefreshController(
         (previousDirectories - directories).forEach { directory ->
             removeRequestFromDirectory(directory, request)
         }
-        var coverageComplete = directories.isNotEmpty()
+        val linkedRoutes = mutableMapOf<Path, Boolean>()
+        fun linkedRoute(path: Path): Boolean =
+            linkedRoutes.getOrPut(path) {
+                Files.isSymbolicLink(path) ||
+                    (path != workspace &&
+                        path.parent?.takeIf { it.startsWith(workspace) }?.let(::linkedRoute) ==
+                            true)
+            }
+        // The native stream observes only workspace paths; an external symlink target can change
+        // without any callback, and an internal target callback need not name its lexical alias.
+        var coverageComplete =
+            directories.isNotEmpty() && sourcePathsByRequest[request].orEmpty().none(::linkedRoute)
         directories.forEach { directory ->
             if (
                 !nativelyCovered(directory) &&
@@ -321,7 +380,7 @@ internal class AutoRefreshController(
         registrations.forEach { it.join() }
     }
 
-    fun freshness(freshness: FreshnessPolicy): SnapshotFreshness {
+    fun freshness(freshness: FreshnessPolicy): SnapshotFreshness? {
         checkNativeCoverage()
         return when {
             directoriesByRequest.isEmpty() -> SnapshotFreshness.UNKNOWN
@@ -329,7 +388,7 @@ internal class AutoRefreshController(
             uncovered.isNotEmpty() -> SnapshotFreshness.UNKNOWN
             dirty.isNotEmpty() || pendingLaunch.isNotEmpty() -> SnapshotFreshness.DIRTY
             freshness == FreshnessPolicy.AWAIT_CURRENT -> SnapshotFreshness.CURRENT
-            else -> SnapshotFreshness.UNKNOWN
+            else -> null // Clean PUBLISHED retains the generation's own freshness evidence.
         }
     }
 
@@ -355,6 +414,9 @@ internal class AutoRefreshController(
             pendingLaunch.clear()
             hintedPaths.clear()
             uncertainTopology.clear()
+            clusterPaths.clear()
+            warmParents.clear()
+            pendingParent.clear()
             registrationEpoch.clear()
             captureEpoch.clear()
             topologyResolutionEpoch.clear()
@@ -414,6 +476,8 @@ internal class AutoRefreshController(
             )
                 uncertainTopology[request] = epoch
             else hintedPaths.getOrPut(request) { linkedMapOf() }[path] = epoch
+            val paths = clusterPaths.getOrPut(request) { linkedSetOf() }
+            if (paths.size <= MAX_LOCAL_CLUSTER_PATHS) paths.add(path ?: workspace)
             dirty.add(request)
             retryAttempts.remove(request)
             if (
@@ -440,12 +504,27 @@ internal class AutoRefreshController(
         pendingLaunch[request] = dirtyEpoch[request]?.get() ?: 0L
         pendingRegistration[request] = CompletableFuture()
         val paths = hintedPaths.remove(request)?.keys.orEmpty()
+        val cluster = clusterPaths.remove(request).orEmpty()
         val uncertain = uncertainTopology.remove(request) != null
+        if (uncertain && request !in uncovered && nativeCoverageAvailable()) {
+            val unknown = (cluster - paths.toSet()).singleOrNull()
+            if (
+                unknown != null &&
+                    unknown !in topologyInputsByRequest[request].orEmpty() &&
+                    paths.isNotEmpty() &&
+                    cluster.size <= MAX_LOCAL_CLUSTER_PATHS
+            ) {
+                pendingParent[request] =
+                    PendingParent(paths.toSet(), unknown, pendingLaunch.getValue(request))
+            }
+        }
         if (uncertain || nativeCoverageLost.get() || request in uncovered) return true
         if (
             paths.isNotEmpty() &&
                 paths.all {
-                    it in sourcePathsByRequest[request].orEmpty() && Files.isRegularFile(it)
+                    it in sourcePathsByRequest[request].orEmpty() &&
+                        Files.isRegularFile(it) &&
+                        !linkedSourceRoute(it)
                 }
         ) {
             topologyProvider(request)?.let { topology ->
@@ -467,36 +546,90 @@ internal class AutoRefreshController(
         return true
     }
 
+    @Suppress("CyclomaticComplexMethod", "ComplexCondition")
     private fun launch(request: RefreshRequest) {
         checkNativeCoverage()
-        val (topology, paths, epoch) =
+        val state =
             synchronized(stateLock) {
                 val invalidated =
                     nativeCoverageLost.get() || request in uncovered || request in uncertainTopology
                 val topology = pendingTopology.remove(request)
                 val paths = pendingHintedPaths.remove(request).orEmpty()
-                Triple(
+                LaunchState(
                     if (invalidated) null else topology,
                     if (invalidated) emptySet() else paths,
                     coverageEpoch.get(),
+                    pendingParent.remove(request),
                 )
             }
         try {
-            if (topology != null && refreshWithTopology != null)
+            val nativeCandidate = state.parent
+            val provisional =
+                if (nativeCandidate != null && nativeCoverageAvailable()) {
+                    val before = beforeDiscoveryFence()
+                    val hint =
+                        if (before != null)
+                            tentativeParentHint?.invoke(
+                                request,
+                                nativeCandidate.unknown,
+                                nativeCandidate.known,
+                            )
+                        else null
+                    val after = beforeDiscoveryFence()
+                    val acceptedEpoch =
+                        if (hint != null && after != null)
+                            eventsSince(
+                                hint.observationEpoch,
+                                nativeCandidate.known + setOf(nativeCandidate.unknown),
+                            )
+                        else null
+                    if (
+                        hint != null &&
+                            acceptedEpoch != null &&
+                            nativeCoverageAvailable() &&
+                            nativeEpoch.get() == acceptedEpoch &&
+                            dirtyEpoch[request]?.get() == nativeCandidate.dirtyEpoch &&
+                            request !in uncovered &&
+                            coverageEpoch.get() == state.coverageEpoch
+                    )
+                        hint to acceptedEpoch
+                    else null
+                } else null
+            if (provisional != null && refreshWithTopology != null) {
+                val (hint, acceptedEpoch) = provisional
                 refreshWithTopology.invoke(
                     request,
-                    topology,
-                    paths,
+                    hint.topology,
+                    hint.paths,
+                    {
+                        checkNativeCoverage()
+                        !closed.get() &&
+                            nativeCoverageAvailable() &&
+                            request !in uncovered &&
+                            coverageEpoch.get() == state.coverageEpoch &&
+                            nativeEpoch.get() == acceptedEpoch
+                    },
+                    workspace,
+                    true,
+                )
+                return
+            }
+            if (state.topology != null && refreshWithTopology != null)
+                refreshWithTopology.invoke(
+                    request,
+                    state.topology,
+                    state.paths,
                     {
                         checkNativeCoverage()
                         !closed.get() &&
                             !nativeCoverageLost.get() &&
                             request !in uncovered &&
-                            coverageEpoch.get() == epoch
+                            coverageEpoch.get() == state.coverageEpoch
                     },
                     // Only the native stream reports every path under the workspace; per-directory
                     // WatchService keys miss directories without sources.
                     workspace.takeIf { nativeCoverageAvailable() },
+                    false,
                 )
             else refresh(request)
         } catch (@Suppress("TooGenericExceptionCaught") failure: Throwable) {
@@ -534,6 +667,11 @@ internal class AutoRefreshController(
             TimeUnit.MILLISECONDS,
         )
     }
+
+    private fun linkedSourceRoute(path: Path): Boolean =
+        generateSequence(path) { it.parent }
+            .takeWhile { it.startsWith(workspace) }
+            .any(Files::isSymbolicLink)
 
     private fun scheduleRetry(request: RefreshRequest) {
         uncertainTopology[request] = dirtyEpoch[request]?.get() ?: 0L
@@ -631,13 +769,46 @@ internal class AutoRefreshController(
     private fun onMacPathChanged(path: Path) {
         val changed = path.normalize()
         if (ignoredEvent(changed)) return
+        recordNative(changed)
         val affected = linkedSetOf<RefreshRequest>()
         generateSequence(changed) { it.parent }
             .forEach { directory -> requestsByDirectory[directory]?.let(affected::addAll) }
         affected.forEach { enqueue(it, changed) }
+        if (affected.any { changed in sourcePathsByRequest[it].orEmpty() }) {
+            synchronized(stateLock) {
+                affected
+                    .filter { changed in sourcePathsByRequest[it].orEmpty() }
+                    .forEach { request ->
+                        warmParents
+                            .getOrPut(request) { linkedSetOf() }
+                            .let { parents ->
+                                if (parents.size < MAX_ACTIVE_PARENTS) parents.add(changed.parent)
+                            }
+                    }
+            }
+        }
     }
 
-    private fun onWatcherOverflow() = invalidateCoverage(directoriesByRequest.keys)
+    private fun onWatcherOverflow() {
+        recordNative(null)
+        invalidateCoverage(directoriesByRequest.keys)
+    }
+
+    private fun recordNative(path: Path?) {
+        synchronized(observationLock) {
+            nativeEvents.addLast(nativeEpoch.incrementAndGet() to path)
+            if (nativeEvents.size > MAX_OBSERVED_EVENTS) nativeEvents.removeFirst()
+        }
+    }
+
+    private fun eventsSince(epoch: Long, allowed: Set<Path>): Long? =
+        synchronized(observationLock) {
+            val first = nativeEvents.firstOrNull()?.first ?: return@synchronized null
+            if (first > epoch + 1) return@synchronized null
+            if (nativeEvents.asSequence().filter { it.first > epoch }.any { it.second !in allowed })
+                return@synchronized null
+            nativeEpoch.get()
+        }
 
     private fun invalidateCoverage(affected: Collection<RefreshRequest>) {
         val requests = affected.toList()
@@ -694,6 +865,9 @@ internal class AutoRefreshController(
     private companion object {
         const val GIT_DIRECTORY = ".git"
         const val DEBOUNCE_MILLIS = 150L
+        const val MAX_LOCAL_CLUSTER_PATHS = 4
+        const val MAX_ACTIVE_PARENTS = 64
+        const val MAX_OBSERVED_EVENTS = 256
         val MAX_DEBOUNCE_NANOS = TimeUnit.SECONDS.toNanos(30)
         const val RECONCILIATION_INTERVAL_MILLIS = 30_000L
         const val MAX_RETRY_ATTEMPTS = 3

@@ -1227,6 +1227,7 @@ ref = "&lt;release-tag-or-commit&gt;"</code></pre>
           <li>Auto-refresh derives the watch set from each active scope’s <strong>resolved source closure</strong> (plus topology/build/configuration inputs for those scopes)—not the entire origin mount. Events map to owning origin/shard and dependent scopes. Exclude VCS internals and the user-local cache root so publishing cannot self-trigger.</li>
           <li><strong>macOS:</strong> one native FSEvents stream (JDK 25 FFM, no JNA helper binary) with userspace path filtering—tree size is irrelevant. <strong>Linux:</strong> inotify over the scope closure; on <code>ENOSPC</code> degrade uncovered paths to periodic reconciliation and warn once at runtime (do not precompute feasibility against <code>max_user_watches</code>). <strong>Windows:</strong> stock JDK <code>WatchService</code>. No native code on Linux/Windows.</li>
           <li>When watch coverage is incomplete (overflow, ENOSPC remainder, unwatchable root), freshness reports <code>UNKNOWN</code> for affected scopes until reconciliation proves currency. S7 must artificially cap the watch budget and assert an out-of-set edit is still caught by reconciliation.</li>
+          <li>A macOS atomic-save hint may produce a <code>PROVISIONAL</code> published generation after a bounded, native-event-fenced parent rehash. It is queryable through <code>PUBLISHED</code>, but does not certify files outside that parent. <code>AWAIT_CURRENT</code> requires an independent full audit; on restart, provisional evidence becomes <code>UNKNOWN</code>.</li>
           <li>A failed automatic attempt leaves the last complete generation queryable and status dirty. Retries are bounded/backed off; a new change or manual request may retry immediately without creating a busy loop.</li>
         </ul>
         <p>
@@ -2459,6 +2460,7 @@ host.abi.major == plugin.targetAbi.major</code></pre>
     <span class="kw">public companion object</span> {
         @JvmField <span class="kw">public val</span> CURRENT: SnapshotFreshness
         @JvmField <span class="kw">public val</span> DIRTY: SnapshotFreshness
+        @JvmField <span class="kw">public val</span> PROVISIONAL: SnapshotFreshness
         @JvmField <span class="kw">public val</span> UNKNOWN: SnapshotFreshness
     }
 }

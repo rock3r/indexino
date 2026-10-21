@@ -148,6 +148,20 @@ The runtime records a separate topology epoch before resolution starts. Registra
 source capture covers earlier source edits, but an unknown path or build-input event after the
 topology epoch still requires a full successor even if the first refresh publishes successfully.
 
+On a native atomic-save hint that names one vanished temporary path and a known source, a bounded
+inventory captured before the previous source read may rehash that source's immediate siblings.
+It accepts the candidate only when the parent identity and child names match, the temporary path
+is still absent, the known source changed, no child is a symlink, no scanned source has a shared
+inode, and no intervening native callback names another path. A failed fence, changed coverage, or
+other uncertainty falls back to full discovery. Ignored `.git` callbacks are filtered before the
+native-event fence.
+The resulting generation is **PROVISIONAL**: the rehash does not prove that files outside the
+bounded parent are unchanged. `PUBLISHED` can query it immediately; `AWAIT_CURRENT` refuses it
+until an independent full audit certifies `CURRENT`. Subsequent covered known-source edits inherit
+that uncertainty rather than promoting it; a certified base stays `CURRENT` after an ordinary
+covered edit. A restart forgets that in-memory evidence and reports `UNKNOWN` until audit.
+Existing pins retain their acquisition-time freshness.
+
 Origin provenance (HEAD, working-tree fingerprint, dirty flag) normally costs whole-repository
 `git diff HEAD`, `git status` and `git ls-files --others` walks, seconds on a large checkout. A
 known-source watcher refresh updates it incrementally only with evidence: the macOS FSEvents stream
