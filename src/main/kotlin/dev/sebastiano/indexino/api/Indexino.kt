@@ -76,6 +76,8 @@ private constructor(
     private val snapshotPins = mutableMapOf<WorkspaceGenerationId, Int>()
     private val baseGenerationRefs = mutableSetOf<Path>()
     private var published: PublishedGeneration? = null
+    private var publishingGeneration: WorkspaceGenerationId? = null
+    private var publishingPreviousGeneration: WorkspaceGenerationId? = null
     private val remoteSnapshots = mutableMapOf<String, IndexSnapshot>()
     private val watcherCaptures = ConcurrentHashMap<RefreshRequest, WatcherCapture>()
 
@@ -640,38 +642,49 @@ private constructor(
         linkGeneration: String? = null,
         evidence: SnapshotFreshness,
     ) {
-        val publishedStore =
-            publishGenerationStore(
-                commit,
-                generation,
-                revision,
-                scope,
-                applications,
-                manifest,
-                forkBase,
-                overlayDeltaPath,
-                tombstonePrefixes,
-                linkGeneration,
-            )
-        afterPublishGenerationStoreForTests?.invoke()
         synchronized(generationLock) {
-            if (closed.get()) {
-                // Publication is workspace-owned, but this closed client no longer owns a ref.
-                if (publishedStore.created) {
-                    deleteClientGenerationRef(publishedStore.path)
-                }
-                return
-            }
-            generationStores[generation] = publishedStore.path
-            published =
-                PublishedGeneration(
-                    storePath = publishedStore.path,
-                    revision = revision,
-                    generation = generation,
-                    baseCopy = baseCopyFor(generation),
-                    evidence = evidence,
+            publishingPreviousGeneration = currentPublishedGenerationId()
+            publishingGeneration = generation
+        }
+        try {
+            val publishedStore =
+                publishGenerationStore(
+                    commit,
+                    generation,
+                    revision,
+                    scope,
+                    applications,
+                    manifest,
+                    forkBase,
+                    overlayDeltaPath,
+                    tombstonePrefixes,
+                    linkGeneration,
                 )
-            reclaimUnpinnedGenerations()
+            afterPublishGenerationStoreForTests?.invoke()
+            synchronized(generationLock) {
+                if (closed.get()) {
+                    // Publication is workspace-owned, but this closed client no longer owns a ref.
+                    if (publishedStore.created) {
+                        deleteClientGenerationRef(publishedStore.path)
+                    }
+                    return
+                }
+                generationStores[generation] = publishedStore.path
+                published =
+                    PublishedGeneration(
+                        storePath = publishedStore.path,
+                        revision = revision,
+                        generation = generation,
+                        baseCopy = baseCopyFor(generation),
+                        evidence = evidence,
+                    )
+                reclaimUnpinnedGenerations()
+            }
+        } finally {
+            synchronized(generationLock) {
+                publishingGeneration = null
+                publishingPreviousGeneration = null
+            }
         }
     }
 
@@ -761,9 +774,16 @@ private constructor(
             }
             val sharedGeneration = currentPublishedGenerationId()
             val current =
-                published?.takeIf { it.generation == sharedGeneration }
-                    ?: restorePublishedGeneration()
-                    ?: published
+                if (sharedGeneration == publishingGeneration) {
+                    // The pointer can precede this owner's evidence update; keep serving the
+                    // previous complete generation rather than restoring the new one as UNKNOWN.
+                    published
+                        ?: publishingPreviousGeneration?.let { restorePublishedGeneration(it) }
+                } else {
+                    published?.takeIf { it.generation == sharedGeneration }
+                        ?: restorePublishedGeneration()
+                        ?: published
+                }
                     ?: throw failure(
                         category = IndexFailureCategory.INDEX_NOT_FOUND,
                         code = "index_not_found",
@@ -1232,11 +1252,15 @@ private constructor(
     }
 
     @OptIn(IndexinoInternalApi::class)
-    private fun restorePublishedGeneration(): PublishedGeneration? {
+    private fun restorePublishedGeneration(
+        requestedGeneration: WorkspaceGenerationId? = null
+    ): PublishedGeneration? {
         val cacheRoot = InProcessCacheLayout.cacheRoot()
-        val manifest =
+        val manifests =
             WorkspaceGenerationManifestStore(cacheRoot, InProcessCacheLayout.workspaceId(workspace))
-                .current() ?: return null
+        val manifest =
+            (if (requestedGeneration == null) manifests.current()
+            else manifests.readGeneration(requestedGeneration.value)) ?: return null
         if (manifest.basicFactSchemaVersion != BASIC_FACT_SCHEMA_VERSION) return null
         val generation = WorkspaceGenerationId.of(manifest.generation)
         val storePath =

@@ -223,6 +223,11 @@ origin graph (origin ID, actual revision, expected revision when applicable, and
 fingerprint), workspace revision fingerprint, and pack keys. Older single-origin entries remain
 readable through their legacy workspace-origin fields.
 
+The publishing client keeps serving its previous complete generation while that pointer advances
+and it installs the new generation with its freshness evidence. A concurrent snapshot cannot restore
+the new manifest with `UNKNOWN` evidence in this interval. A newly opened client still restores
+published evidence as `UNKNOWN` until a full audit verifies it.
+
 The staging writer is populated from a consistent immutable source snapshot, including prior
 captures inherited under continuous native watcher coverage. Pack facts and file-hash records
 inside that pack describe the same captured content, including when the checkout changes during
