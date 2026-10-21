@@ -37,6 +37,7 @@ private constructor(
             val config =
                 EnvironmentConfig()
                     .setEnvIsReadonly(readOnly)
+                    .setGcEnabled(!readOnly)
                     .setLogLockTimeout(LOCK_TIMEOUT_MILLIS)
             val environment = Environments.newContextualInstance(path.toString(), config)
             return runCatching {
