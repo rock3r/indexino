@@ -1482,7 +1482,7 @@ class InProcessIndexinoTest {
     }
 
     @Test
-    fun `close reclaims unpinned client generation copies`() {
+    fun `close retains the shared generation without client copies`() {
         val workspace = createGitWorkspace()
         val cacheDirectory = createTempDirectory("indexino-close-reclaim-cache-")
         tempDirs.add(cacheDirectory)
@@ -1490,14 +1490,23 @@ class InProcessIndexinoTest {
         System.setProperty("indexino.cache.dir", cacheDirectory.toString())
         try {
             val indexino = Indexino.connectBlocking(workspace)
+            lateinit var shared: java.nio.file.Path
             try {
-                runSuspend {
-                    indexino.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui"))).await()
-                }
-                assertTrue(generationCopyExists(workspace, null))
+                val generation =
+                    runSuspend {
+                            indexino
+                                .refresh(RefreshRequest.forScope(IndexScope.gradle(":ui")))
+                                .await()
+                        }
+                        .generation
+                        .value
+                shared = InProcessCacheLayout.sharedGenerationStore(workspace, generation)
+                assertTrue(Files.isDirectory(shared))
+                assertFalse(generationCopyExists(workspace, generation))
             } finally {
                 indexino.close()
             }
+            assertTrue(Files.isDirectory(shared))
             assertFalse(generationCopyExists(workspace, null))
         } finally {
             if (previousCacheDirectory == null) {
@@ -1509,7 +1518,7 @@ class InProcessIndexinoTest {
     }
 
     @Test
-    fun `published overlay keeps its base copy between unpinned snapshots`() {
+    fun `published overlay reuses the shared base between unpinned snapshots`() {
         val workspace = createGitWorkspace()
         val cacheDirectory = createTempDirectory("indexino-overlay-base-retention-cache-")
         tempDirs.add(cacheDirectory)
@@ -1534,17 +1543,25 @@ class InProcessIndexinoTest {
                             )
                             .readGeneration(overlay.value)
                     assertEquals(base, manifest?.baseGeneration, "$manifest")
-                    // Unzipping a large base for every new unpinned snapshot defeats warm edits.
-                    assertTrue(generationCopyExists(workspace, base), "Base copy reclaimed")
+                    val shared = InProcessCacheLayout.sharedGenerationStore(workspace, base)
+                    assertTrue(Files.isDirectory(shared), "Shared base missing")
+                    assertFalse(generationCopyExists(workspace, base), "Private base copy created")
                     repeat(2) {
                         runSuspend { indexino.snapshot() }
                             .use { snapshot -> assertEquals(overlay, snapshot.generation) }
-                        assertTrue(generationCopyExists(workspace, base), "Base copy reclaimed")
+                        assertTrue(Files.isDirectory(shared), "Shared base reclaimed")
+                        assertFalse(
+                            generationCopyExists(workspace, base),
+                            "Private base copy created",
+                        )
                     }
                     base
                 } finally {
                     indexino.close()
                 }
+            assertTrue(
+                Files.isDirectory(InProcessCacheLayout.sharedGenerationStore(workspace, base))
+            )
             assertFalse(generationCopyExists(workspace, base), "Closed clients keep no copies")
         } finally {
             if (previousCacheDirectory == null) {

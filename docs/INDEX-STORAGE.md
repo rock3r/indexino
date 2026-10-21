@@ -43,9 +43,12 @@ worktree for product storage.
   origins/<origin-cache-id>/inventory
   workspaces/<workspace-id>/
     generations/<generation>/manifest
+    generations/<generation>/materialized/  # one expanded, immutable Xodus base
+    generations/<generation>/overlay-delta/ # shared small overlay when present
+    staging/in-process-writer/              # mutable incremental writer
     staging/<refresh-id>/manifest
     current                            # atomic pointer
-    refs/<runtime-or-snapshot-id>
+    refs/<client-id>/<generation>/overlay-delta/ # private overlay when present
     source-links/registry.json           # dependency-to-source link registry snapshot
     source-links/generations/<link-generation>/snapshot.json
     change-journal
@@ -214,6 +217,9 @@ client close retain that lease, and refreshes retain independent leases until th
 GC takes the exclusive lock for its entire reachability scan and deletion, or reports
 `activeRuntime=true` without deleting packs. This prevents publication and pinned-generation races
 across cooperating processes. It intentionally defers all reclamation while any client is live.
+`cache forget` also takes the exclusive activity lock and refuses deletion while another live
+workspace's current overlay recursively references the selected base; otherwise a fork could lose
+its manifest and shared materialized store. Forget dependent workspaces first.
 Age/quota policy, a persisted grace window, and `daemon stop --purge` remain follow-up work rather
 than guarantees of the current collector. All participating processes must use the updated locking
 protocol; stop older in-process clients before running this collector against their cache.
@@ -324,10 +330,14 @@ service. Preserve retained checkpoints for investigation; removing only the chec
 partially restored staging as valid. Published generation manifests and immutable packs are not
 rewritten by this rollback.
 
-Each client materializes a referenced immutable pack atomically into its own
-`workspaces/<workspace-id>/refs/<client-id>/<generation-id>/store/` directory before opening a
-snapshot. Simultaneous snapshots in one client share a reference-counted read-only Xodus environment;
-different clients open their own copies because Xodus locks even read-only environments exclusively.
+All clients and compatible forks read the same expanded, immutable Xodus base under
+`generations/<generation-id>/materialized/`. They open it through a read-only Xodus provider
+that bypasses the default exclusive writer lock and rejects every log mutation, including recovery
+attempts; an incomplete or damaged base fails closed rather than being repaired in place.
+The completed pack remains available for reconstruction. A client materializes only an overlay
+delta, if present, under its private `refs/<client-id>/<generation-id>/overlay-delta/` path.
+Simultaneous snapshots in one JVM share a reference-counted environment per canonical directory;
+separate processes have independent Xodus RAM caches and query the same immutable base files.
 Opening and closing an environment is serialized per store directory, so a slow Xodus cleaner
 during snapshot close cannot block a refresh opening an unrelated base or delta store.
 Read-only snapshot environments disable Xodus garbage collection: they cannot reclaim log files,
@@ -335,13 +345,12 @@ but its utilization scan can otherwise delay close. Writable staging keeps garba
 Publication and snapshot restoration may compete to materialize the same immutable destination.
 If another complete directory wins the rename, its copy is reused and the losing staging directory
 is removed. A move failure without a directory at the destination still propagates.
-Closing one snapshot does not close another snapshot's environment. Snapshot pins retain those
-caller-owned refs until close. Client-owned overlay base copies are tracked alongside the snapshot
-pins and reclaimed after the last pin closes, except the materialized base of the client's current
-published overlay: it stays until another generation is published or the client closes, because
-the next snapshot would otherwise unpack the whole base again (gigabytes on a large workspace).
-Nested overlay bases are not retained. Shared packs remain immutable and
-are reclaimed only by reachability/age/quota GC. There is no runtime `legacy-store` layout. Do **not**
+Closing one snapshot does not close another snapshot's environment. Snapshot pins retain private
+overlay refs until close; client close never deletes a shared base that another process or fork may
+read. The shared expanded base and mutable staging writer remain on disk; current `cache gc` only
+collects unreachable packs, not obsolete materialized directories or staging. ZIP compression still
+serves transport and pack reachability, not random-access queries. There is no runtime
+`legacy-store` layout. Do **not**
 extend `<project>/.indexino/index/<commit>/`; new features must assume user-local composite storage.
 
 ## Deprecated / rejected paths

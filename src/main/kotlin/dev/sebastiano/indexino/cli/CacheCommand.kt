@@ -90,10 +90,15 @@ internal object CacheMaintenance {
         if (DaemonStopCommand().stop(canonicalProject, cacheRoot) != CliExitCodes.SUCCESS) {
             return CliExitCodes.ANALYSIS_ERROR
         }
-        deleteTree(cacheRoot.resolve("workspaces").resolve(workspaceId))
-        WorkspaceRegistryStore(cacheRoot).remove(workspaceId)
-        Files.deleteIfExists(RuntimePaths.tombstonePath(cacheRoot, workspaceId))
-        return CliExitCodes.SUCCESS
+        return CacheActivityLock.withExclusiveLock(cacheRoot) {
+            if (hasLiveRuntime(cacheRoot) || isBaseForCurrentWorkspace(cacheRoot, workspaceId)) {
+                return@withExclusiveLock CliExitCodes.ANALYSIS_ERROR
+            }
+            deleteTree(cacheRoot.resolve("workspaces").resolve(workspaceId))
+            WorkspaceRegistryStore(cacheRoot).remove(workspaceId)
+            Files.deleteIfExists(RuntimePaths.tombstonePath(cacheRoot, workspaceId))
+            CliExitCodes.SUCCESS
+        } ?: CliExitCodes.ANALYSIS_ERROR
     }
 
     private fun hasLiveRuntime(cacheRoot: Path): Boolean =
@@ -101,6 +106,36 @@ internal object CacheMaintenance {
             .filter { it.fileName.toString().endsWith(".lease.json") }
             .mapNotNull { RuntimeLeaseStore.read(it) }
             .any(RuntimeLeaseStore::isLive)
+
+    private fun isBaseForCurrentWorkspace(cacheRoot: Path, workspaceId: String): Boolean {
+        val workspaces = cacheRoot.resolve("workspaces")
+        if (!Files.isDirectory(workspaces)) return false
+        Files.list(workspaces).use { roots ->
+            return roots
+                .filter(Files::isDirectory)
+                .filter { it.fileName.toString() != workspaceId }
+                .anyMatch { root ->
+                    WorkspaceGenerationManifestStore(cacheRoot, root.fileName.toString())
+                        .current()
+                        ?.referencesWorkspace(cacheRoot, workspaceId) == true
+                }
+        }
+    }
+
+    private fun WorkspaceGenerationManifest.referencesWorkspace(
+        cacheRoot: Path,
+        workspaceId: String,
+        visited: MutableSet<Pair<String, String>> = mutableSetOf(),
+    ): Boolean {
+        if (representation != WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) return false
+        val baseId = baseWorkspaceId ?: return false
+        val generation = baseGeneration ?: return false
+        if (baseId == workspaceId) return true
+        if (!visited.add(baseId to generation)) return false
+        return WorkspaceGenerationManifestStore(cacheRoot, baseId)
+            .readGeneration(generation)
+            ?.referencesWorkspace(cacheRoot, workspaceId, visited) == true
+    }
 
     private fun referencedPackKeys(cacheRoot: Path): Set<String> {
         val workspaces = cacheRoot.resolve("workspaces")

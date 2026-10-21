@@ -6,6 +6,7 @@ import dev.sebastiano.indexino.api.Indexino
 import dev.sebastiano.indexino.api.IndexinoException
 import dev.sebastiano.indexino.api.RefreshRequest
 import dev.sebastiano.indexino.cli.CacheMaintenance
+import dev.sebastiano.indexino.cli.CliExitCodes
 import dev.sebastiano.indexino.core.BASIC_FACT_SCHEMA_VERSION
 import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.store.WorktreeOverlayIndexStore
@@ -50,24 +51,56 @@ class WorktreeOverlayIntegrationTest {
     }
 
     @Test
-    fun `overlay snapshot base copies are reclaimed after their last pin closes`() {
+    fun `base and fork snapshots share one immutable store without client base copies`() {
         val cacheDirectory = createTempDirectory("indexino-overlay-pins-cache-")
         tempDirs.add(cacheDirectory)
         val (mainWorkspace, forkWorkspace) = createLinkedWorktrees()
         val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
         withCache(cacheDirectory) {
             indexMainAndFork(mainWorkspace, forkWorkspace, request)
-            Indexino.connectBlocking(forkWorkspace).use { fork ->
-                runBlocking {
-                    val first = fork.snapshot()
-                    fork.snapshot().use { second ->
-                        first.close()
-                        assertTrue(
-                            second
-                                .findSymbols(SymbolQuery.named("Panel"), QueryOptions.page(10))
-                                .items
-                                .isNotEmpty()
-                        )
+            Indexino.connectBlocking(mainWorkspace).use { main ->
+                Indexino.connectBlocking(forkWorkspace).use { fork ->
+                    runBlocking {
+                        main.snapshot().use { base ->
+                            val first = fork.snapshot()
+                            fork.snapshot().use { second ->
+                                first.close()
+                                assertTrue(
+                                    base
+                                        .findSymbols(
+                                            SymbolQuery.named("Panel"),
+                                            QueryOptions.page(10),
+                                        )
+                                        .items
+                                        .isNotEmpty()
+                                )
+                                assertTrue(
+                                    second
+                                        .findSymbols(
+                                            SymbolQuery.named("Panel"),
+                                            QueryOptions.page(10),
+                                        )
+                                        .items
+                                        .isNotEmpty()
+                                )
+                                val workspaces =
+                                    canonicalCacheRoot(cacheDirectory).resolve("workspaces")
+                                val clientBaseStores =
+                                    Files.walk(workspaces).use { paths ->
+                                        paths
+                                            .filter {
+                                                Files.isRegularFile(it) &&
+                                                    it.fileName.toString().endsWith(".xd") &&
+                                                    it.any { part -> part.toString() == "refs" }
+                                            }
+                                            .toList()
+                                    }
+                                assertTrue(
+                                    clientBaseStores.isEmpty(),
+                                    "Client base log copies: $clientBaseStores",
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -531,6 +564,34 @@ class WorktreeOverlayIntegrationTest {
             assertTrue(Files.exists(packPath(cacheRoot, mainPackKey)))
             forkOnlyPackKeys.forEach { packKey ->
                 assertFalse(Files.exists(packPath(cacheRoot, packKey)))
+            }
+        }
+    }
+
+    @Test
+    fun `forget refuses a shared base still referenced by a current fork`() {
+        val cacheDirectory = createTempDirectory("indexino-overlay-base-forget-cache-")
+        tempDirs.add(cacheDirectory)
+        val (mainWorkspace, forkWorkspace) = createLinkedWorktrees()
+        val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+        withCache(cacheDirectory) {
+            indexMainAndFork(mainWorkspace, forkWorkspace, request)
+            val cacheRoot = canonicalCacheRoot(cacheDirectory)
+            assertEquals(
+                CliExitCodes.ANALYSIS_ERROR,
+                CacheMaintenance.forget(cacheRoot, mainWorkspace),
+            )
+            Indexino.connectBlocking(forkWorkspace).use { fork ->
+                runBlocking {
+                    fork.snapshot().use { snapshot ->
+                        assertTrue(
+                            snapshot
+                                .findSymbols(SymbolQuery.named("Panel"), QueryOptions.page(10))
+                                .items
+                                .isNotEmpty()
+                        )
+                    }
+                }
             }
         }
     }

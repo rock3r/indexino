@@ -32,13 +32,23 @@ private constructor(
         private const val CALL_INDEX_STORE_NAME = "CallFiles"
         private const val LOCK_TIMEOUT_MILLIS = 30_000L
 
-        fun open(path: Path, readOnly: Boolean = false): XodusCodeIndexStore {
+        fun open(
+            path: Path,
+            readOnly: Boolean = false,
+            immutable: Boolean = false,
+        ): XodusCodeIndexStore {
+            require(!immutable || readOnly) { "Immutable generations must be opened read-only" }
             path.parent?.createDirectories()
             val config =
                 EnvironmentConfig()
                     .setEnvIsReadonly(readOnly)
                     .setGcEnabled(!readOnly)
                     .setLogLockTimeout(LOCK_TIMEOUT_MILLIS)
+            if (immutable) {
+                config.setLogDataReaderWriterProvider(
+                    ImmutableFileDataReaderWriterProvider::class.java.name
+                )
+            }
             val environment = Environments.newContextualInstance(path.toString(), config)
             return runCatching {
                     var hasSymbolIndex = false
