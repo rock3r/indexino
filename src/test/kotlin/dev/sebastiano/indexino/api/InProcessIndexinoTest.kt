@@ -1138,13 +1138,15 @@ class InProcessIndexinoTest {
         System.setProperty("indexino.cache.dir", cacheDirectory.toString())
         try {
             val first = Indexino.connectBlocking(workspace)
-            try {
-                runSuspend {
-                    first.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui"))).await()
+            val initialGeneration =
+                try {
+                    runSuspend {
+                            first.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui"))).await()
+                        }
+                        .generation
+                } finally {
+                    first.close()
                 }
-            } finally {
-                first.close()
-            }
             val second = Indexino.connectBlocking(workspace)
             try {
                 val snapshot = runSuspend { second.snapshot() }
@@ -1161,6 +1163,37 @@ class InProcessIndexinoTest {
                 }
             } finally {
                 second.close()
+            }
+            Indexino.connectBlocking(workspace).use { reopened ->
+                val duringPublication =
+                    CopyOnWriteArrayList<Triple<WorkspaceGenerationId, Int, Int>>()
+                reopened.afterPublishGenerationStoreForTests = {
+                    reopened.afterPublishGenerationStoreForTests = null
+                    runSuspend { reopened.snapshot() }
+                        .use { snapshot ->
+                            duringPublication +=
+                                Triple(
+                                    snapshot.generation,
+                                    symbolCount(snapshot, "ActionButton"),
+                                    symbolCount(snapshot, "ChangedButton"),
+                                )
+                            assertEquals(SnapshotFreshness.UNKNOWN, snapshot.freshnessAtAcquisition)
+                        }
+                }
+                val source = workspace.resolve("ui/src/main/kotlin/Panel.kt")
+                Files.writeString(
+                    source,
+                    Files.readString(source).replace("ActionButton", "ChangedButton"),
+                )
+                runSuspend {
+                    reopened.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui"))).await()
+                }
+                assertEquals(listOf(Triple(initialGeneration, 1, 0)), duringPublication)
+                runSuspend { reopened.snapshot() }
+                    .use { snapshot ->
+                        assertEquals(0, symbolCount(snapshot, "ActionButton"))
+                        assertEquals(1, symbolCount(snapshot, "ChangedButton"))
+                    }
             }
         } finally {
             if (previousCacheDirectory == null) System.clearProperty("indexino.cache.dir")

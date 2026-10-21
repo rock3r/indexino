@@ -77,6 +77,7 @@ private constructor(
     private val baseGenerationRefs = mutableSetOf<Path>()
     private var published: PublishedGeneration? = null
     private var publishingGeneration: WorkspaceGenerationId? = null
+    private var publishingPreviousGeneration: WorkspaceGenerationId? = null
     private val remoteSnapshots = mutableMapOf<String, IndexSnapshot>()
     private val watcherCaptures = ConcurrentHashMap<RefreshRequest, WatcherCapture>()
 
@@ -641,7 +642,10 @@ private constructor(
         linkGeneration: String? = null,
         evidence: SnapshotFreshness,
     ) {
-        synchronized(generationLock) { publishingGeneration = generation }
+        synchronized(generationLock) {
+            publishingPreviousGeneration = currentPublishedGenerationId()
+            publishingGeneration = generation
+        }
         try {
             val publishedStore =
                 publishGenerationStore(
@@ -677,7 +681,10 @@ private constructor(
                 reclaimUnpinnedGenerations()
             }
         } finally {
-            synchronized(generationLock) { publishingGeneration = null }
+            synchronized(generationLock) {
+                publishingGeneration = null
+                publishingPreviousGeneration = null
+            }
         }
     }
 
@@ -771,6 +778,7 @@ private constructor(
                     // The pointer can precede this owner's evidence update; keep serving the
                     // previous complete generation rather than restoring the new one as UNKNOWN.
                     published
+                        ?: publishingPreviousGeneration?.let { restorePublishedGeneration(it) }
                 } else {
                     published?.takeIf { it.generation == sharedGeneration }
                         ?: restorePublishedGeneration()
@@ -1244,11 +1252,15 @@ private constructor(
     }
 
     @OptIn(IndexinoInternalApi::class)
-    private fun restorePublishedGeneration(): PublishedGeneration? {
+    private fun restorePublishedGeneration(
+        requestedGeneration: WorkspaceGenerationId? = null
+    ): PublishedGeneration? {
         val cacheRoot = InProcessCacheLayout.cacheRoot()
-        val manifest =
+        val manifests =
             WorkspaceGenerationManifestStore(cacheRoot, InProcessCacheLayout.workspaceId(workspace))
-                .current() ?: return null
+        val manifest =
+            (if (requestedGeneration == null) manifests.current()
+            else manifests.readGeneration(requestedGeneration.value)) ?: return null
         if (manifest.basicFactSchemaVersion != BASIC_FACT_SCHEMA_VERSION) return null
         val generation = WorkspaceGenerationId.of(manifest.generation)
         val storePath =
