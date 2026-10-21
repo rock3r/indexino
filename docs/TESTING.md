@@ -90,8 +90,9 @@ incidental log wording is not the sole signal.
 A differential golden suite compares stdout/JSONL, stderr routing, exit codes, invalid usage, and
 the manifest schema/version across the thin Maven runtime classpath, unshrunk fat JAR, R8 JAR, and
 the target's real Roast executable. Each entry point independently indexes an equivalent clean
-fixture so store creation, schema/version, and representative records are compared; only the
-documented volatile `builtAt` value is normalized. Process output is captured in task-owned files and
+fixture so store creation, schema/version, and representative records are compared. The manifest's
+volatile `builtAt` and text-progress `durationMillis` values are normalized; phase names and all
+other output remain compared. Process output is captured in task-owned files and
 decoded with UTF-8 replacement semantics so platform-native diagnostic bytes cannot abort the
 verifier. A descendant that inherits stdout or stderr cannot keep a completed launch blocked. Each
 command starts only after a helper establishes a new POSIX session/process group or a Windows Job

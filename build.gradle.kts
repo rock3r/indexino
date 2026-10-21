@@ -14,6 +14,7 @@ import dev.sebastiano.indexino.buildlogic.Sha256File
 import io.github.fourlastor.construo.Target
 import io.github.fourlastor.construo.task.PackageTask
 import io.github.fourlastor.construo.task.jvm.CreateRuntimeImageTask
+import io.github.fourlastor.construo.task.jvm.RoastTask
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermissions
@@ -561,6 +562,35 @@ construo {
     }
 }
 
+// NormalizedJar deliberately gives every output the same mtime. Gradle can otherwise reuse file
+// snapshots when the R8 JAR changes bytes without changing size, leaving AOT training, Construo's
+// staging, and archive tasks up-to-date with an obsolete application JAR.
+val normalizedCliJarSha256 =
+    normalizedCliJar.flatMap(NormalizedJar::getArchiveFile).map { jar ->
+        val digest = MessageDigest.getInstance("SHA-256")
+        jar.asFile.inputStream().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        HexFormat.of().formatHex(digest.digest())
+    }
+
+tasks.withType<RoastTask>().configureEach {
+    inputs.property("normalizedCliJarSha256", normalizedCliJarSha256)
+}
+
+tasks.withType<AotTrainingTask>().configureEach {
+    inputs.property("normalizedCliJarSha256", normalizedCliJarSha256)
+}
+
+tasks.withType<PackageTask>().configureEach {
+    inputs.property("normalizedCliJarSha256", normalizedCliJarSha256)
+}
+
 val finalizedMacArm64Archive by
     tasks.registering(MacDittoArchive::class) {
         group = "distribution"
@@ -953,6 +983,14 @@ fun registerNativeDistributionVerification(
         systemProperty(
             "indexino.normalizedApplicationJar",
             normalizedApplicationJar.get().asFile.absolutePath,
+        )
+        systemProperty(
+            "indexino.trainedApplicationJar",
+            layout.buildDirectory
+                .file("tmp/trainAot$taskSuffix/staging/indexino-cli.jar")
+                .get()
+                .asFile
+                .absolutePath,
         )
         systemProperty("indexino.aotCache", aotCache.get().asFile.absolutePath)
         systemProperty("indexino.unshrunkJar", unshrunkApplicationJar.get().asFile.absolutePath)

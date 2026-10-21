@@ -66,13 +66,7 @@ class NativeDistributionTest {
                 Files.size(requiredFile("indexino.normalizedApplicationJar")),
                 applicationJar.size,
             )
-            val packagedApplicationBytes = zip.getInputStream(applicationJar).use { it.readBytes() }
-            assertTrue(
-                packagedApplicationBytes.contentEquals(
-                    Files.readAllBytes(requiredFile("indexino.normalizedApplicationJar"))
-                ),
-                "Packaged application JAR differs from the normalized training input",
-            )
+            assertPackagedApplicationMatchesTraining(zip, applicationJar)
             val launcherConfiguration =
                 zip.getInputStream(entries.getValue("indexino/app/indexino.json"))
                     .bufferedReader()
@@ -146,6 +140,22 @@ class NativeDistributionTest {
                 entries.getValue("indexino/licenses/roast-LICENSE").unixMode,
             )
         }
+    }
+
+    private fun assertPackagedApplicationMatchesTraining(zip: ZipFile, applicationJar: ZipEntry) {
+        val packagedBytes = zip.getInputStream(applicationJar).use { it.readBytes() }
+        assertTrue(
+            packagedBytes.contentEquals(
+                Files.readAllBytes(requiredFile("indexino.normalizedApplicationJar"))
+            ),
+            "Packaged application JAR differs from the normalized training input",
+        )
+        assertTrue(
+            packagedBytes.contentEquals(
+                Files.readAllBytes(requiredFile("indexino.trainedApplicationJar"))
+            ),
+            "AOT training used application bytes different from the packaged JAR",
+        )
     }
 
     private fun assertPackagedLicenses(zip: ZipFile, entries: Map<String, ZipEntry>) {

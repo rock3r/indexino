@@ -611,6 +611,7 @@ class NativeCompatibilityTest {
                 return knownRepresentations
                     .fold(value) { normalized, path -> normalized.replace(path, "<workspace>") }
                     .replace(BUILT_AT_JSON) { match -> "${match.groupValues[1]}<volatile>" }
+                    .replace(PROGRESS_DURATION) { match -> "${match.groupValues[1]}<volatile>" }
             }
             return copy(
                 stdout = normalize(stdout),
@@ -630,6 +631,7 @@ class NativeCompatibilityTest {
         const val LINUX_X64 = "linux-x64"
         const val WINDOWS_X64 = "windows-x64"
         val BUILT_AT_JSON = Regex("""("builtAt":")[^"]+""")
+        val PROGRESS_DURATION = Regex("""(durationMillis=)\d+""")
         val JAVA_TOOL_OPTIONS_BANNER = Regex("Picked up JAVA_TOOL_OPTIONS: .*\\n")
     }
 }
