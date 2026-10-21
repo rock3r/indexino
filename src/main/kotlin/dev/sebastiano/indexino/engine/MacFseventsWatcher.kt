@@ -20,22 +20,33 @@ internal class MacFseventsWatcher(
     private val root: Path,
     private val changed: (Path) -> Unit,
     private val overflowed: () -> Unit,
-) : AutoCloseable {
+) : NativeWorkspaceWatcher {
     private val closed = AtomicBoolean()
+    private val running = AtomicBoolean()
+    @Volatile private var startupFailure: Throwable? = null
+    override val isAlive: Boolean
+        get() = running.get() && thread.isAlive && !closed.get()
+
     private val ready = CountDownLatch(1)
     private val arena = Arena.ofShared()
     private val id = NEXT_ID.incrementAndGet()
     private lateinit var stream: MemorySegment
     private lateinit var runLoop: MemorySegment
-    private val thread =
-        Thread(::run, "indexino-fsevents").apply {
-            isDaemon = true
-            start()
-        }
+    private val thread = Thread(::run, "indexino-fsevents").apply { isDaemon = true }
 
     init {
         INSTANCES[id] = this
-        ready.await()
+        thread.start()
+        try {
+            ready.await()
+            startupFailure?.let {
+                throw IllegalStateException("FSEvents startup failed for $root", it)
+            }
+            check(isAlive) { "FSEvents exited during startup for $root" }
+        } catch (@Suppress("TooGenericExceptionCaught") failure: Throwable) {
+            runCatching { close() }.exceptionOrNull()?.let(failure::addSuppressed)
+            throw failure
+        }
     }
 
     internal fun flushForTests() {
@@ -48,7 +59,7 @@ internal class MacFseventsWatcher(
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
-        if (::stream.isInitialized) {
+        if (::stream.isInitialized && stream != NULL) {
             fsevents("FSEventStreamStop", STOP, stream)
             fsevents("FSEventStreamInvalidate", INVALIDATE, stream)
         }
@@ -58,7 +69,8 @@ internal class MacFseventsWatcher(
         }
         INSTANCES.remove(id)
         if (::stream.isInitialized) STREAMS.remove(stream.address())
-        if (::stream.isInitialized) fsevents("FSEventStreamRelease", RELEASE, stream)
+        if (::stream.isInitialized && stream != NULL)
+            fsevents("FSEventStreamRelease", RELEASE, stream)
         arena.close()
     }
 
@@ -119,9 +131,13 @@ internal class MacFseventsWatcher(
             check((fsevents("FSEventStreamStart", START, stream) as Byte).toInt() != 0) {
                 "FSEventStreamStart failed"
             }
+            running.set(true)
             ready.countDown()
             coreFoundation("CFRunLoopRun", RUN_LOOP_RUN)
+        } catch (@Suppress("TooGenericExceptionCaught") failure: Throwable) {
+            startupFailure = failure
         } finally {
+            running.set(false)
             ready.countDown()
         }
     }

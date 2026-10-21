@@ -24,14 +24,81 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 @OptIn(IndexinoInternalApi::class)
 class AutoRefreshControllerTest {
+    @Test
+    fun `native startup failure falls back to directory watches`() {
+        val workspace = Files.createTempDirectory("indexino-native-startup-")
+        val request = RefreshRequest.forScope(IndexScope.gradle(":app"))
+        try {
+            AutoRefreshController(
+                    workspace,
+                    AutoRefreshMode.DISABLED,
+                    refresh = {},
+                    nativeWorkspaceWatcher = { _, _, _ -> error("fake native startup failure") },
+                )
+                .use { controller ->
+                    controller.register(request, emptyList(), listOf(workspace))
+                    assertTrue(workspace in controller.polledDirectoriesForTests())
+                }
+        } finally {
+            workspace.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `dead native worker loses coverage and installs fallback keys`() {
+        val workspace = Files.createTempDirectory("indexino-native-death-")
+        val request = RefreshRequest.forScope(IndexScope.gradle(":app"))
+        val native =
+            object : NativeWorkspaceWatcher {
+                @Volatile override var isAlive = true
+
+                override fun close() {
+                    isAlive = false
+                }
+            }
+        try {
+            AutoRefreshController(
+                    workspace,
+                    AutoRefreshMode.DISABLED,
+                    refresh = {},
+                    reconciliationIntervalMillis = 10,
+                    nativeWorkspaceWatcher = { _, _, _ -> native },
+                )
+                .use { controller ->
+                    controller.register(request, emptyList(), listOf(workspace))
+                    assertTrue(controller.polledDirectoriesForTests().isEmpty())
+                    native.isAlive = false
+                    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                    while (
+                        workspace !in controller.polledDirectoriesForTests() &&
+                            System.nanoTime() < deadline
+                    ) {
+                        Thread.sleep(10)
+                    }
+                    assertTrue(
+                        workspace in controller.polledDirectoriesForTests(),
+                        "Dead native coverage needs fallback",
+                    )
+                    assertTrue(
+                        controller.dirtyEpochForTests(request) > 0,
+                        "Loss must force full reconciliation",
+                    )
+                }
+        } finally {
+            workspace.toFile().deleteRecursively()
+        }
+    }
+
     @Test
     fun `explicit refresh coalescing with pending automatic launch retains the edit`() {
         val workspace = Files.createTempDirectory("indexino-coalesced-refresh-")
@@ -167,7 +234,7 @@ class AutoRefreshControllerTest {
                         hints += paths
                         dispatched.countDown()
                     },
-                    nativeWorkspaceWatcher = { _, _, _ -> AutoCloseable {} },
+                    nativeWorkspaceWatcher = { _, _, _ -> TestNativeWatcher() },
                 )
             try {
                 controller.register(request, sources)
@@ -247,7 +314,7 @@ class AutoRefreshControllerTest {
                         hinted += paths
                         successor.countDown()
                     },
-                    nativeWorkspaceWatcher = { _, _, _ -> AutoCloseable {} },
+                    nativeWorkspaceWatcher = { _, _, _ -> TestNativeWatcher() },
                 )
             try {
                 controller.register(request, sources)
@@ -367,7 +434,7 @@ class AutoRefreshControllerTest {
                 refresh = {},
                 nativeWorkspaceWatcher = { watchedRoot, _, _ ->
                     nativeRoot = watchedRoot
-                    AutoCloseable {}
+                    TestNativeWatcher()
                 },
             )
         try {
@@ -459,18 +526,27 @@ class AutoRefreshControllerTest {
             for (native in listOf(true, false)) {
                 val roots = CopyOnWriteArrayList<Path?>()
                 val launched = CountDownLatch(1)
+                val transport =
+                    object : NativeWorkspaceWatcher {
+                        @Volatile override var isAlive = true
+
+                        override fun close() {
+                            isAlive = false
+                        }
+                    }
+                var coverage: (() -> Boolean)? = null
                 val controller =
                     AutoRefreshController(
                         workspace,
                         AutoRefreshMode.ENABLED,
                         refresh = {},
                         topologyProvider = { topology },
-                        refreshWithTopology = { _, _, _, _, recursiveRoot ->
+                        refreshWithTopology = { _, _, _, covered, recursiveRoot ->
+                            coverage = covered
                             roots += recursiveRoot
                             launched.countDown()
                         },
-                        nativeWorkspaceWatcher =
-                            if (native) { _, _, _ -> AutoCloseable {} } else null,
+                        nativeWorkspaceWatcher = if (native) { _, _, _ -> transport } else null,
                     )
                 try {
                     controller.register(
@@ -481,6 +557,27 @@ class AutoRefreshControllerTest {
                     assertTrue(launched.await(5, TimeUnit.SECONDS))
                     // Per-directory WatchService registrations miss unwatched directories.
                     assertEquals(listOf(if (native) workspace else null), roots.toList())
+                    assertTrue(checkNotNull(coverage).invoke())
+                    if (native) {
+                        transport.isAlive = false
+                        assertFalse(
+                            checkNotNull(coverage).invoke(),
+                            "In-flight hash inheritance must be revoked",
+                        )
+                        assertEquals(
+                            SnapshotFreshness.UNKNOWN,
+                            controller.freshness(FreshnessPolicy.AWAIT_CURRENT),
+                        )
+                        assertTrue(source.parent in controller.polledDirectoriesForTests())
+                        controller.register(
+                            request,
+                            listOf(IndexedSource.workspace(workspace, "src/main/kotlin/Panel.kt")),
+                        )
+                        assertEquals(
+                            SnapshotFreshness.UNKNOWN,
+                            controller.freshness(FreshnessPolicy.AWAIT_CURRENT),
+                        )
+                    }
                 } finally {
                     controller.close()
                 }
@@ -491,20 +588,20 @@ class AutoRefreshControllerTest {
     }
 
     @Test
-    fun `known source edit reuses resolved topology while build input change re-resolves it`() {
+    fun `known source edit reuses resolved topology while captured build input re-resolves it`() {
         val workspace = Files.createTempDirectory("indexino-topology-hint-")
-        val source = workspace.resolve("src/main/kotlin/Panel.kt")
+        val source = workspace.resolve("app/src/main/kotlin/Panel.kt")
         Files.createDirectories(source.parent)
         Files.writeString(source, "class Panel")
-        val buildFile = workspace.resolve("BUILD.bazel")
+        val buildFile = workspace.resolve("app/build.gradle.kts")
         Files.writeString(buildFile, "")
-        val request = RefreshRequest.forScope(IndexScope.bazel("//:main"))
+        val request = RefreshRequest.forScope(IndexScope.gradle(":app"))
         val topology =
             TopologyResult(
-                listOf("src/main/kotlin/Panel.kt"),
-                topology = "bazel-query",
+                listOf("app/src/main/kotlin/Panel.kt"),
+                topology = "gradle-parse",
                 includeDeps = false,
-                scope = "//:main",
+                scope = ":app",
             )
         val hints = CopyOnWriteArrayList<TopologyResult>()
         val hintedSources = CopyOnWriteArrayList<Set<Path>>()
@@ -529,7 +626,7 @@ class AutoRefreshControllerTest {
         try {
             controller.register(
                 request,
-                listOf(IndexedSource.workspace(workspace, "src/main/kotlin/Panel.kt")),
+                listOf(IndexedSource.workspace(workspace, "app/src/main/kotlin/Panel.kt")),
             )
             controller.onPathChangedForTests(source)
             assertTrue(firstCompleted.await(5, TimeUnit.SECONDS))
@@ -558,7 +655,10 @@ class AutoRefreshControllerTest {
         try {
             second.register(
                 request,
-                listOf(IndexedSource.workspace(workspace, "src/main/kotlin/Panel.kt")),
+                listOf(
+                    IndexedSource.workspace(workspace, "app/src/main/kotlin/Panel.kt"),
+                    IndexedSource.workspace(workspace, "app/build.gradle.kts"),
+                ),
             )
             second.onPathChangedForTests(source)
             second.onPathChangedForTests(buildFile)
@@ -854,7 +954,7 @@ class AutoRefreshControllerTest {
                             firstStarted.countDown()
                         } else successorStarted.countDown()
                     },
-                    nativeWorkspaceWatcher = { _, _, _ -> AutoCloseable {} },
+                    nativeWorkspaceWatcher = { _, _, _ -> TestNativeWatcher() },
                 )
             try {
                 controller.register(
@@ -891,6 +991,60 @@ class AutoRefreshControllerTest {
     @Test
     fun `await current promotion preserves an edit before handle registration`() {
         assertEditBeforeHandleRegistrationStartsSuccessor(promoteForAwaitCurrent = true)
+    }
+
+    @Test
+    fun `await current waits for a claimed refresh to register without another edit`() {
+        val workspace = Files.createTempDirectory(Path.of("/tmp"), "indexino-claim-await-")
+        val source = workspace.resolve("src/main/kotlin/Panel.kt")
+        Files.createDirectories(source.parent)
+        Files.writeString(source, "class Panel")
+        val request = RefreshRequest.forScope(IndexScope.gradle(":app"))
+        val claimed = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val acquiring = CountDownLatch(1)
+        val id = RefreshId.of("claimed")
+        lateinit var controller: AutoRefreshController
+        controller =
+            AutoRefreshController(
+                workspace,
+                AutoRefreshMode.ENABLED,
+                refresh = {
+                    claimed.countDown()
+                    check(release.await(5, TimeUnit.SECONDS))
+                    controller.onRefreshStarted(
+                        request,
+                        RefreshHandle.inFlight(
+                            id,
+                            CompletableFuture.completedFuture(successfulResult(request, id)),
+                            CompletableFuture(),
+                            stopAction = {},
+                        ),
+                    )
+                },
+            )
+        try {
+            controller.register(
+                request,
+                listOf(IndexedSource.workspace(workspace, "src/main/kotlin/Panel.kt")),
+            )
+            controller.onPathChangedForTests(source)
+            assertTrue(claimed.await(5, TimeUnit.SECONDS))
+            val acquisition = CompletableFuture.supplyAsync {
+                acquiring.countDown()
+                controller.startQueuedForAwaitCurrent()
+            }
+            assertTrue(acquiring.await(5, TimeUnit.SECONDS))
+            assertFailsWith<TimeoutException>("AWAIT_CURRENT cannot pass an unregistered refresh") {
+                acquisition.get(200, TimeUnit.MILLISECONDS)
+            }
+            release.countDown()
+            acquisition.get(5, TimeUnit.SECONDS)
+        } finally {
+            release.countDown()
+            controller.close()
+            workspace.toFile().deleteRecursively()
+        }
     }
 
     private fun assertEditBeforeHandleRegistrationStartsSuccessor(promoteForAwaitCurrent: Boolean) {
@@ -1173,6 +1327,12 @@ class AutoRefreshControllerTest {
             request.scope,
             IndexChanges(1, 0, 0),
         )
+
+    private class TestNativeWatcher : NativeWorkspaceWatcher {
+        override val isAlive: Boolean = true
+
+        override fun close() = Unit
+    }
 
     private companion object {
         const val DEBOUNCE_SETTLE_MILLIS = 250L

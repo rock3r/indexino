@@ -21,6 +21,7 @@ import java.nio.file.WatchEvent
 import java.nio.file.WatchKey
 import java.nio.file.WatchService
 import java.nio.file.attribute.BasicFileAttributes
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -29,7 +30,12 @@ import java.util.concurrent.atomic.AtomicLong
 
 /** Starts a recursive native stream for a workspace: root, path callback, overflow callback. */
 internal typealias NativeWorkspaceWatcherFactory =
-    (Path, (Path) -> Unit, () -> Unit) -> AutoCloseable
+    (Path, (Path) -> Unit, () -> Unit) -> NativeWorkspaceWatcher
+
+/** Native transports must stop claiming recursive coverage when their worker exits. */
+internal interface NativeWorkspaceWatcher : AutoCloseable {
+    val isAlive: Boolean
+}
 
 /** Runtime-owned, scope-derived watcher that coalesces filesystem hints into refresh requests. */
 @Suppress("TooManyFunctions")
@@ -58,6 +64,7 @@ internal class AutoRefreshController(
     private val requestsByDirectory = ConcurrentHashMap<Path, MutableSet<RefreshRequest>>()
     private val directoriesByRequest = ConcurrentHashMap<RefreshRequest, Set<Path>>()
     private val sourcePathsByRequest = ConcurrentHashMap<RefreshRequest, Set<Path>>()
+    private val topologyInputsByRequest = ConcurrentHashMap<RefreshRequest, Set<Path>>()
     private val keys = ConcurrentHashMap<WatchKey, Path>()
     private val queued = ConcurrentHashMap.newKeySet<RefreshRequest>()
     private val dirty = ConcurrentHashMap.newKeySet<RefreshRequest>()
@@ -65,6 +72,7 @@ internal class AutoRefreshController(
     private val active = ConcurrentHashMap<RefreshRequest, String>()
     private val pendingLaunch = ConcurrentHashMap<RefreshRequest, Long>()
     private val stateLock = Any()
+    private val pendingRegistration = mutableMapOf<RefreshRequest, CompletableFuture<Unit>>()
     private val hintedPaths = mutableMapOf<RefreshRequest, MutableMap<Path, Long>>()
     private val uncertainTopology = mutableMapOf<RefreshRequest, Long>()
     private val registrationEpoch = mutableMapOf<RefreshRequest, Long>()
@@ -76,17 +84,31 @@ internal class AutoRefreshController(
     private val uncovered = ConcurrentHashMap.newKeySet<RefreshRequest>()
     // Reverse index of [keys]; a linear scan per registration is quadratic on large closures.
     private val keyByDirectory = ConcurrentHashMap<Path, WatchKey>()
-    private val macWatcher: AutoCloseable? =
-        when {
-            nativeWorkspaceWatcher != null ->
-                nativeWorkspaceWatcher.invoke(workspace, ::onMacPathChanged, ::onWatcherOverflow)
-            watcherKind == AutoRefreshWatcherKind.MAC_FSEVENTS ->
-                runCatching {
+    private val nativeCoverageLost = AtomicBoolean()
+    private val macWatcher: NativeWorkspaceWatcher? =
+        runCatching {
+                when {
+                    nativeWorkspaceWatcher != null ->
+                        nativeWorkspaceWatcher.invoke(
+                            workspace,
+                            ::onMacPathChanged,
+                            ::onWatcherOverflow,
+                        )
+                    watcherKind == AutoRefreshWatcherKind.MAC_FSEVENTS ->
                         MacFseventsWatcher(workspace, ::onMacPathChanged, ::onWatcherOverflow)
-                    }
-                    .getOrNull()
-            else -> null
-        }
+                    else -> null
+                }
+            }
+            .onFailure {
+                nativeCoverageLost.set(true)
+                System.getLogger(AutoRefreshController::class.java.name)
+                    .log(
+                        System.Logger.Level.WARNING,
+                        "Native workspace watcher failed for $workspace; using fallback watches",
+                        it,
+                    )
+            }
+            .getOrNull()
     // FSEvents is the primary macOS transport and recursively covers the workspace. WatchService
     // supplies coverage elsewhere; on macOS it polls, rescanning each registered directory.
     private val watchService: WatchService? = FileSystems.getDefault().newWatchService()
@@ -100,6 +122,7 @@ internal class AutoRefreshController(
     init {
         scheduler.scheduleWithFixedDelay(
             {
+                checkNativeCoverage()
                 uncovered.forEach { request ->
                     if (!queued.contains(request) && !active.containsKey(request)) enqueue(request)
                 }
@@ -117,8 +140,11 @@ internal class AutoRefreshController(
         topologyRoots: List<Path> = emptyList(),
     ) {
         if (closed.get()) return
+        checkNativeCoverage()
         sourcePathsByRequest[request] =
             sources.mapTo(linkedSetOf()) { it.originRoot.resolve(it.path).normalize() }
+        val topologyInputs = topologyInputs(sources).toSet()
+        topologyInputsByRequest[request] = topologyInputs
         val directories =
             buildSet {
                     sources.forEach { source ->
@@ -135,7 +161,7 @@ internal class AutoRefreshController(
                             discoverDirectories(sourceRoot).forEach(::add)
                         }
                     }
-                    topologyInputs(sources).mapTo(this) { it.parent ?: workspace }
+                    topologyInputs.mapTo(this) { it.parent ?: workspace }
                 }
                 .filter { directory -> Files.isDirectory(directory) && !excluded(directory) }
                 .toSet()
@@ -158,7 +184,8 @@ internal class AutoRefreshController(
                 if (!registerDirectory(directory)) coverageComplete = false
             }
         }
-        if (coverageComplete) uncovered.remove(request) else uncovered.add(request)
+        if (coverageComplete && !nativeCoverageLost.get()) uncovered.remove(request)
+        else uncovered.add(request)
         // IndexBuildRunner calls this before capturing source bytes. Events observed before
         // registration completes are covered by that full capture; later events need a successor.
         synchronized(stateLock) {
@@ -192,6 +219,7 @@ internal class AutoRefreshController(
                 if (active[request] == handle.id.value) return
                 active[request] = handle.id.value
                 val automaticEpoch = pendingLaunch.remove(request)
+                pendingRegistration.remove(request)?.complete(Unit)
                 val armedEpoch = registrationEpoch.remove(request)
                 if (automaticEpoch != null && !automatic) {
                     // The explicit worker may have captured its input before the queued edit.
@@ -258,6 +286,7 @@ internal class AutoRefreshController(
 
     fun startQueuedForAwaitCurrent() {
         if (mode == AutoRefreshMode.DISABLED) return
+        checkNativeCoverage()
         dirty.toList().forEach { request ->
             val launch =
                 synchronized(stateLock) {
@@ -269,16 +298,23 @@ internal class AutoRefreshController(
                 }
             if (launch) launch(request)
         }
+        // Claiming removes the dirty bit before the coordinator has registered its handle.
+        // Do not let snapshot(AWAIT_CURRENT) pass through that invisible handoff.
+        val registrations = synchronized(stateLock) { pendingRegistration.values.toList() }
+        registrations.forEach { it.join() }
     }
 
-    fun freshness(freshness: FreshnessPolicy): SnapshotFreshness =
-        when {
+    fun freshness(freshness: FreshnessPolicy): SnapshotFreshness {
+        checkNativeCoverage()
+        return when {
             directoriesByRequest.isEmpty() -> SnapshotFreshness.UNKNOWN
+            nativeCoverageLost.get() -> SnapshotFreshness.UNKNOWN
             uncovered.isNotEmpty() -> SnapshotFreshness.UNKNOWN
-            dirty.isNotEmpty() -> SnapshotFreshness.DIRTY
+            dirty.isNotEmpty() || pendingLaunch.isNotEmpty() -> SnapshotFreshness.DIRTY
             freshness == FreshnessPolicy.AWAIT_CURRENT -> SnapshotFreshness.CURRENT
             else -> SnapshotFreshness.UNKNOWN
         }
+    }
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
@@ -291,9 +327,15 @@ internal class AutoRefreshController(
         requestsByDirectory.clear()
         directoriesByRequest.clear()
         sourcePathsByRequest.clear()
+        topologyInputsByRequest.clear()
         uncovered.clear()
         dirtyEpoch.clear()
         synchronized(stateLock) {
+            pendingRegistration.values.forEach {
+                it.completeExceptionally(IllegalStateException("Auto-refresh controller closed"))
+            }
+            pendingRegistration.clear()
+            pendingLaunch.clear()
             hintedPaths.clear()
             uncertainTopology.clear()
             registrationEpoch.clear()
@@ -347,7 +389,11 @@ internal class AutoRefreshController(
         synchronized(stateLock) {
             if (closed.get()) return
             val epoch = dirtyEpoch.computeIfAbsent(request) { AtomicLong() }.incrementAndGet()
-            if (path == null || path !in sourcePathsByRequest[request].orEmpty())
+            if (
+                path == null ||
+                    path in topologyInputsByRequest[request].orEmpty() ||
+                    path !in sourcePathsByRequest[request].orEmpty()
+            )
                 uncertainTopology[request] = epoch
             else hintedPaths.getOrPut(request) { linkedMapOf() }[path] = epoch
             dirty.add(request)
@@ -363,7 +409,9 @@ internal class AutoRefreshController(
         }
     }
 
+    @Suppress("CyclomaticComplexMethod")
     private fun claimLaunch(request: RefreshRequest): Boolean {
+        checkNativeCoverage()
         if (
             closed.get() ||
                 pendingLaunch.containsKey(request) ||
@@ -372,12 +420,12 @@ internal class AutoRefreshController(
         )
             return false
         pendingLaunch[request] = dirtyEpoch[request]?.get() ?: 0L
+        pendingRegistration[request] = CompletableFuture()
         val paths = hintedPaths.remove(request)?.keys.orEmpty()
         val uncertain = uncertainTopology.remove(request) != null
+        if (uncertain || nativeCoverageLost.get() || request in uncovered) return true
         if (
-            !uncertain &&
-                request !in uncovered &&
-                paths.isNotEmpty() &&
+            paths.isNotEmpty() &&
                 paths.all {
                     it in sourcePathsByRequest[request].orEmpty() && Files.isRegularFile(it)
                 }
@@ -389,7 +437,7 @@ internal class AutoRefreshController(
                 pendingHintedPaths[request] =
                     if (
                         watcherKind != AutoRefreshWatcherKind.MAC_FSEVENTS ||
-                            (macWatcher != null &&
+                            (nativeCoverageAvailable() &&
                                 sourcePathsByRequest[request].orEmpty().all {
                                     it.startsWith(workspace)
                                 })
@@ -402,9 +450,11 @@ internal class AutoRefreshController(
     }
 
     private fun launch(request: RefreshRequest) {
+        checkNativeCoverage()
         val (topology, paths, epoch) =
             synchronized(stateLock) {
-                val invalidated = request in uncovered || request in uncertainTopology
+                val invalidated =
+                    nativeCoverageLost.get() || request in uncovered || request in uncertainTopology
                 val topology = pendingTopology.remove(request)
                 val paths = pendingHintedPaths.remove(request).orEmpty()
                 Triple(
@@ -413,17 +463,33 @@ internal class AutoRefreshController(
                     coverageEpoch.get(),
                 )
             }
-        if (topology != null && refreshWithTopology != null)
-            refreshWithTopology.invoke(
-                request,
-                topology,
-                paths,
-                { !closed.get() && request !in uncovered && coverageEpoch.get() == epoch },
-                // Only the native stream reports every path under the workspace; per-directory
-                // WatchService keys miss directories without sources.
-                workspace.takeIf { macWatcher != null },
-            )
-        else refresh(request)
+        try {
+            if (topology != null && refreshWithTopology != null)
+                refreshWithTopology.invoke(
+                    request,
+                    topology,
+                    paths,
+                    {
+                        checkNativeCoverage()
+                        !closed.get() &&
+                            !nativeCoverageLost.get() &&
+                            request !in uncovered &&
+                            coverageEpoch.get() == epoch
+                    },
+                    // Only the native stream reports every path under the workspace; per-directory
+                    // WatchService keys miss directories without sources.
+                    workspace.takeIf { nativeCoverageAvailable() },
+                )
+            else refresh(request)
+        } catch (@Suppress("TooGenericExceptionCaught") failure: Throwable) {
+            synchronized(stateLock) {
+                pendingLaunch.remove(request)
+                pendingRegistration.remove(request)?.completeExceptionally(failure)
+                dirty.add(request)
+                uncertainTopology[request] = dirtyEpoch[request]?.get() ?: 0L
+            }
+            throw failure
+        }
     }
 
     private fun scheduleDebounced(request: RefreshRequest, epoch: Long, firstChangeNanos: Long) {
@@ -509,7 +575,26 @@ internal class AutoRefreshController(
         }
 
     private fun nativelyCovered(directory: Path): Boolean =
-        macWatcher != null && directory.startsWith(workspace)
+        nativeCoverageAvailable() && directory.startsWith(workspace)
+
+    private fun nativeCoverageAvailable(): Boolean =
+        !nativeCoverageLost.get() && macWatcher?.isAlive == true
+
+    private fun checkNativeCoverage() {
+        if (closed.get() || macWatcher == null || macWatcher.isAlive) return
+        if (!nativeCoverageLost.compareAndSet(false, true)) return
+        System.getLogger(AutoRefreshController::class.java.name)
+            .log(
+                System.Logger.Level.WARNING,
+                "Native workspace watcher exited for $workspace; reconciling with fallback watches",
+            )
+        invalidateCoverage(directoriesByRequest.keys)
+        // Keep scopes uncovered until recursive native coverage is restored. On macOS these
+        // fallback keys poll, so they cannot justify inherited hashes even after a full capture.
+        directoriesByRequest.values.flatten().distinct().forEach { directory ->
+            if (keys.size < maxWatchedDirectories) registerDirectory(directory)
+        }
+    }
 
     private fun registerDirectory(directory: Path): Boolean {
         if (nativelyCovered(directory)) return true
