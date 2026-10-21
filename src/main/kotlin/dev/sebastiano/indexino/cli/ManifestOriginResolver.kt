@@ -1,6 +1,5 @@
 package dev.sebastiano.indexino.cli
 
-import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.IndexManifestOrigin
 import dev.sebastiano.indexino.producer.FileHashProducer
 import dev.sebastiano.indexino.producer.IndexedSource
@@ -10,16 +9,23 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.BasicFileAttributes
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentLinkedQueue
-import java.util.concurrent.ExecutionException
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.io.path.invariantSeparatorsPathString
 import kotlin.io.path.isRegularFile
 import kotlin.io.path.readText
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 /** Builds current origin provenance for manifest freshness checks and publication. */
 @Suppress("TooManyFunctions")
@@ -58,11 +64,11 @@ internal object ManifestOriginResolver {
         hint: OriginIncrementalHint? = null,
         progress: ((String) -> Unit)? = null,
         onPhaseForTests: ((originId: String, phase: String, completed: Boolean) -> Unit)? = null,
-    ): OriginResolution {
+    ): OriginResolution = withOriginScope {
         val incrementalCount = AtomicInteger()
         val timings = ConcurrentLinkedQueue<String>()
-        fun <T> measured(originId: String, phase: String, action: () -> T): T {
-            onPhaseForTests?.invoke(originId, phase, false)
+        suspend fun <T> measured(originId: String, phase: String, action: suspend () -> T): T {
+            runInterruptible { onPhaseForTests?.invoke(originId, phase, false) }
             if (progress == null && onPhaseForTests == null) return action()
             val started = System.nanoTime()
             return action().also {
@@ -71,10 +77,10 @@ internal object ManifestOriginResolver {
                         "index origin=$originId phase=$phase durationMillis=" +
                             TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
                     )
-                onPhaseForTests?.invoke(originId, phase, true)
+                runInterruptible { onPhaseForTests?.invoke(originId, phase, true) }
             }
         }
-        fun resolveState(
+        suspend fun resolveState(
             originId: String,
             originRoot: Path,
             externalExpectedRevision: String?,
@@ -93,17 +99,17 @@ internal object ManifestOriginResolver {
                     ?.also { incrementalCount.incrementAndGet() }
                     ?: fullState(workspace, originRoot, externalExpectedRevision, captureState)
             }
-        fun withFingerprint(
+        suspend fun withFingerprint(
             originId: String,
             originRoot: Path,
             sourceFingerprint: String,
             state: OriginGitState,
         ): Pair<IndexManifestOrigin, OriginGitState> {
             return measured(originId, "manifest-fingerprint") {
-                originFrom(originId, originRoot, sourceFingerprint, state)
+                runInterruptible { originFrom(originId, originRoot, sourceFingerprint, state) }
             } to state
         }
-        fun resolveOrigin(
+        suspend fun resolveOrigin(
             originId: String,
             originRoot: Path,
             sourceFingerprint: String,
@@ -115,40 +121,61 @@ internal object ManifestOriginResolver {
                 sourceFingerprint,
                 resolveState(originId, originRoot, externalExpectedRevision),
             )
-        val sourceOrigins =
-            sources
-                .groupBy { it.originId to it.originRoot }
-                .map { (identity, originSources) ->
-                    val (originId, originRoot) = identity
+        val inventory = sources.groupBy { it.originId to it.originRoot }.entries.toList()
+        val nextOrigin = AtomicInteger()
+        val sourceOrigins = coroutineScope {
+            List(minOf(ORIGIN_WORKERS, inventory.size)) {
                     async {
-                        val expectedRevision =
-                            externalOriginMetadata[originRoot.toRealPath()]?.second
-                        val fingerprint = {
-                            measured(originId, "source-fingerprint") {
-                                FileHashProducer.contentHash(
-                                    originSources
-                                        .sortedBy { it.path }
-                                        .joinToString("\n") { source ->
-                                            val hash =
-                                                sourceSnapshot?.contentHash(source)
-                                                    ?: FileHashProducer.contentHash(
-                                                        source.originRoot
-                                                            .resolve(source.path)
-                                                            .readText()
-                                                    )
-                                            "${source.path}:$hash"
+                        buildList {
+                            while (true) {
+                                ensureActive()
+                                val index = nextOrigin.getAndIncrement()
+                                if (index >= inventory.size) break
+                                val (identity, originSources) = inventory[index]
+                                val (originId, originRoot) = identity
+                                val expectedRevision =
+                                    externalOriginMetadata[originRoot.toRealPath()]?.second
+                                val fingerprint: suspend () -> String = {
+                                    measured(originId, "source-fingerprint") {
+                                        runInterruptible {
+                                            FileHashProducer.contentHash(
+                                                originSources
+                                                    .sortedBy { it.path }
+                                                    .joinToString("\n") { source ->
+                                                        if (Thread.currentThread().isInterrupted)
+                                                            throw InterruptedException()
+                                                        val hash =
+                                                            sourceSnapshot?.contentHash(source)
+                                                                ?: FileHashProducer.contentHash(
+                                                                    source.originRoot
+                                                                        .resolve(source.path)
+                                                                        .readText()
+                                                                )
+                                                        "${source.path}:$hash"
+                                                    }
+                                            )
                                         }
+                                    }
+                                }
+                                val (capturedFingerprint, state) =
+                                    sourceFingerprintAndGitState(sourceSnapshot, fingerprint) {
+                                        resolveState(originId, originRoot, expectedRevision)
+                                    }
+                                add(
+                                    withFingerprint(
+                                        originId,
+                                        originRoot,
+                                        capturedFingerprint,
+                                        state,
+                                    )
                                 )
                             }
                         }
-                        val (capturedFingerprint, state) =
-                            sourceFingerprintAndGitState(sourceSnapshot, fingerprint) {
-                                resolveState(originId, originRoot, expectedRevision)
-                            }
-                        withFingerprint(originId, originRoot, capturedFingerprint, state)
                     }
                 }
-                .map { it.join() }
+                .awaitAll()
+                .flatten()
+        }
         // One realpath per distinct root, not per source: tens of thousands of syscalls otherwise.
         val sourceRoots =
             sources.mapTo(hashSetOf()) { it.originRoot }.map { it.toRealPath() }.toSet()
@@ -182,7 +209,7 @@ internal object ManifestOriginResolver {
             }
         val resolved = sourceOrigins + emptyExternalOrigins + workspaceOrigin
         progress?.let { sink -> timings.forEach(sink) }
-        return OriginResolution(
+        OriginResolution(
             origins = resolved.map { it.first }.sortedBy { it.originId },
             states =
                 if (captureState) {
@@ -192,20 +219,36 @@ internal object ManifestOriginResolver {
         )
     }
 
-    private fun sourceFingerprintAndGitState(
+    private suspend fun sourceFingerprintAndGitState(
         snapshot: SourceContentSnapshot?,
-        fingerprint: () -> String,
-        gitState: () -> OriginGitState,
-    ): Pair<String, OriginGitState> {
-        if (snapshot == null) return fingerprint() to gitState()
-        val runningGit = async(gitState)
-        val captured = runCatching(fingerprint)
-        val state = runCatching { runningGit.join() }
-        captured.exceptionOrNull()?.let { failure ->
-            state.exceptionOrNull()?.let(failure::addSuppressed)
-            throw failure
+        fingerprint: suspend () -> String,
+        gitState: suspend () -> OriginGitState,
+    ): Pair<String, OriginGitState> = coroutineScope {
+        if (snapshot == null) return@coroutineScope fingerprint() to gitState()
+        val runningGit = async { gitState() }
+        fingerprint() to runningGit.await()
+    }
+
+    // This internal blocking bridge owns its dispatcher; it is not supplied by an API caller.
+    @Suppress("InjectDispatcher")
+    private fun <T> withOriginScope(block: suspend CoroutineScope.() -> T): T {
+        val owner = Job()
+        try {
+            return runBlocking(Dispatchers.IO + owner, block)
+        } finally {
+            // Interrupted runBlocking cancels its body but does not wait for child cleanup.
+            // Do not let a stopped refresh publish its terminal event before all Git exits.
+            owner.cancel()
+            var interrupted = Thread.interrupted()
+            while (!owner.isCompleted) {
+                try {
+                    runBlocking { owner.join() }
+                } catch (_: InterruptedException) {
+                    interrupted = true
+                }
+            }
+            if (interrupted) Thread.currentThread().interrupt()
         }
-        return captured.getOrThrow() to state.getOrThrow()
     }
 
     private fun originFrom(
@@ -231,12 +274,12 @@ internal object ManifestOriginResolver {
      * that `ls-files --others` already performs. A captured state is stamped before and after the
      * reads; a stamp that moved means another Git client raced them, so the state stays full-only.
      */
-    private fun fullState(
+    private suspend fun fullState(
         workspace: Path,
         originRoot: Path,
         externalExpectedRevision: String?,
         captureState: Boolean,
-    ): OriginGitState {
+    ): OriginGitState = coroutineScope {
         val stampBefore = if (captureState) stamp(workspace, originRoot) else null
         val diff = async {
             val arguments = listOf("diff", "--no-ext-diff", "--binary", "HEAD", "--", ".")
@@ -255,19 +298,19 @@ internal object ManifestOriginResolver {
         }
         val untrackedPaths =
             untracked
-                .join()
+                .await()
                 ?.split('\u0000')
                 ?.filter(String::isNotEmpty)
                 ?.filterNot(OriginGitState::isTransitionalPath)
-        val diffText = diff.join()
-        val statusText = trackedStatus.join()
+        val diffText = diff.await()
+        val statusText = trackedStatus.await()
         val stamp = stampBefore?.value?.takeIf { stamp(workspace, originRoot)?.value == it }
-        return OriginGitState(
+        OriginGitState(
             originRoot = originRoot,
             stamp = stamp,
-            revision = revision.join(),
+            revision = revision.await(),
             externalExpectedRevision = externalExpectedRevision,
-            expectedRevision = expected.join(),
+            expectedRevision = expected.await(),
             diff = diffText,
             diffSections = diffText?.takeIf { stamp != null }?.let(OriginGitState::diffSections),
             trackedStatus = statusText,
@@ -284,32 +327,33 @@ internal object ManifestOriginResolver {
      * hinted untracked files are re-hashed. Returns null to request full recomputation.
      */
     @Suppress("ReturnCount", "CyclomaticComplexMethod")
-    private fun incrementalState(
+    private suspend fun incrementalState(
         workspace: Path,
         originId: String,
         originRoot: Path,
         externalExpectedRevision: String?,
         hint: OriginIncrementalHint,
-    ): OriginGitState? {
+    ): OriginGitState? = coroutineScope {
         val previous =
             hint.previous[originId]?.takeIf {
                 it.incremental &&
                     it.originRoot == originRoot &&
                     it.externalExpectedRevision == externalExpectedRevision
-            } ?: return null
-        if (!originRoot.startsWith(hint.recursiveWatchRoot)) return null
+            } ?: return@coroutineScope null
+        if (!originRoot.startsWith(hint.recursiveWatchRoot)) return@coroutineScope null
         val current =
-            stamp(workspace, originRoot)?.takeIf { it.value == previous.stamp } ?: return null
+            stamp(workspace, originRoot)?.takeIf { it.value == previous.stamp }
+                ?: return@coroutineScope null
         val stamp = current.value
-        if (enclosesTrackedHintedOrigin(originRoot, hint)) return null
+        if (enclosesTrackedHintedOrigin(originRoot, hint)) return@coroutineScope null
         val own =
             hint.hintedSources
                 .filter { it.originId == originId && it.originRoot == originRoot }
                 .map { it.path }
                 .distinct()
-        if (own.isEmpty()) return previous
+        if (own.isEmpty()) return@coroutineScope previous
         if (own.size > MAX_INCREMENTAL_PATHS || !own.all(OriginGitState::isVerbatimPath)) {
-            return null
+            return@coroutineScope null
         }
         val diff = async {
             runGitWithIndexCopy(
@@ -332,26 +376,22 @@ internal object ManifestOriginResolver {
             )
         }
         val ownPaths = own.toSet()
-        val newSections = diff.join()?.let(OriginGitState::diffSections) ?: return null
-        val newEntries = status.join()?.let(OriginGitState::statusEntries) ?: return null
+        val newSections =
+            diff.await()?.let(OriginGitState::diffSections) ?: return@coroutineScope null
+        val newEntries =
+            status.await()?.let(OriginGitState::statusEntries) ?: return@coroutineScope null
         if (newSections.any { it.path !in ownPaths } || newEntries.any { it.path !in ownPaths }) {
-            return null
+            return@coroutineScope null
         }
-        if (stamp(workspace, originRoot)?.value != stamp) return null
-        return previous.withHintedPaths(
-            stamp,
-            externalExpectedRevision,
-            ownPaths,
-            newSections,
-            newEntries,
-        )
+        if (stamp(workspace, originRoot)?.value != stamp) return@coroutineScope null
+        previous.withHintedPaths(stamp, externalExpectedRevision, ownPaths, newSections, newEntries)
     }
 
     /**
      * A nested origin's edits can change this origin's diff only through paths this origin's index
      * tracks, such as a gitlink or vendored copy; any tracked path requires full reads.
      */
-    private fun enclosesTrackedHintedOrigin(
+    private suspend fun enclosesTrackedHintedOrigin(
         originRoot: Path,
         hint: OriginIncrementalHint,
     ): Boolean {
@@ -378,7 +418,7 @@ internal object ManifestOriginResolver {
     private class GitStamp(val value: String, val gitDir: Path)
 
     @Suppress("ReturnCount")
-    private fun stamp(workspace: Path, originRoot: Path): GitStamp? {
+    private suspend fun stamp(workspace: Path, originRoot: Path): GitStamp? = coroutineScope {
         val parsed = async {
             runGit(
                 originRoot,
@@ -394,11 +434,12 @@ internal object ManifestOriginResolver {
             val owner = superprojectRoot(originRoot.toRealPath()) ?: workspace.toRealPath()
             runGit(owner, "rev-parse", "HEAD")
         }
-        val lines = parsed.join()?.lines()?.filter(String::isNotEmpty) ?: return null
-        if (lines.size != REV_PARSE_STAMP_LINES) return null
+        val lines =
+            parsed.await()?.lines()?.filter(String::isNotEmpty) ?: return@coroutineScope null
+        if (lines.size != REV_PARSE_STAMP_LINES) return@coroutineScope null
         val gitDir = Path.of(lines[2])
         val commonDir = originRoot.resolve(lines[3]).normalize()
-        val configText = config.join() ?: return null
+        val configText = config.await() ?: return@coroutineScope null
         val index =
             runCatching {
                     val attributes =
@@ -424,10 +465,10 @@ internal object ManifestOriginResolver {
                 configuredFile(configText, "core.attributesfile", "attributes"),
             )
         val value =
-            (listOf(lines[0], lines[1], ownerHead.join().orEmpty(), configText, index) +
+            (listOf(lines[0], lines[1], ownerHead.await().orEmpty(), configText, index) +
                     inputs.map { "$it=${OriginGitState.hashOrNull(it)}" })
                 .joinToString("\u0000")
-        return GitStamp(value, gitDir)
+        GitStamp(value, gitDir)
     }
 
     /**
@@ -436,7 +477,7 @@ internal object ManifestOriginResolver {
      * index, and so its stamp, untouched. The copy keeps the index mtime so racy-entry detection is
      * unchanged.
      */
-    private fun runGitWithIndexCopy(
+    private suspend fun runGitWithIndexCopy(
         originRoot: Path,
         gitDir: Path,
         arguments: List<String>,
@@ -472,22 +513,11 @@ internal object ManifestOriginResolver {
         return (xdg?.let(Path::of) ?: Path.of(home, ".config")).resolve("git").resolve(defaultName)
     }
 
-    private fun <T> async(block: () -> T): CompletableFuture<T> =
-        CompletableFuture.supplyAsync(block, GIT_EXECUTOR)
-
-    private fun <T> CompletableFuture<T>.join(): T =
-        try {
-            get()
-        } catch (failure: ExecutionException) {
-            throw failure.cause ?: failure
-        }
-
-    private fun revisionAtOriginRoot(originRoot: Path): String? {
+    private suspend fun revisionAtOriginRoot(originRoot: Path): String? {
         val canonicalRoot = originRoot.toRealPath()
         val topLevel = runGit(canonicalRoot, "rev-parse", "--show-toplevel")?.trim()?.let(Path::of)
         if (topLevel?.toRealPath() != canonicalRoot) return null
-        return GitHeadResolver.resolve(canonicalRoot)
-            .takeUnless(GitHeadResolver::isFilesystemRevision)
+        return runGit(canonicalRoot, "rev-parse", "HEAD")?.trim()
     }
 
     private fun filesystemInventoryFingerprint(originRoot: Path): String =
@@ -503,78 +533,107 @@ internal object ManifestOriginResolver {
                 }
                 .sortedBy { (path, _) -> path }
                 .joinToString("\n") { (path, file) ->
+                    if (Thread.currentThread().isInterrupted) throw InterruptedException()
                     "$path:${runCatching { FileHashProducer.contentHash(Files.readAllBytes(file)) }.getOrNull()}"
                 }
                 .let(FileHashProducer::contentHash)
         }
 
-    private fun runGit(originRoot: Path, vararg arguments: String): String? =
+    private suspend fun runGit(originRoot: Path, vararg arguments: String): String? =
         runGit(originRoot, arguments.asList())
 
-    private fun runGit(
+    private suspend fun runGit(
         originRoot: Path,
         arguments: List<String>,
         indexFile: Path? = null,
-    ): String? {
-        val process =
-            runCatching {
-                    ProcessBuilder(listOf("git", "-C", originRoot.toString()) + arguments)
-                        .redirectErrorStream(true)
-                        // Reads must not refresh the index: that would move the index stamp and
-                        // write to the user's repository.
-                        .apply {
-                            environment()["GIT_OPTIONAL_LOCKS"] = "0"
-                            indexFile?.let { environment()["GIT_INDEX_FILE"] = it.toString() }
-                        }
-                        .start()
+    ): String? = GIT_PROCESSES.withPermit {
+        runInterruptible {
+            val output = Files.createTempFile("indexino-origin-git-", ".out")
+            var process: Process? = null
+            val descendants = linkedSetOf<ProcessHandle>()
+            try {
+                // Only a start failure is an unavailable Git command, never cancellation.
+                process =
+                    try {
+                        ProcessBuilder(listOf("git", "-C", originRoot.toString()) + arguments)
+                            .redirectErrorStream(true)
+                            .redirectOutput(output.toFile())
+                            .apply {
+                                environment()["GIT_OPTIONAL_LOCKS"] = "0"
+                                indexFile?.let { environment()["GIT_INDEX_FILE"] = it.toString() }
+                            }
+                            .start()
+                    } catch (_: java.io.IOException) {
+                        return@runInterruptible null
+                    }
+                do {
+                    process.descendants().use { children -> children.forEach(descendants::add) }
+                } while (!process.waitFor(PROCESS_POLL_MILLIS, TimeUnit.MILLISECONDS))
+                Files.readAllBytes(output).toString(Charsets.UTF_8).takeIf {
+                    process.exitValue() == 0
                 }
-                .getOrNull() ?: return null
-        val output = process.inputStream.bufferedReader().readText()
-        return output.takeIf { process.waitFor() == 0 }
+            } finally {
+                // runInterruptible does not complete (and the permit is not returned) until this
+                // blocking body has reaped its process, including on cancellation during waitFor.
+                process?.let { terminateAndReap(it, descendants) }
+                Files.deleteIfExists(output)
+            }
+        }
     }
 
-    private fun expectedSubmoduleRevision(workspace: Path, originRoot: Path): String? {
+    private fun terminateAndReap(process: Process, knownDescendants: Set<ProcessHandle>) {
+        val descendants =
+            (knownDescendants + process.descendants().use { it.toList() }).sortedByDescending {
+                child ->
+                generateSequence(child) { it.parent().orElse(null) }.count()
+            }
+        var interrupted = Thread.interrupted()
+        try {
+            // Leave each parent alive to reap its children before terminating the parent.
+            descendants.forEach { child ->
+                child.destroyForcibly()
+                while (child.isAlive) {
+                    try {
+                        child.onExit().get()
+                    } catch (_: InterruptedException) {
+                        interrupted = true
+                    }
+                }
+            }
+            process.destroyForcibly()
+            while (process.isAlive) {
+                try {
+                    process.waitFor()
+                } catch (_: InterruptedException) {
+                    interrupted = true
+                }
+            }
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt()
+        }
+    }
+
+    private suspend fun expectedSubmoduleRevision(workspace: Path, originRoot: Path): String? {
         val canonicalOriginRoot = originRoot.toRealPath()
         val owner = superprojectRoot(canonicalOriginRoot) ?: workspace.toRealPath()
         if (canonicalOriginRoot == owner || !canonicalOriginRoot.startsWith(owner)) return null
         val mount = owner.relativize(canonicalOriginRoot).toString().replace('\\', '/')
-        val process =
-            runCatching {
-                    ProcessBuilder("git", "-C", owner.toString(), "ls-tree", "HEAD", "--", mount)
-                        .redirectErrorStream(true)
-                        .start()
-                }
-                .getOrNull() ?: return null
-        val output = process.inputStream.bufferedReader().readText().trim()
-        if (process.waitFor() != 0) return null
+        val output = runGit(owner, "ls-tree", "HEAD", "--", mount)?.trim() ?: return null
         val fields = output.substringBefore('\t').split(' ')
         return fields.getOrNull(0)?.takeIf { it == "160000" }?.let { fields.getOrNull(2) }
     }
 
-    private fun superprojectRoot(originRoot: Path): Path? {
-        val process =
-            runCatching {
-                    ProcessBuilder(
-                            "git",
-                            "-C",
-                            originRoot.toString(),
-                            "rev-parse",
-                            "--show-superproject-working-tree",
-                        )
-                        .redirectErrorStream(true)
-                        .start()
-                }
-                .getOrNull() ?: return null
-        val output = process.inputStream.bufferedReader().readText().trim()
-        return output.takeIf { process.waitFor() == 0 && it.isNotEmpty() }?.let(Path::of)
-    }
+    private suspend fun superprojectRoot(originRoot: Path): Path? =
+        runGit(originRoot, "rev-parse", "--show-superproject-working-tree")
+            ?.trim()
+            ?.takeIf(String::isNotEmpty)
+            ?.let(Path::of)
 
     private const val REV_PARSE_STAMP_LINES = 4
     private const val MAX_INCREMENTAL_PATHS = 2048
-    // Unbounded because origin tasks wait on their own Git reads; threads idle out after 60s.
-    private val GIT_EXECUTOR: ExecutorService = Executors.newCachedThreadPool { task ->
-        Thread(task, "indexino-origin-git").apply { isDaemon = true }
-    }
+    private const val ORIGIN_WORKERS = 4
+    private const val PROCESS_POLL_MILLIS = 25L
+    private val GIT_PROCESSES = Semaphore(4)
     private val TRANSIENT_DIRECTORY_NAMES =
         setOf(".git", ".gradle", ".idea", "build", "out", "target")
     private const val WORKSPACE_ORIGIN_ID = "workspace"

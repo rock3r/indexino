@@ -17,7 +17,6 @@ import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.TimeoutException
 import kotlin.io.path.Path
 import kotlin.io.path.readText
 import kotlin.io.path.writeText
@@ -76,6 +75,7 @@ class IndexBuildRunnerTest {
 
         val failingOriginStarted = CountDownLatch(1)
         val releaseFailingOrigin = CountDownLatch(1)
+        val failingOriginCancelled = CountDownLatch(1)
         val producerFailed = CountDownLatch(1)
         val failure = IllegalArgumentException("producer stopped")
         val failedBuild = CompletableFuture.supplyAsync {
@@ -86,7 +86,12 @@ class IndexBuildRunnerTest {
                             when {
                                 message == "index phase=origin-resolution state=started" -> {
                                     failingOriginStarted.countDown()
-                                    check(releaseFailingOrigin.await(15, TimeUnit.SECONDS))
+                                    try {
+                                        check(releaseFailingOrigin.await(15, TimeUnit.SECONDS))
+                                    } catch (interrupted: InterruptedException) {
+                                        failingOriginCancelled.countDown()
+                                        throw interrupted
+                                    }
                                 }
                                 message.startsWith(
                                     "index phase=producer:file-hash state=completed"
@@ -103,7 +108,8 @@ class IndexBuildRunnerTest {
         try {
             assertTrue(failingOriginStarted.await(5, TimeUnit.SECONDS))
             assertTrue(producerFailed.await(10, TimeUnit.SECONDS))
-            assertFailsWith<TimeoutException> { failedBuild.get(100, TimeUnit.MILLISECONDS) }
+            assertTrue(failingOriginCancelled.await(3, TimeUnit.SECONDS))
+            failedBuild.get(5, TimeUnit.SECONDS)
         } finally {
             releaseFailingOrigin.countDown()
         }

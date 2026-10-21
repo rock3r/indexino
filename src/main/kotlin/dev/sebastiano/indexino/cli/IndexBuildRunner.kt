@@ -39,7 +39,7 @@ import dev.sebastiano.indexino.topology.bazel.BazelQueryExecutor
 import java.nio.file.Path
 import java.time.Instant
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.CompletionException
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.exists
 
@@ -322,7 +322,7 @@ internal class IndexBuildRunner(
         }
         val pendingOrigins =
             if (overlapOrigins)
-                CompletableFuture.supplyAsync {
+                PendingOriginResolution {
                     timedPhase("origin-resolution") {
                         resolveOrigins(
                             sources,
@@ -336,8 +336,8 @@ internal class IndexBuildRunner(
         fun resolvedOrigins(): List<IndexManifestOrigin> =
             origins
                 ?: try {
-                    checkNotNull(pendingOrigins).join()
-                } catch (failure: CompletionException) {
+                    checkNotNull(pendingOrigins).await()
+                } catch (failure: ExecutionException) {
                     throw failure.cause ?: failure
                 }
         try {
@@ -374,16 +374,8 @@ internal class IndexBuildRunner(
                     forkBase = forkBase,
                 )
             }
-        } catch (@Suppress("TooGenericExceptionCaught") failure: Throwable) {
-            // No origin worker may outlive a failed build; preserve origin-first failure ordering.
-            val originFailure = pendingOrigins?.let {
-                runCatching(::resolvedOrigins).exceptionOrNull()
-            }
-            if (originFailure != null && originFailure !== failure) {
-                originFailure.addSuppressed(failure)
-                throw originFailure
-            }
-            throw failure
+        } finally {
+            pendingOrigins?.close()
         }
         machineProgress?.completed("indexed")
         return CliExitCodes.SUCCESS
@@ -764,3 +756,41 @@ internal data class IndexBuildExecution(
     val sourceHashes: Map<IndexedSource, String> = emptyMap(),
     val originStates: Map<String, OriginGitState> = emptyMap(),
 )
+
+/** Blocking bridge owned by the build, never by the common pool or an observing client. */
+internal class PendingOriginResolution<T>(action: () -> T) : AutoCloseable {
+    private val result = CompletableFuture<T>()
+    private val worker =
+        Thread(
+                {
+                    try {
+                        result.complete(action())
+                    } catch (@Suppress("TooGenericExceptionCaught") failure: Throwable) {
+                        result.completeExceptionally(failure)
+                    }
+                },
+                "indexino-origin-resolution",
+            )
+            .apply {
+                isDaemon = true
+                start()
+            }
+
+    fun await(): T = result.get()
+
+    override fun close() {
+        worker.interrupt()
+        var interrupted = Thread.interrupted()
+        try {
+            while (worker.isAlive) {
+                try {
+                    worker.join()
+                } catch (_: InterruptedException) {
+                    interrupted = true
+                }
+            }
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt()
+        }
+    }
+}

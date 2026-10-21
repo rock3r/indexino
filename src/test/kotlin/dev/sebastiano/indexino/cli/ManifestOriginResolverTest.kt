@@ -9,13 +9,11 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.TimeoutException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
-import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.io.TempDir
 
@@ -220,10 +218,12 @@ class ManifestOriginResolverTest {
     }
 
     @Test
-    fun `failed fingerprint waits for its in-flight git state`() {
+    fun `failed fingerprint cancels its in-flight git state`() {
         val workspace = committedWorkspace("failed-fingerprint")
         val sources = sources(workspace, "src/A.java")
         val releaseGit = CountDownLatch(1)
+        val gitStarted = CountDownLatch(1)
+        val gitCancelled = CountDownLatch(1)
         val fingerprintFailed = CountDownLatch(1)
         val failure = IllegalStateException("fingerprint failed")
         val result = CompletableFuture.supplyAsync {
@@ -234,9 +234,16 @@ class ManifestOriginResolverTest {
                 sourceSnapshot = SourceContentSnapshot.capture(sources),
                 onPhaseForTests = { origin, phase, completed ->
                     if (origin == "workspace" && phase == "git-state" && !completed) {
-                        check(releaseGit.await(15, TimeUnit.SECONDS))
+                        gitStarted.countDown()
+                        try {
+                            check(releaseGit.await(15, TimeUnit.SECONDS))
+                        } catch (interrupted: InterruptedException) {
+                            gitCancelled.countDown()
+                            throw interrupted
+                        }
                     }
                     if (origin == "workspace" && phase == "source-fingerprint" && !completed) {
+                        check(gitStarted.await(5, TimeUnit.SECONDS))
                         fingerprintFailed.countDown()
                         throw failure
                     }
@@ -245,14 +252,163 @@ class ManifestOriginResolverTest {
         }
         try {
             assertTrue(fingerprintFailed.await(5, TimeUnit.SECONDS))
-            assertFailsWith<TimeoutException> { result.get(100, TimeUnit.MILLISECONDS) }
+            assertTrue(
+                gitCancelled.await(3, TimeUnit.SECONDS),
+                "Failed origin must interrupt sibling work",
+            )
+            val actual = assertFailsWith<ExecutionException> { result.get(5, TimeUnit.SECONDS) }
+            assertTrue(generateSequence<Throwable>(actual) { it.cause }.any { it === failure })
         } finally {
             releaseGit.countDown()
         }
-        assertSame(
-            failure,
-            assertFailsWith<ExecutionException> { result.get(15, TimeUnit.SECONDS) }.cause,
+    }
+
+    @Test
+    fun `hundreds of blocked origins have bounded admission`() {
+        val sources =
+            (0 until 300).map { index ->
+                val root = Files.createDirectories(tempDir.resolve("origin-$index"))
+                Files.writeString(root.resolve("A.java"), "class A {}")
+                IndexedSource("origin-$index", root, "A.java")
+            }
+        val admitted = java.util.concurrent.atomic.AtomicInteger()
+        val excessAdmission = CountDownLatch(1)
+        val firstAdmission = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val result = CompletableFuture.supplyAsync {
+            ManifestOriginResolver.resolveWithState(
+                tempDir,
+                sources,
+                emptyMap(),
+                captureState = false,
+                onPhaseForTests = { _, phase, completed ->
+                    if (phase == "source-fingerprint" && !completed) {
+                        if (admitted.incrementAndGet() > 4) excessAdmission.countDown()
+                        firstAdmission.countDown()
+                        check(release.await(30, TimeUnit.SECONDS))
+                    }
+                },
+            )
+        }
+        try {
+            assertTrue(firstAdmission.await(5, TimeUnit.SECONDS))
+            assertFalse(
+                excessAdmission.await(1, TimeUnit.SECONDS),
+                "Origin admission exceeds four workers",
+            )
+        } finally {
+            release.countDown()
+            assertEquals(300, result.get(30, TimeUnit.SECONDS).origins.size)
+        }
+    }
+
+    @Test
+    fun `fingerprint failure terminates live git children before returning`() {
+        val workspace = committedWorkspace("live-child-failure")
+        val pids = installBlockingFsmonitor(workspace)
+        val sources = sources(workspace, "src/A.java")
+        val result = CompletableFuture.supplyAsync {
+            ManifestOriginResolver.resolveWithState(
+                workspace,
+                sources,
+                emptyMap(),
+                sourceSnapshot = SourceContentSnapshot.capture(sources),
+                onPhaseForTests = { _, phase, completed ->
+                    if (phase == "source-fingerprint" && !completed) {
+                        awaitChildren(pids)
+                        error("fingerprint failed after Git child started")
+                    }
+                },
+            )
+        }
+        assertFailsWith<ExecutionException> { result.get(10, TimeUnit.SECONDS) }
+        assertChildrenExited(pids)
+    }
+
+    @Test
+    fun `explicit refresh stop terminates overlapped origin git children before terminal event`() {
+        val workspace = committedWorkspace("live-child-stop")
+        val pids = installBlockingFsmonitor(workspace)
+        val sources =
+            (0 until 300).map { index -> IndexedSource("origin-$index", workspace, "src/A.java") }
+        val operation =
+            dev.sebastiano.indexino.engine.IndexingCoordinator.start(
+                workspace,
+                dev.sebastiano.indexino.api.RefreshRequest.forScope(
+                    dev.sebastiano.indexino.api.IndexScope.gradle(":")
+                ),
+            ) {
+                try {
+                    PendingOriginResolution {
+                            ManifestOriginResolver.resolveWithState(
+                                workspace,
+                                sources,
+                                emptyMap(),
+                                captureState = false,
+                            )
+                        }
+                        .use { pending -> pending.await() }
+                } catch (_: InterruptedException) {
+                    // The refresh worker reports the stop only after its bridge has joined cleanup.
+                }
+            }
+        awaitChildren(pids, count = 4)
+        assertEquals(
+            4L,
+            Files.list(pids).use { paths ->
+                paths.filter { it.fileName.toString().startsWith("child-") }.count()
+            },
         )
+        operation.stop()
+        assertTrue(
+            operation.terminalEvent.get(10, TimeUnit.SECONDS)
+                is dev.sebastiano.indexino.api.RefreshStopped
+        )
+        assertChildrenExited(pids)
+    }
+
+    private fun installBlockingFsmonitor(workspace: Path): Path {
+        org.junit.jupiter.api.Assumptions.assumeFalse(
+            System.getProperty("os.name").startsWith("Windows")
+        )
+        val pids = Files.createDirectories(tempDir.resolve("pids-${workspace.fileName}"))
+        val hook = tempDir.resolve("fsmonitor-${workspace.fileName}")
+        Files.writeString(
+            hook,
+            "#!/bin/sh\necho $$ > '$pids/hook-'$$\necho ${'$'}PPID > '$pids/git-'$$\n" +
+                "sleep 60 &\necho $! > '$pids/child-'$$\nwait\n",
+        )
+        check(hook.toFile().setExecutable(true))
+        git(workspace, "config", "core.fsmonitor", hook.toString())
+        return pids
+    }
+
+    private fun awaitChildren(pids: Path, count: Long = 1) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (System.nanoTime() < deadline) {
+            if (
+                Files.list(pids).use { paths ->
+                    paths.filter { it.fileName.toString().startsWith("child-") }.count()
+                } >= count
+            ) {
+                Thread.sleep(100) // Let the managed Git poll observe the hook's child.
+                return
+            }
+            Thread.sleep(10)
+        }
+        error("Git did not start the blocking fsmonitor child")
+    }
+
+    private fun assertChildrenExited(pids: Path) {
+        val children = Files.list(pids).use { it.toList() }
+        assertTrue(children.isNotEmpty())
+        children.forEach { file ->
+            val pid = Files.readString(file).trim().toLong()
+            assertFalse(
+                ProcessHandle.of(pid).map { it.isAlive }.orElse(false),
+                "Git child $pid survived cleanup",
+            )
+        }
     }
 
     @Test

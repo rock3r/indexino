@@ -134,10 +134,16 @@ example external included builds) are registered with the JDK `WatchService`, wh
 The stream uses NoDefer to deliver the first event after a quiet period without waiting for the
 100 ms native coalescing window; later events still coalesce, and the controller's 150 ms debounce
 still applies before a refresh starts.
+Native startup failures fall back to scope-derived WatchService keys. Unexpected worker exit
+revokes recursive coverage and in-flight hints, adds fallback keys within the watch budget, and
+keeps scopes uncovered for periodic full reconciliation: macOS polling cannot certify inherited
+source hashes. The controller does not restart the native stream; a runtime restart restores it.
 Paths inside `.git` directories and the Indexino cache are ignored on every transport: Git's index
 bookkeeping during origin resolution is not a source edit and must not schedule another refresh.
 A `.git` entry being created or removed still re-resolves topology; a polled modification of that
 entry (its mtime changes on every index lock) does not.
+An edited build input also re-resolves topology even when the captured inventory lists it as
+resource metadata; its source membership cannot certify an unchanged dependency closure.
 
 Origin provenance (HEAD, working-tree fingerprint, dirty flag) normally costs whole-repository
 `git diff HEAD`, `git status` and `git ls-files --others` walks, seconds on a large checkout. A
@@ -160,12 +166,27 @@ Origin reads never write the user's index: `status` runs with optional locks dis
 For a captured source snapshot, each origin computes its source fingerprint alongside its Git
 state, then joins both before constructing provenance. Callers without a captured snapshot retain
 sequential reads so a live source read does not race with its Git-state observation.
+Source-bearing origins are admitted by four workers pulling from the inventory, not one queued
+future per root. Nested Git reads are coroutine children with suspending joins, so waiting parents
+do not occupy a fixed worker pool. One shared four-permit semaphore covers every origin Git
+command (including revision and submodule helpers), from process start through confirmed exit and
+cleanup. Output is merged into a temporary file rather than drained through an interrupt-insensitive
+pipe. Failure cancels sibling reads; interruption cancels the resolution and waits for its children.
+Cleanup terminates observed descendants deepest-first while their parents can still reap them,
+then terminates and reaps Git before returning the permit. Git hooks are trusted local code;
+deliberately daemonized descendants that escape observation are not an OS-sandbox guarantee.
 On a watcher-hinted changed-source refresh with the same topology, origin inventory, applications,
 and current published generation, the store builds from the captured sources while origin
 provenance resolves. The build uses known origin IDs only for fact ownership; resolved provenance
 joins inside the rollback checkpoint before the compatibility manifest is written. An origin
 failure rolls back staging. Fresh/no-op, missing-origin, cold, and fork-reuse decisions still wait
 for origin resolution before building or publishing.
+The overlapped resolver has a dedicated build-owned blocking bridge, not a detached common-pool
+future. Its publication join is interruptible; the build's `finally` interrupts the resolver and
+joins actual worker termination even if the refresh owner was interrupted. The coordinator's
+existing worker interruption therefore reaches Git cleanup, and `RefreshStopped` follows cleanup,
+not merely future cancellation. A producer failure remains the primary failure when it cancels
+still-pending provenance; an origin failure at the publication join still rolls back staging.
 
 Daemon close excludes overlapping cleanup attempts. A failed lease release remains retryable without
 closing an already stopped handshake server again; identity checks still protect successor leases.
@@ -217,7 +238,9 @@ rules under `gradle/r8/`. `normalizedCliJar` atomically copies that R8 output an
 deterministic even-second filesystem mtime plus ordinary-file `0644` permissions on POSIX hosts.
 The task is intentionally never up-to-date and its
 build cache is disabled because Gradle content snapshots do not detect metadata-only changes that
-would invalidate AOT. Construo is configured to consume this exact normalized output.
+would invalidate AOT. Construo is configured to consume this exact normalized output. AOT training,
+Roast staging, and package tasks also track the JAR's SHA-256: the fixed mtime and an unchanged file
+size must not let Gradle reuse a cache trained on older bytes or an obsolete application archive.
 
 Each native target uses checked-in JBR and Roast digests. Construo verifies those archives before
 extraction, runs `jlink`, `jdeps`, and `javap` from the matching target JBRSDK 25, and emits one
