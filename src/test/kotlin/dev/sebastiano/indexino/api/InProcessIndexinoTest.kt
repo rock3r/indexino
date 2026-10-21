@@ -476,26 +476,22 @@ class InProcessIndexinoTest {
         System.setProperty("indexino.cache.dir", cacheDirectory.toString())
         val indexino = Indexino.connectBlocking(workspace)
         try {
-            runSuspend {
-                indexino
-                    .refresh(
-                        RefreshRequest.forScope(IndexScope.gradle(":ui"))
-                            .withPlugin(PluginId.of("dev.sebastiano.selection-context"))
-                    )
-                    .await()
-            }
+            val request =
+                RefreshRequest.forScope(IndexScope.gradle(":ui"))
+                    .withPlugin(PluginId.of("dev.sebastiano.selection-context"))
+            val check =
+                dev.sebastiano.indexino.model.CheckRequest.of(
+                    PluginId.of("dev.sebastiano.selection-context"),
+                    "interactive-in-selection",
+                )
+            val base = runSuspend { indexino.refresh(request).await() }.generation
             runSuspend { indexino.snapshot() }
                 .use { snapshot ->
-                    val request =
-                        dev.sebastiano.indexino.model.CheckRequest.of(
-                            PluginId.of("dev.sebastiano.selection-context"),
-                            "interactive-in-selection",
-                        )
                     val first = runSuspend {
-                        snapshot.runCheck(request, QueryOptions.page(limit = 1))
+                        snapshot.runCheck(check, QueryOptions.page(limit = 1))
                     }
                     val second = runSuspend {
-                        snapshot.runCheck(request, QueryOptions.page(limit = 1, offset = 1))
+                        snapshot.runCheck(check, QueryOptions.page(limit = 1, offset = 1))
                     }
                     assertEquals(1, first.items.size)
                     assertEquals(first.totalCount, first.items.size + second.items.size)
@@ -505,6 +501,30 @@ class InProcessIndexinoTest {
                         first.items.single().range?.start?.file?.path,
                     )
                     assertTrue(first.items.single().range?.start?.line != null)
+                }
+            val buildScript = workspace.resolve("ui/build.gradle.kts")
+            Files.writeString(
+                buildScript,
+                Files.readString(buildScript) + "\nandroid { namespace = \"test.new\" }\n",
+            )
+            val overlay = runSuspend { indexino.refresh(request).await() }.generation
+            val manifest =
+                dev.sebastiano.indexino.core.cache
+                    .WorkspaceGenerationManifestStore(
+                        cacheDirectory,
+                        InProcessCacheLayout.workspaceId(workspace),
+                    )
+                    .readGeneration(overlay.value)
+            assertEquals(base.value, manifest?.baseGeneration, "$manifest")
+            runSuspend { indexino.snapshot() }
+                .use { snapshot ->
+                    val findings = runSuspend {
+                        snapshot.runCheck(check, QueryOptions.page(limit = 10))
+                    }
+                    assertEquals(
+                        listOf("ActionButton"),
+                        findings.items.map { it.properties["callee"] },
+                    )
                 }
         } finally {
             indexino.close()

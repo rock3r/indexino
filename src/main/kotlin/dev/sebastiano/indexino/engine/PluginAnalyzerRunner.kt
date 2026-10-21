@@ -49,7 +49,8 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
         selectedPluginIds.forEach { pluginId ->
             val analyzers = analyzersByPlugin[pluginId].orEmpty()
             val filesToAnalyze =
-                if (pluginId in fullAnalysisPlugins) context.sources else context.changedSources
+                if (pluginId in fullAnalysisPlugins) context.sources
+                else context.changedSources + context.reindexedSources
             val affectedSources = filesToAnalyze + context.deletedSources
             val affectedFiles = affectedSources.mapTo(hashSetOf()) { it.originId to it.path }
             val keys = mutableListOf<CodeIndexKey>()

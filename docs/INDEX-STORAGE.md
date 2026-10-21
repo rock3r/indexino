@@ -241,7 +241,8 @@ uses the rebuilt representation instead of reviving missing content. Unchanged r
 reinstall the writer pack. File analyzers process changed
 sources; metadata-dependent resource and code files are reprocessed when module metadata or
 resources change. An overlay tombstones their inherited facts and rewrites their file hashes even
-when their content is unchanged, so old package identities cannot survive a namespace edit.
+when their content is unchanged, so old package identities cannot survive a namespace edit. Selected
+file analyzers reprocess these sources too, retaining plugin findings hidden by the tombstone.
 Post-processors still recompute their declared scope. Physical cleanup scans the delta for
 invalidated records rather than streaming the inherited base.
 
