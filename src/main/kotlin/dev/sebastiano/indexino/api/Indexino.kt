@@ -31,6 +31,7 @@ import dev.sebastiano.indexino.engine.RuntimeProtocolException
 import dev.sebastiano.indexino.engine.RuntimeRefreshClient
 import dev.sebastiano.indexino.engine.RuntimeRefreshHandle
 import dev.sebastiano.indexino.engine.RuntimeSnapshotClient
+import dev.sebastiano.indexino.engine.TentativeParentInventory
 import dev.sebastiano.indexino.model.IndexFailureCategory
 import dev.sebastiano.indexino.model.IndexinoInternalApi
 import dev.sebastiano.indexino.model.LinkGenerationId
@@ -84,7 +85,28 @@ private constructor(
         val hashes: Map<IndexedSource, String>,
         val sources: List<IndexedSource>,
         val originStates: Map<String, dev.sebastiano.indexino.cli.OriginGitState>,
+        val observationEpoch: Long?,
+        val parents: Map<Path, TentativeParentInventory>,
+        val evidence: SnapshotFreshness,
     )
+
+    internal data class TentativeHint(
+        val topology: TopologyResult,
+        val paths: Set<Path>,
+        val observationEpoch: Long,
+    )
+
+    internal fun tentativeParentHint(
+        request: RefreshRequest,
+        unknown: Path,
+        known: Set<Path>,
+    ): TentativeHint? {
+        val capture = currentWatcherCapture(request) ?: return null
+        val epoch = capture.observationEpoch ?: return null
+        val parent = capture.parents[unknown.parent] ?: return null
+        val checked = parent.compare(capture.hashes, unknown, known) ?: return null
+        return TentativeHint(capture.topology, checked, epoch)
+    }
 
     private fun currentWatcherCapture(request: RefreshRequest): WatcherCapture? =
         watcherCaptures[request]?.takeIf(::captureIsPublished)
@@ -125,6 +147,13 @@ private constructor(
     @Volatile
     internal var onSourcesResolvedForRuntime:
         ((RefreshRequest, List<IndexedSource>, List<Path>) -> Unit)? =
+        null
+
+    /** Capture a native event fence before source discovery for bounded provisional refreshes. */
+    @Volatile internal var onNativeFenceForRuntime: (() -> Long?)? = null
+    @Volatile
+    internal var onBoundedParentInventoryForRuntime:
+        ((RefreshRequest, List<IndexedSource>) -> Map<Path, TentativeParentInventory>)? =
         null
 
     /** Topology events after this boundary cannot be covered by the resolved source closure. */
@@ -247,6 +276,7 @@ private constructor(
         hintedPaths: Set<Path> = emptySet(),
         watcherCoverageValid: () -> Boolean = { true },
         recursiveWatchRoot: Path? = null,
+        tentative: Boolean = false,
     ): RefreshHandle {
         ensureOpen()
         runtimeConnection?.let { connection ->
@@ -277,6 +307,7 @@ private constructor(
                                 hintedPaths,
                                 watcherCoverageValid,
                                 recursiveWatchRoot,
+                                tentative,
                             )
                         }
                     progress(
@@ -356,12 +387,15 @@ private constructor(
         hintedPaths: Set<Path>,
         watcherCoverageValid: () -> Boolean,
         recursiveWatchRoot: Path?,
+        tentative: Boolean,
     ): RefreshResult {
         // Serialize in-process peers across run+copy so a shared commit writer cannot mutate while
         // another client copies it. Cross-process single-writer election remains S6.
         synchronized(IndexingCoordinator.refreshLockFor(workspace)) {
             try {
                 operation.checkActive()
+                val observationEpoch = onNativeFenceForRuntime?.invoke()
+                var parentInventories = emptyMap<Path, TentativeParentInventory>()
                 val inherited =
                     if (hintedPaths.isNotEmpty())
                         currentWatcherCapture(request)?.takeIf { it.topology == topologyOverride }
@@ -396,6 +430,14 @@ private constructor(
                                     { sources, roots ->
                                         onSourcesResolvedForRuntime?.invoke(request, sources, roots)
                                     },
+                            beforeSourceCapture = { sources ->
+                                if (observationEpoch != null) {
+                                    parentInventories =
+                                        onBoundedParentInventoryForRuntime
+                                            ?.invoke(request, sources)
+                                            .orEmpty()
+                                }
+                            },
                             beforeTopologyResolution = {
                                 onTopologyResolutionStartedForRuntime?.invoke(
                                     request,
@@ -428,6 +470,15 @@ private constructor(
                         .publishFromConfig()
                         ?.value
                 val generation = manifest.toGenerationId(revision, linkGeneration)
+                val evidence =
+                    when {
+                        inherited != null ->
+                            if (tentative && inherited.evidence == SnapshotFreshness.CURRENT)
+                                SnapshotFreshness.PROVISIONAL
+                            else inherited.evidence
+                        topologyOverride == null -> SnapshotFreshness.CURRENT
+                        else -> SnapshotFreshness.UNKNOWN
+                    }
                 val current =
                     WorkspaceGenerationManifestStore(
                             InProcessCacheLayout.cacheRoot(),
@@ -472,6 +523,7 @@ private constructor(
                             execution.overlayDeltaPath,
                             execution.tombstonePrefixes,
                             linkGeneration,
+                            evidence,
                         )
                     }
                     val publicationMillis =
@@ -479,6 +531,27 @@ private constructor(
                     progress(
                         "index phase=publication state=completed durationMillis=$publicationMillis"
                     )
+                } else {
+                    operation.commitIfActive {
+                        synchronized(generationLock) {
+                            val prior =
+                                published?.takeIf { it.generation == generation }
+                                    ?: restorePublishedGeneration()?.takeIf {
+                                        it.generation == generation
+                                    }
+                            checkNotNull(prior) {
+                                "Published generation changed during unchanged refresh"
+                            }
+                            published =
+                                PublishedGeneration(
+                                    prior.storePath,
+                                    prior.revision,
+                                    prior.generation,
+                                    prior.baseCopy,
+                                    evidence,
+                                )
+                        }
+                    }
                 }
                 if (onSourcesResolvedForRuntime != null) {
                     execution.topologyResult?.let {
@@ -489,6 +562,9 @@ private constructor(
                                 execution.sourceHashes,
                                 execution.sources,
                                 execution.originStates,
+                                observationEpoch,
+                                parentInventories,
+                                evidence,
                             )
                     }
                 }
@@ -561,6 +637,7 @@ private constructor(
         overlayDeltaPath: Path? = null,
         tombstonePrefixes: List<String> = emptyList(),
         linkGeneration: String? = null,
+        evidence: SnapshotFreshness,
     ) {
         val publishedStore =
             publishGenerationStore(
@@ -591,6 +668,7 @@ private constructor(
                     revision = revision,
                     generation = generation,
                     baseCopy = baseCopyFor(generation),
+                    evidence = evidence,
                 )
             reclaimUnpinnedGenerations()
         }
@@ -620,31 +698,7 @@ private constructor(
         }
         val generation =
             try {
-                synchronized(generationLock) {
-                    // Prefer CLOSED over INDEX_NOT_FOUND if close() raced after ensureOpen().
-                    if (closed.get()) {
-                        throw failure(
-                            category = IndexFailureCategory.CLOSED,
-                            code = "client_closed",
-                            message = "Indexino client is closed",
-                            retryable = false,
-                        )
-                    }
-                    val sharedGeneration = currentPublishedGenerationId()
-                    val current =
-                        published?.takeIf { it.generation == sharedGeneration }
-                            ?: restorePublishedGeneration()
-                            ?: published
-                            ?: throw failure(
-                                category = IndexFailureCategory.INDEX_NOT_FOUND,
-                                code = "index_not_found",
-                                message = "No published index exists; call refresh first",
-                                retryable = true,
-                            )
-                    snapshotPins[current.generation] =
-                        snapshotPins.getOrDefault(current.generation, 0) + 1
-                    current
-                }
+                pinPublishedGeneration(freshness)
             } catch (thrown: IndexinoException) {
                 throw thrown
             } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
@@ -670,7 +724,8 @@ private constructor(
                     if (freshness == FreshnessPolicy.AWAIT_CURRENT) {
                         SnapshotFreshness.CURRENT
                     } else {
-                        SnapshotFreshness.UNKNOWN
+                        generation.evidence.takeIf { it == SnapshotFreshness.PROVISIONAL }
+                            ?: SnapshotFreshness.UNKNOWN
                     },
                 onClose = { releaseGeneration(generation.generation) },
                 consumerWorkspace = workspace,
@@ -691,6 +746,43 @@ private constructor(
             throw mapUnexpectedFailure(thrown)
         }
     }
+
+    private fun pinPublishedGeneration(freshness: FreshnessPolicy): PublishedGeneration =
+        synchronized(generationLock) {
+            // Prefer CLOSED over INDEX_NOT_FOUND if close() raced after ensureOpen().
+            if (closed.get()) {
+                throw failure(
+                    category = IndexFailureCategory.CLOSED,
+                    code = "client_closed",
+                    message = "Indexino client is closed",
+                    retryable = false,
+                )
+            }
+            val sharedGeneration = currentPublishedGenerationId()
+            val current =
+                published?.takeIf { it.generation == sharedGeneration }
+                    ?: restorePublishedGeneration()
+                    ?: published
+                    ?: throw failure(
+                        category = IndexFailureCategory.INDEX_NOT_FOUND,
+                        code = "index_not_found",
+                        message = "No published index exists; call refresh first",
+                        retryable = true,
+                    )
+            if (
+                freshness == FreshnessPolicy.AWAIT_CURRENT &&
+                    current.evidence != SnapshotFreshness.CURRENT
+            ) {
+                throw failure(
+                    category = IndexFailureCategory.STORAGE_BUSY,
+                    code = "current_unverified",
+                    message = "The published generation needs a full audit before CURRENT",
+                    retryable = true,
+                )
+            }
+            snapshotPins[current.generation] = snapshotPins.getOrDefault(current.generation, 0) + 1
+            current
+        }
 
     public suspend fun shutdownRuntime() {
         ensureOpen()
@@ -1301,6 +1393,7 @@ private constructor(
         val revision: WorkspaceRevision,
         val generation: WorkspaceGenerationId,
         val baseCopy: Path? = null,
+        val evidence: SnapshotFreshness = SnapshotFreshness.UNKNOWN,
     )
 }
 

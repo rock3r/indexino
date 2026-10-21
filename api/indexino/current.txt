@@ -216,12 +216,14 @@ package dev.sebastiano.indexino.api {
     field public static final dev.sebastiano.indexino.api.SnapshotFreshness CURRENT;
     field public static final dev.sebastiano.indexino.api.SnapshotFreshness.Companion Companion;
     field public static final dev.sebastiano.indexino.api.SnapshotFreshness DIRTY;
+    field public static final dev.sebastiano.indexino.api.SnapshotFreshness PROVISIONAL;
     field public static final dev.sebastiano.indexino.api.SnapshotFreshness UNKNOWN;
   }
 
   public static final class SnapshotFreshness.Companion {
     property public dev.sebastiano.indexino.api.SnapshotFreshness CURRENT;
     property public dev.sebastiano.indexino.api.SnapshotFreshness DIRTY;
+    property public dev.sebastiano.indexino.api.SnapshotFreshness PROVISIONAL;
     property public dev.sebastiano.indexino.api.SnapshotFreshness UNKNOWN;
   }
 

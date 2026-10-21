@@ -230,7 +230,7 @@ class AutoRefreshControllerTest {
                     AutoRefreshMode.ENABLED,
                     refresh = { dispatched.countDown() },
                     topologyProvider = { topology },
-                    refreshWithTopology = { _, _, paths, _, _ ->
+                    refreshWithTopology = { _, _, paths, _, _, _ ->
                         hints += paths
                         dispatched.countDown()
                     },
@@ -310,7 +310,7 @@ class AutoRefreshControllerTest {
                         successor.countDown()
                     },
                     topologyProvider = { topology },
-                    refreshWithTopology = { _, _, paths, _, _ ->
+                    refreshWithTopology = { _, _, paths, _, _, _ ->
                         hinted += paths
                         successor.countDown()
                     },
@@ -551,7 +551,7 @@ class AutoRefreshControllerTest {
                         scope = ":app",
                     )
                 },
-                refreshWithTopology = { _, _, _, _, _ -> hinted.incrementAndGet() },
+                refreshWithTopology = { _, _, _, _, _, _ -> hinted.incrementAndGet() },
             )
         try {
             controller.register(
@@ -600,7 +600,7 @@ class AutoRefreshControllerTest {
                         AutoRefreshMode.ENABLED,
                         refresh = {},
                         topologyProvider = { topology },
-                        refreshWithTopology = { _, _, _, covered, recursiveRoot ->
+                        refreshWithTopology = { _, _, _, covered, recursiveRoot, _ ->
                             coverage = covered
                             roots += recursiveRoot
                             launched.countDown()
@@ -676,7 +676,7 @@ class AutoRefreshControllerTest {
                     firstCompleted.countDown()
                 },
                 topologyProvider = { topology },
-                refreshWithTopology = { _, hint, paths, _, _ ->
+                refreshWithTopology = { _, hint, paths, _, _, _ ->
                     hints += hint
                     hintedSources += paths
                     firstCompleted.countDown()
@@ -705,7 +705,7 @@ class AutoRefreshControllerTest {
                     secondCompleted.countDown()
                 },
                 topologyProvider = { topology },
-                refreshWithTopology = { _, hint, paths, _, _ ->
+                refreshWithTopology = { _, hint, paths, _, _, _ ->
                     hints += hint
                     hintedSources += paths
                     secondCompleted.countDown()
@@ -756,7 +756,7 @@ class AutoRefreshControllerTest {
                 AutoRefreshMode.ENABLED,
                 refresh = { full.countDown() },
                 topologyProvider = { topology },
-                refreshWithTopology = { _, _, paths, _, _ ->
+                refreshWithTopology = { _, _, paths, _, _, _ ->
                     assertEquals(setOf(source), paths)
                     reused.countDown()
                 },
@@ -803,7 +803,7 @@ class AutoRefreshControllerTest {
                         scope = ":app",
                     )
                 },
-                refreshWithTopology = { _, _, _, _, _ -> hinted.incrementAndGet() },
+                refreshWithTopology = { _, _, _, _, _, _ -> hinted.incrementAndGet() },
             )
         try {
             controller.register(
@@ -835,7 +835,7 @@ class AutoRefreshControllerTest {
                         scope = ":app",
                     )
                 },
-                refreshWithTopology = { _, _, _, _, _ -> additionHinted.incrementAndGet() },
+                refreshWithTopology = { _, _, _, _, _, _ -> additionHinted.incrementAndGet() },
             )
         try {
             addition.register(
@@ -997,7 +997,7 @@ class AutoRefreshControllerTest {
                         successorStarted.countDown()
                     },
                     topologyProvider = { topology },
-                    refreshWithTopology = { _, _, paths, _, _ ->
+                    refreshWithTopology = { _, _, paths, _, _, _ ->
                         hints += paths
                         if (hints.size == 1) {
                             val id = RefreshId.of("first")

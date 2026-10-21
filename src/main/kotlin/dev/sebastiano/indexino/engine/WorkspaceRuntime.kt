@@ -198,17 +198,23 @@ private constructor(
                         topology,
                         hintedPaths,
                         coverageValid,
-                        recursiveWatchRoot ->
+                        recursiveWatchRoot,
+                        tentative ->
                         runtime.refreshDispatcher.refreshWithTopology(
                             request,
                             topology,
                             hintedPaths,
                             coverageValid,
                             recursiveWatchRoot,
+                            tentative,
                         )
                     },
+                    tentativeParentHint = owner::tentativeParentHint,
                 )
             owner.onSourcesResolvedForRuntime = runtime.autoRefreshController::register
+            owner.onNativeFenceForRuntime = runtime.autoRefreshController::beforeDiscoveryFence
+            owner.onBoundedParentInventoryForRuntime =
+                runtime.autoRefreshController::captureWarmParents
             owner.onTopologyResolutionStartedForRuntime =
                 runtime.autoRefreshController::onTopologyResolutionStarted
             val start =

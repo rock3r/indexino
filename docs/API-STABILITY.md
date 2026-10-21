@@ -18,6 +18,9 @@ types remain outside the compatibility boundary.
   (`api/<artifact>/current.txt`). Update dumps only via the explicit
   `metalavaUpdateSignature` / `:indexino-model:metalavaUpdateSignature` tasks after human review —
   never to silence CI.
+- `SnapshotFreshness.PROVISIONAL` is additive. It denotes a published bounded refresh that may
+  omit changes outside its observed parent; it is not a synonym for `CURRENT`. Strict
+  `AWAIT_CURRENT` requires a full audit, and a restart discards provisional evidence.
 - KGP `abiValidation` / `api/indexino.api` are **not** used. See
   [PUBLIC-API-DESIGN.html](PUBLIC-API-DESIGN.html).
 - The plugin API additionally keeps immutable SemVer-named dumps under
