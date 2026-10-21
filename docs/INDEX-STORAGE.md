@@ -239,8 +239,11 @@ manifest only while all referenced packs remain present, including overlay delta
 referenced bases. Historical manifests can outlive packs reclaimed by GC; in that case publication
 uses the rebuilt representation instead of reviving missing content. Unchanged refreshes do not
 reinstall the writer pack. File analyzers process changed
-sources; post-processors still recompute their declared scope. Physical cleanup scans the delta
-for invalidated records rather than streaming the inherited base.
+sources; metadata-dependent resource and code files are reprocessed when module metadata or
+resources change. An overlay tombstones their inherited facts and rewrites their file hashes even
+when their content is unchanged, so old package identities cannot survive a namespace edit.
+Post-processors still recompute their declared scope. Physical cleanup scans the delta for
+invalidated records rather than streaming the inherited base.
 
 This is an incremental **fact-storage and source-capture** path, not a subsecond whole-workspace
 refresh guarantee:

@@ -3,6 +3,7 @@ package dev.sebastiano.indexino.api
 import dev.sebastiano.indexino.model.PluginId
 import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.ReferenceQuery
+import dev.sebastiano.indexino.model.ResourceQuery
 import dev.sebastiano.indexino.model.SourceFile
 import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.SymbolQuery
@@ -1120,6 +1121,67 @@ class InProcessIndexinoTest {
             } else {
                 System.setProperty("indexino.cache.dir", previousCacheDirectory)
             }
+        }
+    }
+
+    @Test
+    fun `namespace edit replaces inherited resource facts in a published overlay`() {
+        val workspace = createTempDirectory("indexino-namespace-overlay-")
+        val cacheDirectory = createTempDirectory("indexino-namespace-cache-")
+        tempDirs.addAll(listOf(workspace, cacheDirectory))
+        val resource = workspace.resolve("app/src/main/res/values/strings.xml")
+        val code = workspace.resolve("app/src/main/kotlin/Screen.kt")
+        Files.createDirectories(resource.parent)
+        Files.createDirectories(code.parent)
+        Files.writeString(workspace.resolve("settings.gradle.kts"), "include(\":app\")\n")
+        val buildScript = workspace.resolve("app/build.gradle.kts")
+        Files.writeString(buildScript, "android { namespace = \"com.example.old\" }\n")
+        Files.writeString(resource, "<resources><string name=\"title\">Hello</string></resources>")
+        Files.writeString(code, "class Screen { val title = R.string.title }\n")
+        runGit(workspace, "init")
+        runGit(workspace, "config", "user.email", "test@example.com")
+        runGit(workspace, "config", "user.name", "Test User")
+        runGit(workspace, "add", ".")
+        runGit(workspace, "commit", "-m", "namespace fixture")
+        val prior = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheDirectory.toString())
+        try {
+            Indexino.connectBlocking(workspace).use { index ->
+                val request = RefreshRequest.forScope(IndexScope.gradle(":app"))
+                val base = runSuspend { index.refresh(request).await() }.generation
+                Files.writeString(buildScript, "android { namespace = \"com.example.new\" }\n")
+                val overlay = runSuspend { index.refresh(request).await() }.generation
+                val manifest =
+                    dev.sebastiano.indexino.core.cache
+                        .WorkspaceGenerationManifestStore(
+                            cacheDirectory,
+                            InProcessCacheLayout.workspaceId(workspace),
+                        )
+                        .readGeneration(overlay.value)
+                assertEquals(base.value, manifest?.baseGeneration, "$manifest")
+                runSuspend { index.snapshot() }
+                    .use { snapshot ->
+                        val query =
+                            ResourceQuery.of(packageName = null, type = "string", name = "title")
+                        val definitions = runSuspend {
+                            snapshot.findResources(query, QueryOptions.page(limit = 10))
+                        }
+                        val usages = runSuspend {
+                            snapshot.findResourceUsages(query, QueryOptions.page(limit = 10))
+                        }
+                        assertEquals(
+                            listOf("com.example.new"),
+                            definitions.items.map { it.id.packageName },
+                        )
+                        assertEquals(
+                            listOf("com.example.new"),
+                            usages.items.map { it.id.packageName },
+                        )
+                    }
+            }
+        } finally {
+            if (prior == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", prior)
         }
     }
 

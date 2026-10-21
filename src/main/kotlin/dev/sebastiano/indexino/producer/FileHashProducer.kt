@@ -15,12 +15,13 @@ internal class FileHashProducer : IndexProducer {
     override val displayName: String = "FileHashProducer"
 
     override val progressTotal: (IndexBuildContext) -> Int = { context ->
-        context.changedSources.size
+        (context.changedSources + context.reindexedSources).size
     }
 
     override fun produce(context: IndexBuildContext, store: CodeIndexStore) {
         val currentFiles = context.sources.map { it.originId to it.path }.toSet()
-        val changedFiles = context.changedSources.mapTo(hashSetOf()) { it.originId to it.path }
+        val files = context.changedSources + context.reindexedSources
+        val changedFiles = files.mapTo(hashSetOf()) { it.originId to it.path }
         val removedKeys = mutableListOf<CodeIndexKey>()
         store.forEachWritablePrefix("file:") { key, record ->
             if (
@@ -32,7 +33,6 @@ internal class FileHashProducer : IndexProducer {
             true
         }
         removedKeys.forEach(store::delete)
-        val files = context.changedSources
         files.forEachIndexed { index, source ->
             context.reportFileProgress(index + 1, files.size, source)
             val hash = context.sourceHash(source)

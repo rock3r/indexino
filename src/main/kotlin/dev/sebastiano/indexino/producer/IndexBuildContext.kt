@@ -26,6 +26,7 @@ internal data class IndexBuildContext(
     val deletedSourceFiles: Set<String> = emptySet(),
     val changedSourceSet: Set<IndexedSource>? = null,
     val deletedSourceSet: Set<IndexedSource>? = null,
+    val reindexedSources: Set<IndexedSource> = emptySet(),
 ) {
     private val sourcesByIdentity by lazy {
         buildMap {

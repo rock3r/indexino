@@ -589,8 +589,15 @@ internal class IndexBuildRunner(
                             detectChanges(store, sources, sourceSnapshot, forceFullRebuild)
                         }
                     latestChanges = changes
+                    val reindexedSources =
+                        reindexedSourcesForOverlay(
+                            store is WorktreeOverlayIndexStore,
+                            changes,
+                            sources,
+                        )
                     val tombstones =
-                        (changes.deletedSources + changes.changedSources).map { source ->
+                        (changes.deletedSources + changes.changedSources + reindexedSources).map {
+                            source ->
                             WorktreeOverlayIndexStore.tombstonePrefixForSource(
                                 source.originId,
                                 source.path.replace('\\', '/'),
@@ -625,6 +632,7 @@ internal class IndexBuildRunner(
                             deletedSourceFiles = changes.deletedFiles,
                             changedSourceSet = changes.changedSources,
                             deletedSourceSet = changes.deletedSources,
+                            reindexedSources = reindexedSources,
                         )
                     ProducerRegistry.forApplications(applications).forEach { producer ->
                         progress(producer.displayName)
@@ -675,6 +683,37 @@ internal class IndexBuildRunner(
                 }
             }
         }
+    }
+
+    private fun reindexedSourcesForOverlay(
+        overlay: Boolean,
+        changes: SourceChangeSet,
+        sources: List<IndexedSource>,
+    ): Set<IndexedSource> {
+        if (!overlay) return emptySet()
+        val invalidated = changes.changedSources + changes.deletedSources
+        val metadataModules =
+            invalidated
+                .mapNotNull { source ->
+                    ResourceMetadata.metadataModule(source.path)?.let { source.originId to it }
+                }
+                .toSet()
+        val resourceModules =
+            invalidated
+                .filter { ResourceMetadata.isResourceXml(it.path) }
+                .map { it.originId to ResourceMetadata.moduleDirectory(it.path) }
+                .toSet()
+        val codeModules = metadataModules + resourceModules
+        if (codeModules.isEmpty()) return emptySet()
+        // Producers clean only the writable delta; shadow base facts for every source they
+        // reprocess from a metadata or resource change, even if its bytes did not change.
+        return sources.filterTo(linkedSetOf()) { source ->
+            val module = source.originId to ResourceMetadata.moduleDirectory(source.path)
+            (ResourceMetadata.isResourceXml(source.path) && module in metadataModules) ||
+                (source.isCode &&
+                    (source.path.endsWith(".kt") || source.path.endsWith(".java")) &&
+                    module in codeModules)
+        } - changes.changedSources
     }
 
     private fun detectChanges(
