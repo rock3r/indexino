@@ -209,6 +209,8 @@ private constructor(
                     },
                 )
             owner.onSourcesResolvedForRuntime = runtime.autoRefreshController::register
+            owner.onTopologyResolutionStartedForRuntime =
+                runtime.autoRefreshController::onTopologyResolutionStarted
             val start =
                 RuntimeDaemon.start(
                     cacheRoot = cacheRoot,

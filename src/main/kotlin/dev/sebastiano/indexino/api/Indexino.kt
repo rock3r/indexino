@@ -127,6 +127,10 @@ private constructor(
         ((RefreshRequest, List<IndexedSource>, List<Path>) -> Unit)? =
         null
 
+    /** Topology events after this boundary cannot be covered by the resolved source closure. */
+    @Volatile
+    internal var onTopologyResolutionStartedForRuntime: ((RefreshRequest, String) -> Unit)? = null
+
     public companion object {
         /**
          * Test-only seam: replaces [Path.toRealPath] during [connectBlocking]. Production leaves
@@ -392,6 +396,12 @@ private constructor(
                                     { sources, roots ->
                                         onSourcesResolvedForRuntime?.invoke(request, sources, roots)
                                     },
+                            beforeTopologyResolution = {
+                                onTopologyResolutionStartedForRuntime?.invoke(
+                                    request,
+                                    operation.id.value,
+                                )
+                            },
                         )
                         .runDetailed()
                 operation.checkActive()

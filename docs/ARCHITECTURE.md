@@ -144,6 +144,9 @@ A `.git` entry being created or removed still re-resolves topology; a polled mod
 entry (its mtime changes on every index lock) does not.
 An edited build input also re-resolves topology even when the captured inventory lists it as
 resource metadata; its source membership cannot certify an unchanged dependency closure.
+The runtime records a separate topology epoch before resolution starts. Registration just before
+source capture covers earlier source edits, but an unknown path or build-input event after the
+topology epoch still requires a full successor even if the first refresh publishes successfully.
 
 Origin provenance (HEAD, working-tree fingerprint, dirty flag) normally costs whole-repository
 `git diff HEAD`, `git status` and `git ls-files --others` walks, seconds on a large checkout. A

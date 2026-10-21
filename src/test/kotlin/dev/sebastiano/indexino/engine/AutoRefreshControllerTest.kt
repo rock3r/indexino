@@ -361,6 +361,65 @@ class AutoRefreshControllerTest {
     }
 
     @Test
+    fun `topology edit during resolution requires full successor despite later source capture`() {
+        for (editAfterTopology in listOf(false, true)) {
+            val workspace = Files.createTempDirectory("indexino-topology-capture-")
+            val source = workspace.resolve("src/main/kotlin/Panel.kt")
+            val buildFile = workspace.resolve("build.gradle.kts")
+            Files.createDirectories(source.parent)
+            Files.writeString(source, "class Panel")
+            Files.writeString(buildFile, "include(\":app\")")
+            val request = RefreshRequest.forScope(IndexScope.gradle(":app"))
+            val sources = listOf(IndexedSource.workspace(workspace, "src/main/kotlin/Panel.kt"))
+            val successor = CountDownLatch(1)
+            val result = CompletableFuture<RefreshResult>()
+            val id = RefreshId.of("topology-capture")
+            val controller =
+                AutoRefreshController(
+                    workspace,
+                    AutoRefreshMode.ENABLED,
+                    refresh = { successor.countDown() },
+                    nativeWorkspaceWatcher = { _, _, _ -> TestNativeWatcher() },
+                )
+            try {
+                controller.register(request, sources)
+                controller.onRefreshStarted(
+                    request,
+                    RefreshHandle.inFlight(id, result, CompletableFuture(), stopAction = {}),
+                    automatic = false,
+                )
+                if (!editAfterTopology) controller.onPathChangedForTests(buildFile)
+                controller.onTopologyResolutionStarted(request, id.value)
+                // A dependency added after this boundary cannot enter the resolved closure.
+                if (editAfterTopology) controller.onPathChangedForTests(buildFile)
+                controller.register(request, sources) // Source capture follows this callback.
+                result.complete(successfulResult(request, id))
+                if (editAfterTopology) {
+                    assertTrue(successor.await(5, TimeUnit.SECONDS), "Needs full discovery")
+                    assertEquals(
+                        SnapshotFreshness.DIRTY,
+                        controller.freshness(FreshnessPolicy.AWAIT_CURRENT),
+                    )
+                } else {
+                    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                    while (
+                        controller.freshness(FreshnessPolicy.AWAIT_CURRENT) !=
+                            SnapshotFreshness.CURRENT && System.nanoTime() < deadline
+                    ) Thread.sleep(10)
+                    assertEquals(
+                        SnapshotFreshness.CURRENT,
+                        controller.freshness(FreshnessPolicy.AWAIT_CURRENT),
+                    )
+                    assertFalse(successor.await(300, TimeUnit.MILLISECONDS))
+                }
+            } finally {
+                controller.close()
+                workspace.toFile().deleteRecursively()
+            }
+        }
+    }
+
+    @Test
     fun `one nested FSEvents path produces one epoch even with several ancestor watches`() {
         val workspace = Files.createTempDirectory("indexino-nested-event-")
         val source = workspace.resolve("src/main/kotlin/Panel.kt")

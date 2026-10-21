@@ -77,6 +77,7 @@ internal class AutoRefreshController(
     private val uncertainTopology = mutableMapOf<RefreshRequest, Long>()
     private val registrationEpoch = mutableMapOf<RefreshRequest, Long>()
     private val captureEpoch = mutableMapOf<RefreshRequest, Pair<String, Long>>()
+    private val topologyResolutionEpoch = mutableMapOf<RefreshRequest, Pair<String, Long>>()
     private val pendingTopology = mutableMapOf<RefreshRequest, TopologyResult>()
     private val pendingHintedPaths = mutableMapOf<RefreshRequest, Set<Path>>()
     private val coverageEpoch = AtomicLong()
@@ -186,8 +187,8 @@ internal class AutoRefreshController(
         }
         if (coverageComplete && !nativeCoverageLost.get()) uncovered.remove(request)
         else uncovered.add(request)
-        // IndexBuildRunner calls this before capturing source bytes. Events observed before
-        // registration completes are covered by that full capture; later events need a successor.
+        // IndexBuildRunner calls this before capturing source bytes. Earlier source edits are
+        // covered by that capture; topology edits use the earlier resolution boundary instead.
         synchronized(stateLock) {
             val epoch = dirtyEpoch[request]?.get() ?: 0L
             val id = active[request]
@@ -207,6 +208,12 @@ internal class AutoRefreshController(
     internal fun onPathChangedForTests(path: Path) = onMacPathChanged(path)
 
     internal fun onWatcherOverflowForTests() = onWatcherOverflow()
+
+    fun onTopologyResolutionStarted(request: RefreshRequest, refreshId: String) {
+        synchronized(stateLock) {
+            topologyResolutionEpoch[request] = refreshId to (dirtyEpoch[request]?.get() ?: 0L)
+        }
+    }
 
     @Suppress("CyclomaticComplexMethod")
     fun onRefreshStarted(
@@ -247,16 +254,26 @@ internal class AutoRefreshController(
                             if (captured?.first == handle.id.value)
                                 maxOf(epochAtStart, captured.second)
                             else epochAtStart
+                        val topologyStart =
+                            topologyResolutionEpoch[request]?.takeIf { it.first == handle.id.value }
+                        if (topologyStart != null) topologyResolutionEpoch.remove(request)
+                        val topologyCoveredEpoch = topologyStart?.second ?: epochAtStart
                         if (succeeded) {
                             // Keep a path if it was touched again after the full capture began.
                             hintedPaths[request]?.let { paths ->
                                 paths.entries.removeIf { it.value <= coveredEpoch }
                                 if (paths.isEmpty()) hintedPaths.remove(request)
                             }
-                            if ((uncertainTopology[request] ?: Long.MAX_VALUE) <= coveredEpoch)
+                            if (
+                                (uncertainTopology[request] ?: Long.MAX_VALUE) <=
+                                    topologyCoveredEpoch
+                            )
                                 uncertainTopology.remove(request)
                         }
-                        val newerChange = (dirtyEpoch[request]?.get() ?: 0L) > coveredEpoch
+                        val newerChange =
+                            (dirtyEpoch[request]?.get() ?: 0L) > coveredEpoch ||
+                                (uncertainTopology[request]?.let { it > topologyCoveredEpoch } ==
+                                    true)
                         if (succeeded && !newerChange) {
                             dirty.remove(request)
                             retryAttempts.remove(request)
@@ -340,6 +357,7 @@ internal class AutoRefreshController(
             uncertainTopology.clear()
             registrationEpoch.clear()
             captureEpoch.clear()
+            topologyResolutionEpoch.clear()
             pendingTopology.clear()
             pendingHintedPaths.clear()
         }

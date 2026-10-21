@@ -65,6 +65,7 @@ internal class IndexBuildRunner(
     private val captureOriginStates: Boolean = false,
     private val hintedPaths: Set<Path> = emptySet(),
     private val onSourcesResolved: ((List<IndexedSource>, List<Path>) -> Unit)? = null,
+    private val beforeTopologyResolution: (() -> Unit)? = null,
 ) {
     private var latestChanges: SourceChangeSet? = null
     private var latestManifest: IndexManifest? = null
@@ -130,6 +131,7 @@ internal class IndexBuildRunner(
         latestForkBase = null
         latestOverlayDeltaPath = null
         latestTombstonePrefixes = emptyList()
+        beforeTopologyResolution?.invoke()
         val topologyResult =
             timedPhase("topology") {
                 topologyOverride?.also { progress("index topology=reused watcher-source-edit") }
