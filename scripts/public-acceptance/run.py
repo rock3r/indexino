@@ -305,6 +305,7 @@ def main():
         if len(encoded) > MAX_REPORT_BYTES:
             report = {"schema": report["schema"], "status": "failed",
                       "reasons": ["report exceeded upload limit; bounded lane evidence retained"],
+                      "artifactSha256": report.get("artifactSha256"),
                       "originalReportBytes": len(encoded),
                       "originalReportSha256": hashlib.sha256(encoded).hexdigest(),
                       "cleanupVerified": report["cleanupVerified"],

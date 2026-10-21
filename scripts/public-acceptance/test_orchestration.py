@@ -212,6 +212,7 @@ class OrchestrationTest(unittest.TestCase):
                 report["fixtures"] = [{"lane": "manual", "status": "failed", "exitCode": 7,
                                        "queries": [], "diagnostics": "x" * (17 << 20)}]
                 report["cleanupVerified"] = True
+                report["artifactSha256"] = "a" * 64
             with patch.object(sys, "argv", argv), patch.object(run, "readiness", return_value=[]), \
                     patch.object(run, "execute", side_effect=oversized_report):
                 self.assertEqual(2, run.main())
@@ -219,6 +220,7 @@ class OrchestrationTest(unittest.TestCase):
             self.assertLessEqual(report_path.stat().st_size, 16 << 20)
             self.assertEqual("failed", report["status"])
             self.assertTrue(report["cleanupVerified"])
+            self.assertEqual("a" * 64, report.get("artifactSha256"))
             self.assertEqual("manual", report["fixtures"][0]["lane"])
             self.assertEqual(7, report["fixtures"][0]["exitCode"])
             self.assertNotIn("diagnostics", report["fixtures"][0])
