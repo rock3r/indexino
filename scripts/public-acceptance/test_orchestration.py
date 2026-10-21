@@ -128,6 +128,46 @@ class OrchestrationTest(unittest.TestCase):
         self.assertEqual("refresh_started", repeat["diagnostics"]["phaseEvents"][0]["event"])
         self.assertEqual(["coverage-mismatch"], report["commands"][-1]["stderrDiagnostic"]["signals"])
 
+    def test_malformed_fixture_checkpoints_fail_closed_and_run_independent_lanes(self):
+        checkpoints = [[], {"queries": 1}, {"status": "passed", "queries": [{}]}]
+        for malformed in checkpoints:
+            with self.subTest(checkpoint=malformed):
+                class MalformedFixture(FakeJob):
+                    def run(self, argv, cwd, timeout=120):
+                        result = super().run(argv, cwd, timeout)
+                        output = Path(argv[-1])
+                        if output.name.startswith("fixture-") and output.suffix == ".json":
+                            checkpoint = (malformed if output.name != "fixture-calls-watcher.json" else
+                                          {"status": "passed", "queries": [{"apiNanos": [1, 2]}],
+                                           "evidence": "independent-lane"})
+                            output.write_text(json.dumps(checkpoint))
+                        return result
+                with tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    artifact = root / "driver.zip"
+                    artifact.write_bytes(b"fake artifact")
+                    args = SimpleNamespace(corpus="spectre", artifact=artifact,
+                        sha256=hashlib.sha256(b"fake artifact").hexdigest(), scratch=root, cgroup_parent=root)
+                    report = {}
+                    with patch.object(run, "Commands", MalformedFixture), \
+                            patch.object(run, "clone", fake_clone), patch.object(run, "extract_driver"):
+                        with self.assertRaises(AssertionError):
+                            run.execute(args, report)
+                    self.assertFalse(MalformedFixture.instances[-1].root.exists())
+                self.assertTrue(report["cleanupVerified"])
+                self.assertEqual(["manual", "watcher", "calls-manual", "calls-watcher"],
+                                 [f["lane"] for f in report["fixtures"]])
+                for fixture in report["fixtures"][:3]:
+                    self.assertEqual("failed", fixture["status"])
+                    self.assertEqual([], fixture["queries"])
+                    self.assertRegex(fixture["checkpointError"], r"^[A-Za-z]{1,64}$")
+                    self.assertEqual(0, fixture["exitCode"])
+                independent = report["fixtures"][3]
+                self.assertEqual("passed", independent["status"])
+                self.assertEqual("independent-lane", independent["evidence"])
+                self.assertEqual([1, 2], independent["queries"][0]["apiNanos"]["raw"])
+                self.assertNotIn(["clone-corpus"], MalformedFixture.instances[-1].calls)
+
     def test_failed_fixture_retains_checkpoint_and_runs_other_lane(self):
         class FailedFixture(FakeJob):
             def run(self, argv, cwd, timeout=120):

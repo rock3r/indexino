@@ -149,7 +149,18 @@ def execute(args, report):
                                               "checkpointError": "driver checkpoint exceeds 16 MiB"}
                         else:
                             fixture_result = json.loads(output.read_text())
-                    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+                        if (not isinstance(fixture_result, dict) or
+                                fixture_result.get("status") not in ("passed", "failed", "incomplete") or
+                                not isinstance(fixture_result.get("queries"), list)):
+                            raise ValueError("invalid fixture checkpoint structure")
+                        for query in fixture_result["queries"]:
+                            if (not isinstance(query, dict) or not isinstance(query.get("apiNanos"), list) or
+                                    any(type(value) not in (int, float) for value in query["apiNanos"])):
+                                raise ValueError("invalid fixture query samples")
+                            query["apiNanos"] = (samples(query["apiNanos"]) if query["apiNanos"] else
+                                                 {"raw": [], "p50": None, "p95": None,
+                                                  "reason": "query did not complete"})
+                    except (OSError, UnicodeError, ValueError, OverflowError) as error:
                         fixture_result = {"status": "failed", "queries": [],
                                           "checkpointError": type(error).__name__}
                     exit_code = (runner_error.returncode
@@ -159,10 +170,6 @@ def execute(args, report):
                     if runner_error is not None:
                         # A checkpoint written before a runner failure is evidence, not success.
                         fixture_result.update(status="failed", failureType=type(runner_error).__name__)
-                    for query in fixture_result.get("queries", []):
-                        query["apiNanos"] = (samples(query["apiNanos"]) if query["apiNanos"] else
-                                             {"raw": [], "p50": None, "p95": None,
-                                              "reason": "query did not complete"})
                     report["fixtures"].append(fixture_result)
                 if runner_error is not None:
                     if not isinstance(runner_error, Exception):
