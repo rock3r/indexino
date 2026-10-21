@@ -50,8 +50,8 @@ time**; there is no prior Central release before 0.2.0.
 
 ## Stable in 0.2.0
 
-Tracer foundation through **S7** (in-process facade, durable refresh, plugin SPI, packaging,
-daemon protocol, auto-refresh + large-repository gate, multi-origin topology adapters):
+This release includes the in-process facade, durable refresh, plugin SPI, packaging,
+daemon protocol, auto-refresh, large-repository checks, and multi-origin topology adapters:
 
 - Public packages in `dev.sebastiano.indexino.model`, `dev.sebastiano.indexino.api`, and
   `dev.sebastiano.indexino.plugin.api`
@@ -68,8 +68,8 @@ daemon protocol, auto-refresh + large-repository gate, multi-origin topology ada
 
 ## Deferred (not release blockers)
 
-- **S10 follow-on** — broader Android/CMP resource indexing coverage beyond the shipped query APIs
-- **S11** — Compose decoration plugin
+- Broader Android/Compose Multiplatform resource indexing beyond the shipped query APIs
+- Compose decoration plugin
 - Post-v1 worktree overlay optimizations (#44)
 
 ## Reporting incompatibilities

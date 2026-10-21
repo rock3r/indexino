@@ -4,14 +4,19 @@ description: >
   Use when auditing Compose/Jewel UI for SelectionContainer context: interactive composables
   inside a SelectionContainer without DisableSelection, nested selection containers, or missing
   exclusion wrappers. Uses indexino (selection-context application) for precomputed
-  facts from a persistent `.indexino/` index — not manual file reading. Bazel monorepos primary;
+  facts from a persistent user-local cache. Bazel monorepos primary;
   Gradle secondary.
 ---
 
 # Compose Selection Audit
 
 Uses **indexino** with `--application dev.sebastiano.selection-context`. The skill applies **policy**;
-the index supplies **facts** from `.indexino/index/<commit>/` (persistent — build once, query many).
+the index supplies **facts** from a persistent cache outside the repository checkout.
+Indexino resolves the cache root from `$INDEXINO_CACHE_DIR`, then `$XDG_CACHE_HOME/indexino`,
+then `~/Library/Caches/indexino` on macOS or `~/.cache/indexino` elsewhere.
+See [Index storage](../../../docs/INDEX-STORAGE.md) for the cache layout.
+The current CLI also creates a project-local compatibility copy after `index`.
+See [CLI storage](../../../docs/CLI.md#storage) for that transitional behavior.
 
 ## Prerequisites
 

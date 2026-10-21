@@ -27,7 +27,7 @@ Minimum JDK for published library artifacts: **25**.
 
 - **Native release pipeline** — every `v*` tag now builds and drafts all three Tier 1 CLI ZIPs;
   macOS archives are Developer ID signed and notarized in CI
-- **S11** — compiled Compose decoration plugin (`indexino-compose-decoration`)
+- Compiled Compose decoration plugin (`indexino-compose-decoration`)
 - **Source-link federation** — provenance-aware dependency source links (#45)
 - **Native dynamic extensions** — out-of-process protocol v1 tracer (#64)
 - **Worktree overlays** — nested chains, deepest-base selection, resource/plugin/LKG coverage (#44,

@@ -1778,11 +1778,10 @@ host.abi.major == plugin.targetAbi.major</code></pre>
           </table>
         </div>
         <p>
-          This is a functional split, not packaging theater.        <p>
-          This is a functional split, not packaging theater. Plugin authors need a lightweight contract
-          without Xodus/compiler/CLI dependencies; script users should opt into Kotlin compiler hosting;
-          and <code>selection-context</code> must prove that the external plugin story works without making
-          every consumer inherit its domain model. Publish a platform/BOM (or Gradle module alignment) so
+          Each module has a separate dependency contract. Plugin authors need a lightweight contract
+          without Xodus, compiler, or CLI dependencies. Script users opt into Kotlin compiler hosting.
+          The <code>selection-context</code> plugin tests external plugin support and keeps its domain
+          model separate from other consumers. Publish a platform/BOM (or Gradle module alignment) so
           artifacts that share a release train resolve on one version.
         </p>
         <h3>Published dependency graph</h3>

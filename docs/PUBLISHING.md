@@ -10,7 +10,7 @@ native-packaging input. Both are deliberately excluded from Maven publication.
 
 ## API publication state
 
-No version has been published. The current snapshot exposes the reviewed S1 API from
+The published artifacts expose the reviewed embedded API from
 `indexino-model` and `dev.sebastiano.indexino.api`; implementation packages remain unsupported.
 Metalava signature dumps under `api/<artifact>/`, detekt declaration rules, and external consumer
 fixtures enforce that boundary. See [API-STABILITY.md](API-STABILITY.md) and
@@ -102,6 +102,10 @@ The macOS job signs all Mach-O payloads, creates the immutable final ZIP, submit
 for notarization, exercises online Gatekeeper, and reruns the complete native verifier against the
 signed archive before replacing its checksum. The workflow never auto-publishes the GitHub draft.
 
+To sign and notarize macOS bytes without a new tag, for example for a version that Central has
+already promoted, dispatch `native-distributions.yml` manually with `release` set to true. The
+`release` input defaults to false. When it is true, the run requires the `version` input.
+
 Required repository secrets:
 
 | Secret | Purpose |
@@ -124,13 +128,13 @@ password flow (`notarytool --apple-id`) rather than Spectre's App Store Connect 
 From a machine with `op`, `gh`, `jq`, and `openssl` authenticated:
 
 ```bash
-.github/scripts/setup-macos-release-secrets.sh rock3r/indexino
+OP_APPLE_ITEM='<1Password item title>' .github/scripts/setup-macos-release-secrets.sh rock3r/indexino
 ```
 
 The script reads:
 
-- **Compose Pi Apple signing cert** — app-specific password (`credential`) and attached
-  `.cer`/`.key` → base64 `.p12`
+- **The item named by `OP_APPLE_ITEM`** (required) — app-specific password (`credential`) and
+  attached `.cer`/`.key` → base64 `.p12`
 - **Apple ID** — account email (`username` → `APPLE_ID`) and `team ID` → `APPLE_TEAM_ID`
 
 Before the first release, confirm that the Central Portal account can publish under the verified

@@ -3,19 +3,18 @@
 Commands for **indexino**. The CLI is an adapter over the workspace runtime and public API
 described in [PUBLIC-API-DESIGN.html](PUBLIC-API-DESIGN.html) (Accepted 2026-07-25).
 
-## Storage (product vs transitional)
+## Storage
 
-| | Product contract | Transitional (current shipping CLI) |
-|--|------------------|-------------------------------------|
-| Location | User-local cache root (`$INDEXINO_CACHE_DIR` / XDG / `~/Library/Caches/indexino`) | May still open `<project>/.indexino/index/<commit>/` until S2 |
-| Migration | Non-goal — wipe and rebuild | Do not extend the in-worktree layout |
-| Details | [INDEX-STORAGE.md](INDEX-STORAGE.md) | Implementation debt only |
-
-Do **not** document new features as depending on project-local `.indexino/` stores.
+The product cache lives under the user-local root described in [INDEX-STORAGE.md](INDEX-STORAGE.md).
+The current CLI also writes a compatibility copy after each successful `index` command:
+`<project>/.indexino/index/<commit>/base.xodus` and `manifest.json`.
+`IndexCommand.materializeCliCompatibilityProjection` creates this copy from the published generation.
+Deleting the copy does not delete the user-local cache; the next successful `index` recreates it.
+Do not extend this transitional layout or use it as the product cache contract.
 
 ## Lifecycle commands (product surface)
 
-These map to the embedded API; land with slices S6–S7 (daemon) and cache operators.
+These commands map to the embedded API and manage the workspace daemon and cache.
 
 ### `daemon`
 

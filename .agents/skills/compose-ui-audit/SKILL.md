@@ -72,7 +72,7 @@ Out of scope unless the user explicitly asks:
 ```
 
 Do not assign numeric scores by default. If the user explicitly requests scoring, read
-[reporting-guidance.md](references/reporting-guidance.md), label scoring as Compose Pi-specific heuristic, and avoid
+[reporting-guidance.md](references/reporting-guidance.md), label scoring as a project-specific heuristic, and avoid
 importing Android release metrics.
 
 ## Audit Process
@@ -102,7 +102,7 @@ For broad audits, name the sampled surface in the report.
 Search hits are leads, not findings. Read surrounding code before reporting. For the full pattern list, read
 [audit-search-patterns.md](references/audit-search-patterns.md).
 
-### 4. Judge by Compose Pi categories
+### 4. Judge by project-specific categories
 
 Use the category checklist below, but avoid re-reading every reference file. Open only the reference files needed for
 actual evidence you find.
@@ -121,7 +121,7 @@ actual evidence you find.
 
 When the target includes reusable component APIs, public/cross-file composables, Detekt findings, or lint-like Compose
 smells, read [api-hygiene.md](references/api-hygiene.md). It distils Detekt's comments/naming/complexity/coroutines/
-performance guidance and Nacho López' Compose Rules into Compose Pi Desktop audit heuristics.
+performance guidance and Nacho López' Compose Rules into Compose Desktop audit heuristics.
 
 Review composables as production code, not as throwaway markup. Flag composables that are so large, deeply nested, or
 mixed-purpose that they obscure state ownership, make recomposition behavior hard to reason about, or prevent focused
@@ -179,7 +179,7 @@ For jank, recomposition, or rendering performance with trace evidence:
 - Capture an after trace with the same scenario; do not claim a performance fix from code shape alone.
 - Setup: [tracing-setup.md](references/tracing-setup.md)
 - Usage: [tracing-usage.md](references/tracing-usage.md)
-- For Compose Pi's tracing facade and categories: [`docs/TRACING.md`](../../../docs/TRACING.md)
+- For the target project's own tracing facade and categories, read its tracing docs if it has them.
 
 ## Reporting Rules
 

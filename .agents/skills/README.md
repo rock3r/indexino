@@ -19,6 +19,9 @@ Agent-facing playbooks for developing and using Indexino. Each skill has a
 
 **Purpose:** Poll PR CI, review comments, mergeability; retry flaky jobs; stop on human input.
 **Use when:** A PR is open and should be watched until merge-ready.
+**Source:** Vendored from [rock3r/babysit-pr-skill](https://github.com/rock3r/babysit-pr-skill) at the tag in
+`babysit-pr/VERSION`. Do not edit the vendored files. Update them with that repository's `sync.py`. Project
+settings (local gate, required checks) live in `babysit-pr/config.json`.
 
 ### `compose-ui-audit`
 

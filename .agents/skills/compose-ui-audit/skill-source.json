@@ -1,5 +1,5 @@
 {
-  "attribution": "Adapted from Ivan Morgillo's jetpack-compose-audit skill (https://github.com/hamen/compose_skill), rewritten for Compose Pi Desktop and project architecture. Additional API-hygiene guidance distils Detekt rule documentation and Nacho López' Compose Rules for Compose Desktop/Jewel audits.",
+  "attribution": "Adapted from Ivan Morgillo's jetpack-compose-audit skill (https://github.com/hamen/compose_skill), rewritten for Compose Desktop apps and project architecture. Additional API-hygiene guidance distils Detekt rule documentation and Nacho López' Compose Rules for Compose Desktop/Jewel audits.",
   "schemaVersion": 1,
   "skill": "compose-ui-audit",
   "sources": [
@@ -22,20 +22,20 @@
     },
     {
       "fetchedAt": "2026-06-11",
-      "label": "Compose Pi Desktop performance/audit references",
+      "label": "Project-specific Compose Desktop performance/audit references",
       "role": "original-content",
       "type": "local-original-content",
-      "version": "83c0b1b563de310b814ef3ae62ec3f504acaaf28",
-      "versionSource": "gitCommit",
+      "version": "2026-06-11",
+      "versionSource": "fetchDate",
       "license": "project"
     },
     {
       "fetchedAt": "2026-06-11",
-      "label": "Compose Pi original content and adaptation for compose-ui-audit",
+      "label": "Original content and adaptation for compose-ui-audit",
       "role": "original-content",
       "type": "local-original-content",
-      "version": "83c0b1b563de310b814ef3ae62ec3f504acaaf28",
-      "versionSource": "gitCommit",
+      "version": "2026-06-11",
+      "versionSource": "fetchDate",
       "license": "project"
     },
     {
@@ -47,7 +47,7 @@
       "version": "2026-06-13",
       "versionSource": "fetchDate",
       "license": "unknown",
-      "notes": "Distilled comments plus sibling naming, complexity, coroutines, performance, potential-bugs, exceptions, and style rule pages into Compose Pi UI audit heuristics."
+      "notes": "Distilled comments plus sibling naming, complexity, coroutines, performance, potential-bugs, exceptions, and style rule pages into Compose Desktop UI audit heuristics."
     },
     {
       "fetchedAt": "2026-06-13",

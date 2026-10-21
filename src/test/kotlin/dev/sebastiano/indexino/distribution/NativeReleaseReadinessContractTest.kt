@@ -194,6 +194,8 @@ class NativeReleaseReadinessContractTest {
             """
                 .trimIndent(),
         )
+        assertContains(workflow, "if: inputs.release\n")
+        assertContains(workflow, "if: inputs.release && matrix.target == 'macos-arm64'")
         assertContains(workflow, "MACOS_CERTIFICATE_P12")
         assertContains(workflow, "APPLE_APP_SPECIFIC_PASSWORD")
         assertContains(workflow, "sign-notarize-macos-distribution.sh")

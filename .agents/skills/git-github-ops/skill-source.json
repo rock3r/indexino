@@ -4,11 +4,11 @@
   "sources": [
     {
       "fetchedAt": "2026-06-11",
-      "label": "Compose Pi git and GitHub workflow",
+      "label": "Original git and GitHub workflow",
       "role": "original-content",
       "type": "local-original-content",
-      "version": "2461946f77b7d7cd7b64236a0adf81bb2fd207c3",
-      "versionSource": "gitCommit",
+      "version": "2026-06-11",
+      "versionSource": "fetchDate",
       "license": "project"
     }
   ]
