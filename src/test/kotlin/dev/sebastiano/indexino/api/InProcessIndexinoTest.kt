@@ -12,6 +12,7 @@ import dev.sebastiano.indexino.model.ResourceQuery
 import dev.sebastiano.indexino.model.SourceFile
 import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.SymbolQuery
+import dev.sebastiano.indexino.model.WorkspaceGenerationId
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
@@ -128,6 +129,20 @@ class InProcessIndexinoTest {
                     assertTrue((seeded.lastOrNull() ?: 0) > 0, "No pre-capture inventory: $seeded")
                     val pinned = runSuspend { index.snapshot() }
                     try {
+                        val duringPublication =
+                            CopyOnWriteArrayList<Triple<WorkspaceGenerationId, Int, Int>>()
+                        index.afterPublishGenerationStoreForTests = {
+                            index.afterPublishGenerationStoreForTests = null
+                            runSuspend { index.snapshot() }
+                                .use { snapshot ->
+                                    duringPublication +=
+                                        Triple(
+                                            snapshot.generation,
+                                            symbolCount(snapshot, "SourceB0"),
+                                            symbolCount(snapshot, "ChangedA"),
+                                        )
+                                }
+                        }
                         val originalMtime = Files.getLastModifiedTime(sibling)
                         Files.writeString(sibling, "package sample\nclass SourceB1\n")
                         Files.setLastModifiedTime(sibling, originalMtime)
@@ -157,6 +172,7 @@ class InProcessIndexinoTest {
                             1,
                             runSuspend { index.snapshot() }.use { symbolCount(it, "SourceB1") },
                         )
+                        assertEquals(listOf(Triple(pinned.generation, 1, 0)), duringPublication)
                         assertTrue(
                             hinted.any { it.containsAll(setOf(source, sibling)) },
                             "No two-source hint: $hinted",
@@ -335,6 +351,7 @@ class InProcessIndexinoTest {
                             tentative.close()
                         }
                     } finally {
+                        index.afterPublishGenerationStoreForTests = null
                         pinned.close()
                     }
                 } finally {

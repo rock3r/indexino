@@ -76,6 +76,7 @@ private constructor(
     private val snapshotPins = mutableMapOf<WorkspaceGenerationId, Int>()
     private val baseGenerationRefs = mutableSetOf<Path>()
     private var published: PublishedGeneration? = null
+    private var publishingGeneration: WorkspaceGenerationId? = null
     private val remoteSnapshots = mutableMapOf<String, IndexSnapshot>()
     private val watcherCaptures = ConcurrentHashMap<RefreshRequest, WatcherCapture>()
 
@@ -640,38 +641,43 @@ private constructor(
         linkGeneration: String? = null,
         evidence: SnapshotFreshness,
     ) {
-        val publishedStore =
-            publishGenerationStore(
-                commit,
-                generation,
-                revision,
-                scope,
-                applications,
-                manifest,
-                forkBase,
-                overlayDeltaPath,
-                tombstonePrefixes,
-                linkGeneration,
-            )
-        afterPublishGenerationStoreForTests?.invoke()
-        synchronized(generationLock) {
-            if (closed.get()) {
-                // Publication is workspace-owned, but this closed client no longer owns a ref.
-                if (publishedStore.created) {
-                    deleteClientGenerationRef(publishedStore.path)
-                }
-                return
-            }
-            generationStores[generation] = publishedStore.path
-            published =
-                PublishedGeneration(
-                    storePath = publishedStore.path,
-                    revision = revision,
-                    generation = generation,
-                    baseCopy = baseCopyFor(generation),
-                    evidence = evidence,
+        synchronized(generationLock) { publishingGeneration = generation }
+        try {
+            val publishedStore =
+                publishGenerationStore(
+                    commit,
+                    generation,
+                    revision,
+                    scope,
+                    applications,
+                    manifest,
+                    forkBase,
+                    overlayDeltaPath,
+                    tombstonePrefixes,
+                    linkGeneration,
                 )
-            reclaimUnpinnedGenerations()
+            afterPublishGenerationStoreForTests?.invoke()
+            synchronized(generationLock) {
+                if (closed.get()) {
+                    // Publication is workspace-owned, but this closed client no longer owns a ref.
+                    if (publishedStore.created) {
+                        deleteClientGenerationRef(publishedStore.path)
+                    }
+                    return
+                }
+                generationStores[generation] = publishedStore.path
+                published =
+                    PublishedGeneration(
+                        storePath = publishedStore.path,
+                        revision = revision,
+                        generation = generation,
+                        baseCopy = baseCopyFor(generation),
+                        evidence = evidence,
+                    )
+                reclaimUnpinnedGenerations()
+            }
+        } finally {
+            synchronized(generationLock) { publishingGeneration = null }
         }
     }
 
@@ -761,9 +767,15 @@ private constructor(
             }
             val sharedGeneration = currentPublishedGenerationId()
             val current =
-                published?.takeIf { it.generation == sharedGeneration }
-                    ?: restorePublishedGeneration()
-                    ?: published
+                if (sharedGeneration == publishingGeneration) {
+                    // The pointer can precede this owner's evidence update; keep serving the
+                    // previous complete generation rather than restoring the new one as UNKNOWN.
+                    published
+                } else {
+                    published?.takeIf { it.generation == sharedGeneration }
+                        ?: restorePublishedGeneration()
+                        ?: published
+                }
                     ?: throw failure(
                         category = IndexFailureCategory.INDEX_NOT_FOUND,
                         code = "index_not_found",
