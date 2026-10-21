@@ -664,6 +664,12 @@ class InProcessIndexinoTest {
                     },
                     "$progress",
                 )
+                runSuspend { first.snapshot(FreshnessPolicy.AWAIT_CURRENT) }
+                    .use { snapshot ->
+                        assertEquals(SnapshotFreshness.CURRENT, snapshot.freshnessAtAcquisition)
+                        assertEquals(1, symbolCount(snapshot, "AfterOtherPublisher"))
+                        assertEquals(0, symbolCount(snapshot, "OtherPublisher"))
+                    }
             }
         } finally {
             if (prior == null) System.clearProperty("indexino.cache.dir")

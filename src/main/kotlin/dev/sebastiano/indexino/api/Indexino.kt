@@ -400,6 +400,9 @@ private constructor(
                     if (hintedPaths.isNotEmpty())
                         currentWatcherCapture(request)?.takeIf { it.topology == topologyOverride }
                     else null
+                val effectiveTopologyOverride = topologyOverride.takeUnless {
+                    hintedPaths.isNotEmpty() && inherited == null
+                }
                 // A failed or stopped refresh must not leave a previous capture eligible.
                 watcherCaptures.remove(request)
                 val execution =
@@ -415,9 +418,7 @@ private constructor(
                             },
                             machineProgress = machineProgress,
                             storeRootOverride = storeRoot,
-                            topologyOverride =
-                                if (hintedPaths.isNotEmpty() && inherited == null) null
-                                else topologyOverride,
+                            topologyOverride = effectiveTopologyOverride,
                             inheritedSourceHashes = inherited?.hashes.orEmpty(),
                             inheritedSources = inherited?.sources,
                             inheritedOriginStates = inherited?.originStates,
@@ -476,7 +477,7 @@ private constructor(
                             if (tentative && inherited.evidence == SnapshotFreshness.CURRENT)
                                 SnapshotFreshness.PROVISIONAL
                             else inherited.evidence
-                        topologyOverride == null -> SnapshotFreshness.CURRENT
+                        effectiveTopologyOverride == null -> SnapshotFreshness.CURRENT
                         else -> SnapshotFreshness.UNKNOWN
                     }
                 val current =
