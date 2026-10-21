@@ -188,6 +188,91 @@ class IndexSnapshotStorageFailureTest {
 
     @OptIn(IndexinoInternalApi::class)
     @Test
+    fun `file symbol pages stream overlay rows with origin and tombstone shadowing`() {
+        fun row(name: String, origin: String, file: String, keyFile: String = file) =
+            CodeIndexKey.symbolDefinition(name, origin, keyFile, 1, 0) to
+                SymbolRecord(
+                    fqn = name,
+                    originId = origin,
+                    relativeFile = file,
+                    line = 1,
+                    kind = "class",
+                    name = name,
+                )
+
+        val base =
+            StreamingRecordsCodeIndexStore(
+                listOf(
+                    row("Alpha", "workspace", "A.kt"),
+                    row("Moved", "workspace", "A.kt"),
+                    row("OtherOrigin", "git:other", "A.kt"),
+                    row("Removed", "workspace", "Edited.kt"),
+                )
+            )
+        val delta =
+            StreamingRecordsCodeIndexStore(
+                listOf(
+                    row("Moved", "workspace", "B.kt", keyFile = "A.kt"),
+                    row("Added", "workspace", "A.kt"),
+                    row("Replacement", "workspace", "Edited.kt"),
+                )
+            )
+        IndexSnapshot.create(
+                store =
+                    WorktreeOverlayIndexStore(
+                        base,
+                        delta,
+                        listOf(
+                            WorktreeOverlayIndexStore.tombstonePrefixForSource(
+                                "workspace",
+                                "Edited.kt",
+                            )
+                        ),
+                    ),
+                revision = workspaceRevision(),
+                generation = WorkspaceGenerationId.of("generation"),
+            )
+            .use { snapshot ->
+                fun file(path: String, origin: String = "workspace") =
+                    SymbolQuery.inFile(SourceFile.of(SourceOriginId.of(origin), path, path))
+                val first = runSuspend {
+                    snapshot.findSymbols(file("A.kt"), QueryOptions.page(limit = 1))
+                }
+                assertEquals(listOf("Added"), first.items.map { it.name })
+                assertTrue(first.hasMore)
+                val second = runSuspend {
+                    snapshot.findSymbols(
+                        file("A.kt"),
+                        QueryOptions.after(limit = 1, cursor = requireNotNull(first.nextCursor)),
+                    )
+                }
+                assertEquals(listOf("Alpha"), second.items.map { it.name })
+                assertEquals(false, second.hasMore)
+                assertEquals(
+                    listOf("Moved"),
+                    runSuspend { snapshot.findSymbols(file("B.kt"), QueryOptions.page(10)) }
+                        .items
+                        .map { it.name },
+                )
+                assertEquals(
+                    listOf("Replacement"),
+                    runSuspend { snapshot.findSymbols(file("Edited.kt"), QueryOptions.page(10)) }
+                        .items
+                        .map { it.name },
+                )
+                assertEquals(
+                    listOf("OtherOrigin"),
+                    runSuspend {
+                            snapshot.findSymbols(file("A.kt", "git:other"), QueryOptions.page(10))
+                        }
+                        .items
+                        .map { it.name },
+                )
+            }
+    }
+
+    @OptIn(IndexinoInternalApi::class)
+    @Test
     fun `exact FQN visits only matching definitions including legacy keys`() {
         val records =
             listOf("demo.TargetOther", "demo.Target", "unrelated.Target").map { fqn ->

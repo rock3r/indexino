@@ -135,6 +135,12 @@ seek the location-qualified primary-key prefix (and the legacy exact key). Short
 prefix queries use a derived `SymbolNames` duplicate store mapping each term to its primary key.
 Owner resolution uses the same index while retaining origin/file precedence and primary-key tie
 ordering. Public result sorting and pagination are unchanged; broad unnamed queries still scan.
+Unnamed file-scoped symbol queries use a derived `SymbolFiles` duplicate store keyed by the
+length-prefixed origin ID and relative file path. Writes, replacements and deletions update it in
+the primary transaction; writable older stores backfill on open. Read-only older packs without
+this index stream all symbol records in their base/delta instead of materializing the full overlay,
+so their file queries remain slower until rebuilt. Neither path changes the fact schema or public
+sorting/pagination. Tombstones and moved replacements stay hidden in both paths.
 
 File-scoped call queries use a derived `CallFiles` duplicate store mapping a length-prefixed
 origin ID plus origin-relative file path to primary call keys. Call candidate resolution uses

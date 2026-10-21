@@ -1,5 +1,7 @@
 package dev.sebastiano.indexino.core.store
 
+import dev.sebastiano.indexino.core.key.CodeIndexKey
+import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
@@ -20,6 +22,12 @@ internal object SharedReadOnlyStore {
             entry.pins++
             object : CodeIndexStore by entry.store {
                 private val closed = AtomicBoolean()
+
+                override fun forEachSymbolInFile(
+                    originId: String,
+                    relativeFile: String,
+                    action: (CodeIndexKey, SymbolRecord) -> Boolean,
+                ) = entry.store.forEachSymbolInFile(originId, relativeFile, action)
 
                 override fun close() {
                     if (!closed.compareAndSet(false, true)) return

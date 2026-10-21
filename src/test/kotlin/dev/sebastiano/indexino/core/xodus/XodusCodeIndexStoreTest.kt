@@ -123,7 +123,11 @@ class XodusCodeIndexStoreTest {
         val wantedCall = CodeIndexKey.call("wanted")
         val wantedSymbol = CodeIndexKey.sym("pkg.Wanted")
         store.put(wantedCall, call("one", "File.kt"))
-        store.put(wantedSymbol, symbol("Wanted", "pkg.Wanted", emptyList()))
+        store.put(
+            wantedSymbol,
+            symbol("Wanted", "pkg.Wanted", emptyList())
+                .copy(originId = "one", relativeFile = "File.kt"),
+        )
         store.close()
         val path = tempDir.resolve("base.xodus")
         Environments.newContextualInstance(path.toString()).use { environment ->
@@ -142,6 +146,7 @@ class XodusCodeIndexStoreTest {
         SharedReadOnlyStore.open(path).use { snapshot ->
             val calls = mutableListOf<CodeIndexKey>()
             val symbols = mutableListOf<CodeIndexKey>()
+            val fileSymbols = mutableListOf<CodeIndexKey>()
             val callResult = runCatching {
                 snapshot.forEachCallInFile("one", "File.kt") { key, _ ->
                     calls += key
@@ -154,14 +159,64 @@ class XodusCodeIndexStoreTest {
                     true
                 }
             }
+            val fileResult = runCatching {
+                snapshot.forEachSymbolInFile("one", "File.kt") { key, _ ->
+                    fileSymbols += key
+                    true
+                }
+            }
             assertTrue(
-                callResult.isSuccess && symbolResult.isSuccess,
+                callResult.isSuccess && symbolResult.isSuccess && fileResult.isSuccess,
                 "Shared snapshot scanned: calls=${callResult.exceptionOrNull()}, " +
-                    "symbols=${symbolResult.exceptionOrNull()}",
+                    "symbols=${symbolResult.exceptionOrNull()}, " +
+                    "file symbols=${fileResult.exceptionOrNull()}",
             )
             assertEquals(listOf(wantedCall), calls)
             assertEquals(listOf(wantedSymbol), symbols)
+            assertEquals(listOf(wantedSymbol), fileSymbols)
         }
+    }
+
+    @Test
+    fun `symbol file index survives replacement rollback deletion and reopen`() {
+        val key = CodeIndexKey.symbolDefinition("a.Wanted", "one", "File.kt", 1, 0)
+        val other = CodeIndexKey.symbolDefinition("b.Other", "two", "File.kt", 1, 0)
+        val record =
+            symbol("Wanted", "a.Wanted", emptyList())
+                .copy(originId = "one", relativeFile = "File.kt")
+        store.put(key, record)
+        store.put(other, record.copy(fqn = "b.Other", originId = "two"))
+        assertEquals(listOf(key), symbolsInFile("one", "File.kt"))
+        assertEquals(listOf(other), symbolsInFile("two", "File.kt"))
+        assertEquals(emptyList(), symbolsInFile("one", "Other.kt"))
+        assertFailsWith<IllegalStateException> {
+            store.transaction {
+                store.put(key, record.copy(relativeFile = "Other.kt"))
+                assertEquals(emptyList(), symbolsInFile("one", "File.kt"))
+                assertEquals(listOf(key), symbolsInFile("one", "Other.kt"))
+                error("rollback")
+            }
+        }
+        assertEquals(listOf(key), symbolsInFile("one", "File.kt"))
+        store.put(key, record.copy(originId = "two", relativeFile = "Other.kt"))
+        assertEquals(emptyList(), symbolsInFile("one", "File.kt"))
+        assertEquals(listOf(key), symbolsInFile("two", "Other.kt"))
+        store.delete(key)
+        assertEquals(emptyList(), symbolsInFile("two", "Other.kt"))
+        store.close()
+        val path = tempDir.resolve("base.xodus")
+        Environments.newContextualInstance(path.toString()).use { env ->
+            env.executeInTransaction { txn ->
+                env.openStore("CodeIndex", StoreConfig.WITHOUT_DUPLICATES, txn)
+                    .put(
+                        txn,
+                        StringBinding.stringToEntry("sym:zz.Corrupt"),
+                        ArrayByteIterable(byteArrayOf(1, 2)),
+                    )
+            }
+        }
+        store = XodusCodeIndexStore.open(path, readOnly = true)
+        assertEquals(listOf(other), symbolsInFile("two", "File.kt"))
     }
 
     @Test
@@ -311,26 +366,31 @@ class XodusCodeIndexStoreTest {
         store.close()
         store = XodusCodeIndexStore.open(path, readOnly = true)
         assertEquals(listOf(key), matching("Coffee"))
+        assertEquals(listOf(key), symbolsInFile("workspace", "Café.kt"))
         assertEquals(listOf(key), matching("Caf", prefix = true))
         assertEquals(emptyList(), matching("Caf"))
         store.close()
         Environments.newContextualInstance(path.toString()).use { environment ->
             environment.executeInTransaction { txn ->
                 assertEquals(false, environment.storeExists("SymbolNames", txn))
+                assertEquals(false, environment.storeExists("SymbolFiles", txn))
             }
         }
         store = XodusCodeIndexStore.open(path)
         assertEquals(record, store.get(key))
         assertEquals(listOf(key), matching("Coffee"))
+        assertEquals(listOf(key), symbolsInFile("workspace", "Café.kt"))
         assertEquals(listOf(key), matching("Caf", prefix = true))
         store.close()
         Environments.newContextualInstance(path.toString()).use { environment ->
             environment.executeInTransaction { txn ->
                 assertTrue(environment.storeExists("SymbolNames", txn))
+                assertTrue(environment.storeExists("SymbolFiles", txn))
             }
         }
         store = XodusCodeIndexStore.open(path, readOnly = true)
         assertEquals(listOf(key), matching("pkg.Café"))
+        assertEquals(listOf(key), symbolsInFile("workspace", "Café.kt"))
         assertEquals(listOf(key), matching("Caf", prefix = true))
     }
 
@@ -395,6 +455,13 @@ class XodusCodeIndexStoreTest {
 
     private fun matching(name: String, prefix: Boolean = false): List<CodeIndexKey> = buildList {
         store.forEachSymbolMatching(name, prefix) { key, _ ->
+            add(key)
+            true
+        }
+    }
+
+    private fun symbolsInFile(origin: String, file: String): List<CodeIndexKey> = buildList {
+        store.forEachSymbolInFile(origin, file) { key, _ ->
             add(key)
             true
         }

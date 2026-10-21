@@ -488,7 +488,10 @@ private constructor(
             true
         }
         val name = query.name
+        val file = query.file
         when {
+            name == null && file != null ->
+                localStore.forEachSymbolInFile(file.originId.value, file.path, accept)
             name == null -> localStore.forEachPrefix("sym:", accept)
             query.match == NameMatchMode.FQN -> {
                 val key = CodeIndexKey.sym(name)
