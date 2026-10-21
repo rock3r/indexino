@@ -131,6 +131,10 @@ cleanup even when a command fails. Existing driver JSON is retained on nonzero e
 per-repeat filenames so an earlier success cannot stand in for a missing checkpoint. Stderr evidence
 is limited to fixed allowlisted exception classes and diagnostic signals from the first 64 KiB;
 raw messages, command arguments, absolute host paths and possible secrets are not exported.
+Fixture checkpoints over 1 MiB fail closed and retain only their byte count and SHA-256; other
+independent lanes still run. If the aggregate UTF-8 report exceeds the workflow's 16 MiB upload
+limit, the run fails and writes a bounded envelope with lane statuses, exit codes, cleanup evidence,
+and the original report's byte count and SHA-256 instead of losing the artifact entirely.
 After exact set comparison succeeds, each repeat retains the inventory count and SHA-256 rather
 than duplicating the entire large source list. Failed checkpoints retain available source rows.
 This compaction does not replace set equality with a count or digest-only correctness check.

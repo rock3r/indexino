@@ -2,6 +2,7 @@
 """Manual public-corpus acceptance. Python 3.11+, JDK 25, Linux cgroup v2."""
 import argparse
 from contextlib import contextmanager
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,8 @@ from harness import (JOB_MEMORY_BYTES, JVM_HEAP, MIN_AVAILABLE_MEMORY_BYTES,
 from runner import Commands, clone
 
 HERE = Path(__file__).resolve().parent
+MAX_FIXTURE_REPORT_BYTES = 1 << 20
+MAX_REPORT_BYTES = 16 << 20
 
 
 def available_memory():
@@ -144,9 +147,15 @@ def execute(args, report):
                         if not output.exists():
                             fixture_result = {"status": "failed", "queries": [],
                                               "reason": "driver produced no checkpoint"}
-                        elif output.stat().st_size > 16 << 20:
+                        elif output.stat().st_size > MAX_REPORT_BYTES:
                             fixture_result = {"status": "failed", "queries": [],
                                               "checkpointError": "driver checkpoint exceeds 16 MiB"}
+                        elif output.stat().st_size > MAX_FIXTURE_REPORT_BYTES:
+                            checkpoint = output.read_bytes()
+                            fixture_result = {"status": "failed", "queries": [],
+                                              "checkpointError": "retained checkpoint exceeds 1 MiB",
+                                              "checkpointBytes": len(checkpoint),
+                                              "checkpointSha256": hashlib.sha256(checkpoint).hexdigest()}
                         else:
                             fixture_result = json.loads(output.read_text())
                         if (not isinstance(fixture_result, dict) or
@@ -292,7 +301,19 @@ def main():
             report["reasons"].append(f"{type(error).__name__}: see command diagnostics and lane checkpoints")
     finally:
         args.report.parent.mkdir(parents=True, exist_ok=True)
-        args.report.write_text(json.dumps(report, indent=2) + "\n")
+        encoded = (json.dumps(report, indent=2) + "\n").encode("utf-8")
+        if len(encoded) > MAX_REPORT_BYTES:
+            report = {"schema": report["schema"], "status": "failed",
+                      "reasons": ["report exceeded upload limit; bounded lane evidence retained"],
+                      "originalReportBytes": len(encoded),
+                      "originalReportSha256": hashlib.sha256(encoded).hexdigest(),
+                      "cleanupVerified": report["cleanupVerified"],
+                      "fixtures": [{key: fixture[key] for key in
+                                    ("lane", "status", "exitCode", "failureType", "checkpointError",
+                                     "checkpointBytes", "checkpointSha256") if key in fixture}
+                                   for fixture in report.get("fixtures", [])[:4]]}
+            encoded = (json.dumps(report, indent=2) + "\n").encode("utf-8")
+        args.report.write_bytes(encoded)
     return 0 if report["status"] == "passed" else 2
 
 

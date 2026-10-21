@@ -168,6 +168,61 @@ class OrchestrationTest(unittest.TestCase):
                 self.assertEqual([1, 2], independent["queries"][0]["apiNanos"]["raw"])
                 self.assertNotIn(["clone-corpus"], MalformedFixture.instances[-1].calls)
 
+    def test_large_valid_fixture_checkpoints_keep_bounded_failure_evidence(self):
+        class LargeFixture(FakeJob):
+            def run(self, argv, cwd, timeout=120):
+                result = super().run(argv, cwd, timeout)
+                output = Path(argv[-1])
+                if output.name.startswith("fixture-") and output.suffix == ".json":
+                    output.write_text(json.dumps({"status": "passed", "queries": [{"apiNanos": [1, 2]}],
+                                                  "extra": "x" * (5 << 20)}))
+                return result
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifact = root / "driver.zip"
+            artifact.write_bytes(b"fake artifact")
+            report_path = root / "report.json"
+            argv = ["run.py", "--execute", "--corpus", "spectre", "--artifact", str(artifact),
+                    "--sha256", hashlib.sha256(b"fake artifact").hexdigest(),
+                    "--scratch", str(root), "--cgroup-parent", str(root), "--report", str(report_path)]
+            with patch.object(sys, "argv", argv), patch.object(run, "readiness", return_value=[]), \
+                    patch.object(run, "Commands", LargeFixture), patch.object(run, "clone", fake_clone), \
+                    patch.object(run, "extract_driver"):
+                self.assertEqual(2, run.main())
+            report = json.loads(report_path.read_text())
+            self.assertLessEqual(report_path.stat().st_size, 16 << 20)
+            self.assertEqual("failed", report["status"])
+            self.assertTrue(report["cleanupVerified"])
+            self.assertEqual(["manual", "watcher", "calls-manual", "calls-watcher"],
+                             [f["lane"] for f in report["fixtures"]])
+            for fixture in report["fixtures"]:
+                self.assertEqual("failed", fixture["status"])
+                self.assertEqual(0, fixture["exitCode"])
+                self.assertGreater(fixture["checkpointBytes"], 5 << 20)
+                self.assertRegex(fixture["checkpointSha256"], r"^[0-9a-f]{64}$")
+                self.assertEqual([], fixture["queries"])
+            self.assertNotIn(["clone-corpus"], LargeFixture.instances[-1].calls)
+
+    def test_aggregate_report_overflow_keeps_lane_statuses_under_upload_limit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report_path = Path(temporary) / "report.json"
+            argv = ["run.py", "--execute", "--corpus", "spectre", "--artifact", "driver.zip",
+                    "--sha256", "digest", "--report", str(report_path)]
+            def oversized_report(_, report):
+                report["fixtures"] = [{"lane": "manual", "status": "failed", "exitCode": 7,
+                                       "queries": [], "diagnostics": "x" * (17 << 20)}]
+                report["cleanupVerified"] = True
+            with patch.object(sys, "argv", argv), patch.object(run, "readiness", return_value=[]), \
+                    patch.object(run, "execute", side_effect=oversized_report):
+                self.assertEqual(2, run.main())
+            report = json.loads(report_path.read_text())
+            self.assertLessEqual(report_path.stat().st_size, 16 << 20)
+            self.assertEqual("failed", report["status"])
+            self.assertTrue(report["cleanupVerified"])
+            self.assertEqual("manual", report["fixtures"][0]["lane"])
+            self.assertEqual(7, report["fixtures"][0]["exitCode"])
+            self.assertNotIn("diagnostics", report["fixtures"][0])
+
     def test_failed_fixture_retains_checkpoint_and_runs_other_lane(self):
         class FailedFixture(FakeJob):
             def run(self, argv, cwd, timeout=120):
