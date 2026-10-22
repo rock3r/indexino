@@ -356,6 +356,7 @@ class ShrunkCliDistributionTest {
                     setOf("org.jetbrains.kotlin.cli.common.ModuleVisibilityHelperImpl"),
                 "jetbrains.exodus.io.DataReaderWriterProvider" to
                     setOf(
+                        "dev.sebastiano.indexino.core.xodus.ImmutableFileDataReaderWriterProvider",
                         "jetbrains.exodus.io.FileDataReaderWriterProvider",
                         "jetbrains.exodus.io.WatchingFileDataReaderWriterProvider",
                         "jetbrains.exodus.io.inMemory.MemoryDataReaderWriterProvider",

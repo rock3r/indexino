@@ -43,6 +43,8 @@ indexino cache forget --project /path/to/repo
 ```
 
 Not an agent-query API. Reclamation policy: [INDEX-STORAGE.md](INDEX-STORAGE.md).
+`forget` refuses to delete a workspace while any cache client is active or another current
+workspace generation depends on its immutable base. Forget dependent forks first.
 
 ### Shared flags (product)
 

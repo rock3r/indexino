@@ -84,6 +84,26 @@ internal class WorktreeOverlayIndexStore(
         }
     }
 
+    override fun forEachSymbolInFile(
+        originId: String,
+        relativeFile: String,
+        action: (CodeIndexKey, SymbolRecord) -> Boolean,
+    ) {
+        var keepGoing = true
+        delta?.forEachSymbolInFile(originId, relativeFile) { key, record ->
+            keepGoing = action(key, record)
+            keepGoing
+        }
+        if (!keepGoing) return
+        if (tombstonePrefixForSource(originId, relativeFile) in tombstonePrefixes) return
+        base.forEachSymbolInFile(originId, relativeFile) { key, record ->
+            if (!isTombstoned(key, record) && delta?.get(key) == null) {
+                keepGoing = action(key, record)
+            }
+            keepGoing
+        }
+    }
+
     override fun forEachCallInFile(
         originId: String,
         relativeFile: String,

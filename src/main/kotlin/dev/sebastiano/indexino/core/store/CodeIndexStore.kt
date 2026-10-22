@@ -52,6 +52,23 @@ internal interface CodeIndexStore : AutoCloseable {
         }
     }
 
+    /** Visits symbols in one origin-qualified file, streaming when no file index exists. */
+    fun forEachSymbolInFile(
+        originId: String,
+        relativeFile: String,
+        action: (CodeIndexKey, SymbolRecord) -> Boolean,
+    ) {
+        forEachPrefix("sym:") { key, record ->
+            if (
+                record is SymbolRecord &&
+                    record.originId == originId &&
+                    record.relativeFile == relativeFile
+            ) {
+                action(key, record)
+            } else true
+        }
+    }
+
     /** Visits calls in one origin-qualified source file, with legacy scanning fallback. */
     fun forEachCallInFile(
         originId: String,

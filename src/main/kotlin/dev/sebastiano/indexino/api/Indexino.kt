@@ -550,7 +550,6 @@ private constructor(
                                     prior.storePath,
                                     prior.revision,
                                     prior.generation,
-                                    prior.baseCopy,
                                     evidence,
                                 )
                         }
@@ -675,7 +674,6 @@ private constructor(
                         storePath = publishedStore.path,
                         revision = revision,
                         generation = generation,
-                        baseCopy = baseCopyFor(generation),
                         evidence = evidence,
                     )
                 reclaimUnpinnedGenerations()
@@ -990,7 +988,10 @@ private constructor(
             // Historical manifests can outlive their packs after GC; those use the rebuilt
             // representation below.
             manifests.publish(previous)
-            return PublishedStore(path = clientStorePath, created = false)
+            return PublishedStore(
+                path = publishedStorePath(previous, clientStorePath, generation),
+                created = false,
+            )
         }
         val current = manifests.current()
         if (
@@ -1004,7 +1005,10 @@ private constructor(
             manifests.publish(
                 current.copy(generation = generation.value, linkGeneration = linkGeneration)
             )
-            return PublishedStore(path = clientStorePath, created = false)
+            return PublishedStore(
+                path = publishedStorePath(current, clientStorePath, generation),
+                created = false,
+            )
         }
         check(
             forkBase?.baseWorkspaceId != workspaceId || forkBase.baseGeneration != generation.value
@@ -1039,7 +1043,6 @@ private constructor(
         return publishMaterializedGenerationStore(
             cacheRoot = cacheRoot,
             workspaceId = workspaceId,
-            clientStorePath = clientStorePath,
             commit = commit,
             generation = generation,
             revision = revision,
@@ -1050,6 +1053,14 @@ private constructor(
             linkGeneration = linkGeneration,
         )
     }
+
+    private fun publishedStorePath(
+        manifest: WorkspaceGenerationManifest,
+        clientStorePath: Path,
+        generation: WorkspaceGenerationId,
+    ): Path =
+        if (manifest.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) clientStorePath
+        else InProcessCacheLayout.sharedGenerationStore(workspace, generation.value)
 
     @Suppress("ReturnCount")
     private fun hasReachablePacks(
@@ -1137,7 +1148,6 @@ private constructor(
     private fun publishMaterializedGenerationStore(
         cacheRoot: Path,
         workspaceId: String,
-        clientStorePath: Path,
         commit: String,
         generation: WorkspaceGenerationId,
         revision: WorkspaceRevision,
@@ -1171,11 +1181,7 @@ private constructor(
         if (!Files.isDirectory(sharedDestination)) {
             packs.materializeDirectory(packKey, sharedDestination)
         }
-        val createdClientCopy = !Files.isDirectory(clientStorePath)
-        if (createdClientCopy) {
-            packs.materializeDirectory(packKey, clientStorePath)
-        }
-        return PublishedStore(path = clientStorePath, created = createdClientCopy)
+        return PublishedStore(path = sharedDestination, created = false)
     }
 
     private fun workspaceGenerationManifest(
@@ -1267,7 +1273,7 @@ private constructor(
             if (manifest.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) {
                 InProcessCacheLayout.overlayDeltaStore(workspace, clientId, generation.value)
             } else {
-                InProcessCacheLayout.generationStore(workspace, clientId, generation.value)
+                InProcessCacheLayout.sharedGenerationStore(workspace, generation.value)
             }
         if (
             manifest.representation != WorktreeOverlayPolicy.REPRESENTATION_OVERLAY &&
@@ -1275,17 +1281,6 @@ private constructor(
         ) {
             ContentAddressedPackCache(cacheRoot)
                 .materializeDirectory(manifest.packKeys.single(), storePath)
-            if (
-                !Files.isDirectory(
-                    InProcessCacheLayout.sharedGenerationStore(workspace, generation.value)
-                )
-            ) {
-                ContentAddressedPackCache(cacheRoot)
-                    .materializeDirectory(
-                        manifest.packKeys.single(),
-                        InProcessCacheLayout.sharedGenerationStore(workspace, generation.value),
-                    )
-            }
         } else if (
             manifest.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY &&
                 manifest.overlayPackKeys.isNotEmpty() &&
@@ -1310,7 +1305,7 @@ private constructor(
                     )
                 },
             )
-        val restored = PublishedGeneration(storePath, revision, generation, baseCopyFor(generation))
+        val restored = PublishedGeneration(storePath, revision, generation)
         generationStores[generation] = storePath
         published = restored
         return restored
@@ -1344,17 +1339,12 @@ private constructor(
     }
 
     private fun reclaimUnpinnedGenerations() {
-        // The published overlay's next snapshot needs its base; re-materializing a large base
-        // for every unpinned snapshot would make each warm query pay a full unpack.
-        val retainedBase = published?.baseCopy
         if (snapshotPins.isEmpty()) {
-            baseGenerationRefs.removeAll { it != retainedBase && it.toFile().deleteRecursively() }
+            baseGenerationRefs.removeAll { it.toFile().deleteRecursively() }
         }
         val current = published?.generation
-        val reclaimable = generationStores.filter { (generation, path) ->
-            generation != current &&
-                snapshotPins.getOrDefault(generation, 0) == 0 &&
-                path.parent != retainedBase
+        val reclaimable = generationStores.filter { (generation, _) ->
+            generation != current && snapshotPins.getOrDefault(generation, 0) == 0
         }
         reclaimable.forEach { (generation, path) ->
             if (deleteClientGenerationRef(path)) {
@@ -1364,7 +1354,16 @@ private constructor(
     }
 
     private fun deleteClientGenerationRef(path: Path): Boolean =
-        path.parent.toFile().deleteRecursively()
+        if (
+            path.startsWith(
+                InProcessCacheLayout.workspaceRoot(workspace).resolve("refs").resolve(clientId)
+            )
+        ) {
+            path.parent.toFile().deleteRecursively()
+        } else {
+            // Shared immutable materializations are retained for other clients and forks.
+            true
+        }
 
     private fun buildFailure(execution: IndexBuildExecution, message: String): IndexinoException =
         failure(
@@ -1391,33 +1390,10 @@ private constructor(
 
     private class PublishedStore(val path: Path, val created: Boolean)
 
-    /**
-     * This client's materialized base copy for an overlay generation, or null. Nested overlay bases
-     * are not retained.
-     */
-    private fun baseCopyFor(generation: WorkspaceGenerationId): Path? {
-        val cacheRoot = InProcessCacheLayout.cacheRoot()
-        val manifest =
-            WorkspaceGenerationManifestStore(cacheRoot, InProcessCacheLayout.workspaceId(workspace))
-                .readGeneration(generation.value)
-        if (manifest?.representation != WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) return null
-        val baseWorkspaceId = manifest.baseWorkspaceId ?: return null
-        val baseGeneration = manifest.baseGeneration ?: return null
-        val baseManifest =
-            WorkspaceGenerationManifestStore(cacheRoot, baseWorkspaceId)
-                .readGeneration(baseGeneration) ?: return null
-        if (baseManifest.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) return null
-        val baseWorkspace =
-            WorkspaceRegistryStore(cacheRoot).entry(baseWorkspaceId)?.path?.let(Path::of)
-                ?: return null
-        return InProcessCacheLayout.generationStore(baseWorkspace, clientId, baseGeneration).parent
-    }
-
     private class PublishedGeneration(
         val storePath: Path,
         val revision: WorkspaceRevision,
         val generation: WorkspaceGenerationId,
-        val baseCopy: Path? = null,
         val evidence: SnapshotFreshness = SnapshotFreshness.UNKNOWN,
     )
 }

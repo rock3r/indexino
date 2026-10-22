@@ -82,9 +82,11 @@ result from mutable storage.
 
 The storage layer publishes refresh output as immutable content-addressed packs with generation manifests and an
 atomic workspace `current` pointer. Mutable incremental writer state is confined to workspace
-`staging/in-process-writer`; each client atomically materializes a referenced pack into its own
-on-disk `refs/<client>/<generation>/store` snapshot directory. Snapshot pins reclaim only those
-client-owned refs after close, while shared packs are retained by manifest reachability and cache GC.
+`staging/in-process-writer`; compatible forks and clients query one immutable materialized base
+per generation. Xodus readers bypass its exclusive directory lock through a provider that rejects
+writes, while client-local refs contain only overlay deltas. Snapshot pins retain those private
+delta refs until close; shared bases and packs outlive individual clients. Cache GC currently
+reclaims only unreachable packs, not expanded materializations or staging.
 
 The thin `indexino` POM deliberately omits CLI-only Clikt, JNA, and `slf4j-nop`; Gradle Module
 Metadata is disabled for that artifact so Gradle consumers resolve the filtered POM rather than an

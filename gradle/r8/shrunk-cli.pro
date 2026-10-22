@@ -14,6 +14,9 @@
 -keep class jetbrains.exodus.env.management.** { *; }
 -keep class jetbrains.exodus.management.** { *; }
 
+# Xodus discovers the immutable generation reader through ServiceLoader by its class name.
+-keep class dev.sebastiano.indexino.core.xodus.ImmutableFileDataReaderWriterProvider { public <init>(); }
+
 # Kotlin's embedded IntelliJ bootstrap invokes this singleton for registration side effects.
 -keep class org.jetbrains.kotlin.com.intellij.psi.compiled.ClassFileDecompilers { *; }
 

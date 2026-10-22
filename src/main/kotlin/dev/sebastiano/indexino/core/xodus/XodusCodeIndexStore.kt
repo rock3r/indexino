@@ -22,46 +22,80 @@ private constructor(
     private val environment: Environment,
     private val readOnly: Boolean,
     private val hasSymbolIndex: Boolean,
+    private val hasSymbolFileIndex: Boolean,
     private val hasCallIndex: Boolean,
 ) : CodeIndexStore {
     companion object {
         private const val STORE_NAME = "CodeIndex"
         private const val SYMBOL_INDEX_STORE_NAME = "SymbolNames"
+        private const val SYMBOL_FILE_INDEX_STORE_NAME = "SymbolFiles"
         private const val CALL_INDEX_STORE_NAME = "CallFiles"
         private const val LOCK_TIMEOUT_MILLIS = 30_000L
 
-        fun open(path: Path, readOnly: Boolean = false): XodusCodeIndexStore {
+        fun open(
+            path: Path,
+            readOnly: Boolean = false,
+            immutable: Boolean = false,
+        ): XodusCodeIndexStore {
+            require(!immutable || readOnly) { "Immutable generations must be opened read-only" }
             path.parent?.createDirectories()
             val config =
                 EnvironmentConfig()
                     .setEnvIsReadonly(readOnly)
+                    .setGcEnabled(!readOnly)
                     .setLogLockTimeout(LOCK_TIMEOUT_MILLIS)
+            if (immutable) {
+                config.setLogDataReaderWriterProvider(
+                    ImmutableFileDataReaderWriterProvider::class.java.name
+                )
+            }
             val environment = Environments.newContextualInstance(path.toString(), config)
             return runCatching {
                     var hasSymbolIndex = false
+                    var hasSymbolFileIndex = false
                     var hasCallIndex = false
                     environment.executeInTransaction { txn ->
                         val primary =
                             environment.openStore(STORE_NAME, StoreConfig.WITHOUT_DUPLICATES, txn)
                         hasSymbolIndex = environment.storeExists(SYMBOL_INDEX_STORE_NAME, txn)
-                        if (!readOnly && !hasSymbolIndex) {
-                            val index =
-                                environment.openStore(
-                                    SYMBOL_INDEX_STORE_NAME,
-                                    StoreConfig.WITH_DUPLICATES,
-                                    txn,
-                                )
+                        hasSymbolFileIndex =
+                            environment.storeExists(SYMBOL_FILE_INDEX_STORE_NAME, txn)
+                        if (!readOnly && (!hasSymbolIndex || !hasSymbolFileIndex)) {
+                            val nameIndex =
+                                if (hasSymbolIndex) null
+                                else
+                                    environment.openStore(
+                                        SYMBOL_INDEX_STORE_NAME,
+                                        StoreConfig.WITH_DUPLICATES,
+                                        txn,
+                                    )
+                            val fileIndex =
+                                if (hasSymbolFileIndex) null
+                                else
+                                    environment.openStore(
+                                        SYMBOL_FILE_INDEX_STORE_NAME,
+                                        StoreConfig.WITH_DUPLICATES,
+                                        txn,
+                                    )
                             val cursor = primary.openCursor(txn)
                             try {
-                                var hasEntry = cursor.getNext()
+                                var hasEntry =
+                                    cursor.getSearchKeyRange(StringBinding.stringToEntry("sym:")) !=
+                                        null
                                 while (hasEntry) {
                                     val key = StringBinding.entryToString(cursor.key)
-                                    if (key.startsWith("sym:")) {
-                                        val record =
-                                            CodeIndexRecordCodec.decode(cursor.value.bytesUnsafe)
-                                        if (record is SymbolRecord) {
-                                            addSymbolEntries(index, txn, key, record)
-                                        }
+                                    if (!key.startsWith("sym:")) break
+                                    val record =
+                                        CodeIndexRecordCodec.decode(cursor.value.bytesUnsafe)
+                                    if (record is SymbolRecord) {
+                                        nameIndex?.let { addSymbolEntries(it, txn, key, record) }
+                                        fileIndex?.put(
+                                            txn,
+                                            StringBinding.stringToEntry(
+                                                fileTerm(record.originId, record.relativeFile)
+                                            ),
+                                            cursor.key,
+                                        )
                                     }
                                     hasEntry = cursor.getNext()
                                 }
@@ -69,10 +103,17 @@ private constructor(
                                 cursor.close()
                             }
                             hasSymbolIndex = true
+                            hasSymbolFileIndex = true
                         }
                         hasCallIndex = initializeCallIndex(environment, primary, txn, readOnly)
                     }
-                    XodusCodeIndexStore(environment, readOnly, hasSymbolIndex, hasCallIndex)
+                    XodusCodeIndexStore(
+                        environment,
+                        readOnly,
+                        hasSymbolIndex,
+                        hasSymbolFileIndex,
+                        hasCallIndex,
+                    )
                 }
                 .getOrElse { failure -> environment.use { throw failure } }
         }
@@ -83,7 +124,7 @@ private constructor(
             addAll(record.aliases)
         }
 
-        private fun callFileTerm(originId: String, relativeFile: String): String =
+        private fun fileTerm(originId: String, relativeFile: String): String =
             "${originId.length}:$originId$relativeFile"
 
         private fun initializeCallIndex(
@@ -108,9 +149,7 @@ private constructor(
                     if (call != null) {
                         index.put(
                             txn,
-                            StringBinding.stringToEntry(
-                                callFileTerm(call.originId, call.relativeFile)
-                            ),
+                            StringBinding.stringToEntry(fileTerm(call.originId, call.relativeFile)),
                             cursor.key,
                         )
                     }
@@ -138,8 +177,8 @@ private constructor(
     private fun store(txn: jetbrains.exodus.env.Transaction): Store =
         environment.openStore(STORE_NAME, StoreConfig.WITHOUT_DUPLICATES, txn)
 
-    private fun symbolIndex(txn: jetbrains.exodus.env.Transaction): Store =
-        environment.openStore(SYMBOL_INDEX_STORE_NAME, StoreConfig.WITH_DUPLICATES, txn)
+    private fun index(txn: jetbrains.exodus.env.Transaction, name: String): Store =
+        environment.openStore(name, StoreConfig.WITH_DUPLICATES, txn)
 
     override fun get(key: CodeIndexKey): CodeIndexRecord? =
         environment.computeInTransaction(
@@ -161,15 +200,19 @@ private constructor(
                 ArrayByteIterable(CodeIndexRecordCodec.encode(record)),
             )
             if (record is SymbolRecord && key.value.startsWith("sym:")) {
-                addSymbolEntries(symbolIndex(txn), txn, key.value, record)
-            }
-            if (record is CallSiteRecord && key.value.startsWith("call:")) {
-                callIndex(txn)
+                addSymbolEntries(index(txn, SYMBOL_INDEX_STORE_NAME), txn, key.value, record)
+                index(txn, SYMBOL_FILE_INDEX_STORE_NAME)
                     .put(
                         txn,
-                        StringBinding.stringToEntry(
-                            callFileTerm(record.originId, record.relativeFile)
-                        ),
+                        StringBinding.stringToEntry(fileTerm(record.originId, record.relativeFile)),
+                        StringBinding.stringToEntry(key.value),
+                    )
+            }
+            if (record is CallSiteRecord && key.value.startsWith("call:")) {
+                index(txn, CALL_INDEX_STORE_NAME)
+                    .put(
+                        txn,
+                        StringBinding.stringToEntry(fileTerm(record.originId, record.relativeFile)),
                         StringBinding.stringToEntry(key.value),
                     )
             }
@@ -194,10 +237,10 @@ private constructor(
         if (!key.value.startsWith("sym:")) return
         val old = primary.get(txn, StringBinding.stringToEntry(key.value)) ?: return
         val record = CodeIndexRecordCodec.decode(old.bytesUnsafe) as? SymbolRecord ?: return
-        val index = symbolIndex(txn)
+        val nameIndex = index(txn, SYMBOL_INDEX_STORE_NAME)
         val value = StringBinding.stringToEntry(key.value)
         symbolTerms(record).forEach { term ->
-            val cursor = index.openCursor(txn)
+            val cursor = nameIndex.openCursor(txn)
             try {
                 if (cursor.getSearchBoth(StringBinding.stringToEntry(term), value)) {
                     cursor.deleteCurrent()
@@ -206,10 +249,19 @@ private constructor(
                 cursor.close()
             }
         }
+        val cursor = index(txn, SYMBOL_FILE_INDEX_STORE_NAME).openCursor(txn)
+        try {
+            if (
+                cursor.getSearchBoth(
+                    StringBinding.stringToEntry(fileTerm(record.originId, record.relativeFile)),
+                    value,
+                )
+            )
+                cursor.deleteCurrent()
+        } finally {
+            cursor.close()
+        }
     }
-
-    private fun callIndex(txn: jetbrains.exodus.env.Transaction): Store =
-        environment.openStore(CALL_INDEX_STORE_NAME, StoreConfig.WITH_DUPLICATES, txn)
 
     private fun removeExistingCallEntry(
         primary: Store,
@@ -219,11 +271,11 @@ private constructor(
         if (!key.value.startsWith("call:")) return
         val old = primary.get(txn, StringBinding.stringToEntry(key.value)) ?: return
         val call = CodeIndexRecordCodec.decode(old.bytesUnsafe) as? CallSiteRecord ?: return
-        val cursor = callIndex(txn).openCursor(txn)
+        val cursor = index(txn, CALL_INDEX_STORE_NAME).openCursor(txn)
         try {
             if (
                 cursor.getSearchBoth(
-                    StringBinding.stringToEntry(callFileTerm(call.originId, call.relativeFile)),
+                    StringBinding.stringToEntry(fileTerm(call.originId, call.relativeFile)),
                     StringBinding.stringToEntry(key.value),
                 )
             )
@@ -244,8 +296,8 @@ private constructor(
         }
         environment.computeInTransaction(
             TransactionalComputable { txn ->
-                val cursor = callIndex(txn).openCursor(txn)
-                val term = callFileTerm(originId, relativeFile)
+                val cursor = index(txn, CALL_INDEX_STORE_NAME).openCursor(txn)
+                val term = fileTerm(originId, relativeFile)
                 try {
                     var hasEntry = cursor.getSearchKey(StringBinding.stringToEntry(term)) != null
                     while (hasEntry && StringBinding.entryToString(cursor.key) == term) {
@@ -254,6 +306,37 @@ private constructor(
                         val record =
                             value?.let { CodeIndexRecordCodec.decode(it.bytesUnsafe) }
                                 as? CallSiteRecord
+                        if (record != null && !action(CodeIndexKey.parse(rawKey), record)) break
+                        hasEntry = cursor.getNext()
+                    }
+                } finally {
+                    cursor.close()
+                }
+            }
+        )
+    }
+
+    override fun forEachSymbolInFile(
+        originId: String,
+        relativeFile: String,
+        action: (CodeIndexKey, SymbolRecord) -> Boolean,
+    ) {
+        if (!hasSymbolFileIndex) {
+            super.forEachSymbolInFile(originId, relativeFile, action)
+            return
+        }
+        environment.computeInTransaction(
+            TransactionalComputable { txn ->
+                val cursor = index(txn, SYMBOL_FILE_INDEX_STORE_NAME).openCursor(txn)
+                val term = fileTerm(originId, relativeFile)
+                try {
+                    var hasEntry = cursor.getSearchKey(StringBinding.stringToEntry(term)) != null
+                    while (hasEntry && StringBinding.entryToString(cursor.key) == term) {
+                        val rawKey = StringBinding.entryToString(cursor.value)
+                        val value = store(txn).get(txn, StringBinding.stringToEntry(rawKey))
+                        val record =
+                            value?.let { CodeIndexRecordCodec.decode(it.bytesUnsafe) }
+                                as? SymbolRecord
                         if (record != null && !action(CodeIndexKey.parse(rawKey), record)) break
                         hasEntry = cursor.getNext()
                     }
@@ -326,7 +409,7 @@ private constructor(
         }
         environment.computeInTransaction(
             TransactionalComputable { txn ->
-                val indexCursor = symbolIndex(txn).openCursor(txn)
+                val indexCursor = index(txn, SYMBOL_INDEX_STORE_NAME).openCursor(txn)
                 try {
                     val search = StringBinding.stringToEntry(name)
                     var hasEntry =
