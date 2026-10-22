@@ -271,6 +271,10 @@ new source paths, deletions that leave a known source absent at launch, watcher 
 watches, and failed automatic refresh retries resolve topology anew. A delete/create pair that
 replaces a known file can retain the hint if the path exists when the refresh is claimed. This
 hint is in-memory and never persisted across daemon restarts.
+The narrow exception for unknown paths is a native-fenced atomic-save cluster of at most five
+same-parent paths: all unknown temporary paths must have vanished without changing the bounded
+parent inventory, and a known source must have changed. Its published freshness is PROVISIONAL
+until an independent full audit; any failed fence or inventory check still resolves topology.
 The daemon arms its watches before the full capture; for a subsequent known-source edit it reads
 only hinted sources, inherits other hashes from the matching published generation, and avoids a
 disk fact scan for change detection. Analyzers verify any inherited source bytes they need against

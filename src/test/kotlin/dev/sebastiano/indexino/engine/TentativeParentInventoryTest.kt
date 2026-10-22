@@ -44,19 +44,27 @@ class TentativeParentInventoryTest {
             Files.setLastModifiedTime(b, originalMtime)
             Files.writeString(temporary, "class NewA")
             Files.move(temporary, a, ATOMIC_MOVE, REPLACE_EXISTING)
-            assertEquals(setOf(a, b), baseline.compare(hashes, temporary, setOf(a)))
-            assertNull(baseline.compare(hashes, temporary, setOf(a, outside)))
+            val anotherTemporary = parent.resolve("other-atomic.tmp")
+            assertEquals(
+                setOf(a, b),
+                baseline.compare(hashes, setOf(temporary, anotherTemporary), setOf(a)),
+            )
+            assertNull(baseline.compare(hashes, setOf(temporary), setOf(a, outside)))
+            assertNull(baseline.compare(hashes, setOf(temporary, outside), setOf(a)))
+            Files.writeString(anotherTemporary, "class Surviving")
+            assertNull(baseline.compare(hashes, setOf(temporary, anotherTemporary), setOf(a)))
+            Files.delete(anotherTemporary)
             // A callback for an unchanged byte stream can still report a Git metadata change.
-            assertEquals(setOf(a, b, c), baseline.compare(hashes, temporary, setOf(a, c)))
+            assertEquals(setOf(a, b, c), baseline.compare(hashes, setOf(temporary), setOf(a, c)))
             val survivingAlias = root.resolve("alias.kt")
             Files.createLink(survivingAlias, b)
-            assertNull(baseline.compare(hashes, temporary, setOf(a)))
+            assertNull(baseline.compare(hashes, setOf(temporary), setOf(a)))
             Files.delete(survivingAlias)
             Files.writeString(parent.resolve("New.kt"), "class New")
-            assertNull(baseline.compare(hashes, temporary, setOf(a)))
+            assertNull(baseline.compare(hashes, setOf(temporary), setOf(a)))
             Files.delete(parent.resolve("New.kt"))
             Files.write(b, ByteArray(TentativeParentInventory.MAX_HASH_BYTES.toInt() + 1))
-            assertNull(baseline.compare(hashes, temporary, setOf(a)))
+            assertNull(baseline.compare(hashes, setOf(temporary), setOf(a)))
         } finally {
             root.toFile().deleteRecursively()
         }
@@ -84,7 +92,7 @@ class TentativeParentInventoryTest {
             assertNull(
                 baseline.compare(
                     mapOf(sources.single() to FileHashProducer.contentHash("class Original")),
-                    parent.resolve("atomic.tmp"),
+                    setOf(parent.resolve("atomic.tmp")),
                     setOf(child),
                 )
             )

@@ -17,13 +17,24 @@ private constructor(
     private val indexed: Map<Path, IndexedSource>,
 ) {
     @Suppress("CyclomaticComplexMethod", "ReturnCount")
-    fun compare(hashes: Map<IndexedSource, String>, unknown: Path, known: Set<Path>): Set<Path>? {
+    fun compare(
+        hashes: Map<IndexedSource, String>,
+        unknown: Set<Path>,
+        known: Set<Path>,
+    ): Set<Path>? {
         val start = System.nanoTime()
-        if (known.isEmpty() || known.any { it.parent != parent || it !in indexed }) return null
         if (
-            unknown.parent != parent ||
-                unknown.fileName.toString() in children ||
-                Files.exists(unknown, NOFOLLOW_LINKS)
+            unknown.isEmpty() ||
+                known.isEmpty() ||
+                known.any { it.parent != parent || it !in indexed }
+        )
+            return null
+        if (
+            unknown.any {
+                it.parent != parent ||
+                    it.fileName.toString() in children ||
+                    Files.exists(it, NOFOLLOW_LINKS)
+            }
         )
             return null
         val first = inventory(parent) ?: return null

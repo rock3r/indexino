@@ -149,7 +149,8 @@ class InProcessIndexinoTest {
                         Files.writeString(temporary, "package sample\nclass ChangedA\n")
                         Files.move(temporary, source, ATOMIC_MOVE, REPLACE_EXISTING)
                         assertTrue(
-                            index.tentativeParentHint(request, temporary, setOf(source)) != null,
+                            index.tentativeParentHint(request, setOf(temporary), setOf(source)) !=
+                                null,
                             "No same-generation candidate despite seed: $seeded",
                         )
                         // Git's index bookkeeping can arrive after the capture fence without
@@ -401,6 +402,147 @@ class InProcessIndexinoTest {
             if (priorCache == null) System.clearProperty("indexino.cache.dir")
             else System.setProperty("indexino.cache.dir", priorCache)
         }
+    }
+
+    @Test
+    fun `vanished same-parent temporary burst publishes provisional sibling facts`() {
+        val workspace = createGitWorkspace().toRealPath()
+        val source = workspace.resolve("ui/src/main/kotlin/Panel.kt")
+        val sibling = source.resolveSibling("Other.kt")
+        Files.writeString(sibling, "package sample\nclass SourceB0\n")
+        val cache = createTempDirectory("indexino-burst-parent-cache-")
+        tempDirs.add(cache)
+        val priorCache = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cache.toString())
+        try {
+            val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+            Indexino.connectBlocking(workspace).use { index ->
+                val controller = burstController(workspace, index)
+                try {
+                    index.onSourcesResolvedForRuntime = controller::register
+                    index.onNativeFenceForRuntime = controller::beforeDiscoveryFence
+                    index.onBoundedParentInventoryForRuntime = controller::captureWarmParents
+                    assertVanishedBurst(index, controller, request, source, sibling)
+                } finally {
+                    controller.close()
+                }
+            }
+        } finally {
+            if (priorCache == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", priorCache)
+        }
+    }
+
+    private fun burstController(
+        workspace: java.nio.file.Path,
+        index: Indexino,
+    ): AutoRefreshController {
+        lateinit var controller: AutoRefreshController
+        controller =
+            AutoRefreshController(
+                workspace,
+                AutoRefreshMode.ENABLED,
+                refresh = { received ->
+                    val handle = runSuspend { index.refresh(received) }
+                    controller.onRefreshStarted(received, handle)
+                    runSuspend { handle.await() }
+                },
+                topologyProvider = index::topologyForWatch,
+                refreshWithTopology = { received, topology, paths, coverage, root, tentative ->
+                    val handle = runSuspend {
+                        index.refresh(
+                            received,
+                            {},
+                            null,
+                            topology,
+                            paths,
+                            coverage,
+                            root,
+                            tentative,
+                        )
+                    }
+                    controller.onRefreshStarted(received, handle)
+                    runSuspend { handle.await() }
+                },
+                nativeWorkspaceWatcher = { _, _, _ ->
+                    object : NativeWorkspaceWatcher {
+                        override val isAlive = true
+
+                        override fun close() = Unit
+                    }
+                },
+                tentativeParentHint = index::tentativeParentHint,
+                nativeFlushForTests = {},
+            )
+        return controller
+    }
+
+    private fun assertVanishedBurst(
+        index: Indexino,
+        controller: AutoRefreshController,
+        request: RefreshRequest,
+        source: java.nio.file.Path,
+        sibling: java.nio.file.Path,
+    ) {
+        runSuspend { index.refresh(request).await() }
+        Files.writeString(source, "package sample\nclass WarmA\n")
+        controller.onPathChangedForTests(source)
+        val warmDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
+        while (System.nanoTime() < warmDeadline) {
+            if (runSuspend { index.snapshot() }.use { symbolCount(it, "WarmA") } == 1) break
+            Thread.sleep(25)
+        }
+        runSuspend { index.snapshot() }
+            .use { pinned ->
+                assertEquals(1, symbolCount(pinned, "WarmA"))
+                val originalMtime = Files.getLastModifiedTime(sibling)
+                Files.writeString(sibling, "package sample\nclass SourceB1\n")
+                Files.setLastModifiedTime(sibling, originalMtime)
+                val temporaryPaths = (0 until 4).map { source.resolveSibling("burst-$it.tmp") }
+                temporaryPaths.forEachIndexed { indexOf, temporary ->
+                    Files.writeString(temporary, "package sample\nclass Burst$indexOf\n")
+                    Files.move(temporary, source, ATOMIC_MOVE, REPLACE_EXISTING)
+                }
+                temporaryPaths.forEach(controller::onPathChangedForTests)
+                controller.onPathChangedForTests(source)
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
+                while (System.nanoTime() < deadline) {
+                    val updated =
+                        runSuspend { index.snapshot() }
+                            .use { snapshot ->
+                                symbolCount(snapshot, "Burst3") == 1 &&
+                                    symbolCount(snapshot, "SourceB1") == 1
+                            }
+                    if (updated) break
+                    Thread.sleep(25)
+                }
+                runSuspend { index.snapshot() }
+                    .use { published ->
+                        assertEquals(1, symbolCount(published, "Burst3"))
+                        assertEquals(1, symbolCount(published, "SourceB1"))
+                        assertEquals(
+                            SnapshotFreshness.PROVISIONAL,
+                            published.freshnessAtAcquisition,
+                        )
+                    }
+                assertEquals(1, symbolCount(pinned, "WarmA"))
+                assertEquals(1, symbolCount(pinned, "SourceB0"))
+                assertEquals(0, symbolCount(pinned, "Burst3"))
+                assertEquals(
+                    "current_unverified",
+                    assertFailsWith<IndexinoException> {
+                            runSuspend { index.snapshot(FreshnessPolicy.AWAIT_CURRENT) }.close()
+                        }
+                        .failure
+                        .code,
+                )
+                runSuspend { index.refresh(request).await() }
+                runSuspend { index.snapshot(FreshnessPolicy.AWAIT_CURRENT) }
+                    .use { audited ->
+                        assertEquals(SnapshotFreshness.CURRENT, audited.freshnessAtAcquisition)
+                        assertEquals(1, symbolCount(audited, "Burst3"))
+                    }
+            }
     }
 
     @Test

@@ -57,7 +57,7 @@ internal class AutoRefreshController(
         null,
     private val nativeWorkspaceWatcher: NativeWorkspaceWatcherFactory? = null,
     private val tentativeParentHint:
-        ((RefreshRequest, Path, Set<Path>) -> Indexino.TentativeHint?)? =
+        ((RefreshRequest, Set<Path>, Set<Path>) -> Indexino.TentativeHint?)? =
         null,
     private val nativeFlushForTests: (() -> Unit)? = null,
 ) : AutoCloseable {
@@ -83,7 +83,11 @@ internal class AutoRefreshController(
     private val clusterPaths = mutableMapOf<RefreshRequest, MutableSet<Path>>()
     private val warmParents = mutableMapOf<RefreshRequest, MutableSet<Path>>()
 
-    private data class PendingParent(val known: Set<Path>, val unknown: Path, val dirtyEpoch: Long)
+    private data class PendingParent(
+        val known: Set<Path>,
+        val unknown: Set<Path>,
+        val dirtyEpoch: Long,
+    )
 
     private data class LaunchState(
         val topology: TopologyResult?,
@@ -507,11 +511,12 @@ internal class AutoRefreshController(
         val cluster = clusterPaths.remove(request).orEmpty()
         val uncertain = uncertainTopology.remove(request) != null
         if (uncertain && request !in uncovered && nativeCoverageAvailable()) {
-            val unknown = (cluster - paths.toSet()).singleOrNull()
+            val unknown = cluster - paths.toSet()
             if (
-                unknown != null &&
-                    unknown !in topologyInputsByRequest[request].orEmpty() &&
+                unknown.isNotEmpty() &&
+                    unknown.none { it in topologyInputsByRequest[request].orEmpty() } &&
                     paths.isNotEmpty() &&
+                    (unknown + paths).map { it.parent }.distinct().size == 1 &&
                     cluster.size <= MAX_LOCAL_CLUSTER_PATHS
             ) {
                 pendingParent[request] =
@@ -580,7 +585,7 @@ internal class AutoRefreshController(
                         if (hint != null && after != null)
                             eventsSince(
                                 hint.observationEpoch,
-                                nativeCandidate.known + setOf(nativeCandidate.unknown),
+                                nativeCandidate.known + nativeCandidate.unknown,
                             )
                         else null
                     if (
@@ -865,7 +870,7 @@ internal class AutoRefreshController(
     private companion object {
         const val GIT_DIRECTORY = ".git"
         const val DEBOUNCE_MILLIS = 150L
-        const val MAX_LOCAL_CLUSTER_PATHS = 4
+        const val MAX_LOCAL_CLUSTER_PATHS = 5
         const val MAX_ACTIVE_PARENTS = 64
         const val MAX_OBSERVED_EVENTS = 256
         val MAX_DEBOUNCE_NANOS = TimeUnit.SECONDS.toNanos(30)
