@@ -81,6 +81,7 @@ internal class AutoRefreshController(
     private val hintedPaths = mutableMapOf<RefreshRequest, MutableMap<Path, Long>>()
     private val uncertainTopology = mutableMapOf<RefreshRequest, Long>()
     private val clusterPaths = mutableMapOf<RefreshRequest, MutableSet<Path>>()
+    private val lastChangeNanos = mutableMapOf<RefreshRequest, Long>()
     private val warmParents = mutableMapOf<RefreshRequest, MutableSet<Path>>()
 
     private data class PendingParent(
@@ -419,6 +420,7 @@ internal class AutoRefreshController(
             hintedPaths.clear()
             uncertainTopology.clear()
             clusterPaths.clear()
+            lastChangeNanos.clear()
             warmParents.clear()
             pendingParent.clear()
             registrationEpoch.clear()
@@ -473,6 +475,8 @@ internal class AutoRefreshController(
         synchronized(stateLock) {
             if (closed.get()) return
             val epoch = dirtyEpoch.computeIfAbsent(request) { AtomicLong() }.incrementAndGet()
+            val changedAt = System.nanoTime()
+            lastChangeNanos[request] = changedAt
             if (
                 path == null ||
                     path in topologyInputsByRequest[request].orEmpty() ||
@@ -491,7 +495,7 @@ internal class AutoRefreshController(
                     !queued.add(request)
             )
                 return
-            scheduleDebounced(request, epoch, System.nanoTime())
+            scheduleDebounced(request, epoch, changedAt)
         }
     }
 
@@ -505,6 +509,7 @@ internal class AutoRefreshController(
                 !dirty.remove(request)
         )
             return false
+        lastChangeNanos.remove(request)
         pendingLaunch[request] = dirtyEpoch[request]?.get() ?: 0L
         pendingRegistration[request] = CompletableFuture()
         val paths = hintedPaths.remove(request)?.keys.orEmpty()
@@ -648,19 +653,34 @@ internal class AutoRefreshController(
         }
     }
 
-    private fun scheduleDebounced(request: RefreshRequest, epoch: Long, firstChangeNanos: Long) {
+    private fun scheduleDebounced(
+        request: RefreshRequest,
+        epoch: Long,
+        firstChangeNanos: Long,
+        delayNanos: Long = TimeUnit.MILLISECONDS.toNanos(DEBOUNCE_MILLIS),
+    ) {
         scheduler.schedule(
             {
                 val launch =
                     synchronized(stateLock) {
                         val latestEpoch = dirtyEpoch[request]?.get() ?: epoch
+                        val now = System.nanoTime()
+                        val remainingQuietNanos =
+                            TimeUnit.MILLISECONDS.toNanos(DEBOUNCE_MILLIS) -
+                                (now - (lastChangeNanos[request] ?: firstChangeNanos))
                         if (
                             !closed.get() &&
                                 queued.contains(request) &&
                                 latestEpoch != epoch &&
-                                System.nanoTime() - firstChangeNanos < maxDebounceNanos
+                                now - firstChangeNanos < maxDebounceNanos &&
+                                remainingQuietNanos > 0
                         ) {
-                            scheduleDebounced(request, latestEpoch, firstChangeNanos)
+                            scheduleDebounced(
+                                request,
+                                latestEpoch,
+                                firstChangeNanos,
+                                remainingQuietNanos,
+                            )
                             false
                         } else {
                             queued.remove(request) && claimLaunch(request)
@@ -668,8 +688,8 @@ internal class AutoRefreshController(
                     }
                 if (launch) launch(request)
             },
-            DEBOUNCE_MILLIS,
-            TimeUnit.MILLISECONDS,
+            delayNanos,
+            TimeUnit.NANOSECONDS,
         )
     }
 

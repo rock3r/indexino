@@ -130,6 +130,8 @@ of continuous changes. Edits during an active refresh queue a successor so a sna
 mid-burst does not become the last published view of that burst. The controller reserves the
 change epoch before launching a worker; a later edit stays dirty even if its event arrives before
 the worker's handle is registered.
+Callbacks within one burst extend the quiet deadline from the latest callback rather than adding
+a full 150 ms delay for each scheduler tick.
 
 On macOS a recursive FSEvents stream covers the workspace, so only directories outside it (for
 example external included builds) are registered with the JDK `WatchService`, which polls there.
