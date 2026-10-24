@@ -25,6 +25,7 @@ import java.nio.file.attribute.BasicFileAttributes
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -60,6 +61,7 @@ internal class AutoRefreshController(
         ((RefreshRequest, Set<Path>, Set<Path>) -> Indexino.TentativeHint?)? =
         null,
     private val nativeFlushForTests: (() -> Unit)? = null,
+    private val debounceMillis: Long = DEBOUNCE_MILLIS,
 ) : AutoCloseable {
     private val closed = AtomicBoolean()
     private val watcherKind = AutoRefreshWatcherFactory.configuredKind()
@@ -303,63 +305,77 @@ internal class AutoRefreshController(
                     else automaticEpoch ?: armedEpoch ?: (dirtyEpoch[request]?.get() ?: 0L)
                 epoch to (automaticEpoch != null && automatic)
             }
-        scheduler.execute {
-            var succeeded = false
-            try {
-                kotlinx.coroutines.runBlocking { handle.await() }
-                succeeded = true
-            } catch (_: Exception) {
-                // Automatic failures retain the dirty epoch for bounded retry.
-            } finally {
-                synchronized(stateLock) {
-                    if (active.remove(request, handle.id.value)) {
-                        val captured = captureEpoch.remove(request)
-                        val coveredEpoch =
-                            if (captured?.first == handle.id.value)
-                                maxOf(epochAtStart, captured.second)
-                            else epochAtStart
-                        val topologyStart =
-                            topologyResolutionEpoch[request]?.takeIf { it.first == handle.id.value }
-                        if (topologyStart != null) topologyResolutionEpoch.remove(request)
-                        val topologyCoveredEpoch = topologyStart?.second ?: epochAtStart
-                        if (succeeded) {
-                            // Keep a path if it was touched again after the full capture began.
-                            hintedPaths[request]?.let { paths ->
-                                paths.entries.removeIf { it.value <= coveredEpoch }
-                                if (paths.isEmpty()) hintedPaths.remove(request)
-                            }
-                            if (
-                                (uncertainTopology[request] ?: Long.MAX_VALUE) <=
-                                    topologyCoveredEpoch
-                            )
-                                uncertainTopology.remove(request)
-                        }
-                        val newerChange =
-                            (dirtyEpoch[request]?.get() ?: 0L) > coveredEpoch ||
-                                (uncertainTopology[request]?.let { it > topologyCoveredEpoch } ==
-                                    true)
-                        if (succeeded && !newerChange) {
-                            dirty.remove(request)
-                            retryAttempts.remove(request)
-                        } else {
-                            if (newerChange || automaticRefresh) dirty.add(request)
-                            if (!succeeded && automaticRefresh) scheduleRetry(request)
-                            else if (
-                                mode != AutoRefreshMode.DISABLED &&
-                                    dirty.contains(request) &&
-                                    queued.add(request)
-                            ) {
-                                // The path and uncertainty from events during this refresh are
-                                // already recorded. A pathless enqueue would discard a safe hint
-                                // and force the successor through full topology reconciliation.
-                                scheduleDebounced(
-                                    request,
-                                    dirtyEpoch[request]?.get() ?: 0L,
-                                    System.nanoTime(),
-                                )
-                            }
-                        }
+        handle.onCompletion { succeeded ->
+            // A result can complete before its worker retires. Do not block this shared scheduler
+            // while waiting: other scopes still need their own debounce and reconciliation ticks.
+            IndexingCoordinator.onRetired(workspace, request, handle.id) {
+                if (closed.get()) return@onRetired
+                try {
+                    scheduler.execute {
+                        finishRefresh(
+                            request,
+                            handle.id.value,
+                            epochAtStart,
+                            automaticRefresh,
+                            succeeded,
+                        )
                     }
+                } catch (rejected: RejectedExecutionException) {
+                    if (!closed.get()) throw rejected
+                }
+            }
+        }
+    }
+
+    @Suppress("CyclomaticComplexMethod")
+    private fun finishRefresh(
+        request: RefreshRequest,
+        id: String,
+        epochAtStart: Long,
+        automaticRefresh: Boolean,
+        succeeded: Boolean,
+    ) {
+        synchronized(stateLock) {
+            if (!active.remove(request, id)) return
+            val captured = captureEpoch.remove(request)
+            val coveredEpoch =
+                if (captured?.first == id) maxOf(epochAtStart, captured.second) else epochAtStart
+            val topologyStart = topologyResolutionEpoch[request]?.takeIf { it.first == id }
+            if (topologyStart != null) topologyResolutionEpoch.remove(request)
+            val topologyCoveredEpoch = topologyStart?.second ?: epochAtStart
+            if (succeeded) {
+                // Keep paths touched again after the full capture began.
+                hintedPaths[request]?.let { paths ->
+                    paths.entries.removeIf { it.value <= coveredEpoch }
+                    if (paths.isEmpty()) hintedPaths.remove(request)
+                }
+                if ((uncertainTopology[request] ?: Long.MAX_VALUE) <= topologyCoveredEpoch)
+                    uncertainTopology.remove(request)
+            }
+            val newerChange =
+                (dirtyEpoch[request]?.get() ?: 0L) > coveredEpoch ||
+                    (uncertainTopology[request]?.let { it > topologyCoveredEpoch } == true)
+            if (succeeded && !newerChange) {
+                dirty.remove(request)
+                retryAttempts.remove(request)
+            } else {
+                if (newerChange || automaticRefresh) dirty.add(request)
+                if (!succeeded && automaticRefresh) scheduleRetry(request)
+                else if (
+                    mode != AutoRefreshMode.DISABLED &&
+                        dirty.contains(request) &&
+                        queued.add(request)
+                ) {
+                    // Preserve the event's path hint instead of forcing a full topology refresh.
+                    val scheduledAt = System.nanoTime()
+                    val changedAt = lastChangeNanos[request] ?: scheduledAt
+                    scheduleDebounced(
+                        request,
+                        dirtyEpoch[request]?.get() ?: 0L,
+                        scheduledAt,
+                        (TimeUnit.MILLISECONDS.toNanos(debounceMillis) - (scheduledAt - changedAt))
+                            .coerceAtLeast(0L),
+                    )
                 }
             }
         }
@@ -657,7 +673,7 @@ internal class AutoRefreshController(
         request: RefreshRequest,
         epoch: Long,
         firstChangeNanos: Long,
-        delayNanos: Long = TimeUnit.MILLISECONDS.toNanos(DEBOUNCE_MILLIS),
+        delayNanos: Long = TimeUnit.MILLISECONDS.toNanos(debounceMillis),
     ) {
         scheduler.schedule(
             {
@@ -666,7 +682,7 @@ internal class AutoRefreshController(
                         val latestEpoch = dirtyEpoch[request]?.get() ?: epoch
                         val now = System.nanoTime()
                         val remainingQuietNanos =
-                            TimeUnit.MILLISECONDS.toNanos(DEBOUNCE_MILLIS) -
+                            TimeUnit.MILLISECONDS.toNanos(debounceMillis) -
                                 (now - (lastChangeNanos[request] ?: firstChangeNanos))
                         if (
                             !closed.get() &&

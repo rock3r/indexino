@@ -42,6 +42,10 @@ private constructor(
 
     public suspend fun stop(): Unit = stopAction()
 
+    internal fun onCompletion(action: (Boolean) -> Unit) {
+        resultFuture.whenComplete { _, failure -> action(failure == null) }
+    }
+
     private suspend fun <T> awaitFuture(future: CompletableFuture<T>): T =
         suspendCancellableCoroutine { continuation ->
             future.whenComplete { value, failure ->

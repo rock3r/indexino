@@ -21,6 +21,7 @@ internal class InFlightRefresh(
 ) {
     internal val result: CompletableFuture<RefreshResult> = CompletableFuture()
     internal val terminalEvent: CompletableFuture<RefreshEvent> = CompletableFuture()
+    internal val retired: CompletableFuture<Unit> = CompletableFuture()
     private val stopped = AtomicBoolean()
     private val stateLock = Any()
     private var worker: Thread? = null
@@ -55,6 +56,7 @@ internal class InFlightRefresh(
                 cleanupFailure
             }
         onFinished(this)
+        retired.complete(Unit)
         if (failure != null) {
             result.completeExceptionally(failure)
             terminalEvent.complete(RefreshFailed(id, failure.failure))
@@ -95,6 +97,16 @@ internal object IndexingCoordinator {
 
     internal fun refreshLockFor(workspace: Path): Any =
         workspaceRefreshLocks.computeIfAbsent(workspace) { Any() }
+
+    internal fun onRetired(
+        workspace: Path,
+        request: RefreshRequest,
+        id: RefreshId,
+        action: () -> Unit,
+    ) {
+        val operation = activeRefreshes[RefreshKey(workspace, request)]
+        if (operation?.id == id) operation.retired.thenRun(action) else action()
+    }
 
     internal fun start(
         workspace: Path,

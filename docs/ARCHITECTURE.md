@@ -132,6 +132,9 @@ change epoch before launching a worker; a later edit stays dirty even if its eve
 the worker's handle is registered.
 Callbacks within one burst extend the quiet deadline from the latest callback rather than adding
 a full 150 ms delay for each scheduler tick.
+After an active refresh completes, its successor waits only for any quiet time remaining since
+the last callback; it starts immediately if that interval already elapsed during the first refresh,
+but only after the previous worker retires from the coordinator.
 
 On macOS a recursive FSEvents stream covers the workspace, so only directories outside it (for
 example external included builds) are registered with the JDK `WatchService`, which polls there.
