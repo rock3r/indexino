@@ -215,6 +215,14 @@ event delivery: a change whose event arrives after a refresh started schedules a
 all intervening events name known sources under continuous recursive coverage, the successor keeps
 their path hints and can reuse topology and unchanged hashes; unknown paths, overflow, failed
 refreshes and lost coverage still force full reconciliation.
+In a guarded macOS comparison on separate disposable copies of a 433,534-entry corpus, both
+versions published correct facts for 24 known-source saves with one source read per refresh.
+With the combined Git stamp, 18 of 24 matched saves reached a correct `PUBLISHED` query sooner:
+median rename-to-query fell from 745.67 to 706.05 ms, observed p95 from 826.93 to 743.03 ms,
+and observed maximum from 978.34 to 811.36 ms. Origin-resolution and concurrent store-build
+medians fell from 316 to 279 ms and from 346 to 302.5 ms. The protected original and both
+disposable copies passed PRE/POST, Git/index and immutable-base checks. This sequential pair is
+not a worst-case latency bound or proof that every later save improves.
 Origin reads never write the user's index: `status` runs with optional locks disabled and daemon
 `diff` reads a private copy of the index, because `git diff` otherwise refreshes the index.
 For a captured source snapshot, each origin computes its source fingerprint alongside its Git
