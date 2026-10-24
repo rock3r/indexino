@@ -167,6 +167,15 @@ that uncertainty rather than promoting it; a certified base stays `CURRENT` afte
 covered edit. A restart forgets that in-memory evidence and reports `UNKNOWN` until audit.
 Existing pins retain their acquisition-time freshness.
 
+In a matched, private macOS validation of [PR #73](https://github.com/rock3r/indexino/pull/73),
+72 atomic saves (24 each with spaced, jittered, and three-save-burst timing) used the same schedule
+before and after the bounded multi-temp-parent and quiet-timer changes. All 72 treatment saves
+published correct `PROVISIONAL` facts with one source read and 65,148 inherited hashes; overlapping
+readers and a reopener observed the publications, and independent full audits reported `UNCHANGED`.
+Pooled rename-to-correct-query p95 fell from 963 to 806 ms and the observed maximum from 1,041 to
+830 ms (70 of 72 pairs improved). These are contended host measurements, not a sub-second guarantee
+or a substitute for full-corpus public acceptance.
+
 Origin provenance (HEAD, working-tree fingerprint, dirty flag) normally costs whole-repository
 `git diff HEAD`, `git status` and `git ls-files --others` walks, seconds on a large checkout. A
 known-source watcher refresh updates it incrementally only with evidence: the macOS FSEvents stream
