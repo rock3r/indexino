@@ -179,6 +179,18 @@ Pooled rename-to-correct-query p95 fell from 963 to 806 ms and the observed maxi
 830 ms (70 of 72 pairs improved). These are contended host measurements, not a sub-second guarantee
 or a substitute for full-corpus public acceptance.
 
+A separate guarded macOS overlap lane staged atomic rename inputs on the same APFS volume outside
+the watched tree. In three matched pairs, a second known-source edit arrived after the first source
+capture but before its refresh completed. Each arm completed two distinct reused-topology refreshes
+per pair, reading one source and inheriting 65,148 hashes. `PUBLISHED` returned correct facts with
+its specified `UNKNOWN` freshness for owner `CURRENT`; strict `AWAIT_CURRENT`, concurrent readers
+and a reopener passed. Observed completion-to-successor launch
+fell from 160–163 ms to 0.9–6.7 ms, and final rename-to-correct-`PUBLISHED`-query from
+1,078–1,151 ms to 964–993 ms. The protected original and independent disposable copies passed
+433,534-entry PRE/POST, Git/index and immutable-base checks. An initial same-parent-temp baseline
+instead failed and retried a full capture after one second; it is excluded from this healthy-overlap
+comparison. Three samples do not establish a worst-case bound or characterize every atomic save.
+
 Origin provenance (HEAD, working-tree fingerprint, dirty flag) normally costs whole-repository
 `git diff HEAD`, `git status` and `git ls-files --others` walks, seconds on a large checkout. A
 known-source watcher refresh updates it incrementally only with evidence: the macOS FSEvents stream
