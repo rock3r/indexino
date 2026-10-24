@@ -132,12 +132,21 @@ change epoch before launching a worker; a later edit stays dirty even if its eve
 the worker's handle is registered.
 Callbacks within one burst extend the quiet deadline from the latest callback rather than adding
 a full 150 ms delay for each scheduler tick.
+After an active refresh completes, its successor waits only for any quiet time remaining since
+the last callback; it starts immediately if that interval already elapsed during the first refresh,
+but only after the previous worker retires from the coordinator.
 
 On macOS a recursive FSEvents stream covers the workspace, so only directories outside it (for
 example external included builds) are registered with the JDK `WatchService`, which polls there.
 The stream uses NoDefer to deliver the first event after a quiet period without waiting for the
 100 ms native coalescing window; later events still coalesce, and the controller's 150 ms debounce
 still applies before a refresh starts.
+In a guarded 24-save matched macOS comparison on independent disposable copies of a 433,534-entry
+corpus, reducing that window to 10 ms improved the three-save-burst source-naming callback p95
+from 35.77 to 11.76 ms, but increased burst callbacks from 23 to 42. Both arms published correct
+facts for all saves with no native overflows; neither had a query taking at least one second.
+The observed ~24 ms callback gain missed the prespecified 60 ms threshold, so the 100 ms setting
+was retained. A callback after a burst's final rename can coalesce earlier events in that burst.
 Native startup failures fall back to scope-derived WatchService keys. Unexpected worker exit
 revokes recursive coverage and in-flight hints, adds fallback keys within the watch budget, and
 keeps scopes uncovered for periodic full reconciliation: macOS polling cannot certify inherited
@@ -176,6 +185,18 @@ Pooled rename-to-correct-query p95 fell from 963 to 806 ms and the observed maxi
 830 ms (70 of 72 pairs improved). These are contended host measurements, not a sub-second guarantee
 or a substitute for full-corpus public acceptance.
 
+A separate guarded macOS overlap lane staged atomic rename inputs on the same APFS volume outside
+the watched tree. In three matched pairs, a second known-source edit arrived after the first source
+capture but before its refresh completed. Each arm completed two distinct reused-topology refreshes
+per pair, reading one source and inheriting 65,148 hashes. `PUBLISHED` returned correct facts with
+its specified `UNKNOWN` freshness for owner `CURRENT`; strict `AWAIT_CURRENT`, concurrent readers
+and a reopener passed. Observed completion-to-successor launch
+fell from 160–163 ms to 0.9–6.7 ms, and final rename-to-correct-`PUBLISHED`-query from
+1,078–1,151 ms to 964–993 ms. The protected original and independent disposable copies passed
+433,534-entry PRE/POST, Git/index and immutable-base checks. An initial same-parent-temp baseline
+instead failed and retried a full capture after one second; it is excluded from this healthy-overlap
+comparison. Three samples do not establish a worst-case bound or characterize every atomic save.
+
 Origin provenance (HEAD, working-tree fingerprint, dirty flag) normally costs whole-repository
 `git diff HEAD`, `git status` and `git ls-files --others` walks, seconds on a large checkout. A
 known-source watcher refresh updates it incrementally only with evidence: the macOS FSEvents stream
@@ -183,15 +204,25 @@ recursively covers the origin (per-directory `WatchService` keys do not), so any
 change, overflow or coverage loss already forces a full refresh; and a per-origin stamp proves Git
 state the watcher ignores is unchanged: HEAD and its tree, the owning repository's HEAD, effective
 configuration, the index file identity and ignore, attribute, graft and sparse-checkout files. The
-stamp is taken before and after the reads. Only hinted files are then re-read with
-pathspec-limited `diff` and `status`, and the full diff is rebuilt from per-path sections, so the
-result is byte-identical to a full resolution. Unparseable output (renames, quoted paths, extra
-stderr), too many hints, or a nested origin whose files an enclosing repository tracks fall back to
-the full reads for that origin. Like inherited source hashes, the evidence is only as current as
+stamp is taken before and after the reads. One `rev-parse` also identifies a submodule's
+superproject; an origin that owns its repository reuses its already-read HEAD instead of launching
+another Git process, while a submodule still reads its owner's HEAD. Only hinted files are then
+re-read with pathspec-limited `diff` and `status`. The full diff is rebuilt from per-path sections,
+so the result is byte-identical to a full resolution. Unparseable output (renames, quoted paths,
+extra stderr), too many hints, or a nested origin whose files an enclosing repository tracks fall
+back to the full reads for that origin. Like inherited source hashes, the evidence is only as current as
 event delivery: a change whose event arrives after a refresh started schedules a successor. When
 all intervening events name known sources under continuous recursive coverage, the successor keeps
 their path hints and can reuse topology and unchanged hashes; unknown paths, overflow, failed
 refreshes and lost coverage still force full reconciliation.
+In a guarded macOS comparison on separate disposable copies of a 433,534-entry corpus, both
+versions published correct facts for 24 known-source saves with one source read per refresh.
+With the combined Git stamp, 18 of 24 matched saves reached a correct `PUBLISHED` query sooner:
+median rename-to-query fell from 745.67 to 706.05 ms, observed p95 from 826.93 to 743.03 ms,
+and observed maximum from 978.34 to 811.36 ms. Origin-resolution and concurrent store-build
+medians fell from 316 to 279 ms and from 346 to 302.5 ms. The protected original and both
+disposable copies passed PRE/POST, Git/index and immutable-base checks. This sequential pair is
+not a worst-case latency bound or proof that every later save improves.
 Origin reads never write the user's index: `status` runs with optional locks disabled and daemon
 `diff` reads a private copy of the index, because `git diff` otherwise refreshes the index.
 For a captured source snapshot, each origin computes its source fingerprint alongside its Git

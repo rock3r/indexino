@@ -964,6 +964,160 @@ class AutoRefreshControllerTest {
     }
 
     @Test
+    fun `active refresh successor waits only for remaining quiet time`() {
+        for (alreadyQuiet in listOf(true, false)) {
+            val workspace = Files.createTempDirectory("indexino-successor-quiet-")
+            val source = workspace.resolve("src/main/kotlin/Panel.kt")
+            Files.createDirectories(source.parent)
+            Files.writeString(source, "class Panel")
+            val request = RefreshRequest.forScope(IndexScope.gradle(":app"))
+            val firstStarted = CountDownLatch(1)
+            val successorStarted = CountDownLatch(1)
+            val firstResult = CompletableFuture<RefreshResult>()
+            val refreshCount = AtomicInteger()
+            lateinit var controller: AutoRefreshController
+            controller =
+                AutoRefreshController(
+                    workspace,
+                    AutoRefreshMode.ENABLED,
+                    refresh = {
+                        if (refreshCount.incrementAndGet() == 1) {
+                            val id = RefreshId.of("first")
+                            controller.onRefreshStarted(
+                                request,
+                                RefreshHandle.inFlight(
+                                    id,
+                                    firstResult,
+                                    CompletableFuture(),
+                                    stopAction = {},
+                                ),
+                            )
+                            firstStarted.countDown()
+                        } else successorStarted.countDown()
+                    },
+                    debounceMillis = 500L,
+                )
+            try {
+                controller.register(
+                    request,
+                    listOf(IndexedSource.workspace(workspace, "src/main/kotlin/Panel.kt")),
+                )
+                controller.onPathChangedForTests(source)
+                assertTrue(firstStarted.await(5, TimeUnit.SECONDS))
+                controller.onPathChangedForTests(source)
+                if (alreadyQuiet) Thread.sleep(600L)
+                firstResult.complete(successfulResult(request, RefreshId.of("first")))
+                if (alreadyQuiet) {
+                    assertTrue(
+                        successorStarted.await(250, TimeUnit.MILLISECONDS),
+                        "An already-quiet edit should not wait another full interval",
+                    )
+                } else {
+                    assertFalse(
+                        successorStarted.await(150, TimeUnit.MILLISECONDS),
+                        "A recent edit still needs quiet time",
+                    )
+                    assertTrue(successorStarted.await(5, TimeUnit.SECONDS))
+                }
+                assertEquals(2, refreshCount.get())
+            } finally {
+                controller.close()
+                workspace.toFile().deleteRecursively()
+            }
+        }
+    }
+
+    @Test
+    fun `already quiet successor waits for previous worker retirement`() {
+        val workspace = Files.createTempDirectory("indexino-successor-retirement-")
+        val otherRoot = Files.createTempDirectory("indexino-other-scope-")
+        val source = workspace.resolve("src/main/kotlin/Panel.kt")
+        val otherSource = otherRoot.resolve("src/main/kotlin/Other.kt")
+        Files.createDirectories(source.parent)
+        Files.createDirectories(otherSource.parent)
+        Files.writeString(source, "class Panel")
+        Files.writeString(otherSource, "class Other")
+        val request = RefreshRequest.forScope(IndexScope.gradle(":app"))
+        val otherRequest = RefreshRequest.forScope(IndexScope.gradle(":lib"))
+        val firstWorkerStarted = CountDownLatch(1)
+        val allowFirstResult = CountDownLatch(1)
+        val releaseFirstWorker = CountDownLatch(1)
+        val successorDispatched = CountDownLatch(1)
+        val successorWorkerStarted = CountDownLatch(1)
+        val otherScopeDispatched = CountDownLatch(1)
+        val dispatchCount = AtomicInteger()
+        val workerCount = AtomicInteger()
+        lateinit var controller: AutoRefreshController
+        controller =
+            AutoRefreshController(
+                workspace,
+                AutoRefreshMode.ENABLED,
+                refresh = { refreshed ->
+                    if (refreshed == otherRequest) otherScopeDispatched.countDown()
+                    else {
+                        val dispatch = dispatchCount.incrementAndGet()
+                        val operation =
+                            IndexingCoordinator.start(workspace, request) { worker ->
+                                if (workerCount.incrementAndGet() == 1) {
+                                    firstWorkerStarted.countDown()
+                                    check(allowFirstResult.await(5, TimeUnit.SECONDS))
+                                    worker.result.complete(successfulResult(request, worker.id))
+                                    check(releaseFirstWorker.await(5, TimeUnit.SECONDS))
+                                } else {
+                                    successorWorkerStarted.countDown()
+                                    worker.result.complete(successfulResult(request, worker.id))
+                                }
+                            }
+                        controller.onRefreshStarted(
+                            request,
+                            RefreshHandle.inFlight(
+                                operation.id,
+                                operation.result,
+                                operation.terminalEvent,
+                                stopAction = {},
+                            ),
+                        )
+                        if (dispatch > 1) successorDispatched.countDown()
+                    }
+                },
+            )
+        try {
+            controller.register(
+                request,
+                listOf(IndexedSource.workspace(workspace, "src/main/kotlin/Panel.kt")),
+            )
+            controller.onPathChangedForTests(source)
+            assertTrue(firstWorkerStarted.await(5, TimeUnit.SECONDS))
+            controller.onPathChangedForTests(source)
+            controller.register(
+                otherRequest,
+                listOf(IndexedSource("other", otherRoot, "src/main/kotlin/Other.kt")),
+            )
+            Thread.sleep(250L)
+            allowFirstResult.countDown()
+            controller.onPathChangedForTests(otherSource)
+            assertTrue(
+                otherScopeDispatched.await(450, TimeUnit.MILLISECONDS),
+                "A waiting worker must not block another scope's debounce",
+            )
+            assertFalse(
+                successorDispatched.await(150, TimeUnit.MILLISECONDS),
+                "A completed result is not a retired worker: do not join the old handle",
+            )
+            releaseFirstWorker.countDown()
+            assertTrue(successorDispatched.await(5, TimeUnit.SECONDS))
+            assertTrue(successorWorkerStarted.await(5, TimeUnit.SECONDS))
+            assertEquals(2, workerCount.get())
+        } finally {
+            allowFirstResult.countDown()
+            releaseFirstWorker.countDown()
+            controller.close()
+            workspace.toFile().deleteRecursively()
+            otherRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `known edits during active refresh keep successor hint but unknown edits reconcile fully`() {
         for (unknown in listOf(false, true)) {
             val workspace = Files.createTempDirectory("indexino-active-hints-")
