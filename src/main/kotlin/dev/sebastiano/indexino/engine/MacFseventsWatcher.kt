@@ -186,7 +186,7 @@ internal class MacFseventsWatcher(
         private const val NO_DEFER = 0x00000002
         private const val OVERFLOW_FLAGS = 0x0000000F
         private const val SINCE_NOW = -1L
-        private const val LATENCY_SECONDS = 0.1
+        private const val LATENCY_SECONDS = 0.01
         private const val FSEVENT_STREAM_CONTEXT_SIZE = 40L
         private const val FSEVENT_STREAM_CONTEXT_VERSION_OFFSET = 0L
         private const val FSEVENT_STREAM_CONTEXT_INFO_OFFSET = 8L

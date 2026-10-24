@@ -139,7 +139,7 @@ but only after the previous worker retires from the coordinator.
 On macOS a recursive FSEvents stream covers the workspace, so only directories outside it (for
 example external included builds) are registered with the JDK `WatchService`, which polls there.
 The stream uses NoDefer to deliver the first event after a quiet period without waiting for the
-100 ms native coalescing window; later events still coalesce, and the controller's 150 ms debounce
+10 ms native coalescing window; later events still coalesce, and the controller's 150 ms debounce
 still applies before a refresh starts.
 Native startup failures fall back to scope-derived WatchService keys. Unexpected worker exit
 revokes recursive coverage and in-flight hints, adds fallback keys within the watch budget, and
