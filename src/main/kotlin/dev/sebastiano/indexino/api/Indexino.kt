@@ -100,12 +100,13 @@ private constructor(
 
     internal fun tentativeParentHint(
         request: RefreshRequest,
-        unknown: Path,
+        unknown: Set<Path>,
         known: Set<Path>,
     ): TentativeHint? {
         val capture = currentWatcherCapture(request) ?: return null
         val epoch = capture.observationEpoch ?: return null
-        val parent = capture.parents[unknown.parent] ?: return null
+        val firstUnknown = unknown.firstOrNull() ?: return null
+        val parent = capture.parents[firstUnknown.parent] ?: return null
         val checked = parent.compare(capture.hashes, unknown, known) ?: return null
         return TentativeHint(capture.topology, checked, epoch)
     }

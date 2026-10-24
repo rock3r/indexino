@@ -1200,6 +1200,43 @@ class AutoRefreshControllerTest {
     }
 
     @Test
+    fun `events in one callback burst do not add a second full debounce`() {
+        val workspace = Files.createTempDirectory("indexino-callback-burst-")
+        val source = workspace.resolve("src/main/kotlin/Panel.kt")
+        val temporary = source.resolveSibling("Panel.kt.tmp")
+        Files.createDirectories(source.parent)
+        Files.writeString(source, "class Panel")
+        val request = RefreshRequest.forScope(IndexScope.gradle(":app"))
+        val refreshed = CountDownLatch(1)
+        val controller =
+            AutoRefreshController(
+                workspace,
+                AutoRefreshMode.ENABLED,
+                refresh = { refreshed.countDown() },
+                nativeWorkspaceWatcher = { _, _, _ -> TestNativeWatcher() },
+            )
+        try {
+            controller.register(
+                request,
+                listOf(IndexedSource.workspace(workspace, "src/main/kotlin/Panel.kt")),
+            )
+            val start = System.nanoTime()
+            controller.onPathChangedForTests(temporary)
+            controller.onPathChangedForTests(source)
+            val remaining =
+                TimeUnit.MILLISECONDS.toNanos(COALESCED_QUIET_DEADLINE_MILLIS) -
+                    (System.nanoTime() - start)
+            assertTrue(
+                refreshed.await(remaining.coerceAtLeast(0), TimeUnit.NANOSECONDS),
+                "A callback burst should start after one quiet interval, not two",
+            )
+        } finally {
+            controller.close()
+            workspace.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `continuous burst starts a refresh within the maximum delay and retains the final edit`() {
         val workspace = Files.createTempDirectory(Path.of("/tmp"), "indexino-continuous-edit-")
         val sourceRoot = workspace.resolve("src/main/kotlin")
@@ -1395,5 +1432,6 @@ class AutoRefreshControllerTest {
 
     private companion object {
         const val DEBOUNCE_SETTLE_MILLIS = 250L
+        const val COALESCED_QUIET_DEADLINE_MILLIS = 260L
     }
 }
