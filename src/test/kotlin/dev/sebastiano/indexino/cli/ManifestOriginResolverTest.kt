@@ -101,6 +101,39 @@ class ManifestOriginResolverTest {
     }
 
     @Test
+    fun `workspace inside a submodule invalidates its stamp when the owner advances`() {
+        val child = committedWorkspace("child")
+        val parent = Files.createDirectories(tempDir.resolve("parent"))
+        Files.writeString(parent.resolve("README.md"), "parent\n")
+        initRepository(parent)
+        git(
+            parent,
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            child.toString(),
+            "module",
+        )
+        git(parent, "commit", "-m", "add module")
+
+        val workspace = parent.resolve("module")
+        val source = sources(workspace, "src/A.java").single()
+        val initial = resolveWithState(workspace, listOf(source))
+        Files.writeString(workspace.resolve("src/A.java"), "class A { int changed; }\n")
+        git(parent, "commit", "--allow-empty", "-m", "advance owner")
+
+        val hinted =
+            resolveWithState(
+                workspace,
+                listOf(source),
+                OriginIncrementalHint(initial.states, listOf(source), workspace.toRealPath()),
+            )
+        assertEquals(0, hinted.incremental)
+        assertEquals(resolveWithState(workspace, listOf(source)).origins, hinted.origins)
+    }
+
+    @Test
     fun `covered known-source edits update origin state incrementally and exactly`() {
         val workspace = committedWorkspace()
         // Staged-only index state, a dirty tracked source and an untracked known source.

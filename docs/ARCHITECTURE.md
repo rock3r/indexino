@@ -186,11 +186,13 @@ recursively covers the origin (per-directory `WatchService` keys do not), so any
 change, overflow or coverage loss already forces a full refresh; and a per-origin stamp proves Git
 state the watcher ignores is unchanged: HEAD and its tree, the owning repository's HEAD, effective
 configuration, the index file identity and ignore, attribute, graft and sparse-checkout files. The
-stamp is taken before and after the reads. Only hinted files are then re-read with
-pathspec-limited `diff` and `status`, and the full diff is rebuilt from per-path sections, so the
-result is byte-identical to a full resolution. Unparseable output (renames, quoted paths, extra
-stderr), too many hints, or a nested origin whose files an enclosing repository tracks fall back to
-the full reads for that origin. Like inherited source hashes, the evidence is only as current as
+stamp is taken before and after the reads. One `rev-parse` also identifies a submodule's
+superproject; an origin that owns its repository reuses its already-read HEAD instead of launching
+another Git process, while a submodule still reads its owner's HEAD. Only hinted files are then
+re-read with pathspec-limited `diff` and `status`. The full diff is rebuilt from per-path sections,
+so the result is byte-identical to a full resolution. Unparseable output (renames, quoted paths,
+extra stderr), too many hints, or a nested origin whose files an enclosing repository tracks fall
+back to the full reads for that origin. Like inherited source hashes, the evidence is only as current as
 event delivery: a change whose event arrives after a refresh started schedules a successor. When
 all intervening events name known sources under continuous recursive coverage, the successor keeps
 their path hints and can reuse topology and unchanged hashes; unknown paths, overflow, failed

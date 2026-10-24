@@ -427,18 +427,22 @@ internal object ManifestOriginResolver {
                 "HEAD^{tree}",
                 "--absolute-git-dir",
                 "--git-common-dir",
+                "--show-superproject-working-tree",
             )
         }
         val config = async { runGit(originRoot, "config", "--list", "--show-origin") }
-        val ownerHead = async {
-            val owner = superprojectRoot(originRoot.toRealPath()) ?: workspace.toRealPath()
-            runGit(owner, "rev-parse", "HEAD")
-        }
-        val lines =
-            parsed.await()?.lines()?.filter(String::isNotEmpty) ?: return@coroutineScope null
-        if (lines.size != REV_PARSE_STAMP_LINES) return@coroutineScope null
+        val parsedText = parsed.await() ?: return@coroutineScope null
+        val lines = parsedText.lines().filter(String::isNotEmpty)
+        if (lines.size !in REV_PARSE_STAMP_LINES..REV_PARSE_STAMP_LINES + 1)
+            return@coroutineScope null
         val gitDir = Path.of(lines[2])
         val commonDir = originRoot.resolve(lines[3]).normalize()
+        val owner = lines.getOrNull(4)?.let(Path::of) ?: workspace.toRealPath()
+        val ownerHead =
+            if (runCatching { Files.isSameFile(owner, originRoot) }.getOrDefault(false)) {
+                // Preserve the newline in the old rev-parse HEAD output for existing stamps.
+                parsedText.substringBefore('\n') + "\n"
+            } else runGit(owner, "rev-parse", "HEAD").orEmpty()
         val configText = config.await() ?: return@coroutineScope null
         val index =
             runCatching {
@@ -465,7 +469,7 @@ internal object ManifestOriginResolver {
                 configuredFile(configText, "core.attributesfile", "attributes"),
             )
         val value =
-            (listOf(lines[0], lines[1], ownerHead.await().orEmpty(), configText, index) +
+            (listOf(lines[0], lines[1], ownerHead, configText, index) +
                     inputs.map { "$it=${OriginGitState.hashOrNull(it)}" })
                 .joinToString("\u0000")
         GitStamp(value, gitDir)
