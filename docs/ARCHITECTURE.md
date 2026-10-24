@@ -141,6 +141,12 @@ example external included builds) are registered with the JDK `WatchService`, wh
 The stream uses NoDefer to deliver the first event after a quiet period without waiting for the
 100 ms native coalescing window; later events still coalesce, and the controller's 150 ms debounce
 still applies before a refresh starts.
+In a guarded 24-save matched macOS comparison on independent disposable copies of a 433,534-entry
+corpus, reducing that window to 10 ms improved the three-save-burst source-naming callback p95
+from 35.77 to 11.76 ms, but increased burst callbacks from 23 to 42. Both arms published correct
+facts for all saves with no native overflows; neither had a query taking at least one second.
+The observed ~24 ms callback gain missed the prespecified 60 ms threshold, so the 100 ms setting
+was retained. A callback after a burst's final rename can coalesce earlier events in that burst.
 Native startup failures fall back to scope-derived WatchService keys. Unexpected worker exit
 revokes recursive coverage and in-flight hints, adds fallback keys within the watch budget, and
 keeps scopes uncovered for periodic full reconciliation: macOS polling cannot certify inherited
