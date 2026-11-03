@@ -17,6 +17,9 @@ import dev.sebastiano.indexino.model.PluginId
 import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.ReferenceQuery
 import dev.sebastiano.indexino.model.SymbolQuery
+import java.net.StandardProtocolFamily
+import java.net.UnixDomainSocketAddress
+import java.nio.channels.ServerSocketChannel
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
@@ -27,6 +30,36 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
 class DaemonStartCommandTest {
+    @Test
+    fun `start waits for a usable connection rather than an existing socket path`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-daemon-readiness-")
+        val workspace =
+            Files.createTempDirectory(Path.of("/tmp"), "indexino-daemon-readiness-workspace-")
+        val previousCacheRoot = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheRoot.toString())
+        try {
+            val endpoint =
+                RuntimePaths.socketPath(
+                    cacheRoot,
+                    InProcessCacheLayout.workspaceId(workspace.toRealPath()),
+                )
+            Files.createDirectories(endpoint.parent)
+            ServerSocketChannel.open(StandardProtocolFamily.UNIX).use { socket ->
+                socket.bind(UnixDomainSocketAddress.of(endpoint))
+            }
+            assertTrue(Files.exists(endpoint))
+
+            assertEquals(CliExitCodes.SUCCESS, DaemonStartCommand().start(workspace, cacheRoot))
+            RuntimeConnection.connect(endpoint).use {}
+        } finally {
+            DaemonStopCommand().stop(workspace, cacheRoot)
+            workspace.toFile().deleteRecursively()
+            cacheRoot.toFile().deleteRecursively()
+            if (previousCacheRoot == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheRoot)
+        }
+    }
+
     @Test
     fun `daemon start rejects an incompatible live auto refresh mode`() {
         val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-daemon-mode-mismatch-")

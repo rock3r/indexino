@@ -31,6 +31,9 @@ indexino daemon run    --project /path/to/repo [--no-auto-refresh] # foreground 
 | `status` | Lease + liveness | Reports tombstones if the workspace was lost |
 | `stop` | `shutdownRuntime()` | Explicit shared shutdown — not client disconnect. `--purge` drops reclaimable cache for this workspace |
 
+`daemon start` reports success only once the launched owner accepts a protocol handshake; an
+existing socket pathname alone does not establish that its listener is ready.
+
 Before deleting or moving a daemon-owned worktree, run `daemon stop`. Deleting the bound workspace
 while the daemon is alive yields terminal **`WORKSPACE_LOST`** (loud diagnostic + external tombstone).
 
