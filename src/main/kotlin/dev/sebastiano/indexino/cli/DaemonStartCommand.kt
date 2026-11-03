@@ -8,6 +8,7 @@ import dev.sebastiano.indexino.engine.RuntimePaths
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.TimeUnit
 
 internal class DaemonStartCommand {
     fun start(
@@ -43,19 +44,23 @@ internal class DaemonStartCommand {
                 .start()
 
         val endpoint = RuntimePaths.socketPath(cacheRoot, workspaceId)
-        repeat(START_WAIT_ATTEMPTS) {
+        val deadline =
+            System.nanoTime() +
+                TimeUnit.MILLISECONDS.toNanos(START_WAIT_MILLIS * START_WAIT_ATTEMPTS)
+        while (true) {
+            val remainingMillis = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())
+            if (remainingMillis <= 0) return CliExitCodes.ANALYSIS_ERROR
             if (Files.exists(endpoint)) {
                 try {
-                    RuntimeConnection.connect(endpoint).use {}
+                    RuntimeConnection.connect(endpoint, remainingMillis).use {}
                     return CliExitCodes.SUCCESS
                 } catch (_: IOException) {
                     // The socket file can exist before the owner is accepting connections.
                 }
             }
             if (!process.isAlive) return CliExitCodes.ANALYSIS_ERROR
-            Thread.sleep(START_WAIT_MILLIS)
+            Thread.sleep(minOf(START_WAIT_MILLIS, remainingMillis))
         }
-        return CliExitCodes.ANALYSIS_ERROR
     }
 
     private fun javaExecutable(): String =
