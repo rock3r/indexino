@@ -361,6 +361,7 @@ internal object ManifestOriginResolver {
                 current.gitDir,
                 listOf("--literal-pathspecs", "diff", "--no-ext-diff", "--binary", "HEAD", "--") +
                     own,
+                disableAutoRefreshIndex = true,
             )
         }
         val status = async {
@@ -479,12 +480,14 @@ internal object ManifestOriginResolver {
      * `git diff` rewrites the index when it finds stat-only changes, even with optional locks
      * disabled. Diffing against a private copy keeps the output identical while leaving the user's
      * index, and so its stamp, untouched. The copy keeps the index mtime so racy-entry detection is
-     * unchanged.
+     * unchanged. A path-limited incremental diff can skip Git's automatic whole-index stat refresh;
+     * this is restricted to the private index and does not change full-origin reads or status.
      */
     private suspend fun runGitWithIndexCopy(
         originRoot: Path,
         gitDir: Path,
         arguments: List<String>,
+        disableAutoRefreshIndex: Boolean = false,
     ): String? {
         val index = gitDir.resolve("index")
         if (!Files.isRegularFile(index)) return runGit(originRoot, arguments)
@@ -492,7 +495,10 @@ internal object ManifestOriginResolver {
         return try {
             val copy = directory.resolve("index")
             Files.copy(index, copy, StandardCopyOption.COPY_ATTRIBUTES)
-            runGit(originRoot, arguments, indexFile = copy)
+            val scopedArguments =
+                if (disableAutoRefreshIndex) listOf("-c", "diff.autoRefreshIndex=false") + arguments
+                else arguments
+            runGit(originRoot, scopedArguments, indexFile = copy)
         } finally {
             directory.toFile().deleteRecursively()
         }

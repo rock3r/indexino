@@ -5,6 +5,7 @@ import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.SourceContentSnapshot
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.FileTime
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutionException
@@ -15,6 +16,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.io.TempDir
 
 /** Pins origin provenance so the Git work can be reorganized without changing manifests. */
@@ -169,6 +171,66 @@ class ManifestOriginResolverTest {
             states = incremental
         }
         assertTrue(states.origins.single().dirty)
+    }
+
+    @Test
+    fun `restored known source keeps incremental provenance without refreshing the whole index`() {
+        val workspace = committedWorkspace("reset-source")
+        val source = sources(workspace, "src/A.java").single()
+        val original = Files.readString(workspace.resolve(source.path))
+        val initial = resolveWithState(workspace, listOf(source))
+        Files.writeString(workspace.resolve(source.path), "class A { int edited; }\n")
+        val edited =
+            resolveWithState(
+                workspace,
+                listOf(source),
+                OriginIncrementalHint(initial.states, listOf(source), workspace.toRealPath()),
+            )
+        assertEquals(1, edited.incremental)
+
+        Files.writeString(workspace.resolve(source.path), original)
+        Files.setLastModifiedTime(
+            workspace.resolve(source.path),
+            FileTime.fromMillis(1_000_000_000_000),
+        )
+        val traceDirectory =
+            System.getenv("GIT_TRACE2_EVENT")?.let(Path::of)?.takeIf(Files::isDirectory)
+        val priorTraces = traceDirectory?.let { directory ->
+            Files.list(directory).use { it.toList().toSet() }
+        }
+        val restored =
+            resolveWithState(
+                workspace,
+                listOf(source),
+                OriginIncrementalHint(edited.states, listOf(source), workspace.toRealPath()),
+            )
+        assertEquals(1, restored.incremental)
+        if (traceDirectory != null && priorTraces != null) {
+            val workspaceArgument = JsonPrimitive(workspace.toString()).toString()
+            val diffs =
+                Files.list(traceDirectory).use { paths ->
+                    paths
+                        .filter { it !in priorTraces }
+                        .map(Files::readString)
+                        .filter {
+                            it.contains("\"-C\",$workspaceArgument,") &&
+                                it.contains(",\"diff\",\"--no-ext-diff\"") &&
+                                it.contains(source.path)
+                        }
+                        .toList()
+                }
+            assertEquals(1, diffs.size, "Expected exactly one path-limited Git diff trace")
+            assertTrue(
+                diffs.single().contains("\"-c\",\"diff.autoRefreshIndex=false\""),
+                "The incremental private-index diff must disable Git's index refresh",
+            )
+            assertFalse(
+                diffs.single().contains("\"key\":\"refresh/sum_scan\""),
+                "A clean reset must not stat-refresh the entire Git index for one source",
+            )
+        }
+        assertEquals(resolveWithState(workspace, listOf(source)).origins, restored.origins)
+        assertFalse(restored.origins.single().dirty)
     }
 
     @Test

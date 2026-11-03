@@ -225,6 +225,11 @@ disposable copies passed PRE/POST, Git/index and immutable-base checks. This seq
 not a worst-case latency bound or proof that every later save improves.
 Origin reads never write the user's index: `status` runs with optional locks disabled and daemon
 `diff` reads a private copy of the index, because `git diff` otherwise refreshes the index.
+For an incremental, path-limited binary diff against that private full-index copy only, Indexino
+passes `-c diff.autoRefreshIndex=false`. A clean file restored after an edit otherwise makes Git
+stat-refresh every index entry despite the literal one-file pathspec. Full-origin diffs, `status`,
+the original index, and before/after Git stamps keep their existing behavior. The source content
+hash and publication checks still decide whether a generation can be reused or published.
 For a captured source snapshot, each origin computes its source fingerprint alongside its Git
 state, then joins both before constructing provenance. Callers without a captured snapshot retain
 sequential reads so a live source read does not race with its Git-state observation.
