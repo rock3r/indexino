@@ -665,7 +665,7 @@ class InProcessIndexinoTest {
 
     @Test
     fun `covered hinted edit resolves origins incrementally and exactly`() {
-        val workspace = createGitWorkspace()
+        val workspace = createGitWorkspace().toRealPath()
         val cacheDirectory = createTempDirectory("indexino-incremental-origins-")
         tempDirs.add(cacheDirectory)
         val prior = System.getProperty("indexino.cache.dir")
@@ -752,7 +752,7 @@ class InProcessIndexinoTest {
 
     @Test
     fun `hinted edit inherits only from the generation this runtime captured`() {
-        val workspace = createGitWorkspace()
+        val workspace = createGitWorkspace().toRealPath()
         val cacheDirectory = createTempDirectory("indexino-hinted-capture-")
         tempDirs.add(cacheDirectory)
         val prior = System.getProperty("indexino.cache.dir")

@@ -217,6 +217,9 @@ client close retain that lease, and refreshes retain independent leases until th
 GC takes the exclusive lock for its entire reachability scan and deletion, or reports
 `activeRuntime=true` without deleting packs. This prevents publication and pinned-generation races
 across cooperating processes. It intentionally defers all reclamation while any client is live.
+An in-process client acquires its activity lock before resolving the writer staging path: a new
+cache beneath a symlinked parent must use the same canonical root before and after creation, or a
+second refresh can miss its compatible overlay base.
 `cache forget` also takes the exclusive activity lock and refuses deletion while another live
 workspace's current overlay recursively references the selected base; otherwise a fork could lose
 its manifest and shared materialized store. Forget dependent workspaces first.
