@@ -111,23 +111,43 @@ internal object CacheMaintenance {
     fun forget(cacheRoot: Path, project: Path): Int {
         val canonicalProject = project.toRealPath()
         val workspaceId = InProcessCacheLayout.workspaceId(canonicalProject)
-        if (DaemonStopCommand().stop(canonicalProject, cacheRoot) != CliExitCodes.SUCCESS) {
+        val leasePath = RuntimePaths.leasePath(cacheRoot, workspaceId)
+        if (
+            DaemonStopCommand().stop(canonicalProject, cacheRoot, deferCleanup = true) !=
+                CliExitCodes.SUCCESS
+        ) {
             return CliExitCodes.ANALYSIS_ERROR
         }
-        return CacheActivityLock.withExclusiveLock(cacheRoot) {
-            if (hasLiveRuntime(cacheRoot) || isBaseForCurrentWorkspace(cacheRoot, workspaceId)) {
-                return@withExclusiveLock CliExitCodes.ANALYSIS_ERROR
-            }
-            deleteTree(cacheRoot.resolve("workspaces").resolve(workspaceId))
-            WorkspaceRegistryStore(cacheRoot).remove(workspaceId)
-            Files.deleteIfExists(RuntimePaths.tombstonePath(cacheRoot, workspaceId))
-            CliExitCodes.SUCCESS
-        } ?: CliExitCodes.ANALYSIS_ERROR
+        repeat(FORGET_SHUTDOWN_WAIT_ATTEMPTS) {
+            val outcome =
+                CacheActivityLock.withExclusiveLock(cacheRoot) {
+                    // The selected socket is gone and no compliant owner can hold an activity
+                    // lease while this exclusive lock is held. Its leftover lease is stale.
+                    val abandonedLease = leasePath.takeIf {
+                        !Files.exists(RuntimePaths.socketPath(cacheRoot, workspaceId))
+                    }
+                    if (
+                        hasLiveRuntime(cacheRoot, abandonedLease) ||
+                            isBaseForCurrentWorkspace(cacheRoot, workspaceId)
+                    ) {
+                        return@withExclusiveLock CliExitCodes.ANALYSIS_ERROR
+                    }
+                    deleteTree(cacheRoot.resolve("workspaces").resolve(workspaceId))
+                    WorkspaceRegistryStore(cacheRoot).remove(workspaceId)
+                    Files.deleteIfExists(leasePath)
+                    Files.deleteIfExists(RuntimePaths.tombstonePath(cacheRoot, workspaceId))
+                    CliExitCodes.SUCCESS
+                }
+            if (outcome != null) return outcome
+            Thread.sleep(FORGET_SHUTDOWN_WAIT_MILLIS)
+        }
+        return CliExitCodes.ANALYSIS_ERROR
     }
 
-    private fun hasLiveRuntime(cacheRoot: Path): Boolean =
+    private fun hasLiveRuntime(cacheRoot: Path, ignoredLease: Path? = null): Boolean =
         regularFiles(cacheRoot.resolve("runtime"))
             .filter { it.fileName.toString().endsWith(".lease.json") }
+            .filterNot { it == ignoredLease }
             .mapNotNull { RuntimeLeaseStore.read(it) }
             .any(RuntimeLeaseStore::isLive)
 
@@ -318,6 +338,8 @@ internal object CacheMaintenance {
     }
 
     private const val CONTENT_KEY_LENGTH = 64
+    private const val FORGET_SHUTDOWN_WAIT_ATTEMPTS = 250
+    private const val FORGET_SHUTDOWN_WAIT_MILLIS = 20L
 
     private fun regularFiles(root: Path): List<Path> {
         if (!Files.isDirectory(root)) return emptyList()
