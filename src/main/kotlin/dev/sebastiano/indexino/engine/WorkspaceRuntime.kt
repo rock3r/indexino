@@ -140,7 +140,8 @@ private constructor(
         try {
             val attributes = Files.readAttributes(workspace, BasicFileAttributes::class.java)
             attributes.isDirectory &&
-                (workspaceFileKey == null || attributes.fileKey()?.toString() == workspaceFileKey)
+                (workspaceFileKey == null ||
+                    RuntimePaths.workspaceFileKey(workspace, attributes) == workspaceFileKey)
         } catch (_: java.io.IOException) {
             false
         }
@@ -177,9 +178,10 @@ private constructor(
                 )
             val workspaceId = InProcessCacheLayout.workspaceId(canonicalWorkspace)
             val workspaceFileKey =
-                Files.readAttributes(canonicalWorkspace, BasicFileAttributes::class.java)
-                    .fileKey()
-                    ?.toString()
+                RuntimePaths.workspaceFileKey(
+                    canonicalWorkspace,
+                    Files.readAttributes(canonicalWorkspace, BasicFileAttributes::class.java),
+                )
             val runtime =
                 WorkspaceRuntime(
                     canonicalWorkspace,

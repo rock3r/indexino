@@ -21,16 +21,19 @@ internal object RuntimeClientBootstrap {
         RuntimeTombstoneStore.read(tombstonePath)?.let { tombstone ->
             val currentFileKey =
                 runCatching {
-                        Files.readAttributes(
+                        RuntimePaths.workspaceFileKey(
+                            workspace,
+                            Files.readAttributes(
                                 workspace,
                                 java.nio.file.attribute.BasicFileAttributes::class.java,
-                            )
-                            .fileKey()
-                            ?.toString()
+                            ),
+                        )
                     }
                     .getOrNull()
             if (
-                tombstone.workspaceFileKey != null && tombstone.workspaceFileKey != currentFileKey
+                currentFileKey != null &&
+                    tombstone.workspaceFileKey != null &&
+                    tombstone.workspaceFileKey != currentFileKey
             ) {
                 RuntimeTombstoneStore.acknowledge(tombstonePath)
             } else {

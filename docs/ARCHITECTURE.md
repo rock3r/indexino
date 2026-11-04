@@ -257,6 +257,9 @@ still-pending provenance; an origin failure at the publication join still rolls 
 
 Daemon close excludes overlapping cleanup attempts. A failed lease release remains retryable without
 closing an already stopped handshake server again; identity checks still protect successor leases.
+The bound workspace probe uses the filesystem file key where NIO supplies one. On Windows, where
+NIO may return null, it reads the volume serial and 128-bit file ID from the directory handle;
+replacing a checkout at the same path must still stop the old owner and leave a tombstone.
 
 Plugin file analyzers and shard/composite post-processors receive cancellation checks backed by
 their contribution coroutine and worker interruption. Cooperative code must call `ensureActive()`
