@@ -365,7 +365,9 @@ Read-only snapshot environments disable Xodus garbage collection: they cannot re
 but its utilization scan can otherwise delay close. Writable staging keeps garbage collection.
 Publication and snapshot restoration may compete to materialize the same immutable destination.
 If another complete directory wins the rename, its copy is reused and the losing staging directory
-is removed. A move failure without a directory at the destination still propagates.
+is removed. Only a missing destination is reconstructed: an existing non-directory fails closed
+without replacing it (including on platforms where atomic rename can replace a regular file).
+A move failure without a directory at the destination still propagates.
 Closing one snapshot does not close another snapshot's environment. Snapshot pins retain private
 overlay refs until close; client close never deletes a shared base that another process or fork may
 read. Current `cache gc` reclaims obsolete expanded generations and abandoned private refs only
