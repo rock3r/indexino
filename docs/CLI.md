@@ -46,8 +46,9 @@ indexino cache forget --project /path/to/repo
 ```
 
 Not an agent-query API. Reclamation policy: [INDEX-STORAGE.md](INDEX-STORAGE.md).
-`cache gc` reports reclaimed packs, pack bytes, and expanded-generation directory count;
-it leaves staging and private client refs intact and defers reclamation while clients are active.
+`cache gc` reports reclaimed packs, pack bytes, expanded-generation directories, and abandoned
+client-ref directories; it leaves mutable staging intact and defers reclamation while clients are
+active.
 `forget` refuses to delete a workspace while any cache client is active or another current
 workspace generation depends on its immutable base. Forget dependent forks first.
 

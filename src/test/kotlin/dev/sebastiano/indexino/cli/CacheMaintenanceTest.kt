@@ -1,6 +1,7 @@
 package dev.sebastiano.indexino.cli
 
 import dev.sebastiano.indexino.api.InProcessCacheLayout
+import dev.sebastiano.indexino.core.cache.CacheActivityLock
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifest
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.sourcelink.SerializedSourceLinkRegistration
@@ -312,6 +313,47 @@ class CacheMaintenanceTest {
             assertFalse(Files.exists(orphanedPack), report)
             assertTrue(Files.exists(expanded), report)
             assertTrue(report.contains("reclaimedMaterializations=0"), report)
+        } finally {
+            cacheRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `gc reclaims abandoned client refs only after all snapshot leases end`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-cache-refs-")
+        val workspaceId = "a".repeat(16)
+        val manifests = WorkspaceGenerationManifestStore(cacheRoot, workspaceId)
+        manifests.publish(
+            WorkspaceGenerationManifest(
+                generation = "current",
+                workspaceRevisionFingerprint = "revision",
+                originId = "workspace",
+                revision = null,
+                stateFingerprint = "state",
+                packKeys = emptyList(),
+            )
+        )
+        val abandonedRef =
+            cacheRoot.resolve("workspaces/$workspaceId/refs/old-client/current/overlay-delta")
+        val currentManifest =
+            cacheRoot.resolve("workspaces/$workspaceId/generations/current/manifest.json")
+        Files.createDirectories(abandonedRef)
+        Files.writeString(abandonedRef.resolve("00000000.xd"), "orphaned snapshot")
+        val outside = cacheRoot.resolve("outside/keep")
+        Files.createDirectories(outside.parent)
+        Files.writeString(outside, "must not follow client symlinks")
+        Files.createSymbolicLink(abandonedRef.resolve("outside"), outside.parent)
+        try {
+            CacheActivityLock.acquire(cacheRoot).use {
+                assertTrue(CacheMaintenance.gc(cacheRoot).contains("activeRuntime=true"))
+                assertTrue(Files.exists(abandonedRef))
+            }
+
+            val report = CacheMaintenance.gc(cacheRoot)
+            assertFalse(Files.exists(abandonedRef), report)
+            assertTrue(Files.exists(outside), report)
+            assertTrue(Files.exists(currentManifest), report)
+            assertTrue(report.contains("reclaimedClientRefs=1"), report)
         } finally {
             cacheRoot.toFile().deleteRecursively()
         }
