@@ -1,5 +1,9 @@
 package dev.sebastiano.indexino.engine
 
+import java.net.SocketTimeoutException
+import java.net.StandardProtocolFamily
+import java.net.UnixDomainSocketAddress
+import java.nio.channels.ServerSocketChannel
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
@@ -10,6 +14,24 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
 class RuntimeConnectionTest {
+    @Test
+    fun `bounded handshake closes a connection to a silent owner`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-silent-owner-")
+        val endpoint =
+            RuntimePaths.socketPath(cacheRoot, "a".repeat(RuntimePaths.WORKSPACE_ID_LENGTH))
+        Files.createDirectories(endpoint.parent)
+        try {
+            ServerSocketChannel.open(StandardProtocolFamily.UNIX).use { server ->
+                server.bind(UnixDomainSocketAddress.of(endpoint))
+                assertFailsWith<SocketTimeoutException> {
+                    RuntimeConnection.connect(endpoint, timeoutMillis = 200)
+                }
+            }
+        } finally {
+            cacheRoot.toFile().deleteRecursively()
+        }
+    }
+
     @Test
     fun `refresh stop uses a control connection while await is blocked`() {
         val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-refresh-stop-")

@@ -2,11 +2,16 @@ package dev.sebastiano.indexino.engine
 
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.net.SocketTimeoutException
 import java.net.StandardProtocolFamily
 import java.net.UnixDomainSocketAddress
 import java.nio.channels.Channels
 import java.nio.channels.SocketChannel
 import java.nio.file.Path
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /** One internal local-runtime session. Public callers never see its frame format. */
 internal class RuntimeConnection
@@ -27,8 +32,32 @@ private constructor(
     }
 
     companion object {
-        fun connect(endpoint: Path): RuntimeConnection {
+        fun connect(endpoint: Path): RuntimeConnection =
+            connect(endpoint, SocketChannel.open(StandardProtocolFamily.UNIX))
+
+        /** Bound only the bootstrap handshake; a connected session remains unrestricted. */
+        fun connect(endpoint: Path, timeoutMillis: Long): RuntimeConnection {
+            require(timeoutMillis > 0) { "Handshake timeout must be positive" }
             val channel = SocketChannel.open(StandardProtocolFamily.UNIX)
+            val task = FutureTask { connect(endpoint, channel) }
+            Thread.ofVirtual().start(task)
+            return try {
+                task.get(timeoutMillis, TimeUnit.MILLISECONDS)
+            } catch (_: TimeoutException) {
+                if (!task.cancel(true)) runCatching { task.get().close() }
+                channel.close()
+                throw SocketTimeoutException("Runtime handshake timed out after $timeoutMillis ms")
+            } catch (thrown: InterruptedException) {
+                if (!task.cancel(true)) runCatching { task.get().close() }
+                channel.close()
+                Thread.currentThread().interrupt()
+                throw thrown
+            } catch (thrown: ExecutionException) {
+                throw thrown.cause ?: thrown
+            }
+        }
+
+        private fun connect(endpoint: Path, channel: SocketChannel): RuntimeConnection {
             try {
                 channel.connect(UnixDomainSocketAddress.of(endpoint))
                 val input = DataInputStream(Channels.newInputStream(channel))
