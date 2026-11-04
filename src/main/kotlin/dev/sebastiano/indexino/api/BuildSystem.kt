@@ -4,7 +4,7 @@ public class BuildSystem private constructor(public val value: String) {
     public companion object {
         @JvmField public val BAZEL: BuildSystem = BuildSystem("BAZEL")
         @JvmField public val GRADLE: BuildSystem = BuildSystem("GRADLE")
-        internal val REPO: BuildSystem = BuildSystem("REPO")
+        @JvmField public val REPO: BuildSystem = BuildSystem("REPO")
     }
 
     override fun equals(other: Any?): Boolean =
