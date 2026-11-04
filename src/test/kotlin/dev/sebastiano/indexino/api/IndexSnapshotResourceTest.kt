@@ -12,10 +12,13 @@ import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.SourceOriginRevision
 import dev.sebastiano.indexino.model.WorkspaceGenerationId
 import dev.sebastiano.indexino.model.WorkspaceRevision
+import dev.sebastiano.indexino.producer.IndexBuildContext
+import dev.sebastiano.indexino.producer.ProducerRegistry
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlinx.coroutines.runBlocking
 
 @OptIn(IndexinoInternalApi::class)
@@ -72,6 +75,38 @@ class IndexSnapshotResourceTest {
         }
     }
 
+    @Test
+    fun `resource query retains same line declarations at distinct columns`() {
+        val store =
+            XodusCodeIndexStore.open(createTempDirectory("resource-snapshot-").resolve("index"))
+        try {
+            val layout =
+                """<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android">""" +
+                    """<View android:id="@+id/item"/><View android:id="@+id/item"/></LinearLayout>"""
+            assertNotNull(ProducerRegistry.get("xml-resources"))
+                .produce(
+                    IndexBuildContext.forInlineSources(
+                        store = store,
+                        commitHash = "same-line-columns",
+                        sourceFiles = mapOf("src/main/res/layout/main.xml" to layout),
+                    )
+                )
+            snapshot(store).use { snapshot ->
+                val matches = runBlocking {
+                    snapshot.findResources(
+                        ResourceQuery.of(packageName = null, type = "id", name = "item"),
+                        QueryOptions.page(10),
+                    )
+                }
+                assertEquals(listOf(92, 122), matches.items.map { it.location.column })
+                assertEquals(1, matches.items.map { it.id }.distinct().size)
+                assertFalse(matches.hasMore)
+            }
+        } finally {
+            store.close()
+        }
+    }
+
     private fun seedDefinitions(store: XodusCodeIndexStore) {
         listOf(
                 ResourceDefinitionRecord(
@@ -112,6 +147,7 @@ class IndexSnapshotResourceTest {
                         record.originId,
                         record.relativeFile,
                         record.line,
+                        record.column,
                     ),
                     record,
                 )

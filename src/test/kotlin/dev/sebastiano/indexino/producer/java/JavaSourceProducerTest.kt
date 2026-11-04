@@ -755,6 +755,7 @@ class JavaSourceProducerTest {
                     originId = "workspace",
                     relativeFile = "app/src/main/res/values/colors.xml",
                     line = 2,
+                    column = 1,
                 ),
                 ResourceDefinitionRecord(
                     packageName = "com.example.wild",

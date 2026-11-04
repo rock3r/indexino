@@ -127,6 +127,11 @@ language facts, and resource-to-code runs language analysis. Both roles retain c
 file hashes and provenance. Existing published packs must rebuild because their extension-only
 language facts did not respect build roles. Production/test classification is unchanged.
 
+Version 6 includes the column in persisted resource-definition keys. Older packs overwrite
+same-line declarations, so they cannot be reused as current: refresh rebuilds their facts even
+when source bytes are unchanged. The logical resource ID remains package/type/name; distinct
+definitions retain their own source locations. The embedded resource API signatures are unchanged.
+
 ## Query path (product)
 
 1. Connect to the workspace runtime (or in-process engine in early slices).
