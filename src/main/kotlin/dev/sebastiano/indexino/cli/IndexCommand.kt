@@ -24,6 +24,7 @@ import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
+import dev.sebastiano.indexino.engine.IndexBuildRunner
 import dev.sebastiano.indexino.engine.extension.DistributionCapabilities
 import dev.sebastiano.indexino.model.PluginId
 import dev.sebastiano.indexino.producer.IndexBuildProgressReporter

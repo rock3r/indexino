@@ -1,4 +1,4 @@
-package dev.sebastiano.indexino.cli
+package dev.sebastiano.indexino.engine
 
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.core.BASIC_FACT_SCHEMA_VERSION
@@ -16,8 +16,6 @@ import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.core.store.WorktreeOverlayIndexStore
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
-import dev.sebastiano.indexino.engine.PluginAnalyzerRunner
-import dev.sebastiano.indexino.engine.PluginRegistry
 import dev.sebastiano.indexino.model.PluginId
 import dev.sebastiano.indexino.producer.FileHashProducer
 import dev.sebastiano.indexino.producer.IndexBuildContext
@@ -42,6 +40,12 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.exists
+
+internal object BuildExitCodes {
+    const val SUCCESS = 0
+    const val INVALID_ARGUMENTS = 2
+    const val TOPOLOGY_FAILED = 3
+}
 
 // Keep eligibility, checkpoint join, and fallback decisions in the build owner.
 @Suppress("LargeClass")
@@ -83,7 +87,7 @@ internal class IndexBuildRunner(
 
     fun runDetailed(): IndexBuildExecution {
         val exitCode = run()
-        if (exitCode != CliExitCodes.SUCCESS) {
+        if (exitCode != BuildExitCodes.SUCCESS) {
             return IndexBuildExecution(
                 exitCode,
                 null,
@@ -150,8 +154,8 @@ internal class IndexBuildRunner(
                 topologyResult.externalSources.none { it.sourceFiles.isNotEmpty() }
         ) {
             progress("topology discovery failed: no source files")
-            machineProgress?.failed(CliExitCodes.TOPOLOGY_FAILED, "no source files")
-            return CliExitCodes.TOPOLOGY_FAILED
+            machineProgress?.failed(BuildExitCodes.TOPOLOGY_FAILED, "no source files")
+            return BuildExitCodes.TOPOLOGY_FAILED
         }
 
         val sourceFiles = topologyResult.sourceFiles
@@ -178,8 +182,8 @@ internal class IndexBuildRunner(
         if (unknownApplications.isNotEmpty()) {
             val message = "unknown application(s): ${unknownApplications.joinToString()}"
             progress(message)
-            machineProgress?.failed(CliExitCodes.INVALID_ARGUMENTS, message)
-            return CliExitCodes.INVALID_ARGUMENTS
+            machineProgress?.failed(BuildExitCodes.INVALID_ARGUMENTS, message)
+            return BuildExitCodes.INVALID_ARGUMENTS
         }
         onSourcesResolved?.let { register ->
             timedPhase("watcher-registration") { register(sources, latestTopologyRoots) }
@@ -268,8 +272,8 @@ internal class IndexBuildRunner(
                 .markOriginsUnavailable(vanishedOrigins)
             val message = "topology origin unavailable: ${vanishedOrigins.sorted().joinToString()}"
             progress(message)
-            machineProgress?.failed(CliExitCodes.TOPOLOGY_FAILED, message)
-            return CliExitCodes.TOPOLOGY_FAILED
+            machineProgress?.failed(BuildExitCodes.TOPOLOGY_FAILED, message)
+            return BuildExitCodes.TOPOLOGY_FAILED
         }
         val criteria =
             ManifestFreshness.criteriaFrom(
@@ -293,7 +297,7 @@ internal class IndexBuildRunner(
             reusedFreshIndex = true
             progress("index fresh for ${topologyResult.scope} @ $commit — skip rebuild")
             machineProgress?.completed("fresh")
-            return CliExitCodes.SUCCESS
+            return BuildExitCodes.SUCCESS
         }
 
         val forkBase =
@@ -319,7 +323,7 @@ internal class IndexBuildRunner(
             reusedFreshIndex = true
             progress("worktree fork reuses compatible base generation — skip rebuild")
             machineProgress?.completed("fresh")
-            return CliExitCodes.SUCCESS
+            return BuildExitCodes.SUCCESS
         }
         if (forkBase != null) {
             latestForkBase = forkBase
@@ -382,7 +386,7 @@ internal class IndexBuildRunner(
             pendingOrigins?.close()
         }
         machineProgress?.completed("indexed")
-        return CliExitCodes.SUCCESS
+        return BuildExitCodes.SUCCESS
     }
 
     private fun resolveOrigins(

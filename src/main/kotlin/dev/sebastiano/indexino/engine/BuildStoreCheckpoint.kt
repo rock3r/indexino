@@ -1,4 +1,4 @@
-package dev.sebastiano.indexino.cli
+package dev.sebastiano.indexino.engine
 
 import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.CodeIndexRecord

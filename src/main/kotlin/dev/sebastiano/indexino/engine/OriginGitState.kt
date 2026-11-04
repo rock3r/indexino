@@ -1,4 +1,4 @@
-package dev.sebastiano.indexino.cli
+package dev.sebastiano.indexino.engine
 
 import dev.sebastiano.indexino.producer.FileHashProducer
 import dev.sebastiano.indexino.producer.IndexedSource

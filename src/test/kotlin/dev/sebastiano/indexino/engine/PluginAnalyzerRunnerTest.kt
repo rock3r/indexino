@@ -1,6 +1,5 @@
 package dev.sebastiano.indexino.engine
 
-import dev.sebastiano.indexino.cli.BuildStoreCheckpoint
 import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.plugin.PluginFactValueCodec
 import dev.sebastiano.indexino.core.plugin.StorePluginFactSink

@@ -7,6 +7,7 @@ import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
+import dev.sebastiano.indexino.engine.ManifestOriginResolver
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.topology.BuildSystem
 import dev.sebastiano.indexino.topology.SourceOriginResolver

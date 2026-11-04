@@ -1,6 +1,10 @@
 package dev.sebastiano.indexino.cli
 
 import dev.sebastiano.indexino.core.manifest.IndexManifestOrigin
+import dev.sebastiano.indexino.engine.ManifestOriginResolver
+import dev.sebastiano.indexino.engine.OriginIncrementalHint
+import dev.sebastiano.indexino.engine.OriginResolution
+import dev.sebastiano.indexino.engine.PendingOriginResolution
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.SourceContentSnapshot
 import java.nio.file.Files
