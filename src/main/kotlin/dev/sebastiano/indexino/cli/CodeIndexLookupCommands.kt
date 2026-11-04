@@ -20,6 +20,7 @@ import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.store.IndexStoreOpener
 import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.ReferenceQuery
+import dev.sebastiano.indexino.model.ResourceQuery
 import dev.sebastiano.indexino.model.SymbolQuery
 import java.nio.file.Path
 import kotlin.io.path.exists
@@ -204,7 +205,57 @@ internal class ResolveResourceCommand : CliktCommand(name = "resolve-resource") 
             progressOutput = { echo(it, err = true) },
         ) {
             requireJsonl(format)
-            withStore(project.toPath(), sessionId) { resolveResources(it, type, name) }
+            if (sessionId != null) {
+                return@runLookup withStore(project.toPath(), sessionId) {
+                    resolveResources(it, type, name)
+                }
+            }
+            try {
+                runBlocking {
+                    CliOneShotConnect.connect(project.toPath()).use { indexino ->
+                        indexino.snapshot().use { snapshot ->
+                            val matches = mutableListOf<SymbolRecord>()
+                            var offset = 0
+                            do {
+                                val page =
+                                    snapshot.findResources(
+                                        ResourceQuery.of(null, type, name),
+                                        QueryOptions.page(LOOKUP_PAGE_SIZE, offset),
+                                    )
+                                matches +=
+                                    page.items.map { definition ->
+                                        SymbolRecord(
+                                            fqn = "res:$type:$name",
+                                            relativeFile = definition.location.file.path,
+                                            line = definition.location.line,
+                                            column = definition.location.column ?: 1,
+                                            kind = "resource",
+                                            name = name,
+                                            language = "xml",
+                                            ownerFqn = "res:$type",
+                                            aliases = listOf("@$type/$name"),
+                                            originId = definition.location.file.originId.value,
+                                        )
+                                    }
+                                check(!page.hasMore || page.items.isNotEmpty()) {
+                                    "Resource lookup returned an empty page with more results"
+                                }
+                                offset += page.items.size
+                            } while (page.hasMore)
+                            matches.sortedWith(
+                                compareBy(
+                                    SymbolRecord::relativeFile,
+                                    SymbolRecord::line,
+                                    SymbolRecord::column,
+                                    SymbolRecord::fqn,
+                                )
+                            )
+                        }
+                    }
+                }
+            } catch (_: IndexinoException) {
+                withStore(project.toPath(), sessionId) { resolveResources(it, type, name) }
+            }
         }
     }
 

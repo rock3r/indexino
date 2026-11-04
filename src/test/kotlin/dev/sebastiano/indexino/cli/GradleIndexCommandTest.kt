@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.cli
 
+import com.github.ajalt.clikt.testing.test
 import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.core.record.PluginFactRecord
@@ -13,6 +14,10 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 class GradleIndexCommandTest {
     private val tempDirs = mutableListOf<java.nio.file.Path>()
@@ -60,6 +65,81 @@ class GradleIndexCommandTest {
         } finally {
             store.close()
         }
+    }
+
+    @Test
+    fun `resolve resource reads published snapshot without project compatibility store`() {
+        val workspace = createGitWorkspace()
+        for (configuration in listOf("values", "values-night")) {
+            val resource = workspace.resolve("ui/src/main/res/$configuration/strings.xml")
+            Files.createDirectories(resource.parent)
+            Files.writeString(
+                resource,
+                "<resources>\n<string name=\"title\">Hello</string>\n</resources>\n",
+            )
+        }
+        val indexed =
+            MainCommand()
+                .test(
+                    listOf(
+                        "index",
+                        "--project",
+                        workspace.toString(),
+                        "--build-system",
+                        "gradle",
+                        "--gradle-module",
+                        ":ui",
+                        "--no-auto-refresh",
+                    )
+                )
+        assertEquals(0, indexed.statusCode, indexed.output)
+        val resolver = IndexPathResolver(workspace)
+        val projection = resolver.resolveBaseStore(gitHead(workspace))
+        assertTrue(projection.toFile().deleteRecursively())
+        assertTrue(Files.deleteIfExists(resolver.resolveManifest(gitHead(workspace))))
+
+        val result =
+            MainCommand()
+                .test(
+                    listOf(
+                        "resolve-resource",
+                        "--project",
+                        workspace.toString(),
+                        "--type",
+                        "string",
+                        "--name",
+                        "title",
+                        "--progress-format",
+                        "jsonl",
+                    )
+                )
+
+        assertEquals(0, result.statusCode, result.output)
+        val rows =
+            result.stdout
+                .lineSequence()
+                .filter(String::isNotBlank)
+                .map { Json.parseToJsonElement(it).jsonObject }
+                .toList()
+        assertEquals(
+            listOf(
+                "ui/src/main/res/values-night/strings.xml",
+                "ui/src/main/res/values/strings.xml",
+            ),
+            rows.map { it.getValue("relativeFile").jsonPrimitive.content },
+        )
+        assertTrue(rows.all { it.getValue("fqn").jsonPrimitive.content == "res:string:title" })
+        assertTrue(rows.all { it.getValue("line").jsonPrimitive.content == "2" })
+        assertTrue(rows.all { it.getValue("column").jsonPrimitive.content == "1" })
+        assertTrue(rows.all { it.getValue("language").jsonPrimitive.content == "xml" })
+        assertTrue(
+            rows.all {
+                it.getValue("aliases").jsonArray.map { alias -> alias.jsonPrimitive.content } ==
+                    listOf("@string/title")
+            }
+        )
+        assertTrue(!Files.exists(projection), "Lookup recreated the compatibility store")
+        assertTrue(!Files.exists(resolver.resolveManifest(gitHead(workspace))))
     }
 
     private fun createGitWorkspace(): java.nio.file.Path {
