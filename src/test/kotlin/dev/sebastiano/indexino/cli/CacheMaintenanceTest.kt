@@ -3,8 +3,12 @@ package dev.sebastiano.indexino.cli
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifest
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
+import dev.sebastiano.indexino.core.sourcelink.SerializedSourceLinkRegistration
+import dev.sebastiano.indexino.core.sourcelink.SourceLinkRegistrySnapshot
+import dev.sebastiano.indexino.core.sourcelink.SourceLinkRegistryStore
 import dev.sebastiano.indexino.engine.RuntimeLease
 import dev.sebastiano.indexino.engine.RuntimePaths
+import dev.sebastiano.indexino.model.LinkGenerationId
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
@@ -88,6 +92,226 @@ class CacheMaintenanceTest {
             assertFalse(Files.exists(supersededPack), report)
             assertFalse(Files.exists(orphanedPack), report)
             assertTrue(report.contains("reclaimedPacks=2"), report)
+        } finally {
+            cacheRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    @Suppress("LongMethod")
+    fun `gc reclaims obsolete expanded stores but keeps current and fork base generations`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-cache-expanded-gc-")
+        val baseId = "a".repeat(16)
+        val forkId = "b".repeat(16)
+        val leafId = "c".repeat(16)
+        val base = WorkspaceGenerationManifestStore(cacheRoot, baseId)
+        val fork = WorkspaceGenerationManifestStore(cacheRoot, forkId)
+        val leaf = WorkspaceGenerationManifestStore(cacheRoot, leafId)
+        fun generation(id: String, name: String, directory: String): Path =
+            cacheRoot.resolve("workspaces/$id/generations/$name/$directory").also {
+                Files.createDirectories(it)
+            }
+
+        base.publish(
+            WorkspaceGenerationManifest(
+                generation = "base-orphan",
+                workspaceRevisionFingerprint = "orphan",
+                originId = "workspace",
+                revision = null,
+                stateFingerprint = "orphan",
+                packKeys = listOf("d".repeat(64)),
+            )
+        )
+        val oldBase = generation(baseId, "base-orphan", "materialized")
+        base.publish(
+            WorkspaceGenerationManifest(
+                generation = "base-old",
+                workspaceRevisionFingerprint = "old",
+                originId = "workspace",
+                revision = null,
+                stateFingerprint = "old",
+                packKeys = listOf("a".repeat(64)),
+            )
+        )
+        val forkBase = generation(baseId, "base-old", "materialized")
+        base.publish(
+            WorkspaceGenerationManifest(
+                generation = "base-current",
+                workspaceRevisionFingerprint = "current",
+                originId = "workspace",
+                revision = null,
+                stateFingerprint = "current",
+                packKeys = listOf("b".repeat(64)),
+            )
+        )
+        val currentBase = generation(baseId, "base-current", "materialized")
+        fork.publish(
+            WorkspaceGenerationManifest(
+                generation = "fork-orphan",
+                workspaceRevisionFingerprint = "orphan",
+                originId = "workspace",
+                revision = null,
+                stateFingerprint = "orphan",
+                packKeys = emptyList(),
+                representation = "overlay",
+                baseWorkspaceId = baseId,
+                baseGeneration = "base-old",
+                overlayPackKeys = listOf("d".repeat(64)),
+            )
+        )
+        val oldOverlay = generation(forkId, "fork-orphan", "overlay-delta")
+        fork.publish(
+            WorkspaceGenerationManifest(
+                generation = "fork-old",
+                workspaceRevisionFingerprint = "old",
+                originId = "workspace",
+                revision = null,
+                stateFingerprint = "old",
+                packKeys = emptyList(),
+                representation = "overlay",
+                baseWorkspaceId = baseId,
+                baseGeneration = "base-old",
+                overlayPackKeys = listOf("c".repeat(64)),
+            )
+        )
+        val forkedOverlay = generation(forkId, "fork-old", "overlay-delta")
+        fork.publish(
+            WorkspaceGenerationManifest(
+                generation = "fork-current",
+                workspaceRevisionFingerprint = "current",
+                originId = "workspace",
+                revision = null,
+                stateFingerprint = "current",
+                packKeys = listOf("e".repeat(64)),
+            )
+        )
+        val currentFork = generation(forkId, "fork-current", "materialized")
+        leaf.publish(
+            WorkspaceGenerationManifest(
+                generation = "leaf-current",
+                workspaceRevisionFingerprint = "leaf",
+                originId = "workspace",
+                revision = null,
+                stateFingerprint = "leaf",
+                packKeys = emptyList(),
+                representation = "overlay",
+                baseWorkspaceId = forkId,
+                baseGeneration = "fork-old",
+                overlayPackKeys = listOf("f".repeat(64)),
+            )
+        )
+        val currentOverlay = generation(leafId, "leaf-current", "overlay-delta")
+        try {
+            val report = CacheMaintenance.gc(cacheRoot)
+
+            assertTrue(Files.exists(forkBase), report)
+            assertTrue(Files.exists(currentBase), report)
+            assertTrue(Files.exists(forkedOverlay), report)
+            assertTrue(Files.exists(currentFork), report)
+            assertTrue(Files.exists(currentOverlay), report)
+            assertFalse(Files.exists(oldBase), report)
+            assertFalse(Files.exists(oldOverlay), report)
+            assertTrue(report.contains("reclaimedMaterializations=2"), report)
+        } finally {
+            cacheRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `gc preserves superseded provider generation pinned by current source links`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-cache-linked-gc-")
+        val providerId = "a".repeat(16)
+        val consumerId = "b".repeat(16)
+        val oldPack = "c".repeat(64)
+        val newPack = "d".repeat(64)
+        val orphanPack = "e".repeat(64)
+        val provider = WorkspaceGenerationManifestStore(cacheRoot, providerId)
+        fun manifest(generation: String, pack: String) =
+            WorkspaceGenerationManifest(
+                generation = generation,
+                workspaceRevisionFingerprint = generation,
+                originId = "workspace",
+                revision = null,
+                stateFingerprint = generation,
+                packKeys = listOf(pack),
+            )
+        provider.publish(manifest("old", oldPack))
+        val oldExpanded = cacheRoot.resolve("workspaces/$providerId/generations/old/materialized")
+        Files.createDirectories(oldExpanded)
+        provider.publish(manifest("new", newPack))
+        WorkspaceGenerationManifestStore(cacheRoot, consumerId)
+            .publish(manifest("current", newPack).copy(linkGeneration = "links"))
+        val links = SourceLinkRegistryStore(cacheRoot.resolve("workspaces/$consumerId"))
+        val snapshot =
+            SourceLinkRegistrySnapshot(
+                linkGeneration = "links",
+                registrations =
+                    listOf(
+                        SerializedSourceLinkRegistration(
+                            coordinate = "sample:library:1",
+                            artifactDigest = "digest",
+                            repositoryIdentity = "provider",
+                            checkoutPath = "provider",
+                            sourceRoots = listOf("src/main/java"),
+                            sourceOriginId = "workspace",
+                            linkedGeneration = "old",
+                            mappingBinaryPrefix = "sample",
+                            mappingSourceRoot = "src/main/java",
+                            evidence = "declared",
+                        )
+                    ),
+            )
+        val snapshotPath = links.generationPath(LinkGenerationId.of("links"))
+        Files.createDirectories(snapshotPath.parent)
+        Files.writeString(snapshotPath, Json.encodeToString(snapshot))
+        listOf(oldPack, newPack, orphanPack).forEach { key ->
+            val pack = packPath(cacheRoot, key)
+            Files.createDirectories(pack.parent)
+            Files.writeString(pack, key)
+        }
+        try {
+            val report = CacheMaintenance.gc(cacheRoot)
+
+            assertTrue(Files.isDirectory(oldExpanded), report)
+            assertTrue(Files.exists(packPath(cacheRoot, oldPack)), report)
+            assertTrue(Files.exists(packPath(cacheRoot, newPack)), report)
+            assertFalse(Files.exists(packPath(cacheRoot, orphanPack)), report)
+        } finally {
+            cacheRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `gc retains expanded stores when a current overlay base is unavailable`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-cache-missing-base-")
+        val workspaceId = "a".repeat(16)
+        WorkspaceGenerationManifestStore(cacheRoot, workspaceId)
+            .publish(
+                WorkspaceGenerationManifest(
+                    generation = "current",
+                    workspaceRevisionFingerprint = "current",
+                    originId = "workspace",
+                    revision = null,
+                    stateFingerprint = "current",
+                    packKeys = emptyList(),
+                    representation = "overlay",
+                    baseWorkspaceId = "b".repeat(16),
+                    baseGeneration = "missing",
+                )
+            )
+        val expanded = cacheRoot.resolve("workspaces/$workspaceId/generations/old/materialized")
+        Files.createDirectories(expanded)
+        val orphanedPack = packPath(cacheRoot, "f".repeat(64))
+        Files.createDirectories(orphanedPack.parent)
+        Files.writeString(orphanedPack, "orphan")
+        try {
+            val attempt = runCatching { CacheMaintenance.gc(cacheRoot) }
+            assertTrue(attempt.isSuccess, "GC aborted: ${attempt.exceptionOrNull()}")
+            val report = attempt.getOrThrow()
+
+            assertFalse(Files.exists(orphanedPack), report)
+            assertTrue(Files.exists(expanded), report)
+            assertTrue(report.contains("reclaimedMaterializations=0"), report)
         } finally {
             cacheRoot.toFile().deleteRecursively()
         }
