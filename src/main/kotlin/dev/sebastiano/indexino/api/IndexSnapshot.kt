@@ -222,14 +222,15 @@ private constructor(
         }
     }
 
-    // CLI lookups return every match; the public paged query has a bounded result window.
-    internal fun findAllResources(query: ResourceQuery): List<ResourceDefinition> {
+    // CLI lookups use published resource symbols: old resdef keys omit columns and lose
+    // same-line declarations, while the public paged query has a bounded result window.
+    internal fun findResourceSymbolsForCli(type: String, name: String): List<SymbolRecord> {
         ensureOpen()
         return mapUnexpectedFailures {
             buildList {
-                localStore.forEachPrefix("resdef:") { _, record ->
-                    if (record is ResourceDefinitionRecord && record.matches(query)) {
-                        add(toPublicResourceDefinition(record))
+                localStore.forEachPrefix("res:$type:$name:") { _, record ->
+                    if (record is SymbolRecord && record.fqn == "res:$type:$name") {
+                        add(record)
                     }
                     true
                 }

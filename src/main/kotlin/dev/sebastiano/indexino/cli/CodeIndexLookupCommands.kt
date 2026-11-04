@@ -20,7 +20,6 @@ import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.store.IndexStoreOpener
 import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.ReferenceQuery
-import dev.sebastiano.indexino.model.ResourceQuery
 import dev.sebastiano.indexino.model.SymbolQuery
 import java.nio.file.Path
 import kotlin.io.path.exists
@@ -214,30 +213,16 @@ internal class ResolveResourceCommand : CliktCommand(name = "resolve-resource") 
                 runBlocking {
                     CliOneShotConnect.connect(project.toPath()).use { indexino ->
                         indexino.snapshot().use { snapshot ->
-                            val matches =
-                                snapshot.findAllResources(ResourceQuery.of(null, type, name)).map {
-                                    definition ->
-                                    SymbolRecord(
-                                        fqn = "res:$type:$name",
-                                        relativeFile = definition.location.file.path,
-                                        line = definition.location.line,
-                                        column = definition.location.column ?: 1,
-                                        kind = "resource",
-                                        name = name,
-                                        language = "xml",
-                                        ownerFqn = "res:$type",
-                                        aliases = listOf("@$type/$name"),
-                                        originId = definition.location.file.originId.value,
+                            snapshot
+                                .findResourceSymbolsForCli(type, name)
+                                .sortedWith(
+                                    compareBy(
+                                        SymbolRecord::relativeFile,
+                                        SymbolRecord::line,
+                                        SymbolRecord::column,
+                                        SymbolRecord::fqn,
                                     )
-                                }
-                            matches.sortedWith(
-                                compareBy(
-                                    SymbolRecord::relativeFile,
-                                    SymbolRecord::line,
-                                    SymbolRecord::column,
-                                    SymbolRecord::fqn,
                                 )
-                            )
                         }
                     }
                 }

@@ -357,10 +357,11 @@ indexino resolve-resource \
 ```
 
 Without `--session-id`, this command reads the published snapshot through a one-shot in-process
-client and renders the existing resource JSONL rows; it does not need the project-local
-compatibility copy. Unlike the embedded paged query, the CLI collects all matching definitions,
-including results beyond the host's 10,000-item query window. Older indexes and transitional
-session overlays still use the legacy store.
+client and renders its resource-symbol records as the existing JSONL rows; it does not need the
+project-local compatibility copy. Unlike the embedded paged resource query, the CLI collects all
+matching records, including results beyond the host's 10,000-item query window and declarations
+at different columns on the same line. Older indexes and transitional session overlays still use
+the legacy store.
 The `index` command continues to create that copy for other legacy lookup paths.
 
 ### `query`
