@@ -2,6 +2,7 @@ package dev.sebastiano.indexino.engine
 
 import dev.sebastiano.indexino.plugin.api.PluginDescriptor
 import java.io.ByteArrayInputStream
+import java.net.URL
 import java.net.URLClassLoader
 import java.nio.file.Path
 import java.util.jar.Attributes
@@ -150,14 +151,20 @@ class PluginAbiCompatibilityTest {
 
         URLClassLoader(arrayOf(hostJar.toUri().toURL()), javaClass.classLoader).use { parent ->
             IsolatedPluginClassLoader(pluginJar, parent).use { loader ->
-                assertEquals("source=plugin", loader.getResource(resourceName)?.readText())
+                assertEquals("source=plugin", loader.getResource(resourceName)?.readUncachedText())
                 assertEquals(
                     listOf("source=plugin", "source=host"),
-                    loader.getResources(resourceName).toList().map { it.readText() },
+                    loader.getResources(resourceName).toList().map { it.readUncachedText() },
                 )
             }
         }
     }
+
+    private fun URL.readUncachedText(): String =
+        openConnection().run {
+            useCaches = false
+            getInputStream().bufferedReader().use { it.readText() }
+        }
 
     private fun assertDiagnostic(failure: PluginAbiCompatibilityException, target: String) {
         assertEquals("1.3.0", failure.hostAbi)
