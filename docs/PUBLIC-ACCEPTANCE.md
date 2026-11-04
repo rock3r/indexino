@@ -393,7 +393,8 @@ Public symbol queries use page size one and assert the exact symbol, relative fi
 Short-lived pins must still return their previous generation after refresh; two seed pins survive
 their original clients and remain readable across the entire run. Existing maintenance GC must
 leave packs unchanged while those pins are active. After every client/pin closes, materialized
-reference files must be absent, GC must reclaim obsolete packs, and reopened public snapshots must
+reference files must be absent; the first GC pass retains newly unreferenced packs, then a second
+pass with an injected 30-day-later clock reclaims obsolete packs. Reopened public snapshots must
 still return both current symbols. The owned repository, worktrees and cache are then deleted.
 
 Each completed cycle records reference-file/materialization counts, logical cache bytes, JMX live
@@ -401,8 +402,9 @@ platform threads, JVM heap/non-heap usage, open FDs where supported, and observe
 counts. Baseline, post-close and post-GC snapshots support resource-trend comparison. These are
 boundary samples, not peaks or leak thresholds. RSS and allocated disk bytes remain null with
 explicit reasons; logical file sizes are not allocated blocks. Descendant observations **do not
-prove containment**, and this in-process soak does not exercise daemon teardown. Age, quota, grace
-and daemon-purge policy statuses remain explicitly `not-implemented`.
+prove containment**, and this in-process soak does not exercise daemon teardown. The report labels
+pack age and persisted observation as implemented; dead-workspace age, quota, and daemon-purge
+policy remain pending.
 
 The driver has a ten-minute cooperative coroutine deadline and thirty-second Git command bounds.
 Failures remain nonzero, retain completed-cycle JSON with only the exception class, restore the

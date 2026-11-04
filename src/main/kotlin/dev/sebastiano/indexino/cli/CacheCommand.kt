@@ -7,6 +7,7 @@ import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.core.cache.CacheActivityLock
+import dev.sebastiano.indexino.core.cache.UnreferencedPackLedger
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifest
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.cache.WorkspaceRegistryStore
@@ -19,6 +20,7 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.util.Comparator
+import java.util.concurrent.TimeUnit
 import java.util.stream.Stream
 
 internal class CacheCommand : CliktCommand(name = "cache") {
@@ -54,6 +56,8 @@ internal class CacheForgetCliCommand : CliktCommand(name = "forget") {
 
 @Suppress("TooManyFunctions")
 internal object CacheMaintenance {
+    private val packRetentionMillis = TimeUnit.DAYS.toMillis(30)
+
     fun status(cacheRoot: Path, project: Path? = null): String {
         val workspaceId = project?.let { InProcessCacheLayout.workspaceId(it.toRealPath()) }
         val workspaceRoot = workspaceId?.let { cacheRoot.resolve("workspaces").resolve(it) }
@@ -64,12 +68,12 @@ internal object CacheMaintenance {
             workspaceId?.let { " workspaceId=$it" }.orEmpty()
     }
 
-    fun gc(cacheRoot: Path): String =
-        CacheActivityLock.withExclusiveLock(cacheRoot) { collectGarbage(cacheRoot) }
+    fun gc(cacheRoot: Path, nowEpochMillis: Long = System.currentTimeMillis()): String =
+        CacheActivityLock.withExclusiveLock(cacheRoot) { collectGarbage(cacheRoot, nowEpochMillis) }
             ?: "reclaimedPacks=0 reclaimedBytes=0 reclaimedMaterializations=0 " +
                 "reclaimedClientRefs=0 activeRuntime=true"
 
-    private fun collectGarbage(cacheRoot: Path): String {
+    private fun collectGarbage(cacheRoot: Path, nowEpochMillis: Long): String {
         if (hasLiveRuntime(cacheRoot))
             return "reclaimedPacks=0 reclaimedBytes=0 reclaimedMaterializations=0 " +
                 "reclaimedClientRefs=0 activeRuntime=true"
@@ -90,13 +94,28 @@ internal object CacheMaintenance {
             regularFiles(chunksRoot).filter { pack ->
                 pack.fileName.toString().length == CONTENT_KEY_LENGTH
             }
+        val ledger = UnreferencedPackLedger(cacheRoot)
+        val previous = ledger.read()
+        val unreferenced = packs.filter { it.fileName.toString() !in referenced }
+        val candidates = unreferenced.associate { pack ->
+            val key = pack.fileName.toString()
+            key to (previous[key] ?: nowEpochMillis)
+        }
+        val expired = unreferenced.filter { pack ->
+            val firstObserved = candidates.getValue(pack.fileName.toString())
+            firstObserved >= 0 &&
+                nowEpochMillis >= firstObserved &&
+                nowEpochMillis - firstObserved >= packRetentionMillis
+        }
+        val remaining = candidates - expired.map { it.fileName.toString() }.toSet()
+        // Persist before unlinking: a failed write or crash can only delay collection.
+        if (remaining != previous) ledger.write(remaining)
         var reclaimedBytes = 0L
         var reclaimedPacks = 0
-        packs.forEach { pack ->
-            val key = pack.fileName.toString()
-            if (key !in referenced) {
-                reclaimedBytes += Files.size(pack)
-                Files.deleteIfExists(pack)
+        expired.forEach { pack ->
+            val bytes = Files.size(pack)
+            if (Files.deleteIfExists(pack)) {
+                reclaimedBytes += bytes
                 reclaimedPacks += 1
             }
         }

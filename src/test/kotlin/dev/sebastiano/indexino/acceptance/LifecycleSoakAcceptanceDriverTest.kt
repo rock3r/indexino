@@ -37,7 +37,14 @@ internal class LifecycleSoakAcceptanceDriverTest {
         assertEquals("0", afterClose.getValue("refMaterializations").jsonPrimitive.content)
         assertTrue(report.getValue("reclaimedPacks").jsonPrimitive.content.toLong() > 0)
         assertEquals("true", report.getValue("cleanupVerified").jsonPrimitive.content)
-        assertEquals("not-implemented", report.getValue("agePolicy").jsonPrimitive.content)
+        assertEquals(
+            "unreferenced-packs-30d; dead-workspaces-pending",
+            report.getValue("agePolicy").jsonPrimitive.content,
+        )
+        assertEquals(
+            "persisted-pack-observation",
+            report.getValue("gracePolicy").jsonPrimitive.content,
+        )
         assertFalse(Files.exists(root))
         assertFalse(Files.readString(output).contains(temporary.toString()))
     }

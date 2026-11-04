@@ -17,6 +17,7 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.attribute.DosFileAttributeView
+import java.time.Duration
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration.Companion.minutes
 import kotlinx.coroutines.runBlocking
@@ -67,7 +68,9 @@ internal object LifecycleSoakAcceptanceDriver {
             report["runtimeMode"] = JsonPrimitive("IN_PROCESS; auto-refresh disabled")
             report["resourceThresholds"] = JsonPrimitive("report-only; none invented")
             report["containmentProof"] = JsonPrimitive(false)
-            for (policy in listOf("age", "quota", "grace", "daemonPurge")) {
+            report["agePolicy"] = JsonPrimitive("unreferenced-packs-30d; dead-workspaces-pending")
+            report["gracePolicy"] = JsonPrimitive("persisted-pack-observation")
+            for (policy in listOf("quota", "daemonPurge")) {
                 report["${policy}Policy"] = JsonPrimitive("not-implemented")
             }
             Files.writeString(output, JsonObject(report).toString() + "\n")
@@ -119,8 +122,14 @@ internal object LifecycleSoakAcceptanceDriver {
         report["afterClose"] = resources(cache)
         check(refFiles(cache).isEmpty()) { "Closed clients and pins retained materialized refs" }
         val beforeGc = packs(cache)
-        val gc = CacheMaintenance.gc(cache)
-        check(!gc.contains("activeRuntime=true")) { "Closed activity still blocks GC" }
+        val firstGc = CacheMaintenance.gc(cache)
+        check(!firstGc.contains("activeRuntime=true")) { "Closed activity still blocks GC" }
+        check(packs(cache) == beforeGc) { "First observation removed packs before retention" }
+        // Advance only the injected GC clock; the soak still exercises a disposable local cache.
+        CacheMaintenance.gc(
+            cache,
+            nowEpochMillis = System.currentTimeMillis() + Duration.ofDays(30).toMillis(),
+        )
         val reclaimed = beforeGc - packs(cache)
         check(reclaimed.isNotEmpty()) { "Superseded packs were not reclaimed" }
         report["reclaimedPacks"] = JsonPrimitive(reclaimed.size)
