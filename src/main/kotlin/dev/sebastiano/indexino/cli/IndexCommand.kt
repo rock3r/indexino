@@ -242,11 +242,7 @@ internal class IndexCommand : CliktCommand(name = "index") {
                     )
                 if (includeDeps) scope.includingDependencies() else scope
             }
-            BuildSystem.REPO ->
-                throw UsageError(
-                    "Daemon-backed repo indexing is not available yet",
-                    "--build-system",
-                )
+            BuildSystem.REPO -> IndexScope.repo()
             BuildSystem.AUTO -> error("unreachable")
         }
     }

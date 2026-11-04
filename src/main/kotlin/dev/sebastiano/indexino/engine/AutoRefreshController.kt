@@ -1,6 +1,7 @@
 package dev.sebastiano.indexino.engine
 
 import dev.sebastiano.indexino.api.AutoRefreshMode
+import dev.sebastiano.indexino.api.BuildSystem
 import dev.sebastiano.indexino.api.FreshnessPolicy
 import dev.sebastiano.indexino.api.Indexino
 import dev.sebastiano.indexino.api.RefreshHandle
@@ -8,6 +9,7 @@ import dev.sebastiano.indexino.api.RefreshRequest
 import dev.sebastiano.indexino.api.SnapshotFreshness
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.topology.TopologyResult
+import dev.sebastiano.indexino.topology.repo.RepoManifestParser
 import java.io.IOException
 import java.nio.file.FileSystems
 import java.nio.file.FileVisitResult
@@ -199,7 +201,7 @@ internal class AutoRefreshController(
         checkNativeCoverage()
         sourcePathsByRequest[request] =
             sources.mapTo(linkedSetOf()) { it.originRoot.resolve(it.path).normalize() }
-        val topologyInputs = topologyInputs(sources).toSet()
+        val topologyInputs = topologyInputs(request, sources).toSet()
         topologyInputsByRequest[request] = topologyInputs
         val directories =
             buildSet {
@@ -217,7 +219,9 @@ internal class AutoRefreshController(
                             discoverDirectories(sourceRoot).forEach(::add)
                         }
                     }
-                    topologyInputs.mapTo(this) { it.parent ?: workspace }
+                    topologyInputs.forEach { input ->
+                        add(if (Files.isDirectory(input)) input else input.parent ?: workspace)
+                    }
                 }
                 .filter { directory -> Files.isDirectory(directory) && !excluded(directory) }
                 .toSet()
@@ -866,7 +870,7 @@ internal class AutoRefreshController(
                     current.parent?.parent?.fileName?.toString() == "src"
             }
 
-    private fun topologyInputs(sources: List<IndexedSource>): List<Path> =
+    private fun topologyInputs(request: RefreshRequest, sources: List<IndexedSource>): List<Path> =
         buildSet {
                 addTopologyInputs(this, workspace)
                 sources.forEach { source ->
@@ -874,6 +878,17 @@ internal class AutoRefreshController(
                     generateSequence(sourcePath.parent) { current -> current.parent }
                         .takeWhile { current -> current.startsWith(source.originRoot) }
                         .forEach { directory -> addTopologyInputs(this, directory) }
+                }
+                if (request.scope.buildSystem == BuildSystem.REPO) {
+                    val manifest = workspace.resolve(request.scope.value)
+                    add(manifest)
+                    add(manifest.parent.resolve("local_manifests"))
+                    // A manifest may change between topology resolution and watch registration.
+                    // Retain prior inputs if it can no longer be parsed so its removal is observed.
+                    addAll(
+                        runCatching { RepoManifestParser.parse(manifest).inputPaths }
+                            .getOrElse { topologyInputsByRequest[request].orEmpty() }
+                    )
                 }
             }
             .toList()

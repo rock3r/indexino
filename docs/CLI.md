@@ -89,10 +89,17 @@ indexino index \
   [--applications dev.sebastiano.selection-context]
 ```
 
+Android repo workspaces (a resolved `.repo/manifest.xml`):
+
+```bash
+indexino index --project /path/to/repo-workspace --build-system repo
+```
+
 When `--build-system auto` (default), Bazel is chosen if `MODULE.bazel` / `WORKSPACE` exists;
 otherwise Gradle when `settings.gradle(.kts)` is present; a resolved `.repo/manifest.xml` is
-also detected as repo topology. Pass `--bazel-target` or `--gradle-module` for the scope.
-Embedded API scopes stay explicit (`IndexScope.bazel` / `gradle`); CLI may keep auto-detect.
+also detected as repo topology. Pass `--bazel-target` or `--gradle-module` for those scopes;
+repo indexing uses the complete `.repo/manifest.xml` project set and includes its source closure.
+Embedded API scopes stay explicit (`IndexScope.bazel` / `gradle`); repo scope is CLI-only for now.
 
 For compatibility, Bazel CLI scopes continue to include dependency sources by default: omitting
 `--include-deps` from `index` does not shrink the source set that shipped before the embedded
@@ -105,12 +112,14 @@ external-root policy permits included builds inside the workspace or its canonic
 which supports sibling builds while rejecting unrelated mounts. Each resolved sibling/external build
 is reported as a `gradle-parse: external included build …` diagnostic and indexed as its own origin.
 
-**Repo topology is not yet available through the daemon-backed `index` command.** The internal
-build runner supports repo-origin discovery and provenance while daemon scope support is being
-completed; use explicit Bazel or Gradle scope selection for daemon-backed indexing.
+Repo topology works through the daemon-backed `index` command and preserves each manifest
+project's origin and expected revision. The daemon rehydrates this scope after restart; repo
+topology is not yet an embedded public `IndexScope` factory. Auto-refresh watches the resolved
+manifest, its included documents, and the local-manifest directory so changes to the project set
+trigger a full topology resolution even on nonrecursive filesystem watchers.
 
 **Current shipping behaviour (transitional):** resolves `git rev-parse HEAD`, discovers sources via
-Bazel/Gradle, may open a commit-addressed store under the project, runs core producers plus
+Bazel/Gradle/repo, may open a commit-addressed store under the project, runs core producers plus
 `--applications`. **Product behaviour:** publishes a generation under the user-local cache;
 commit is provenance only. Core producers build Kotlin/Java symbols, references, and XML facts;
 plugins (e.g. selection-context) are loaded explicitly or bundled in the fat JAR.

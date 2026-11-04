@@ -55,6 +55,43 @@ class AutoRefreshControllerTest {
     }
 
     @Test
+    fun `repo scope watches manifest includes and local manifests for topology changes`() {
+        val workspace = Files.createTempDirectory("indexino-repo-manifest-watch-")
+        val manifestRoot = workspace.resolve(".repo")
+        val included = manifestRoot.resolve("manifests/projects.xml")
+        val local = manifestRoot.resolve("local_manifests")
+        val source = workspace.resolve("app/src/main/kotlin/Panel.kt")
+        Files.createDirectories(included.parent)
+        Files.createDirectories(local)
+        Files.createDirectories(source.parent)
+        Files.writeString(source, "class Panel")
+        Files.writeString(included, "<manifest><project name=\"app\" path=\"app\"/></manifest>")
+        Files.writeString(
+            manifestRoot.resolve("manifest.xml"),
+            "<manifest><include name=\"manifests/projects.xml\"/></manifest>",
+        )
+        val request = RefreshRequest.forScope(IndexScope.repo())
+        try {
+            AutoRefreshController(workspace, AutoRefreshMode.DISABLED, refresh = {}).use {
+                controller ->
+                controller.register(
+                    request,
+                    listOf(IndexedSource.workspace(workspace, "app/src/main/kotlin/Panel.kt")),
+                )
+                val watched = controller.directoriesForTests(request)
+                assertTrue(manifestRoot in watched, "Manifest replacement must invalidate topology")
+                assertTrue(
+                    included.parent in watched,
+                    "Included manifest edits must invalidate topology",
+                )
+                assertTrue(local in watched, "New local manifests must invalidate topology")
+            }
+        } finally {
+            workspace.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `dead native worker loses coverage and installs fallback keys`() {
         val workspace = Files.createTempDirectory("indexino-native-death-")
         val request = RefreshRequest.forScope(IndexScope.gradle(":app"))

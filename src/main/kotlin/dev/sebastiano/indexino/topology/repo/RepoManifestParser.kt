@@ -13,7 +13,10 @@ import kotlin.io.path.readText
 
 internal data class RepoProject(val name: String, val path: String, val revision: String?)
 
-internal data class RepoManifest(val projects: List<RepoProject>) {
+internal data class RepoManifest(
+    val projects: List<RepoProject>,
+    val inputPaths: Set<Path> = emptySet(),
+) {
     val digest: String =
         MessageDigest.getInstance("SHA-256")
             .digest(
@@ -44,7 +47,7 @@ internal object RepoManifestParser {
         if (localManifests.exists() && localManifests.isDirectory()) {
             localManifests.listDirectoryEntries("*.xml").sorted().forEach(::apply)
         }
-        return RepoManifest(projects.values.sortedBy { it.name })
+        return RepoManifest(projects.values.sortedBy { it.name }, visited + localManifests)
     }
 
     fun parse(content: String): RepoManifest =
