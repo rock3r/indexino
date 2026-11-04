@@ -114,7 +114,9 @@ is reported as a `gradle-parse: external included build …` diagnostic and inde
 
 Repo topology works through the daemon-backed `index` command and preserves each manifest
 project's origin and expected revision. The daemon rehydrates this scope after restart; repo
-topology is not yet an embedded public `IndexScope` factory.
+topology is not yet an embedded public `IndexScope` factory. Auto-refresh watches the resolved
+manifest, its included documents, and the local-manifest directory so changes to the project set
+trigger a full topology resolution even on nonrecursive filesystem watchers.
 
 **Current shipping behaviour (transitional):** resolves `git rev-parse HEAD`, discovers sources via
 Bazel/Gradle/repo, may open a commit-addressed store under the project, runs core producers plus

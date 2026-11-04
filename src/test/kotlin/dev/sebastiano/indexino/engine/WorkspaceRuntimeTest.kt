@@ -372,6 +372,70 @@ class WorkspaceRuntimeTest {
     }
 
     @Test
+    fun `repo manifest include and new local manifest refresh the project set`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-repo-inputs-")
+        val workspace = createGradleWorkspace()
+        val manifestRoot = workspace.resolve(".repo")
+        val included = manifestRoot.resolve("manifests/projects.xml")
+        val local = manifestRoot.resolve("local_manifests")
+        Files.createDirectories(included.parent)
+        Files.createDirectories(local)
+        Files.writeString(
+            manifestRoot.resolve("manifest.xml"),
+            "<manifest><include name=\"manifests/projects.xml\"/></manifest>",
+        )
+        Files.writeString(included, "<manifest><project name=\"app\" path=\"app\"/></manifest>")
+        listOf("feature", "extra").forEach { name ->
+            val source = workspace.resolve("$name/src/main/java/Panel.java")
+            Files.createDirectories(source.parent)
+            Files.writeString(source, "class ${name.replaceFirstChar(Char::uppercaseChar)}Panel {}")
+        }
+        val previousCacheRoot = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheRoot.toString())
+        val runtime = WorkspaceRuntime.start(workspace, cacheRoot)
+        try {
+            val request = RefreshRequest.forScope(IndexScope.repo())
+            RuntimeConnection.connect(runtime.endpoint).use { connection ->
+                RuntimeRefreshClient(connection).refresh(request).await()
+            }
+            fun awaitOrigins(expected: Set<String>) {
+                val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10)
+                var actual = emptySet<String>()
+                do {
+                    RuntimeConnection.connect(runtime.endpoint).use { connection ->
+                        val snapshots = RuntimeSnapshotClient(connection)
+                        val lease = snapshots.acquire(FreshnessPolicy.PUBLISHED)
+                        actual = lease.revision.origins.mapTo(linkedSetOf()) { it.originId.value }
+                        snapshots.release(lease.id)
+                    }
+                    if (actual == expected) return
+                    Thread.sleep(100)
+                } while (System.nanoTime() < deadline)
+                assertEquals(expected, actual)
+            }
+
+            Files.writeString(
+                included,
+                "<manifest><project name=\"app\" path=\"app\"/>" +
+                    "<project name=\"feature\" path=\"feature\"/></manifest>",
+            )
+            awaitOrigins(setOf("repo:app", "repo:feature"))
+
+            Files.writeString(
+                local.resolve("extra.xml"),
+                "<manifest><project name=\"extra\" path=\"extra\"/></manifest>",
+            )
+            awaitOrigins(setOf("repo:app", "repo:feature", "repo:extra"))
+        } finally {
+            runtime.close()
+            cacheRoot.toFile().deleteRecursively()
+            workspace.toFile().deleteRecursively()
+            if (previousCacheRoot == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheRoot)
+        }
+    }
+
+    @Test
     fun `disconnecting a client releases its daemon snapshot leases`() {
         val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-disconnect-pin-")
         val workspace = createGradleWorkspace()
