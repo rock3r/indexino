@@ -389,16 +389,25 @@ class ManifestOriginResolverTest {
                 },
             )
         }
-        try {
-            assertTrue(firstAdmission.await(5, TimeUnit.SECONDS))
-            assertFalse(
-                excessAdmission.await(1, TimeUnit.SECONDS),
-                "Origin admission exceeds four workers",
-            )
-        } finally {
-            release.countDown()
-            assertEquals(300, result.get(30, TimeUnit.SECONDS).origins.size)
-        }
+        val admission =
+            try {
+                runCatching {
+                    assertTrue(firstAdmission.await(5, TimeUnit.SECONDS))
+                    assertFalse(
+                        excessAdmission.await(1, TimeUnit.SECONDS),
+                        "Origin admission exceeds four workers",
+                    )
+                }
+            } finally {
+                release.countDown()
+            }
+        // On Windows, 300 non-Git roots completed in 61 seconds: each still probes Git state.
+        val completionSeconds =
+            if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) 120L
+            else 30L
+        val completed = runCatching { result.get(completionSeconds, TimeUnit.SECONDS) }
+        admission.getOrThrow()
+        assertEquals(300, completed.getOrThrow().origins.size)
     }
 
     @Test
