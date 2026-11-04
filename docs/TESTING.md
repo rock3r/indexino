@@ -87,12 +87,12 @@ than only reading the pre-relocation store. Exact pinned-JBR output is retained 
 report, while assertions use parsed cache-path, acceptance/rejection, and linked-class facts so
 incidental log wording is not the sole signal.
 
-A differential golden suite compares stdout/JSONL, stderr routing, exit codes, invalid usage, and
-the manifest schema/version across the thin Maven runtime classpath, unshrunk fat JAR, R8 JAR, and
-the target's real Roast executable. Each entry point independently indexes an equivalent clean
-fixture so store creation, schema/version, and representative records are compared. The manifest's
-volatile `builtAt` and text-progress `durationMillis` values are normalized; phase names and all
-other output remain compared. Process output is captured in task-owned files and
+A differential golden suite compares stdout/JSONL, stderr routing, exit codes, and invalid usage
+across the thin Maven runtime classpath, unshrunk fat JAR, R8 JAR, and the target's real Roast
+executable. Each entry point independently indexes an equivalent clean fixture and must not create
+a project-local compatibility store or manifest; published lookup results remain compared. The
+text-progress `durationMillis` values are normalized; phase names and all other output remain
+compared. Process output is captured in task-owned files and
 decoded with UTF-8 replacement semantics so platform-native diagnostic bytes cannot abort the
 verifier. A descendant that inherits stdout or stderr cannot keep a completed launch blocked. Each
 command starts only after a helper establishes a new POSIX session/process group or a Windows Job
@@ -116,6 +116,13 @@ complete Linux x64 native verifier in a separate matching-host job. That job als
 Roast distribution from an arbitrary directory inside `ubuntu:22.04`, whose glibc 2.35 is the oldest
 declared Linux baseline, and performs an index/query workload. The manually dispatched
 `native-distributions.yml` workflow repeats full native verification on all Tier 1 runners.
+
+The native archive cache shell contract in the ordinary JVM `test` task requires Git for Windows
+Bash on Windows. The test resolves its `bash.exe` beside Git's executable, avoiding the Windows
+Subsystem for Linux launcher when no distribution is installed. If Git Bash is unavailable, only
+those two shell-contract tests are skipped with an explicit prerequisite message; other Windows
+JVM tests still run. A Windows JVM test run is not a substitute for the separate matching-host
+`verifyNativeDistributionWindowsX64` launcher and AOT verification.
 
 Native CI caches only the original JBR and Roast archives. The key contains both checked-in digests;
 the helper verifies a restored archive before serving it to unchanged Construo download/digest tasks.

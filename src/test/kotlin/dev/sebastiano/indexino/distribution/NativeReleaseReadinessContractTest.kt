@@ -6,6 +6,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeTrue
 
 class NativeReleaseReadinessContractTest {
     private val projectDirectory = File(System.getProperty("user.dir"))
@@ -238,11 +239,26 @@ class NativeReleaseReadinessContractTest {
     }
 
     private fun runCacheScript(vararg arguments: String): ProcessResult {
-        val command = listOf("bash", ".github/scripts/native-archive-cache.sh") + arguments.toList()
+        val command =
+            listOf(bashExecutable(), ".github/scripts/native-archive-cache.sh") + arguments.toList()
         val process =
             ProcessBuilder(command).directory(projectDirectory).redirectErrorStream(true).start()
         val output = process.inputStream.bufferedReader().use { it.readText() }
         return ProcessResult(process.waitFor(), output)
+    }
+
+    private fun bashExecutable(): String {
+        if (!System.getProperty("os.name").startsWith("Windows")) return "bash"
+        val locator = ProcessBuilder("where.exe", "bash").redirectErrorStream(true).start()
+        val paths = locator.inputStream.bufferedReader().use { it.readLines() }
+        val bash =
+            if (locator.waitFor() == 0)
+                paths.map(String::trim).map(::File).firstOrNull {
+                    it.isFile && it.parentFile.resolve("git.exe").isFile
+                }
+            else null
+        assumeTrue(bash != null, "Native archive cache shell tests require Git for Windows Bash")
+        return requireNotNull(bash).absolutePath
     }
 
     private data class ProcessResult(val exitCode: Int, val output: String)
