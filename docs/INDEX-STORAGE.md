@@ -217,11 +217,12 @@ client close retain that lease, and refreshes retain independent leases until th
 GC takes the exclusive lock for its entire reachability scan and deletion, or reports
 `activeRuntime=true` without deleting packs or expanded stores. It removes expanded `materialized`
 and `overlay-delta` directories only for generations unreachable from any workspace's current
-generation, including recursive fork bases; their generation manifests remain on disk. If a
-current fork base is unavailable, expanded-store reclamation is skipped for that pass, while
-existing pack collection continues. The CLI compatibility projection holds a shared activity
-lease while reading expanded stores, including when a daemon completed the refresh. This
-prevents publication and pinned-generation races across cooperating processes. It intentionally
+generation, including recursive fork bases and provider generations pinned by a current
+source-link snapshot; their referenced packs remain available for reconstruction. If a
+current fork base or source-link snapshot is unavailable, expanded-store reclamation is skipped
+for that pass, while existing pack collection continues. The CLI compatibility projection holds
+a shared activity lease while reading expanded stores, including when a daemon completed the refresh.
+This prevents publication and pinned-generation races across cooperating processes. It intentionally
 defers all reclamation while any client is live.
 An in-process client acquires its activity lock before resolving the writer staging path: a new
 cache beneath a symlinked parent must use the same canonical root before and after creation, or a

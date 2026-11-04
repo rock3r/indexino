@@ -11,8 +11,10 @@ import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifest
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.cache.WorkspaceRegistryStore
 import dev.sebastiano.indexino.core.cache.WorktreeOverlayPolicy
+import dev.sebastiano.indexino.core.sourcelink.SourceLinkRegistryStore
 import dev.sebastiano.indexino.engine.RuntimeLeaseStore
 import dev.sebastiano.indexino.engine.RuntimePaths
+import dev.sebastiano.indexino.model.LinkGenerationId
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
@@ -69,7 +71,17 @@ internal object CacheMaintenance {
         if (hasLiveRuntime(cacheRoot))
             return "reclaimedPacks=0 reclaimedBytes=0 reclaimedMaterializations=0 activeRuntime=true"
         val retainedGenerations = retainedGenerations(cacheRoot)
-        val referenced = referencedPackKeys(cacheRoot)
+        val referenced =
+            referencedPackKeys(cacheRoot).toMutableSet().apply {
+                retainedGenerations?.forEach { (workspaceId, generation) ->
+                    WorkspaceGenerationManifestStore(cacheRoot, workspaceId)
+                        .readGeneration(generation)
+                        ?.let { manifest ->
+                            addAll(manifest.packKeys)
+                            addAll(manifest.overlayPackKeys)
+                        }
+                }
+            }
         val chunksRoot = cacheRoot.resolve("chunks")
         val packs =
             regularFiles(chunksRoot).filter { pack ->
@@ -180,32 +192,66 @@ internal object CacheMaintenance {
     private fun retainedGenerations(cacheRoot: Path): Set<Pair<String, String>>? {
         val workspaces = cacheRoot.resolve("workspaces")
         if (!Files.isDirectory(workspaces, LinkOption.NOFOLLOW_LINKS)) return emptySet()
+        val roots =
+            Files.list(workspaces).use { entries ->
+                entries.filter { Files.isDirectory(it, LinkOption.NOFOLLOW_LINKS) }.toList()
+            }
         val retained = mutableSetOf<Pair<String, String>>()
         fun retain(workspaceId: String, manifest: WorkspaceGenerationManifest): Boolean {
             if (!retained.add(workspaceId to manifest.generation)) return true
-            if (manifest.representation != WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) return true
-            val baseId = manifest.baseWorkspaceId ?: return false
-            val baseGeneration = manifest.baseGeneration ?: return false
-            val base =
-                WorkspaceGenerationManifestStore(cacheRoot, baseId).readGeneration(baseGeneration)
-                    ?: return false
-            return retain(baseId, base)
+            if (manifest.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) {
+                val (baseId, base) = overlayBase(cacheRoot, manifest) ?: return false
+                if (!retain(baseId, base)) return false
+            }
+            manifest.linkGeneration?.let { linkGeneration ->
+                val providers =
+                    linkedGenerations(cacheRoot, roots, workspaceId, linkGeneration) ?: return false
+                if (providers.any { (id, linked) -> !retain(id, linked) }) return false
+            }
+            return true
         }
         var complete = true
-        Files.list(workspaces).use { roots ->
-            roots
-                .filter { Files.isDirectory(it, LinkOption.NOFOLLOW_LINKS) }
-                .forEach { root ->
-                    val currentPath = root.resolve("current")
-                    val current =
-                        WorkspaceGenerationManifestStore(cacheRoot, root.fileName.toString())
-                            .current()
-                    if (current != null)
-                        complete = retain(root.fileName.toString(), current) && complete
-                    else if (Files.exists(currentPath)) complete = false
-                }
+        roots.forEach { root ->
+            val currentPath = root.resolve("current")
+            val current =
+                WorkspaceGenerationManifestStore(cacheRoot, root.fileName.toString()).current()
+            if (current != null) complete = retain(root.fileName.toString(), current) && complete
+            else if (Files.exists(currentPath)) complete = false
         }
         return retained.takeIf { complete }
+    }
+
+    private fun overlayBase(
+        cacheRoot: Path,
+        manifest: WorkspaceGenerationManifest,
+    ): Pair<String, WorkspaceGenerationManifest>? {
+        val id = manifest.baseWorkspaceId ?: return null
+        val generation = manifest.baseGeneration ?: return null
+        val base =
+            WorkspaceGenerationManifestStore(cacheRoot, id).readGeneration(generation)
+                ?: return null
+        return id to base
+    }
+
+    private fun linkedGenerations(
+        cacheRoot: Path,
+        roots: List<Path>,
+        workspaceId: String,
+        linkGeneration: String,
+    ): List<Pair<String, WorkspaceGenerationManifest>>? {
+        val links =
+            SourceLinkRegistryStore(cacheRoot.resolve("workspaces").resolve(workspaceId))
+                .readGeneration(LinkGenerationId.of(linkGeneration)) ?: return null
+        val providers =
+            links.registrations.map { registration ->
+                roots.mapNotNull { root ->
+                    val id = root.fileName.toString()
+                    WorkspaceGenerationManifestStore(cacheRoot, id)
+                        .readGeneration(registration.linkedGeneration)
+                        ?.let { id to it }
+                }
+            }
+        return providers.takeIf { matches -> matches.all { it.isNotEmpty() } }?.flatten()
     }
 
     private fun reclaimObsoleteMaterializations(

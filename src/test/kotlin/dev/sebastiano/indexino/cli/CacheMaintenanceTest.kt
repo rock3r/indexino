@@ -3,8 +3,12 @@ package dev.sebastiano.indexino.cli
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifest
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
+import dev.sebastiano.indexino.core.sourcelink.SerializedSourceLinkRegistration
+import dev.sebastiano.indexino.core.sourcelink.SourceLinkRegistrySnapshot
+import dev.sebastiano.indexino.core.sourcelink.SourceLinkRegistryStore
 import dev.sebastiano.indexino.engine.RuntimeLease
 import dev.sebastiano.indexino.engine.RuntimePaths
+import dev.sebastiano.indexino.model.LinkGenerationId
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
@@ -208,6 +212,70 @@ class CacheMaintenanceTest {
             assertFalse(Files.exists(oldBase), report)
             assertFalse(Files.exists(oldOverlay), report)
             assertTrue(report.contains("reclaimedMaterializations=2"), report)
+        } finally {
+            cacheRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `gc preserves superseded provider generation pinned by current source links`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-cache-linked-gc-")
+        val providerId = "a".repeat(16)
+        val consumerId = "b".repeat(16)
+        val oldPack = "c".repeat(64)
+        val newPack = "d".repeat(64)
+        val orphanPack = "e".repeat(64)
+        val provider = WorkspaceGenerationManifestStore(cacheRoot, providerId)
+        fun manifest(generation: String, pack: String) =
+            WorkspaceGenerationManifest(
+                generation = generation,
+                workspaceRevisionFingerprint = generation,
+                originId = "workspace",
+                revision = null,
+                stateFingerprint = generation,
+                packKeys = listOf(pack),
+            )
+        provider.publish(manifest("old", oldPack))
+        val oldExpanded = cacheRoot.resolve("workspaces/$providerId/generations/old/materialized")
+        Files.createDirectories(oldExpanded)
+        provider.publish(manifest("new", newPack))
+        WorkspaceGenerationManifestStore(cacheRoot, consumerId)
+            .publish(manifest("current", newPack).copy(linkGeneration = "links"))
+        val links = SourceLinkRegistryStore(cacheRoot.resolve("workspaces/$consumerId"))
+        val snapshot =
+            SourceLinkRegistrySnapshot(
+                linkGeneration = "links",
+                registrations =
+                    listOf(
+                        SerializedSourceLinkRegistration(
+                            coordinate = "sample:library:1",
+                            artifactDigest = "digest",
+                            repositoryIdentity = "provider",
+                            checkoutPath = "provider",
+                            sourceRoots = listOf("src/main/java"),
+                            sourceOriginId = "workspace",
+                            linkedGeneration = "old",
+                            mappingBinaryPrefix = "sample",
+                            mappingSourceRoot = "src/main/java",
+                            evidence = "declared",
+                        )
+                    ),
+            )
+        val snapshotPath = links.generationPath(LinkGenerationId.of("links"))
+        Files.createDirectories(snapshotPath.parent)
+        Files.writeString(snapshotPath, Json.encodeToString(snapshot))
+        listOf(oldPack, newPack, orphanPack).forEach { key ->
+            val pack = packPath(cacheRoot, key)
+            Files.createDirectories(pack.parent)
+            Files.writeString(pack, key)
+        }
+        try {
+            val report = CacheMaintenance.gc(cacheRoot)
+
+            assertTrue(Files.isDirectory(oldExpanded), report)
+            assertTrue(Files.exists(packPath(cacheRoot, oldPack)), report)
+            assertTrue(Files.exists(packPath(cacheRoot, newPack)), report)
+            assertFalse(Files.exists(packPath(cacheRoot, orphanPack)), report)
         } finally {
             cacheRoot.toFile().deleteRecursively()
         }
