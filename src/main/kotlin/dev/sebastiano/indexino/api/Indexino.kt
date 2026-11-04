@@ -318,10 +318,7 @@ private constructor(
                         "index phase=refresh state=completed durationMillis=" +
                             TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
                     )
-                    created.publishIfActive {
-                        created.result.complete(result)
-                        created.terminalEvent.complete(RefreshCompleted(created.id, result))
-                    }
+                    created.complete(result)
                 } catch (@Suppress("TooGenericExceptionCaught") thrown: Throwable) {
                     completeRefreshFailure(created, thrown)
                 }
@@ -345,12 +342,7 @@ private constructor(
             return
         }
         try {
-            operation.publishIfActive {
-                operation.result.completeExceptionally(failure)
-                operation.terminalEvent.complete(
-                    RefreshHandle.failed(operation.id, failure.failure)
-                )
-            }
+            operation.fail(failure)
         } catch (_: CancellationException) {
             // Stop won the completion boundary. Worker-finally reports it after cleanup returns.
         }

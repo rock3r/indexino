@@ -164,9 +164,11 @@ that same stopping refresh; `RefreshStopped` and result cancellation occur only 
 cleanup returns. Cancelling an `await()` observer or event collector does not request stop.
 The internal `commitIfActive` boundary serializes explicit stop with generation publication: a stop
 that wins prevents publication; successful publication records commitment before releasing the lock,
-making later stop calls no-ops. Result completion follows cleanup using `publishIfActive`, so a
-committed generation cannot later be reported as cancelled. Neither boundary is a separate check
-followed by an unguarded write.
+making later stop calls no-ops. After cleanup, the worker stages its terminal outcome using
+`publishIfActive`, so a committed generation cannot later be reported as cancelled. It then retires
+from the active map before completing the result and notifying observers; an awaited refresh is no
+longer returned as an active refresh. Neither boundary is a separate check followed by an unguarded
+write.
 For a client cleanup failure, the facade instead maps the typed cause and calls
 `failAfterCleanup(IndexinoException)`. The coordinator stages this failure under its state lock and
 prefers it over stopped when completing both result and terminal event after the worker unwinds.
