@@ -355,7 +355,7 @@ class StatusCommandTest {
                     applications = emptyList(),
                 ),
         )
-        assertTrue(workspace.resolve("tools").toFile().deleteRecursively())
+        removeRepoChild(workspace)
 
         val output = StringBuilder()
         val exitCode =
@@ -384,7 +384,7 @@ class StatusCommandTest {
                     applications = emptyList(),
                 ),
         )
-        assertTrue(workspace.resolve("tools").toFile().deleteRecursively())
+        removeRepoChild(workspace)
 
         val result =
             StatusCommand().test("--project", workspace.toString(), "--build-system", "repo")
@@ -461,6 +461,16 @@ class StatusCommandTest {
 
         assertEquals(CliExitCodes.SUCCESS, result.statusCode)
         assertTrue(result.output.contains("\"fresh\":true"), result.output)
+    }
+
+    private fun removeRepoChild(workspace: java.nio.file.Path) {
+        val tools = workspace.resolve("tools")
+        // Git for Windows marks loose objects read-only; clear the fixture attributes before
+        // simulating a removed repo child so status, rather than test cleanup, is exercised.
+        Files.walk(tools.resolve(".git/objects")).use { paths ->
+            paths.filter(Files::isRegularFile).forEach { assertTrue(it.toFile().setWritable(true)) }
+        }
+        assertTrue(tools.toFile().deleteRecursively())
     }
 
     private fun createRepoWorkspace(): java.nio.file.Path {
