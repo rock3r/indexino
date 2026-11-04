@@ -576,6 +576,15 @@ class InProcessIndexinoTest {
             if (runSuspend { index.snapshot() }.use { symbolCount(it, "WarmA") } == 1) break
             Thread.sleep(25)
         }
+        val settleDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (
+            controller.freshness(FreshnessPolicy.AWAIT_CURRENT) != SnapshotFreshness.CURRENT &&
+                System.nanoTime() < settleDeadline
+        ) Thread.sleep(10)
+        assertEquals(SnapshotFreshness.CURRENT, controller.freshness(FreshnessPolicy.AWAIT_CURRENT))
+        // A cold native metadata probe may exceed the bounded scan budget. Reconcile once more
+        // before measuring a burst that requires an already captured parent inventory.
+        runSuspend { index.refresh(request).await() }
         runSuspend { index.snapshot() }
             .use { pinned ->
                 assertEquals(1, symbolCount(pinned, "WarmA"))

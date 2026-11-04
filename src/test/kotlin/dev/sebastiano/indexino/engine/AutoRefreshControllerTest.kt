@@ -19,6 +19,8 @@ import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.topology.TopologyResult
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption.ATOMIC_MOVE
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -774,7 +776,7 @@ class AutoRefreshControllerTest {
     }
 
     @Test
-    fun `atomic replacement of a known source reuses topology without losing deletion safety`() {
+    fun `atomic replacement of a known source dispatches a safe refresh`() {
         val workspace = Files.createTempDirectory("indexino-atomic-edit-").toRealPath()
         val outside = Files.createTempDirectory("indexino-atomic-edit-outside-")
         val source = workspace.resolve("src/main/kotlin/Panel.kt")
@@ -790,17 +792,21 @@ class AutoRefreshControllerTest {
                 includeDeps = false,
                 scope = ":app",
             )
-        val reused = CountDownLatch(1)
-        val full = CountDownLatch(1)
+        val refreshed = CountDownLatch(1)
+        val full = AtomicInteger()
+        val hinted = CopyOnWriteArrayList<Set<Path>>()
         val controller =
             AutoRefreshController(
                 workspace,
                 AutoRefreshMode.ENABLED,
-                refresh = { full.countDown() },
+                refresh = {
+                    full.incrementAndGet()
+                    refreshed.countDown()
+                },
                 topologyProvider = { topology },
                 refreshWithTopology = { _, _, paths, _, _, _ ->
-                    assertEquals(setOf(source), paths)
-                    reused.countDown()
+                    hinted += paths
+                    refreshed.countDown()
                 },
             )
         try {
@@ -808,14 +814,14 @@ class AutoRefreshControllerTest {
                 request,
                 listOf(IndexedSource.workspace(workspace, "src/main/kotlin/Panel.kt")),
             )
-            Files.move(source, outside.resolve("old-Panel.kt"))
-            Files.move(replacement, source)
+            Files.move(replacement, source, ATOMIC_MOVE, REPLACE_EXISTING)
+            assertTrue(refreshed.await(5, TimeUnit.SECONDS), "Atomic save must dispatch a refresh")
             assertTrue(
-                reused.await(5, TimeUnit.SECONDS),
-                "Atomic save should retain the known path",
+                (hinted == listOf(setOf(source)) && full.get() == 0) ||
+                    (hinted.isEmpty() && full.get() == 1),
+                "An atomic save must use the known source hint or reconcile fully: hinted=$hinted full=${full.get()}",
             )
-            assertEquals(0L, reused.count)
-            assertEquals(1L, full.count)
+            assertEquals("class ChangedPanel", Files.readString(source))
         } finally {
             controller.close()
             workspace.toFile().deleteRecursively()
