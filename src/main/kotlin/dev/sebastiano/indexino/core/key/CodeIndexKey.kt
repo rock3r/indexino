@@ -74,9 +74,10 @@ internal value class CodeIndexKey(val value: String) {
             originId: String,
             relativeFile: String,
             line: Int,
+            column: Int,
         ): CodeIndexKey =
             CodeIndexKey(
-                "resdef:${packageName.orEmpty()}:$type:$name:$qualifiers:$originId:$relativeFile:$line"
+                "resdef:${packageName.orEmpty()}:$type:$name:$qualifiers:$originId:$relativeFile:$line:$column"
             )
 
         fun resourceUsage(

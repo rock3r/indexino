@@ -209,6 +209,7 @@ private constructor(
                         ResourceDefinitionRecord::originId,
                         ResourceDefinitionRecord::relativeFile,
                         ResourceDefinitionRecord::line,
+                        ResourceDefinitionRecord::column,
                     ),
                 scan = { accept ->
                     localStore.forEachPrefix("resdef:") { _, record ->

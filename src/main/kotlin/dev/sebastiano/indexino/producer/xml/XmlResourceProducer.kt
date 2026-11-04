@@ -498,6 +498,7 @@ internal class XmlResourceProducer : IndexProducer {
                 originId = indexedSource.originId,
                 relativeFile = indexedSource.path,
                 line = line,
+                column = column,
             ),
             ResourceDefinitionRecord(
                 packageName = packageName,
