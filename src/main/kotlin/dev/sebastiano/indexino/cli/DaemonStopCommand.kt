@@ -11,7 +11,11 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 internal class DaemonStopCommand {
-    fun stop(project: Path, cacheRoot: Path = InProcessCacheLayout.cacheRoot()): Int {
+    fun stop(
+        project: Path,
+        cacheRoot: Path = InProcessCacheLayout.cacheRoot(),
+        deferCleanup: Boolean = false,
+    ): Int {
         val identityPath =
             if (Files.isDirectory(project)) project.toRealPath()
             else project.toAbsolutePath().normalize()
@@ -20,7 +24,10 @@ internal class DaemonStopCommand {
         val leasePath = RuntimePaths.leasePath(cacheRoot, workspaceId)
         val lease = RuntimeLeaseStore.read(leasePath)
         if (lease == null) {
-            RuntimeTombstoneStore.acknowledge(RuntimePaths.tombstonePath(cacheRoot, workspaceId))
+            if (!deferCleanup)
+                RuntimeTombstoneStore.acknowledge(
+                    RuntimePaths.tombstonePath(cacheRoot, workspaceId)
+                )
             return CliExitCodes.SUCCESS
         }
         try {
@@ -36,7 +43,9 @@ internal class DaemonStopCommand {
         }
         if (Files.exists(endpoint)) return CliExitCodes.ANALYSIS_ERROR
         if (
-            Files.exists(leasePath) && RuntimeLeaseStore.read(leasePath)?.ownerPid == lease.ownerPid
+            !deferCleanup &&
+                Files.exists(leasePath) &&
+                RuntimeLeaseStore.read(leasePath)?.ownerPid == lease.ownerPid
         ) {
             Files.deleteIfExists(leasePath)
         }

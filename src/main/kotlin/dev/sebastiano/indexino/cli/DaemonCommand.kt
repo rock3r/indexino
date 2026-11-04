@@ -65,9 +65,13 @@ internal class DaemonRunCliCommand : CliktCommand(name = "run") {
 
 internal class DaemonStopCliCommand : CliktCommand(name = "stop") {
     private val project by option("--project").required()
+    private val purge by option("--purge").flag(default = false)
 
     override fun run() {
-        val exitCode = DaemonStopCommand().stop(Path.of(project))
+        val workspace = Path.of(project)
+        val exitCode =
+            if (purge) CacheMaintenance.forget(InProcessCacheLayout.cacheRoot(), workspace)
+            else DaemonStopCommand().stop(workspace)
         if (exitCode != CliExitCodes.SUCCESS) throw ProgramResult(exitCode)
     }
 }

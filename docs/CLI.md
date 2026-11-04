@@ -29,13 +29,21 @@ indexino daemon run    --project /path/to/repo [--no-auto-refresh] # foreground 
 |---------|---------|--------|
 | `start` / `run` | Runtime attach / owner process | One AF_UNIX runtime per workspace identity |
 | `status` | Lease + liveness | Reports tombstones if the workspace was lost |
-| `stop` | `shutdownRuntime()` | Explicit shared shutdown — not client disconnect. `--purge` drops reclaimable cache for this workspace |
+| `stop` | `shutdownRuntime()` | Explicit shared shutdown — not client disconnect. `--purge` also forgets this workspace's cache state |
 
 `daemon start` reports success only once the launched owner accepts a protocol handshake; an
 existing socket pathname alone does not establish that its listener is ready.
 
 Before deleting or moving a daemon-owned worktree, run `daemon stop`. Deleting the bound workspace
 while the daemon is alive yields terminal **`WORKSPACE_LOST`** (loud diagnostic + external tombstone).
+`daemon stop --purge` first stops the daemon, then applies the same activity and dependent-fork
+checks as `cache forget`. It removes the selected workspace's generations, staging, private refs,
+registry entry, and tombstone, but keeps shared packs for other workspaces until `cache gc`.
+It waits up to five seconds for activity leases to drain after stopping the owner.
+If another client remains active or a current fork depends on this workspace, purge fails without
+deleting its state or acknowledging its tombstone. The workspace path must still exist so its
+canonical identity is known. A selected lease whose socket has disappeared is discarded only under
+the exclusive activity lock; leases for other workspaces still block deletion.
 
 ### `cache` (operators only)
 
