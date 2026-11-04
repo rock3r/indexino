@@ -14,4 +14,12 @@ final class FacadeJavaConsumer {
             indexino.close();
         }
     }
+
+    static RefreshRequest compileRepoScope() {
+        IndexScope scope = IndexScope.repo();
+        if (scope.getBuildSystem() != BuildSystem.REPO) {
+            throw new AssertionError("Expected repo scope");
+        }
+        return RefreshRequest.forScope(scope);
+    }
 }

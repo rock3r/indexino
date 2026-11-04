@@ -1108,8 +1108,10 @@ ref = "&lt;release-tag-or-commit&gt;"</code></pre>
           <code>--no-auto-refresh</code>, while explicit <code>refresh</code> remains available in either mode.
         </p>
         <p>
-          <code>IndexScope</code> is a final value object created by <code>bazel(target)</code> or
-          <code>gradle(module)</code> factories. It is not an enum or public hierarchy. An immutable
+          <code>IndexScope</code> is a final value object created by <code>bazel(target)</code>,
+          <code>gradle(module)</code>, or <code>repo()</code> factories. The additive repo scope selects
+          all projects in the workspace's resolved <code>.repo/manifest.xml</code> and includes their
+          source closure. It is not an enum or public hierarchy. An immutable
           <code>includingDependencies()</code> method expresses the only common topology option.
           <code>RefreshRequest</code> enables dynamic <code>PluginId</code> values without exposing producers
           or hard-coding <code>selection-context</code> into core.
@@ -1118,7 +1120,7 @@ ref = "&lt;release-tag-or-commit&gt;"</code></pre>
           <table>
             <thead><tr><th>Scope capability</th><th>v1 (experimental → release)</th><th>Later</th></tr></thead>
             <tbody>
-              <tr><td><code>IndexScope.bazel(target)</code> / <code>gradle(module)</code></td><td class="yes">Required; public <code>buildSystem</code> so equality and <code>RefreshKey</code> distinguish Bazel vs Gradle</td><td>—</td></tr>
+              <tr><td><code>IndexScope.bazel(target)</code> / <code>gradle(module)</code> / <code>repo()</code></td><td class="yes">Public <code>buildSystem</code> and <code>BuildSystem.REPO</code> distinguish all three scopes in equality and <code>RefreshKey</code></td><td>—</td></tr>
               <tr><td><code>includingDependencies()</code></td><td class="yes">Required</td><td>—</td></tr>
               <tr><td>Caller-selected build system</td><td class="yes">Required on the type, not only via factory name</td><td>CLI may keep <code>--build-system auto</code>; embedded API stays explicit</td></tr>
               <tr><td>Build-system autodetect in the API</td><td class="no">Non-goal for v1</td><td>Optional helper if demand appears</td></tr>
@@ -2391,6 +2393,7 @@ host.abi.major == plugin.targetAbi.major</code></pre>
     <span class="kw">public companion object</span> {
         @JvmStatic <span class="kw">public fun</span> bazel(target: String): IndexScope { … }
         @JvmStatic <span class="kw">public fun</span> gradle(module: String): IndexScope { … }
+        @JvmStatic <span class="kw">public fun</span> repo(): IndexScope { … }
     }
     <span class="kw">public fun</span> includingDependencies(): IndexScope { … }
     <span class="kw">override fun</span> equals(other: Any?): Boolean { … }
@@ -2402,6 +2405,7 @@ host.abi.major == plugin.targetAbi.major</code></pre>
     <span class="kw">public companion object</span> {
         @JvmField <span class="kw">public val</span> BAZEL: BuildSystem
         @JvmField <span class="kw">public val</span> GRADLE: BuildSystem
+        @JvmField <span class="kw">public val</span> REPO: BuildSystem
     }
 }
 

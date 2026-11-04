@@ -12,11 +12,13 @@ package dev.sebastiano.indexino.api {
     field public static final dev.sebastiano.indexino.api.BuildSystem BAZEL;
     field public static final dev.sebastiano.indexino.api.BuildSystem.Companion Companion;
     field public static final dev.sebastiano.indexino.api.BuildSystem GRADLE;
+    field public static final dev.sebastiano.indexino.api.BuildSystem REPO;
   }
 
   public static final class BuildSystem.Companion {
     property public dev.sebastiano.indexino.api.BuildSystem BAZEL;
     property public dev.sebastiano.indexino.api.BuildSystem GRADLE;
+    property public dev.sebastiano.indexino.api.BuildSystem REPO;
   }
 
   public enum FreshnessPolicy {
@@ -41,6 +43,7 @@ package dev.sebastiano.indexino.api {
     method @InaccessibleFromKotlin public String getValue();
     method public static dev.sebastiano.indexino.api.IndexScope gradle(String module);
     method public dev.sebastiano.indexino.api.IndexScope includingDependencies();
+    method public static dev.sebastiano.indexino.api.IndexScope repo();
     property public dev.sebastiano.indexino.api.BuildSystem buildSystem;
     property public boolean includesDependencies;
     property public String value;
@@ -50,6 +53,7 @@ package dev.sebastiano.indexino.api {
   public static final class IndexScope.Companion {
     method public dev.sebastiano.indexino.api.IndexScope bazel(String target);
     method public dev.sebastiano.indexino.api.IndexScope gradle(String module);
+    method public dev.sebastiano.indexino.api.IndexScope repo();
   }
 
   public final class IndexSnapshot implements java.lang.AutoCloseable dev.sebastiano.indexino.model.BasicFactQueries dev.sebastiano.indexino.model.SourceLinkQueries {

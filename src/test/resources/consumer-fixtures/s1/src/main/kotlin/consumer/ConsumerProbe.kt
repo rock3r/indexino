@@ -1,5 +1,6 @@
 package consumer
 
+import dev.sebastiano.indexino.api.BuildSystem
 import dev.sebastiano.indexino.api.IndexScope
 import dev.sebastiano.indexino.api.Indexino
 import dev.sebastiano.indexino.api.RefreshRequest
@@ -7,6 +8,7 @@ import java.nio.file.Path
 
 public suspend fun main(args: Array<String>) {
     ConsumerProbe().touch()
+    check(IndexScope.repo().buildSystem == BuildSystem.REPO)
     Indexino.connectBlocking(Path.of(args.single())).use { indexino ->
         // Root Gradle scopes always resolve the whole build; the facade requires an explicit
         // includingDependencies() so the published provenance matches the observed closure.

@@ -278,9 +278,10 @@ source tree walks. The `indexino-selection-context` artifact contains this plugi
 
 - **Primary:** Bazel — [BAZEL-TOPOLOGY.md](BAZEL-TOPOLOGY.md)
 - **Secondary:** Gradle — [GRADLE-TOPOLOGY.md](GRADLE-TOPOLOGY.md)
-- **CLI-only:** Android repo manifests — each project is a distinct origin; the daemon remembers
+- **Android repo manifests:** each project is a distinct origin; the daemon remembers
   the manifest scope across restarts
-- Public scopes: `IndexScope.bazel` / `gradle` (+ `includingDependencies`); single-root non-Git workspaces are also supported
+- Public scopes: `IndexScope.bazel` / `gradle` / `repo` (+ `includingDependencies`);
+  single-root non-Git workspaces are also supported
 
 ## Technology
 
