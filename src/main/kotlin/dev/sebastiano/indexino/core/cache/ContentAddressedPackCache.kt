@@ -1,6 +1,8 @@
 package dev.sebastiano.indexino.core.cache
 
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
@@ -64,6 +66,9 @@ internal class ContentAddressedPackCache(
         val pack = packPath(contentKey)
         require(Files.isRegularFile(pack)) { "Content pack does not exist: $contentKey" }
         if (Files.isDirectory(destination)) return
+        if (Files.exists(destination, LinkOption.NOFOLLOW_LINKS)) {
+            throw FileAlreadyExistsException(destination.toString())
+        }
         Files.createDirectories(destination.parent)
         val staging = destination.resolveSibling("${destination.fileName}.tmp-${UUID.randomUUID()}")
         try {
@@ -85,6 +90,14 @@ internal class ContentAddressedPackCache(
                 }
             }
             try {
+                // On Windows an atomic rename may replace a regular file even without
+                // REPLACE_EXISTING.
+                if (
+                    Files.exists(destination, LinkOption.NOFOLLOW_LINKS) &&
+                        !Files.isDirectory(destination)
+                ) {
+                    throw FileAlreadyExistsException(destination.toString())
+                }
                 moveDirectoryAction(staging, destination)
             } catch (failure: java.nio.file.FileSystemException) {
                 // Atomic rename can report EEXIST or ENOTEMPTY when another materializer wins.
