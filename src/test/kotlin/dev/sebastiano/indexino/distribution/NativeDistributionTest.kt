@@ -733,8 +733,8 @@ class NativeDistributionTest {
 
         val commit = runCommand(workspace, "git", "rev-parse", "HEAD").stdout.trim()
         val indexRoot = workspace.resolve(".indexino/index/$commit")
-        assertTrue(Files.isDirectory(indexRoot.resolve("base.xodus")))
-        assertTrue(Files.isRegularFile(indexRoot.resolve("manifest.json")))
+        assertFalse(Files.exists(indexRoot.resolve("base.xodus")))
+        assertFalse(Files.exists(indexRoot.resolve("manifest.json")))
     }
 
     private fun assertCallerRelativeInvocation(launcher: Path, caller: Path, workspace: Path) {

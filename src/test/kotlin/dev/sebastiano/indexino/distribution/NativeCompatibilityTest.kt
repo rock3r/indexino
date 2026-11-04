@@ -13,11 +13,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.int
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Tag
@@ -285,31 +280,24 @@ class NativeCompatibilityTest {
 
         val template = createFixtureWorkspace()
         val caller = tempDir.resolve("compatibility-caller").createDirectories()
-        val commit = runCommand(template, "git", "rev-parse", "HEAD").stdout.trim()
 
         try {
             val snapshots = entryPoints.associate { entryPoint ->
                 val workspace = tempDir.resolve("workspace-${entryPoint.name}")
                 copyTree(template, workspace)
-                entryPoint.name to snapshot(entryPoint, caller, workspace, commit)
+                entryPoint.name to snapshot(entryPoint, caller, workspace)
             }
 
             val golden = snapshots.getValue("thin")
             snapshots.forEach { (name, snapshot) ->
                 assertEquals(golden.results, snapshot.results, "$name CLI behavior differs")
-                assertEquals(golden.manifest, snapshot.manifest, "$name manifest differs")
             }
         } finally {
             releaseCompatibilityResources(tempDir, entryPoints, caller)
         }
     }
 
-    private fun snapshot(
-        entryPoint: EntryPoint,
-        caller: Path,
-        workspace: Path,
-        commit: String,
-    ): Snapshot {
+    private fun snapshot(entryPoint: EntryPoint, caller: Path, workspace: Path): Snapshot {
         val results =
             linkedMapOf(
                 "help" to run(entryPoint, caller, "--help"),
@@ -352,43 +340,11 @@ class NativeCompatibilityTest {
             .forEach { (_, result) -> assertEquals(0, result.exitCode, result.diagnostic()) }
         run(entryPoint, caller, "daemon", "stop", "--project", workspace.toString())
 
-        val manifest = workspace.resolve(".indexino/index/$commit/manifest.json")
-        assertManifestSchema(manifest)
-        assertTrue(Files.isDirectory(manifest.parent.resolve("base.xodus")))
-        return Snapshot(
-            results.mapValues { (_, result) -> result.normalized(workspace) },
-            normalizedManifest(manifest),
-        )
-    }
-
-    private fun normalizedManifest(manifest: Path): Map<String, JsonElement> =
-        Json.parseToJsonElement(manifest.readText()).jsonObject.filterKeys { it != "builtAt" }
-
-    private fun assertManifestSchema(manifest: Path) {
-        val json = Json.parseToJsonElement(manifest.readText()).jsonObject
-        assertEquals(
-            setOf(
-                "commit",
-                "indexerVersion",
-                "basicFactSchemaVersion",
-                "scope",
-                "topology",
-                "includeDeps",
-                "sourceFileCount",
-                "sourcesContentHash",
-                "builtAt",
-                "applications",
-                "pluginCoordinates",
-                "origins",
-                "resolvedTopologyDigest",
-            ),
-            json.keys,
-        )
-        assertEquals(
-            requiredProperty("indexino.version"),
-            json.getValue("indexerVersion").jsonPrimitive.content,
-        )
-        assertEquals(6, json.getValue("basicFactSchemaVersion").jsonPrimitive.int)
+        val commit = runCommand(workspace, "git", "rev-parse", "HEAD").stdout.trim()
+        val indexRoot = workspace.resolve(".indexino/index/$commit")
+        assertFalse(Files.exists(indexRoot.resolve("manifest.json")))
+        assertFalse(Files.exists(indexRoot.resolve("base.xodus")))
+        return Snapshot(results.mapValues { (_, result) -> result.normalized(workspace) })
     }
 
     private fun releaseCompatibilityResources(
@@ -592,10 +548,7 @@ class NativeCompatibilityTest {
         val environment: Map<String, String> = emptyMap(),
     )
 
-    private data class Snapshot(
-        val results: Map<String, ProcessResult>,
-        val manifest: Map<String, JsonElement>,
-    )
+    private data class Snapshot(val results: Map<String, ProcessResult>)
 
     private data class ProcessResult(val exitCode: Int, val stdout: String, val stderr: String) {
         fun normalized(workspace: Path): ProcessResult {
