@@ -15,6 +15,7 @@ import dev.sebastiano.indexino.api.Indexino
 import dev.sebastiano.indexino.api.IndexinoConfiguration
 import dev.sebastiano.indexino.api.RefreshRequest
 import dev.sebastiano.indexino.api.RuntimeAttachMode
+import dev.sebastiano.indexino.core.cache.CacheActivityLock
 import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.cache.WorktreeOverlayPolicy
@@ -162,6 +163,10 @@ internal class IndexCommand : CliktCommand(name = "index") {
 
     private fun materializeCliCompatibilityProjection(project: Path) {
         val cacheRoot = InProcessCacheLayout.cacheRoot()
+        CacheActivityLock.acquire(cacheRoot).use { projectCompatibilityStore(project, cacheRoot) }
+    }
+
+    private fun projectCompatibilityStore(project: Path, cacheRoot: Path) {
         val manifest =
             requireNotNull(
                 WorkspaceGenerationManifestStore(
@@ -176,7 +181,8 @@ internal class IndexCommand : CliktCommand(name = "index") {
         val packKey =
             if (manifest.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) {
                 // Transitional project-local lookup commands still require one physical store.
-                // Only the CLI constructs this projection; daemon and embedded refreshes do not.
+                // Only the CLI constructs this projection; daemon and embedded refreshes do
+                // not.
                 val staging =
                     resolver
                         .resolveBaseStore(commit)

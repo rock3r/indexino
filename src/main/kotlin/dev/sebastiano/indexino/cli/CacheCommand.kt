@@ -14,8 +14,10 @@ import dev.sebastiano.indexino.core.cache.WorktreeOverlayPolicy
 import dev.sebastiano.indexino.engine.RuntimeLeaseStore
 import dev.sebastiano.indexino.engine.RuntimePaths
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.util.Comparator
+import java.util.stream.Stream
 
 internal class CacheCommand : CliktCommand(name = "cache") {
     init {
@@ -61,10 +63,12 @@ internal object CacheMaintenance {
 
     fun gc(cacheRoot: Path): String =
         CacheActivityLock.withExclusiveLock(cacheRoot) { collectGarbage(cacheRoot) }
-            ?: "reclaimedPacks=0 reclaimedBytes=0 activeRuntime=true"
+            ?: "reclaimedPacks=0 reclaimedBytes=0 reclaimedMaterializations=0 activeRuntime=true"
 
     private fun collectGarbage(cacheRoot: Path): String {
-        if (hasLiveRuntime(cacheRoot)) return "reclaimedPacks=0 reclaimedBytes=0 activeRuntime=true"
+        if (hasLiveRuntime(cacheRoot))
+            return "reclaimedPacks=0 reclaimedBytes=0 reclaimedMaterializations=0 activeRuntime=true"
+        val retainedGenerations = retainedGenerations(cacheRoot)
         val referenced = referencedPackKeys(cacheRoot)
         val chunksRoot = cacheRoot.resolve("chunks")
         val packs =
@@ -81,7 +85,10 @@ internal object CacheMaintenance {
                 reclaimedPacks += 1
             }
         }
-        return "reclaimedPacks=$reclaimedPacks reclaimedBytes=$reclaimedBytes"
+        val reclaimedMaterializations =
+            retainedGenerations?.let { reclaimObsoleteMaterializations(cacheRoot, it) } ?: 0
+        return "reclaimedPacks=$reclaimedPacks reclaimedBytes=$reclaimedBytes " +
+            "reclaimedMaterializations=$reclaimedMaterializations"
     }
 
     fun forget(cacheRoot: Path, project: Path): Int {
@@ -168,6 +175,74 @@ internal object CacheMaintenance {
             if (base != null) keys.addAll(base.referencedPackKeys(cacheRoot))
         }
         return keys
+    }
+
+    private fun retainedGenerations(cacheRoot: Path): Set<Pair<String, String>>? {
+        val workspaces = cacheRoot.resolve("workspaces")
+        if (!Files.isDirectory(workspaces, LinkOption.NOFOLLOW_LINKS)) return emptySet()
+        val retained = mutableSetOf<Pair<String, String>>()
+        fun retain(workspaceId: String, manifest: WorkspaceGenerationManifest): Boolean {
+            if (!retained.add(workspaceId to manifest.generation)) return true
+            if (manifest.representation != WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) return true
+            val baseId = manifest.baseWorkspaceId ?: return false
+            val baseGeneration = manifest.baseGeneration ?: return false
+            val base =
+                WorkspaceGenerationManifestStore(cacheRoot, baseId).readGeneration(baseGeneration)
+                    ?: return false
+            return retain(baseId, base)
+        }
+        var complete = true
+        Files.list(workspaces).use { roots ->
+            roots
+                .filter { Files.isDirectory(it, LinkOption.NOFOLLOW_LINKS) }
+                .forEach { root ->
+                    val currentPath = root.resolve("current")
+                    val current =
+                        WorkspaceGenerationManifestStore(cacheRoot, root.fileName.toString())
+                            .current()
+                    if (current != null)
+                        complete = retain(root.fileName.toString(), current) && complete
+                    else if (Files.exists(currentPath)) complete = false
+                }
+        }
+        return retained.takeIf { complete }
+    }
+
+    private fun reclaimObsoleteMaterializations(
+        cacheRoot: Path,
+        retained: Set<Pair<String, String>>,
+    ): Int {
+        val workspaces = cacheRoot.resolve("workspaces")
+        if (!Files.isDirectory(workspaces, LinkOption.NOFOLLOW_LINKS)) return 0
+        var reclaimed = 0
+        Files.list(workspaces).use { roots ->
+            roots
+                .filter { Files.isDirectory(it, LinkOption.NOFOLLOW_LINKS) }
+                .flatMap { root ->
+                    val generations = root.resolve("generations")
+                    if (Files.isDirectory(generations, LinkOption.NOFOLLOW_LINKS)) {
+                        Files.list(generations)
+                            .filter { Files.isDirectory(it, LinkOption.NOFOLLOW_LINKS) }
+                            .filter {
+                                root.fileName.toString() to it.fileName.toString() !in retained
+                            }
+                    } else {
+                        Stream.empty<Path>()
+                    }
+                }
+                .flatMap { generation ->
+                    Stream.of(
+                        generation.resolve("materialized"),
+                        generation.resolve("overlay-delta"),
+                    )
+                }
+                .filter { Files.isDirectory(it, LinkOption.NOFOLLOW_LINKS) }
+                .forEach { expanded ->
+                    deleteTree(expanded)
+                    reclaimed++
+                }
+        }
+        return reclaimed
     }
 
     private const val CONTENT_KEY_LENGTH = 64
