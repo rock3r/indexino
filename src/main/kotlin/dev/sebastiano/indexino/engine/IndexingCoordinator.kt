@@ -1,6 +1,7 @@
 package dev.sebastiano.indexino.engine
 
 import dev.sebastiano.indexino.api.IndexinoException
+import dev.sebastiano.indexino.api.RefreshCompleted
 import dev.sebastiano.indexino.api.RefreshEvent
 import dev.sebastiano.indexino.api.RefreshFailed
 import dev.sebastiano.indexino.api.RefreshRequest
@@ -27,6 +28,7 @@ internal class InFlightRefresh(
     private var worker: Thread? = null
     private var finished = false
     private var committed = false
+    private var completedResult: RefreshResult? = null
     private var cleanupFailure: IndexinoException? = null
 
     internal fun bindWorker(thread: Thread) {
@@ -38,10 +40,14 @@ internal class InFlightRefresh(
 
     internal fun stop() {
         synchronized(stateLock) {
-            if (committed || finished || result.isDone || terminalEvent.isDone) return
+            if (committed || finished || completedResult != null || cleanupFailure != null) return
             if (stopped.compareAndSet(false, true)) worker?.interrupt()
         }
     }
+
+    internal fun complete(result: RefreshResult) = publishIfActive { completedResult = result }
+
+    internal fun fail(failure: IndexinoException) = publishIfActive { cleanupFailure = failure }
 
     internal fun failAfterCleanup(failure: IndexinoException) {
         synchronized(stateLock) { cleanupFailure = failure }
@@ -49,11 +55,11 @@ internal class InFlightRefresh(
 
     @OptIn(IndexinoInternalApi::class)
     internal fun workerFinished() {
-        val failure =
+        val (failure, completed) =
             synchronized(stateLock) {
                 worker = null
                 finished = true
-                cleanupFailure
+                cleanupFailure to completedResult
             }
         onFinished(this)
         retired.complete(Unit)
@@ -63,6 +69,9 @@ internal class InFlightRefresh(
         } else if (stopped.get()) {
             result.cancel(false)
             terminalEvent.complete(RefreshStopped(id, resumable = true))
+        } else if (completed != null) {
+            result.complete(completed)
+            terminalEvent.complete(RefreshCompleted(id, completed))
         }
     }
 

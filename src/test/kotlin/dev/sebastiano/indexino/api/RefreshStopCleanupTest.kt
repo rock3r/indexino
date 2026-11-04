@@ -19,6 +19,69 @@ import kotlinx.coroutines.withTimeout
 
 class RefreshStopCleanupTest {
     @Test
+    fun `completed refresh is retired before await observers resume`() = runBlocking {
+        val root = Files.createTempDirectory("indexino-refresh-retirement-")
+        val workspace = Files.createDirectory(root.resolve("workspace"))
+        Files.writeString(
+            workspace.resolve("settings.gradle.kts"),
+            "rootProject.name = \"retirement\"",
+        )
+        val source = workspace.resolve("src/main/kotlin/Marker.kt")
+        Files.createDirectories(source.parent)
+        Files.writeString(source, "class Marker")
+        val previousCache = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", root.resolve("cache").toString())
+        val workerStarted = CountDownLatch(1)
+        val releaseWorker = CountDownLatch(1)
+        val observerEntered = CountDownLatch(1)
+        val releaseObserver = CountDownLatch(1)
+        try {
+            Indexino.connect(
+                    IndexinoConfiguration.forWorkspace(workspace)
+                        .withRuntimeAttach(RuntimeAttachMode.IN_PROCESS)
+                        .withAutoRefresh(AutoRefreshMode.DISABLED)
+                )
+                .use { index ->
+                    val handle =
+                        index.refresh(
+                            RefreshRequest.forScope(IndexScope.gradle(":").includingDependencies()),
+                            progress = { phase ->
+                                if (phase.startsWith("index phase=refresh-queue")) {
+                                    workerStarted.countDown()
+                                    check(releaseWorker.await(10, TimeUnit.SECONDS))
+                                }
+                            },
+                            machineProgress = null,
+                        )
+                    try {
+                        assertTrue(workerStarted.await(5, TimeUnit.SECONDS))
+                        handle.onCompletion {
+                            observerEntered.countDown()
+                            check(releaseObserver.await(10, TimeUnit.SECONDS))
+                        }
+                        releaseWorker.countDown()
+                        assertTrue(observerEntered.await(10, TimeUnit.SECONDS))
+                        assertTrue(
+                            index.activeRefreshes().isEmpty(),
+                            "A completed refresh must not remain active while its observer resumes",
+                        )
+                    } finally {
+                        releaseWorker.countDown()
+                        releaseObserver.countDown()
+                    }
+                    withTimeout(5_000) { handle.await() }
+                    Unit
+                }
+        } finally {
+            releaseWorker.countDown()
+            releaseObserver.countDown()
+            if (previousCache == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCache)
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `stop after publication cannot cancel the committed result`() = runBlocking {
         val root = Files.createTempDirectory("indexino-committed-stop-")
         val workspace = Files.createDirectory(root.resolve("workspace")).toRealPath()

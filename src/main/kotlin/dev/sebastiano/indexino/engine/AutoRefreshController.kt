@@ -310,8 +310,7 @@ internal class AutoRefreshController(
                 epoch to (automaticEpoch != null && automatic)
             }
         handle.onCompletion { succeeded ->
-            // A result can complete before its worker retires. Do not block this shared scheduler
-            // while waiting: other scopes still need their own debounce and reconciliation ticks.
+            // Schedule successors asynchronously so other scopes receive timely debounce ticks.
             IndexingCoordinator.onRetired(workspace, request, handle.id) {
                 if (closed.get()) return@onRetired
                 try {
