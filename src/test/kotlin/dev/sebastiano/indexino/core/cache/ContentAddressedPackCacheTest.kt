@@ -1,6 +1,7 @@
 package dev.sebastiano.indexino.core.cache
 
 import java.io.IOException
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.zip.ZipFile
@@ -74,6 +75,30 @@ class ContentAddressedPackCacheTest {
         }
         Files.list(root).use { paths ->
             assertTrue(paths.noneMatch { it.fileName.toString().contains(".tmp-") })
+        }
+    }
+
+    @Test
+    fun `materialization rejects an existing file before a replacing atomic move`() {
+        val root = createTempDirectory("indexino-pack-file-destination-").also(tempDirs::add)
+        val source = Files.createDirectory(root.resolve("source"))
+        source.resolve("facts.json").writeText("facts")
+        val contentKey = ContentAddressedPackCache(root).installDirectory(source)
+        val destination = root.resolve("restored")
+        destination.writeText("sentinel")
+        val cache =
+            ContentAddressedPackCache(root) { from, to ->
+                // Model a platform where an atomic rename replaces a regular-file destination.
+                Files.delete(to)
+                Files.move(from, to, StandardCopyOption.ATOMIC_MOVE)
+            }
+
+        assertFailsWith<FileAlreadyExistsException> {
+            cache.materializeDirectory(contentKey, destination)
+        }
+        assertEquals("sentinel", Files.readString(destination))
+        Files.list(root).use { paths ->
+            assertTrue(paths.noneMatch { it.fileName.toString().startsWith("restored.tmp-") })
         }
     }
 
