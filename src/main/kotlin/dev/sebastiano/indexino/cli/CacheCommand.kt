@@ -52,6 +52,7 @@ internal class CacheForgetCliCommand : CliktCommand(name = "forget") {
     }
 }
 
+@Suppress("TooManyFunctions")
 internal object CacheMaintenance {
     fun status(cacheRoot: Path, project: Path? = null): String {
         val workspaceId = project?.let { InProcessCacheLayout.workspaceId(it.toRealPath()) }
@@ -65,11 +66,13 @@ internal object CacheMaintenance {
 
     fun gc(cacheRoot: Path): String =
         CacheActivityLock.withExclusiveLock(cacheRoot) { collectGarbage(cacheRoot) }
-            ?: "reclaimedPacks=0 reclaimedBytes=0 reclaimedMaterializations=0 activeRuntime=true"
+            ?: "reclaimedPacks=0 reclaimedBytes=0 reclaimedMaterializations=0 " +
+                "reclaimedClientRefs=0 activeRuntime=true"
 
     private fun collectGarbage(cacheRoot: Path): String {
         if (hasLiveRuntime(cacheRoot))
-            return "reclaimedPacks=0 reclaimedBytes=0 reclaimedMaterializations=0 activeRuntime=true"
+            return "reclaimedPacks=0 reclaimedBytes=0 reclaimedMaterializations=0 " +
+                "reclaimedClientRefs=0 activeRuntime=true"
         val retainedGenerations = retainedGenerations(cacheRoot)
         val referenced =
             referencedPackKeys(cacheRoot).toMutableSet().apply {
@@ -99,8 +102,10 @@ internal object CacheMaintenance {
         }
         val reclaimedMaterializations =
             retainedGenerations?.let { reclaimObsoleteMaterializations(cacheRoot, it) } ?: 0
+        val reclaimedClientRefs = reclaimAbandonedClientRefs(cacheRoot)
         return "reclaimedPacks=$reclaimedPacks reclaimedBytes=$reclaimedBytes " +
-            "reclaimedMaterializations=$reclaimedMaterializations"
+            "reclaimedMaterializations=$reclaimedMaterializations " +
+            "reclaimedClientRefs=$reclaimedClientRefs"
     }
 
     fun forget(cacheRoot: Path, project: Path): Int {
@@ -285,6 +290,27 @@ internal object CacheMaintenance {
                 .filter { Files.isDirectory(it, LinkOption.NOFOLLOW_LINKS) }
                 .forEach { expanded ->
                     deleteTree(expanded)
+                    reclaimed++
+                }
+        }
+        return reclaimed
+    }
+
+    private fun reclaimAbandonedClientRefs(cacheRoot: Path): Int {
+        val workspaces = cacheRoot.resolve("workspaces")
+        if (!Files.isDirectory(workspaces, LinkOption.NOFOLLOW_LINKS)) return 0
+        var reclaimed = 0
+        Files.list(workspaces).use { roots ->
+            roots
+                .filter { Files.isDirectory(it, LinkOption.NOFOLLOW_LINKS) }
+                .flatMap { root ->
+                    val refs = root.resolve("refs")
+                    if (Files.isDirectory(refs, LinkOption.NOFOLLOW_LINKS)) Files.list(refs)
+                    else Stream.empty<Path>()
+                }
+                .filter { Files.isDirectory(it, LinkOption.NOFOLLOW_LINKS) }
+                .forEach { client ->
+                    deleteTree(client)
                     reclaimed++
                 }
         }

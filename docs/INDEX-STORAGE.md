@@ -215,14 +215,16 @@ Current `cache gc` implements conservative activity exclusion and current-genera
 reachability. In-process clients hold a shared OS lock on `activity.lock`; snapshots that outlive
 client close retain that lease, and refreshes retain independent leases until their work ends.
 GC takes the exclusive lock for its entire reachability scan and deletion, or reports
-`activeRuntime=true` without deleting packs or expanded stores. It removes expanded `materialized`
-and `overlay-delta` directories only for generations unreachable from any workspace's current
-generation, including recursive fork bases and provider generations pinned by a current
-source-link snapshot; their referenced packs remain available for reconstruction. If a
-current fork base or source-link snapshot is unavailable, expanded-store reclamation is skipped
-for that pass, while existing pack collection continues. The CLI compatibility projection holds
-a shared activity lease while reading expanded stores, including when a daemon completed the refresh.
-This prevents publication and pinned-generation races across cooperating processes. It intentionally
+`activeRuntime=true` without deleting packs, expanded stores, or client refs. It removes expanded
+`materialized` and `overlay-delta` directories only for generations unreachable from any current
+generation, recursive fork base, or provider generation pinned by a current source-link snapshot;
+their referenced packs remain available for reconstruction. If a current fork base or source-link
+snapshot is unavailable, expanded-store reclamation is skipped for that pass while existing pack
+collection continues. Abandoned private client refs are removed only when the exclusive lock
+proves that no live client or pinned snapshot can still use them, even if the workspace's current
+generation remains published. The CLI compatibility projection holds a shared activity lease
+while reading expanded stores, including when a daemon completed the refresh. This prevents
+publication and pinned-generation races across cooperating processes. It intentionally
 defers all reclamation while any client is live.
 An in-process client acquires its activity lock before resolving the writer staging path: a new
 cache beneath a symlinked parent must use the same canonical root before and after creation, or a
@@ -361,8 +363,8 @@ If another complete directory wins the rename, its copy is reused and the losing
 is removed. A move failure without a directory at the destination still propagates.
 Closing one snapshot does not close another snapshot's environment. Snapshot pins retain private
 overlay refs until close; client close never deletes a shared base that another process or fork may
-read. Current `cache gc` reclaims obsolete expanded generations only when no client is active;
-mutable staging and private refs remain outside that collector. ZIP compression still
+read. Current `cache gc` reclaims obsolete expanded generations and abandoned private refs only
+when no client is active. Mutable staging remains outside that collector. ZIP compression still
 serves transport and pack reachability, not random-access queries. There is no runtime
 `legacy-store` layout. Do **not**
 extend `<project>/.indexino/index/<commit>/`; new features must assume user-local composite storage.
