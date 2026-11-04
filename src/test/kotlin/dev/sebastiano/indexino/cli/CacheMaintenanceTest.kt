@@ -123,6 +123,60 @@ class CacheMaintenanceTest {
     }
 
     @Test
+    fun `quota evicts only an observed old unreferenced pack after minimum grace`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-cache-quota-")
+        val protectedKey = "c".repeat(64)
+        WorkspaceGenerationManifestStore(cacheRoot, "d".repeat(16))
+            .publish(
+                WorkspaceGenerationManifest(
+                    generation = "current",
+                    workspaceRevisionFingerprint = "current",
+                    originId = "workspace",
+                    revision = null,
+                    stateFingerprint = "current",
+                    packKeys = listOf(protectedKey),
+                )
+            )
+        val protected = packPath(cacheRoot, protectedKey)
+        val older = packPath(cacheRoot, "a".repeat(64))
+        val younger = packPath(cacheRoot, "b".repeat(64))
+        listOf(protected, older, younger).forEach { Files.createDirectories(it.parent) }
+        Files.writeString(protected, "P".repeat(64))
+        Files.writeString(older, "A".repeat(64))
+        try {
+            CacheMaintenance.gc(cacheRoot, nowEpochMillis = 1_000L)
+            Files.writeString(younger, "B".repeat(64))
+            CacheMaintenance.gc(cacheRoot, nowEpochMillis = 1_000L + Duration.ofHours(1).toMillis())
+            val totalBytes =
+                Files.walk(cacheRoot).use { paths ->
+                    paths.filter(Files::isRegularFile).mapToLong(Files::size).sum()
+                }
+            val quota = totalBytes - Files.size(older) + 1
+            val beforeGrace =
+                CacheMaintenance.gc(
+                    cacheRoot,
+                    nowEpochMillis = 1_000L + Duration.ofDays(1).toMillis() - 1,
+                    maxCacheBytes = quota,
+                )
+            assertTrue(Files.exists(older), beforeGrace)
+            assertTrue(Files.exists(younger), beforeGrace)
+
+            val afterGrace =
+                CacheMaintenance.gc(
+                    cacheRoot,
+                    nowEpochMillis = 1_000L + Duration.ofDays(1).toMillis(),
+                    maxCacheBytes = quota,
+                )
+            assertFalse(Files.exists(older), afterGrace)
+            assertTrue(Files.exists(younger), afterGrace)
+            assertTrue(Files.exists(protected), afterGrace)
+            assertTrue(afterGrace.contains("reclaimedPacks=1"), afterGrace)
+        } finally {
+            cacheRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `gc reclaims packs referenced only by superseded generations`() {
         val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-cache-gc-")
         val referenced = "a".repeat(64)
@@ -392,6 +446,14 @@ class CacheMaintenanceTest {
         Files.writeString(orphanedPack, "orphan")
         try {
             CacheMaintenance.gc(cacheRoot, nowEpochMillis = 1_000L)
+            val uncertain =
+                CacheMaintenance.gc(
+                    cacheRoot,
+                    nowEpochMillis = 1_000L + Duration.ofDays(1).toMillis(),
+                    maxCacheBytes = 1,
+                )
+            assertTrue(Files.exists(orphanedPack), uncertain)
+            assertTrue(Files.exists(expanded), uncertain)
             val attempt = runCatching {
                 CacheMaintenance.gc(
                     cacheRoot,

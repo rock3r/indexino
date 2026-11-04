@@ -57,6 +57,8 @@ internal class CacheForgetCliCommand : CliktCommand(name = "forget") {
 @Suppress("TooManyFunctions")
 internal object CacheMaintenance {
     private val packRetentionMillis = TimeUnit.DAYS.toMillis(30)
+    private val quotaGraceMillis = TimeUnit.DAYS.toMillis(1)
+    private const val DEFAULT_CACHE_QUOTA_BYTES = 20L * 1024 * 1024 * 1024
 
     fun status(cacheRoot: Path, project: Path? = null): String {
         val workspaceId = project?.let { InProcessCacheLayout.workspaceId(it.toRealPath()) }
@@ -68,12 +70,18 @@ internal object CacheMaintenance {
             workspaceId?.let { " workspaceId=$it" }.orEmpty()
     }
 
-    fun gc(cacheRoot: Path, nowEpochMillis: Long = System.currentTimeMillis()): String =
-        CacheActivityLock.withExclusiveLock(cacheRoot) { collectGarbage(cacheRoot, nowEpochMillis) }
+    fun gc(
+        cacheRoot: Path,
+        nowEpochMillis: Long = System.currentTimeMillis(),
+        maxCacheBytes: Long = DEFAULT_CACHE_QUOTA_BYTES,
+    ): String =
+        CacheActivityLock.withExclusiveLock(cacheRoot) {
+            collectGarbage(cacheRoot, nowEpochMillis, maxCacheBytes)
+        }
             ?: "reclaimedPacks=0 reclaimedBytes=0 reclaimedMaterializations=0 " +
                 "reclaimedClientRefs=0 activeRuntime=true"
 
-    private fun collectGarbage(cacheRoot: Path, nowEpochMillis: Long): String {
+    private fun collectGarbage(cacheRoot: Path, nowEpochMillis: Long, maxCacheBytes: Long): String {
         if (hasLiveRuntime(cacheRoot))
             return "reclaimedPacks=0 reclaimedBytes=0 reclaimedMaterializations=0 " +
                 "reclaimedClientRefs=0 activeRuntime=true"
@@ -101,12 +109,15 @@ internal object CacheMaintenance {
             val key = pack.fileName.toString()
             key to (previous[key] ?: nowEpochMillis)
         }
-        val expired = unreferenced.filter { pack ->
-            val firstObserved = candidates.getValue(pack.fileName.toString())
-            firstObserved >= 0 &&
-                nowEpochMillis >= firstObserved &&
-                nowEpochMillis - firstObserved >= packRetentionMillis
-        }
+        val expired =
+            selectPackEvictions(
+                cacheRoot,
+                unreferenced,
+                candidates,
+                nowEpochMillis,
+                maxCacheBytes,
+                retainedGenerations != null,
+            )
         val remaining = candidates - expired.map { it.fileName.toString() }.toSet()
         // Persist before unlinking: a failed write or crash can only delay collection.
         if (remaining != previous) ledger.write(remaining)
@@ -125,6 +136,51 @@ internal object CacheMaintenance {
         return "reclaimedPacks=$reclaimedPacks reclaimedBytes=$reclaimedBytes " +
             "reclaimedMaterializations=$reclaimedMaterializations " +
             "reclaimedClientRefs=$reclaimedClientRefs"
+    }
+
+    private fun selectPackEvictions(
+        cacheRoot: Path,
+        unreferenced: List<Path>,
+        candidates: Map<String, Long>,
+        nowEpochMillis: Long,
+        maxCacheBytes: Long,
+        allowQuota: Boolean,
+    ): List<Path> {
+        val ageExpired = unreferenced.filter { pack ->
+            val firstObserved = candidates.getValue(pack.fileName.toString())
+            firstObserved >= 0 &&
+                nowEpochMillis >= firstObserved &&
+                nowEpochMillis - firstObserved >= packRetentionMillis
+        }
+        val ageExpiredKeys = ageExpired.mapTo(mutableSetOf()) { it.fileName.toString() }
+        val cacheBytes =
+            regularFiles(cacheRoot)
+                .filter { Files.isRegularFile(it, LinkOption.NOFOLLOW_LINKS) }
+                .sumOf(Files::size)
+        // Incomplete fork/source-link reachability cannot justify accelerated quota eviction.
+        var excess =
+            if (!allowQuota) 0L
+            else (cacheBytes - ageExpired.sumOf(Files::size) - maxCacheBytes).coerceAtLeast(0)
+        val quotaExpired =
+            if (excess == 0L) emptyList()
+            else
+                unreferenced
+                    .asSequence()
+                    .filter { it.fileName.toString() !in ageExpiredKeys }
+                    .filter { pack ->
+                        val firstObserved = candidates.getValue(pack.fileName.toString())
+                        firstObserved >= 0 &&
+                            nowEpochMillis >= firstObserved &&
+                            nowEpochMillis - firstObserved >= quotaGraceMillis
+                    }
+                    .sortedWith(
+                        compareBy<Path> { candidates.getValue(it.fileName.toString()) }
+                            .thenBy { it.fileName.toString() }
+                    )
+                    .takeWhile { excess > 0 }
+                    .onEach { excess -= Files.size(it) }
+                    .toList()
+        return ageExpired + quotaExpired
     }
 
     fun forget(cacheRoot: Path, project: Path): Int {

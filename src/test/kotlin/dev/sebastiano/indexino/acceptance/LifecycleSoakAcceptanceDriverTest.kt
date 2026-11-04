@@ -45,6 +45,10 @@ internal class LifecycleSoakAcceptanceDriverTest {
             "persisted-pack-observation",
             report.getValue("gracePolicy").jsonPrimitive.content,
         )
+        assertEquals(
+            "20GiB-backstop; not-probed-by-soak",
+            report.getValue("quotaPolicy").jsonPrimitive.content,
+        )
         assertFalse(Files.exists(root))
         assertFalse(Files.readString(output).contains(temporary.toString()))
     }

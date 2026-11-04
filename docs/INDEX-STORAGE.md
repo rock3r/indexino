@@ -237,15 +237,21 @@ Unreferenced packs survive until 30 days after their first GC observation. `cach
 first-observed times in `registry/unreferenced-packs.json` before deleting eligible packs; every
 pass recomputes generation reachability under the exclusive lock and clears the age of any pack
 that is referenced again. Missing or unreadable ledger state cannot authorize an early unlink.
+If the cache's regular files exceed 20 GiB, GC may evict the oldest unreferenced packs after at
+least 24 hours of persisted observation, stopping once enough bytes have been selected. This is
+a best-effort backstop: live generations, fork bases, and linked provider packs remain referenced
+even when they alone exceed the quota. An incomplete fork or source-link reachability scan disables
+accelerated quota eviction for that pass. The size calculation counts logical cache-file bytes,
+including expanded stores, not allocated disk blocks. A pass never uses filesystem `atime`.
 Expanded stores and abandoned client refs retain their separate immediate reclamation rules.
 `cache forget` also takes the exclusive activity lock and refuses deletion while another live
 workspace's current overlay recursively references the selected base; otherwise a fork could lose
 its manifest and shared materialized store. Forget dependent workspaces first. `daemon stop --purge`
 uses the same forget operation after stopping the runtime; it removes only this workspace's local
 state and leaves shared packs for `cache gc`.
-Dead-workspace age and quota policy remain follow-up work rather than guarantees of the current
-collector. All participating processes must use the updated locking protocol; stop older
-in-process clients before running this collector against their cache.
+Dead-workspace age and mutable-staging collection remain follow-up work rather than guarantees of
+the current collector. All participating processes must use the updated locking protocol; stop
+older in-process clients before running this collector against their cache.
 
 ## Current implementation layout
 
