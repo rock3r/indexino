@@ -2,7 +2,6 @@
 
 package dev.sebastiano.indexino.api
 
-import dev.sebastiano.indexino.model.IndexFailure
 import dev.sebastiano.indexino.model.IndexinoInternalApi
 import dev.sebastiano.indexino.model.RefreshId
 import java.util.concurrent.CompletableFuture
@@ -66,9 +65,5 @@ private constructor(
             terminalEvent: CompletableFuture<RefreshEvent>,
             stopAction: () -> Unit,
         ): RefreshHandle = RefreshHandle(id, resultFuture, terminalEvent, stopAction, Unit)
-
-        @OptIn(IndexinoInternalApi::class)
-        internal fun failed(id: RefreshId, failure: IndexFailure): RefreshEvent =
-            RefreshFailed(id, failure)
     }
 }
