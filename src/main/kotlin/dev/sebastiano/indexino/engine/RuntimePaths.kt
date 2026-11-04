@@ -42,7 +42,7 @@ internal object RuntimePaths {
     fun workspaceFileKey(workspace: Path, attributes: BasicFileAttributes): String? =
         attributes.fileKey()?.toString()
             ?: if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
-                WindowsWorkspaceFileKey.read(workspace)
+                WindowsFileMetadata.fileId(workspace)
             } else {
                 null
             }
@@ -55,25 +55,10 @@ internal object RuntimePaths {
             .take(CACHE_ROOT_HASH_LENGTH)
 }
 
-/** Windows NIO can return no fileKey even for a directory with a stable volume/file ID. */
-private object WindowsWorkspaceFileKey {
-    fun read(workspace: Path): String {
-        val handle =
-            kernel32.CreateFileW(
-                WString(workspace.toString()),
-                FILE_READ_ATTRIBUTES,
-                FILE_SHARE_ALL,
-                null,
-                OPEN_EXISTING,
-                FILE_FLAG_BACKUP_SEMANTICS,
-                null,
-            )
-        if (handle == null || Pointer.nativeValue(handle) == -1L) {
-            throw IOException(
-                "Cannot open workspace identity: Windows error ${Native.getLastError()}"
-            )
-        }
-        try {
+/** Windows NIO can omit both file identity and hard-link count on NTFS. */
+internal object WindowsFileMetadata {
+    fun fileId(path: Path, noFollowLinks: Boolean = false): String =
+        withHandle(path, noFollowLinks) { handle ->
             // FILE_ID_INFO: 8-byte volume serial followed by the 16-byte file ID.
             Memory(FILE_ID_INFO_SIZE.toLong()).use { info ->
                 if (
@@ -85,11 +70,43 @@ private object WindowsWorkspaceFileKey {
                     )
                 ) {
                     throw IOException(
-                        "Cannot read workspace identity: Windows error ${Native.getLastError()}"
+                        "Cannot read file identity: Windows error ${Native.getLastError()}"
                     )
                 }
-                return "win:${HexFormat.of().formatHex(info.getByteArray(0, FILE_ID_INFO_SIZE))}"
+                "win:${HexFormat.of().formatHex(info.getByteArray(0, FILE_ID_INFO_SIZE))}"
             }
+        }
+
+    fun linkCount(path: Path): Int =
+        withHandle(path, noFollowLinks = true) { handle ->
+            // BY_HANDLE_FILE_INFORMATION: nNumberOfLinks at byte offset 40.
+            Memory(FILE_INFORMATION_SIZE.toLong()).use { info ->
+                if (!kernel32.GetFileInformationByHandle(handle, info)) {
+                    throw IOException(
+                        "Cannot read link count: Windows error ${Native.getLastError()}"
+                    )
+                }
+                info.getInt(NUMBER_OF_LINKS_OFFSET.toLong())
+            }
+        }
+
+    private fun <T> withHandle(path: Path, noFollowLinks: Boolean, block: (Pointer) -> T): T {
+        val handle =
+            kernel32.CreateFileW(
+                WString(path.toString()),
+                FILE_READ_ATTRIBUTES,
+                FILE_SHARE_ALL,
+                null,
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS or
+                    (if (noFollowLinks) FILE_FLAG_OPEN_REPARSE_POINT else 0),
+                null,
+            )
+        if (handle == null || Pointer.nativeValue(handle) == -1L) {
+            throw IOException("Cannot open file metadata: Windows error ${Native.getLastError()}")
+        }
+        try {
+            return block(handle)
         } finally {
             kernel32.CloseHandle(handle)
         }
@@ -117,6 +134,9 @@ private object WindowsWorkspaceFileKey {
             bufferSize: Int,
         ): Boolean
 
+        @Suppress("FunctionName")
+        fun GetFileInformationByHandle(handle: Pointer, information: Pointer): Boolean
+
         @Suppress("FunctionName") fun CloseHandle(handle: Pointer): Boolean
     }
 
@@ -124,6 +144,9 @@ private object WindowsWorkspaceFileKey {
     private const val FILE_SHARE_ALL = 0x7
     private const val OPEN_EXISTING = 3
     private const val FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+    private const val FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
     private const val FILE_ID_INFO = 18
     private const val FILE_ID_INFO_SIZE = 24
+    private const val FILE_INFORMATION_SIZE = 52
+    private const val NUMBER_OF_LINKS_OFFSET = 40
 }

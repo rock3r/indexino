@@ -47,6 +47,8 @@ private constructor(
                         Files.readAttributes(path, BasicFileAttributes::class.java, NOFOLLOW_LINKS)
                     }
                     .getOrNull() ?: return null
+            val beforeIdentity =
+                runCatching { fileIdentity(path, attributes) }.getOrNull() ?: return null
             if (
                 !attributes.isRegularFile ||
                     hasSharedInode(path) ||
@@ -67,7 +69,8 @@ private constructor(
                     }
                     .getOrNull() ?: return null
             if (
-                attributes.fileKey() != after.fileKey() ||
+                !after.isRegularFile ||
+                    beforeIdentity != runCatching { fileIdentity(path, after) }.getOrNull() ||
                     attributes.size() != after.size() ||
                     hasSharedInode(path)
             )
@@ -86,7 +89,11 @@ private constructor(
         // The retained IntelliJ plan has q95=26 children and q95=124 KiB of immediate file bytes.
         const val MAX_CHILDREN = 64
         const val MAX_HASH_BYTES = 256 * 1024L
-        val MAX_SCAN_NANOS: Long = TimeUnit.MILLISECONDS.toNanos(25)
+        val MAX_SCAN_NANOS: Long =
+            TimeUnit.MILLISECONDS.toNanos(
+                if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) 100
+                else 25
+            )
 
         fun capture(parent: Path, sources: List<IndexedSource>): TentativeParentInventory? {
             val snapshot = inventory(parent) ?: return null
@@ -107,10 +114,22 @@ private constructor(
 
         private fun hasSharedInode(path: Path): Boolean =
             runCatching {
-                    (Files.getAttribute(path, "unix:nlink", NOFOLLOW_LINKS) as Number).toLong() !=
-                        1L
+                    if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+                        WindowsFileMetadata.linkCount(path) != 1
+                    } else {
+                        (Files.getAttribute(path, "unix:nlink", NOFOLLOW_LINKS) as Number)
+                            .toLong() != 1L
+                    }
                 }
                 .getOrDefault(true)
+
+        private fun fileIdentity(path: Path, attributes: BasicFileAttributes): Any? =
+            attributes.fileKey()
+                ?: if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+                    WindowsFileMetadata.fileId(path, noFollowLinks = true)
+                } else {
+                    null
+                }
 
         private fun inventory(parent: Path): Pair<Any, Map<String, Boolean>>? {
             val start = System.nanoTime()
@@ -122,7 +141,7 @@ private constructor(
                             NOFOLLOW_LINKS,
                         )
                     if (!attributes.isDirectory) return null
-                    val identity = attributes.fileKey() ?: return null
+                    val identity = fileIdentity(parent, attributes) ?: return null
                     val children = linkedMapOf<String, Boolean>()
                     Files.newDirectoryStream(parent).use { stream ->
                         for (entry in stream) {
@@ -138,15 +157,13 @@ private constructor(
                             if (System.nanoTime() - start > MAX_SCAN_NANOS) return null
                         }
                     }
-                    if (
+                    val after =
                         Files.readAttributes(
-                                parent,
-                                BasicFileAttributes::class.java,
-                                NOFOLLOW_LINKS,
-                            )
-                            .fileKey() != identity
-                    )
-                        return null
+                            parent,
+                            BasicFileAttributes::class.java,
+                            NOFOLLOW_LINKS,
+                        )
+                    if (!after.isDirectory || fileIdentity(parent, after) != identity) return null
                     identity to children
                 }
                 .getOrNull()
