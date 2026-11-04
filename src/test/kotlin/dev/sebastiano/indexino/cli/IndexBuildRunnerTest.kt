@@ -34,7 +34,7 @@ class IndexBuildRunnerTest {
     @Test
     @Suppress("LongMethod")
     fun `changed source builds against its snapshot while origin resolution waits to publish`() {
-        val workspace = tempDir.resolve("overlap-workspace")
+        val workspace = Files.createDirectories(tempDir.resolve("overlap-workspace")).toRealPath()
         val source = workspace.resolve("src/main/java/Panel.java")
         Files.createDirectories(source.parent)
         source.writeText("class Before {}")
@@ -209,7 +209,8 @@ class IndexBuildRunnerTest {
 
     @Test
     fun `hinted refresh inherits unchanged source hashes while updating edited facts`() {
-        val workspace = tempDir.resolve("hinted-capture-workspace")
+        val workspace =
+            Files.createDirectories(tempDir.resolve("hinted-capture-workspace")).toRealPath()
         val sourceRoot = workspace.resolve("src/main/kotlin")
         Files.createDirectories(sourceRoot)
         Files.writeString(sourceRoot.resolve("Unchanged.kt"), "class Unchanged")

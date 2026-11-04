@@ -35,7 +35,18 @@ internal class CacheActivityIntegrationTest {
     @Test
     fun `gc retains an overlay base after pins close until the workspace is forgotten`() =
         runBlocking {
-            withIndex { index, workspace, cache ->
+            // The cache directory does not exist yet; its parent alias must not change the writer
+            // path after activity-lock creation. Windows runs the ordinary GC contract without a
+            // symlink, since creating one there may require privileges.
+            val cache =
+                if (System.getProperty("os.name").startsWith("Windows")) root.resolve("cache")
+                else
+                    Files.createSymbolicLink(
+                            root.resolve("cache-alias"),
+                            Files.createDirectory(root.resolve("cache-parent")),
+                        )
+                        .resolve("cache")
+            withIndex(cache) { index, workspace, cache ->
                 val request =
                     RefreshRequest.forScope(IndexScope.gradle(":").includingDependencies())
                 index.refresh(request).await()
@@ -178,7 +189,10 @@ internal class CacheActivityIntegrationTest {
         }
     }
 
-    private suspend fun withIndex(block: suspend (Indexino, Path, Path) -> Unit) {
+    private suspend fun withIndex(
+        cache: Path = root.resolve("cache"),
+        block: suspend (Indexino, Path, Path) -> Unit,
+    ) {
         val workspace = Files.createDirectories(root.resolve("workspace"))
         Files.writeString(
             workspace.resolve("settings.gradle.kts"),
@@ -187,7 +201,6 @@ internal class CacheActivityIntegrationTest {
         val source = workspace.resolve("src/main/kotlin/Marker.kt")
         Files.createDirectories(source.parent)
         Files.writeString(source, "class Marker")
-        val cache = root.resolve("cache")
         val previous = System.getProperty("indexino.cache.dir")
         System.setProperty("indexino.cache.dir", cache.toString())
         try {

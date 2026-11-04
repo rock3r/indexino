@@ -67,10 +67,11 @@ private constructor(
 ) : AutoCloseable {
     private val closed = AtomicBoolean()
     private val clientId = UUID.randomUUID().toString()
-    private val storeRoot = InProcessCacheLayout.writerRoot(workspace)
     private val cacheActivity =
         if (runtimeConnection == null) CacheActivityLock.acquire(InProcessCacheLayout.cacheRoot())
         else null
+    // The activity lock creates the cache root before its canonical writer path is resolved.
+    private val storeRoot = InProcessCacheLayout.writerRoot(workspace)
     private val generationLock = Any()
     private val generationStores = mutableMapOf<WorkspaceGenerationId, Path>()
     private val snapshotPins = mutableMapOf<WorkspaceGenerationId, Int>()

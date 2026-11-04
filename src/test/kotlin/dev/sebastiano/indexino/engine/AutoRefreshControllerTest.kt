@@ -583,6 +583,11 @@ class AutoRefreshControllerTest {
             )
         try {
             for (native in listOf(true, false)) {
+                // Without an injected watcher, macOS still starts its real recursive stream.
+                val recursive =
+                    native ||
+                        AutoRefreshWatcherFactory.configuredKind() ==
+                            AutoRefreshWatcherKind.MAC_FSEVENTS
                 val roots = CopyOnWriteArrayList<Path?>()
                 val launched = CountDownLatch(1)
                 val transport =
@@ -615,7 +620,7 @@ class AutoRefreshControllerTest {
                     controller.onPathChangedForTests(source)
                     assertTrue(launched.await(5, TimeUnit.SECONDS))
                     // Per-directory WatchService registrations miss unwatched directories.
-                    assertEquals(listOf(if (native) workspace else null), roots.toList())
+                    assertEquals(listOf(if (recursive) workspace else null), roots.toList())
                     assertTrue(checkNotNull(coverage).invoke())
                     if (native) {
                         transport.isAlive = false
@@ -733,7 +738,7 @@ class AutoRefreshControllerTest {
 
     @Test
     fun `atomic replacement of a known source reuses topology without losing deletion safety`() {
-        val workspace = Files.createTempDirectory("indexino-atomic-edit-")
+        val workspace = Files.createTempDirectory("indexino-atomic-edit-").toRealPath()
         val outside = Files.createTempDirectory("indexino-atomic-edit-outside-")
         val source = workspace.resolve("src/main/kotlin/Panel.kt")
         Files.createDirectories(source.parent)
@@ -783,7 +788,7 @@ class AutoRefreshControllerTest {
 
     @Test
     fun `deleted known source and newly created source both re-resolve topology`() {
-        val workspace = Files.createTempDirectory("indexino-source-membership-")
+        val workspace = Files.createTempDirectory("indexino-source-membership-").toRealPath()
         val source = workspace.resolve("src/main/kotlin/Panel.kt")
         Files.createDirectories(source.parent)
         Files.writeString(source, "class Panel")

@@ -21,7 +21,7 @@ class RefreshStopCleanupTest {
     @Test
     fun `stop after publication cannot cancel the committed result`() = runBlocking {
         val root = Files.createTempDirectory("indexino-committed-stop-")
-        val workspace = Files.createDirectory(root.resolve("workspace"))
+        val workspace = Files.createDirectory(root.resolve("workspace")).toRealPath()
         Files.writeString(workspace.resolve("settings.gradle.kts"), "rootProject.name = \"stop\"")
         val source = workspace.resolve("src/main/kotlin/Marker.kt")
         Files.createDirectories(source.parent)
