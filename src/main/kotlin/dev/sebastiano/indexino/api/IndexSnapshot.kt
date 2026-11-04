@@ -222,6 +222,22 @@ private constructor(
         }
     }
 
+    // CLI lookups use published resource symbols: old resdef keys omit columns and lose
+    // same-line declarations, while the public paged query has a bounded result window.
+    internal fun findResourceSymbolsForCli(type: String, name: String): List<SymbolRecord> {
+        ensureOpen()
+        return mapUnexpectedFailures {
+            buildList {
+                localStore.forEachPrefix("res:$type:$name:") { _, record ->
+                    if (record is SymbolRecord && record.fqn == "res:$type:$name") {
+                        add(record)
+                    }
+                    true
+                }
+            }
+        }
+    }
+
     override suspend fun findResourceUsages(
         query: ResourceQuery,
         options: QueryOptions,

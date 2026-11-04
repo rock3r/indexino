@@ -356,6 +356,14 @@ indexino resolve-resource \
   --name title
 ```
 
+Without `--session-id`, this command reads the published snapshot through a one-shot in-process
+client and renders its resource-symbol records as the existing JSONL rows; it does not need the
+project-local compatibility copy. Unlike the embedded paged resource query, the CLI collects all
+matching records, including results beyond the host's 10,000-item query window and declarations
+at different columns on the same line. Older indexes and transitional session overlays still use
+the legacy store.
+The `index` command continues to create that copy for other legacy lookup paths.
+
 ### `query`
 
 Run a loaded plugin check against the published snapshot. The CLI passes the plugin ID and check ID

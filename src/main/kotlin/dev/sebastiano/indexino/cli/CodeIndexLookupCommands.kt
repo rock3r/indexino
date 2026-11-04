@@ -204,7 +204,31 @@ internal class ResolveResourceCommand : CliktCommand(name = "resolve-resource") 
             progressOutput = { echo(it, err = true) },
         ) {
             requireJsonl(format)
-            withStore(project.toPath(), sessionId) { resolveResources(it, type, name) }
+            if (sessionId != null) {
+                return@runLookup withStore(project.toPath(), sessionId) {
+                    resolveResources(it, type, name)
+                }
+            }
+            try {
+                runBlocking {
+                    CliOneShotConnect.connect(project.toPath()).use { indexino ->
+                        indexino.snapshot().use { snapshot ->
+                            snapshot
+                                .findResourceSymbolsForCli(type, name)
+                                .sortedWith(
+                                    compareBy(
+                                        SymbolRecord::relativeFile,
+                                        SymbolRecord::line,
+                                        SymbolRecord::column,
+                                        SymbolRecord::fqn,
+                                    )
+                                )
+                        }
+                    }
+                }
+            } catch (_: IndexinoException) {
+                withStore(project.toPath(), sessionId) { resolveResources(it, type, name) }
+            }
         }
     }
 
