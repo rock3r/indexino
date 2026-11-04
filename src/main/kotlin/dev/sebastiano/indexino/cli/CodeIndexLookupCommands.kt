@@ -18,6 +18,9 @@ import dev.sebastiano.indexino.core.record.ReferenceRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.store.IndexStoreOpener
+import dev.sebastiano.indexino.core.store.OverlayCodeIndexStore
+import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
+import dev.sebastiano.indexino.model.IndexinoInternalApi
 import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.ReferenceQuery
 import dev.sebastiano.indexino.model.SymbolQuery
@@ -296,9 +299,28 @@ private fun referenceRecord(
         originId = reference.location.file.originId.value,
     )
 
+@OptIn(IndexinoInternalApi::class)
 private fun <T> withStore(project: Path, sessionId: String?, block: (CodeIndexStore) -> T): T {
     val commit = GitHeadResolver.resolve(project)
     val resolver = IndexPathResolver(project)
+    if (!sessionId.isNullOrBlank()) {
+        try {
+            return runBlocking {
+                CliOneShotConnect.connect(project).use { indexino ->
+                    indexino.snapshot().use { snapshot ->
+                        XodusCodeIndexStore.open(resolver.resolveSessionDeltaStore(sessionId))
+                            .use { delta ->
+                                block(
+                                    OverlayCodeIndexStore(snapshot.localStoreForExtension(), delta)
+                                )
+                            }
+                    }
+                }
+            }
+        } catch (_: IndexinoException) {
+            // Pre-daemon indexes still read the project-local base and session delta.
+        }
+    }
     val manifestPath = resolver.resolveManifest(commit)
     if (!manifestPath.exists()) {
         throw IndexNotFoundException(commit)

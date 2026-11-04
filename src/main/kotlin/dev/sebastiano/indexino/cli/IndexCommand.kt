@@ -9,21 +9,11 @@ import com.github.ajalt.clikt.parameters.options.required
 import com.github.ajalt.clikt.parameters.options.split
 import com.github.ajalt.clikt.parameters.types.file
 import dev.sebastiano.indexino.api.AutoRefreshMode
-import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.api.IndexScope
 import dev.sebastiano.indexino.api.Indexino
 import dev.sebastiano.indexino.api.IndexinoConfiguration
 import dev.sebastiano.indexino.api.RefreshRequest
 import dev.sebastiano.indexino.api.RuntimeAttachMode
-import dev.sebastiano.indexino.core.cache.CacheActivityLock
-import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
-import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
-import dev.sebastiano.indexino.core.cache.WorktreeOverlayPolicy
-import dev.sebastiano.indexino.core.cache.WorktreeOverlayStoreOpener
-import dev.sebastiano.indexino.core.git.GitHeadResolver
-import dev.sebastiano.indexino.core.manifest.ManifestIO
-import dev.sebastiano.indexino.core.path.IndexPathResolver
-import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.engine.IndexBuildRunner
 import dev.sebastiano.indexino.engine.extension.DistributionCapabilities
 import dev.sebastiano.indexino.model.PluginId
@@ -34,9 +24,7 @@ import dev.sebastiano.indexino.topology.BuildSystemDetector
 import dev.sebastiano.indexino.topology.TopologyRequest
 import dev.sebastiano.indexino.topology.bazel.BazelProcessRunner
 import dev.sebastiano.indexino.topology.bazel.BazelQueryExecutor
-import java.nio.file.Files
 import java.nio.file.Path
-import java.util.UUID
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -132,9 +120,6 @@ internal class IndexCommand : CliktCommand(name = "index") {
                     val outcome = completion.await()
                     val result = outcome.getOrNull()
                     val failure = outcome.exceptionOrNull()
-                    result?.let {
-                        materializeCliCompatibilityProjection(project.toPath().toRealPath())
-                    }
                     if (!jsonlProgress && result?.outcome?.value == "UNCHANGED")
                         echo("index fresh", err = true)
                     failure?.let { thrown ->
@@ -160,71 +145,6 @@ internal class IndexCommand : CliktCommand(name = "index") {
         val journal = indexino.refreshProgress(refreshId)
         journal.text.filter(emittedText::add).forEach { echo(it, err = true) }
         if (jsonlProgress) journal.machine.filter(emittedMachine::add).forEach(::echo)
-    }
-
-    private fun materializeCliCompatibilityProjection(project: Path) {
-        val cacheRoot = InProcessCacheLayout.cacheRoot()
-        CacheActivityLock.acquire(cacheRoot).use { projectCompatibilityStore(project, cacheRoot) }
-    }
-
-    private fun projectCompatibilityStore(project: Path, cacheRoot: Path) {
-        val manifest =
-            requireNotNull(
-                WorkspaceGenerationManifestStore(
-                        cacheRoot,
-                        InProcessCacheLayout.workspaceId(project),
-                    )
-                    .current()
-            )
-        val resolver = IndexPathResolver(project)
-        val commit = GitHeadResolver.resolve(project)
-        val packs = ContentAddressedPackCache(cacheRoot)
-        val packKey =
-            if (manifest.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) {
-                // Transitional project-local lookup commands still require one physical store.
-                // Only the CLI constructs this projection; daemon and embedded refreshes do
-                // not.
-                val staging =
-                    resolver
-                        .resolveBaseStore(commit)
-                        .resolveSibling("cli-projection-${UUID.randomUUID()}")
-                try {
-                    XodusCodeIndexStore.open(staging).use { target ->
-                        WorktreeOverlayStoreOpener.openForBuildBase(cacheRoot, project, manifest)
-                            .use { source ->
-                                val batch =
-                                    mutableListOf<
-                                        Pair<
-                                            dev.sebastiano.indexino.core.key.CodeIndexKey,
-                                            dev.sebastiano.indexino.core.record.CodeIndexRecord,
-                                        >
-                                    >()
-                                fun flush() {
-                                    target.transaction {
-                                        batch.forEach { (key, record) -> target.put(key, record) }
-                                    }
-                                    batch.clear()
-                                }
-                                source.forEachPrefix("") { key, record ->
-                                    batch += key to record
-                                    if (batch.size == 16) flush()
-                                    true
-                                }
-                                if (batch.isNotEmpty()) flush()
-                            }
-                    }
-                    packs.installDirectory(staging, manifest.basicFactSchemaVersion)
-                } finally {
-                    if (Files.exists(staging)) staging.toFile().deleteRecursively()
-                }
-            } else manifest.packKeys.single()
-        packs.replaceMaterializedDirectory(packKey, resolver.resolveBaseStore(commit))
-        ManifestIO.write(
-            resolver.resolveManifest(commit),
-            requireNotNull(manifest.compatibilityManifest) {
-                "Published generation does not contain a CLI compatibility manifest"
-            },
-        )
     }
 
     private fun daemonScope(project: Path): IndexScope {
