@@ -15,7 +15,6 @@ import org.junit.jupiter.api.Assumptions.assumeTrue
 class TentativeParentInventoryTest {
     @Test
     fun `hashes same-parent siblings even when size and mtime are restored`() {
-        assumeTrue("unix" in FileSystems.getDefault().supportedFileAttributeViews())
         val root = createTempDirectory("indexino-parent-candidate-").toRealPath()
         try {
             val parent = Files.createDirectory(root.resolve("sources"))

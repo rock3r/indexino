@@ -168,7 +168,10 @@ match, every temporary path was absent from the prior inventory and is still abs
 source changed, no child is a symlink, no scanned source has a shared inode, and no intervening
 native callback names another path. A cluster exceeding five paths, a different parent, a failed
 fence, changed coverage, or other uncertainty falls back to full discovery. Ignored `.git`
-callbacks are filtered before the native-event fence.
+callbacks are filtered before the native-event fence. On Windows, where NIO omits directory file
+keys and Unix link counts are unavailable, the inventory reads native file IDs and hard-link counts;
+unavailable metadata still falls back to full discovery rather than certifying an alias. Its
+wall-clock budget is 100 ms on Windows to allow the native metadata reads (25 ms elsewhere).
 The resulting generation is **PROVISIONAL**: the rehash does not prove that files outside the
 bounded parent are unchanged. `PUBLISHED` can query it immediately; `AWAIT_CURRENT` refuses it
 until an independent full audit certifies `CURRENT`. Subsequent covered known-source edits inherit
