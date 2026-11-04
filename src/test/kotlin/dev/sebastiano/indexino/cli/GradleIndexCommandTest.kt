@@ -75,7 +75,13 @@ class GradleIndexCommandTest {
             Files.createDirectories(resource.parent)
             Files.writeString(
                 resource,
-                "<resources>\n<string name=\"title\">Hello</string>\n</resources>\n",
+                buildString {
+                    appendLine("<resources>")
+                    repeat(if (configuration == "values") 10_000 else 1) {
+                        appendLine("<string name=\"title\">Hello</string>")
+                    }
+                    appendLine("</resources>")
+                },
             )
         }
         val indexed =
@@ -121,15 +127,20 @@ class GradleIndexCommandTest {
                 .filter(String::isNotBlank)
                 .map { Json.parseToJsonElement(it).jsonObject }
                 .toList()
+        assertEquals(10_001, rows.size)
         assertEquals(
-            listOf(
-                "ui/src/main/res/values-night/strings.xml",
-                "ui/src/main/res/values/strings.xml",
-            ),
-            rows.map { it.getValue("relativeFile").jsonPrimitive.content },
+            "ui/src/main/res/values-night/strings.xml",
+            rows.first().getValue("relativeFile").jsonPrimitive.content,
+        )
+        assertTrue(
+            rows.drop(1).all {
+                it.getValue("relativeFile").jsonPrimitive.content ==
+                    "ui/src/main/res/values/strings.xml"
+            }
         )
         assertTrue(rows.all { it.getValue("fqn").jsonPrimitive.content == "res:string:title" })
-        assertTrue(rows.all { it.getValue("line").jsonPrimitive.content == "2" })
+        assertEquals("2", rows.first().getValue("line").jsonPrimitive.content)
+        assertEquals("10001", rows.last().getValue("line").jsonPrimitive.content)
         assertTrue(rows.all { it.getValue("column").jsonPrimitive.content == "1" })
         assertTrue(rows.all { it.getValue("language").jsonPrimitive.content == "xml" })
         assertTrue(

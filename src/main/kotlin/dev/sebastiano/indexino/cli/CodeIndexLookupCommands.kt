@@ -214,34 +214,22 @@ internal class ResolveResourceCommand : CliktCommand(name = "resolve-resource") 
                 runBlocking {
                     CliOneShotConnect.connect(project.toPath()).use { indexino ->
                         indexino.snapshot().use { snapshot ->
-                            val matches = mutableListOf<SymbolRecord>()
-                            var offset = 0
-                            do {
-                                val page =
-                                    snapshot.findResources(
-                                        ResourceQuery.of(null, type, name),
-                                        QueryOptions.page(LOOKUP_PAGE_SIZE, offset),
+                            val matches =
+                                snapshot.findAllResources(ResourceQuery.of(null, type, name)).map {
+                                    definition ->
+                                    SymbolRecord(
+                                        fqn = "res:$type:$name",
+                                        relativeFile = definition.location.file.path,
+                                        line = definition.location.line,
+                                        column = definition.location.column ?: 1,
+                                        kind = "resource",
+                                        name = name,
+                                        language = "xml",
+                                        ownerFqn = "res:$type",
+                                        aliases = listOf("@$type/$name"),
+                                        originId = definition.location.file.originId.value,
                                     )
-                                matches +=
-                                    page.items.map { definition ->
-                                        SymbolRecord(
-                                            fqn = "res:$type:$name",
-                                            relativeFile = definition.location.file.path,
-                                            line = definition.location.line,
-                                            column = definition.location.column ?: 1,
-                                            kind = "resource",
-                                            name = name,
-                                            language = "xml",
-                                            ownerFqn = "res:$type",
-                                            aliases = listOf("@$type/$name"),
-                                            originId = definition.location.file.originId.value,
-                                        )
-                                    }
-                                check(!page.hasMore || page.items.isNotEmpty()) {
-                                    "Resource lookup returned an empty page with more results"
                                 }
-                                offset += page.items.size
-                            } while (page.hasMore)
                             matches.sortedWith(
                                 compareBy(
                                     SymbolRecord::relativeFile,

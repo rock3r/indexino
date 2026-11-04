@@ -222,6 +222,21 @@ private constructor(
         }
     }
 
+    // CLI lookups return every match; the public paged query has a bounded result window.
+    internal fun findAllResources(query: ResourceQuery): List<ResourceDefinition> {
+        ensureOpen()
+        return mapUnexpectedFailures {
+            buildList {
+                localStore.forEachPrefix("resdef:") { _, record ->
+                    if (record is ResourceDefinitionRecord && record.matches(query)) {
+                        add(toPublicResourceDefinition(record))
+                    }
+                    true
+                }
+            }
+        }
+    }
+
     override suspend fun findResourceUsages(
         query: ResourceQuery,
         options: QueryOptions,
