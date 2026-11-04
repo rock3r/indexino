@@ -20,6 +20,7 @@ import dev.sebastiano.indexino.model.ResourceQuery
 import dev.sebastiano.indexino.model.SymbolQuery
 import dev.sebastiano.indexino.producer.JsonlIndexBuildProgressReporter
 import java.nio.file.Files
+import java.time.Duration
 import kotlin.io.path.Path
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
@@ -560,6 +561,13 @@ class WorktreeOverlayIntegrationTest {
 
             CacheMaintenance.forget(cacheRoot, forkWorkspace)
             CacheMaintenance.gc(cacheRoot)
+            forkOnlyPackKeys.forEach { packKey ->
+                assertTrue(Files.exists(packPath(cacheRoot, packKey)))
+            }
+            CacheMaintenance.gc(
+                cacheRoot,
+                nowEpochMillis = System.currentTimeMillis() + Duration.ofDays(30).toMillis(),
+            )
 
             assertTrue(Files.exists(packPath(cacheRoot, mainPackKey)))
             forkOnlyPackKeys.forEach { packKey ->

@@ -12,6 +12,7 @@ import dev.sebastiano.indexino.engine.RuntimePaths
 import dev.sebastiano.indexino.model.LinkGenerationId
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Duration
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -44,6 +45,78 @@ class CacheMaintenanceTest {
         try {
             assertTrue(CacheMaintenance.gc(cacheRoot).contains("activeRuntime=true"))
             assertTrue(Files.exists(pack))
+        } finally {
+            cacheRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `gc keeps an unreferenced pack on its first observed pass`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-cache-grace-")
+        val pack = packPath(cacheRoot, "f".repeat(64))
+        Files.createDirectories(pack.parent)
+        Files.writeString(pack, "keep during grace")
+        try {
+            val first = CacheMaintenance.gc(cacheRoot, nowEpochMillis = 1_000L)
+            assertTrue(Files.exists(pack), first)
+            assertTrue(first.contains("reclaimedPacks=0"), first)
+            val beforeExpiry =
+                CacheMaintenance.gc(
+                    cacheRoot,
+                    nowEpochMillis = 1_000L + Duration.ofDays(30).toMillis() - 1,
+                )
+            assertTrue(Files.exists(pack), beforeExpiry)
+            val expired =
+                CacheMaintenance.gc(
+                    cacheRoot,
+                    nowEpochMillis = 1_000L + Duration.ofDays(30).toMillis(),
+                )
+            assertFalse(Files.exists(pack), expired)
+            assertTrue(expired.contains("reclaimedPacks=1"), expired)
+        } finally {
+            cacheRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `gc resets persisted pack age when a generation references it again`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-cache-reused-pack-")
+        val key = "a".repeat(64)
+        val pack = packPath(cacheRoot, key)
+        Files.createDirectories(pack.parent)
+        Files.writeString(pack, "reused")
+        val manifests = WorkspaceGenerationManifestStore(cacheRoot, "b".repeat(16))
+        fun publish(generation: String, keys: List<String>) =
+            manifests.publish(
+                WorkspaceGenerationManifest(
+                    generation = generation,
+                    workspaceRevisionFingerprint = generation,
+                    originId = "workspace",
+                    revision = null,
+                    stateFingerprint = generation,
+                    packKeys = keys,
+                )
+            )
+        try {
+            CacheMaintenance.gc(cacheRoot, nowEpochMillis = 1_000L)
+            publish("reused", listOf(key))
+            CacheMaintenance.gc(cacheRoot, nowEpochMillis = 1_000L + Duration.ofDays(15).toMillis())
+            publish("unreferenced", emptyList())
+            val secondObservation = 1_000L + Duration.ofDays(31).toMillis()
+            val report = CacheMaintenance.gc(cacheRoot, nowEpochMillis = secondObservation)
+            assertTrue(Files.exists(pack), report)
+            val beforeExpiry =
+                CacheMaintenance.gc(
+                    cacheRoot,
+                    nowEpochMillis = secondObservation + Duration.ofDays(30).toMillis() - 1,
+                )
+            assertTrue(Files.exists(pack), beforeExpiry)
+            val expired =
+                CacheMaintenance.gc(
+                    cacheRoot,
+                    nowEpochMillis = secondObservation + Duration.ofDays(30).toMillis(),
+                )
+            assertFalse(Files.exists(pack), expired)
         } finally {
             cacheRoot.toFile().deleteRecursively()
         }
@@ -87,7 +160,14 @@ class CacheMaintenanceTest {
         Files.createDirectories(orphanedPack.parent)
         Files.writeString(orphanedPack, "remove")
         try {
-            val report = CacheMaintenance.gc(cacheRoot)
+            val first = CacheMaintenance.gc(cacheRoot, nowEpochMillis = 1_000L)
+            assertTrue(Files.exists(supersededPack), first)
+            assertTrue(Files.exists(orphanedPack), first)
+            val report =
+                CacheMaintenance.gc(
+                    cacheRoot,
+                    nowEpochMillis = 1_000L + Duration.ofDays(30).toMillis(),
+                )
 
             assertTrue(Files.exists(referencedPack))
             assertFalse(Files.exists(supersededPack), report)
@@ -271,7 +351,12 @@ class CacheMaintenanceTest {
             Files.writeString(pack, key)
         }
         try {
-            val report = CacheMaintenance.gc(cacheRoot)
+            CacheMaintenance.gc(cacheRoot, nowEpochMillis = 1_000L)
+            val report =
+                CacheMaintenance.gc(
+                    cacheRoot,
+                    nowEpochMillis = 1_000L + Duration.ofDays(30).toMillis(),
+                )
 
             assertTrue(Files.isDirectory(oldExpanded), report)
             assertTrue(Files.exists(packPath(cacheRoot, oldPack)), report)
@@ -306,7 +391,13 @@ class CacheMaintenanceTest {
         Files.createDirectories(orphanedPack.parent)
         Files.writeString(orphanedPack, "orphan")
         try {
-            val attempt = runCatching { CacheMaintenance.gc(cacheRoot) }
+            CacheMaintenance.gc(cacheRoot, nowEpochMillis = 1_000L)
+            val attempt = runCatching {
+                CacheMaintenance.gc(
+                    cacheRoot,
+                    nowEpochMillis = 1_000L + Duration.ofDays(30).toMillis(),
+                )
+            }
             assertTrue(attempt.isSuccess, "GC aborted: ${attempt.exceptionOrNull()}")
             val report = attempt.getOrThrow()
 

@@ -8,6 +8,7 @@ import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.SymbolQuery
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Duration
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
@@ -82,6 +83,11 @@ internal class CacheActivityIntegrationTest {
                 assertTrue(Files.exists(oldPack), "The current overlay still references its base")
                 assertEquals(0, CacheMaintenance.forget(cache, workspace))
                 CacheMaintenance.gc(cache)
+                assertTrue(Files.exists(oldPack), "Newly unreferenced packs retain their grace")
+                CacheMaintenance.gc(
+                    cache,
+                    nowEpochMillis = System.currentTimeMillis() + Duration.ofDays(30).toMillis(),
+                )
                 assertFalse(
                     Files.exists(oldPack),
                     "Forgotten workspace no longer references the base",
@@ -133,6 +139,11 @@ internal class CacheActivityIntegrationTest {
                 }
             }
             CacheMaintenance.gc(cache)
+            assertTrue(Files.exists(orphan), "Newly unreferenced packs retain their grace")
+            CacheMaintenance.gc(
+                cache,
+                nowEpochMillis = System.currentTimeMillis() + Duration.ofDays(30).toMillis(),
+            )
             assertFalse(Files.exists(orphan), "Completed refresh must release GC exclusion")
         }
     }
@@ -162,6 +173,11 @@ internal class CacheActivityIntegrationTest {
             assertEquals("materialized", manifests.current()!!.representation)
             assertTrue(manifests.current()!!.baseGeneration == null)
             CacheMaintenance.gc(cache)
+            assertTrue(Files.exists(packA), "Newly unreferenced packs retain their grace")
+            CacheMaintenance.gc(
+                cache,
+                nowEpochMillis = System.currentTimeMillis() + Duration.ofDays(30).toMillis(),
+            )
             assertFalse(Files.exists(packA), "GC must actually reclaim the historical A pack")
 
             Files.writeString(workspace.resolve("src/main/kotlin/Marker.kt"), "class Marker")

@@ -3,6 +3,7 @@ package dev.sebastiano.indexino.core.cache
 import dev.sebastiano.indexino.cli.CacheMaintenance
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Duration
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -48,6 +49,11 @@ internal class CacheActivityProcessTest {
             assertTrue(process.waitFor(10, TimeUnit.SECONDS), "Child failed to release its lease")
             assertEquals(0, process.exitValue(), Files.readString(output))
             CacheMaintenance.gc(cache)
+            assertTrue(Files.exists(pack), "A first post-lease pass starts pack retention")
+            CacheMaintenance.gc(
+                cache,
+                nowEpochMillis = System.currentTimeMillis() + Duration.ofDays(30).toMillis(),
+            )
             assertFalse(Files.exists(pack), "Process exit must release the OS lock")
         } finally {
             local.close()

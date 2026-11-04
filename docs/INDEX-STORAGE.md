@@ -233,14 +233,19 @@ collector intentionally defers all reclamation while any client is live.
 An in-process client acquires its activity lock before resolving the writer staging path: a new
 cache beneath a symlinked parent must use the same canonical root before and after creation, or a
 second refresh can miss its compatible overlay base.
+Unreferenced packs survive until 30 days after their first GC observation. `cache gc` persists
+first-observed times in `registry/unreferenced-packs.json` before deleting eligible packs; every
+pass recomputes generation reachability under the exclusive lock and clears the age of any pack
+that is referenced again. Missing or unreadable ledger state cannot authorize an early unlink.
+Expanded stores and abandoned client refs retain their separate immediate reclamation rules.
 `cache forget` also takes the exclusive activity lock and refuses deletion while another live
 workspace's current overlay recursively references the selected base; otherwise a fork could lose
 its manifest and shared materialized store. Forget dependent workspaces first. `daemon stop --purge`
 uses the same forget operation after stopping the runtime; it removes only this workspace's local
 state and leaves shared packs for `cache gc`.
-Age/quota policy and a persisted grace window remain follow-up work rather than guarantees of the
-current collector. All participating processes must use the updated locking
-protocol; stop older in-process clients before running this collector against their cache.
+Dead-workspace age and quota policy remain follow-up work rather than guarantees of the current
+collector. All participating processes must use the updated locking protocol; stop older
+in-process clients before running this collector against their cache.
 
 ## Current implementation layout
 
