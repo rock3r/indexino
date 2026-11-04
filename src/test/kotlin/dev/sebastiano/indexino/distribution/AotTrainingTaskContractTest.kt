@@ -25,6 +25,7 @@ import org.junit.jupiter.api.io.TempDir
 @Tag("aot-training-contract")
 class AotTrainingTaskContractTest {
     @TempDir lateinit var projectDirectory: Path
+    private val isWindows = System.getProperty("os.name").startsWith("Windows")
 
     @Test
     fun `committed training sources are checked out with LF line endings`() {
@@ -135,6 +136,57 @@ class AotTrainingTaskContractTest {
         assertEquals(TaskOutcome.UP_TO_DATE, second.task(":trainAot")?.outcome)
     }
 
+    @Test
+    fun `retraining removes read-only Git objects from its previous staging`() {
+        writeFixture(fullSdkRuntime = false)
+        val first = runGradle("trainAot", hostileJvmEnvironment = false)
+        assertEquals(TaskOutcome.SUCCESS, first.task(":trainAot")?.outcome)
+
+        val staging = projectDirectory.resolve("build/tmp/trainAot/staging")
+        val objects = staging.resolve("training-workspace/.git/objects")
+        val gitObject =
+            Files.walk(objects).use { paths ->
+                paths.filter { Files.isRegularFile(it) }.findFirst().orElseThrow()
+            }
+        if (isWindows) {
+            Files.setAttribute(gitObject, "dos:readonly", true)
+            assertEquals(true, Files.getAttribute(gitObject, "dos:readonly"))
+        } else {
+            Files.setPosixFilePermissions(gitObject, setOf(PosixFilePermission.OWNER_READ))
+        }
+
+        val second = runGradle("trainAot", hostileJvmEnvironment = false, rerunTasks = true)
+        assertEquals(TaskOutcome.SUCCESS, second.task(":trainAot")?.outcome)
+        assertTrue(gitObject.exists())
+        assertEquals(
+            "aot-cache",
+            projectDirectory.resolve("build/aot/classes.jsa").readText().trim(),
+        )
+    }
+
+    @Test
+    fun `retraining does not follow a symlink in its previous staging`() {
+        assumeTrue(FileSystems.getDefault().supportedFileAttributeViews().contains("posix"))
+        writeFixture(fullSdkRuntime = false)
+        assertEquals(TaskOutcome.SUCCESS, runGradle("trainAot", false).task(":trainAot")?.outcome)
+
+        val outside = projectDirectory.resolve("outside-staging/keep.txt")
+        outside.parent.createDirectories()
+        outside.writeText("keep")
+        Files.createSymbolicLink(
+            projectDirectory.resolve("build/tmp/trainAot/staging/linked-outside"),
+            outside.parent,
+        )
+
+        assertEquals(
+            TaskOutcome.SUCCESS,
+            runGradle("trainAot", hostileJvmEnvironment = false, rerunTasks = true)
+                .task(":trainAot")
+                ?.outcome,
+        )
+        assertEquals("keep", outside.readText())
+    }
+
     private fun writeFixture(fullSdkRuntime: Boolean) {
         writeBuildFixture()
         writeRuntimeFixture(fullSdkRuntime)
@@ -191,7 +243,7 @@ class AotTrainingTaskContractTest {
                     )
                     minimumHeap.set("64m")
                     maximumHeap.set("512m")
-                    javaExecutableName.set("java")
+                    javaExecutableName.set("${if (isWindows) "java.cmd" else "java"}")
                     gitExecutable.set("git")
                     environmentVariables.put("PATH", providers.environmentVariable("PATH"))
                     environmentVariables.put(
@@ -213,22 +265,46 @@ class AotTrainingTaskContractTest {
         runtime.resolve("release").writeText("JAVA_VERSION=fixture\n")
         runtime.resolve("bin").createDirectories()
         runtime.resolve("bin/runtime.dll").writeText("required runtime native library")
-        Files.setPosixFilePermissions(
-            runtime,
-            setOf(
-                PosixFilePermission.OWNER_READ,
-                PosixFilePermission.OWNER_WRITE,
-                PosixFilePermission.OWNER_EXECUTE,
-            ),
-        )
+        if (!isWindows) {
+            Files.setPosixFilePermissions(
+                runtime,
+                setOf(
+                    PosixFilePermission.OWNER_READ,
+                    PosixFilePermission.OWNER_WRITE,
+                    PosixFilePermission.OWNER_EXECUTE,
+                ),
+            )
+        }
         if (fullSdkRuntime) {
             runtime.resolve("bin/javac").writeText("must remain immutable")
         }
     }
 
     private fun writeTargetJdkFixture() {
-        val java = projectDirectory.resolve("target-jdk/bin/java")
+        val java =
+            projectDirectory.resolve("target-jdk/bin/${if (isWindows) "java.cmd" else "java"}")
         java.parent.createDirectories()
+        if (isWindows) {
+            java.writeText(
+                """
+                @echo off
+                setlocal EnableDelayedExpansion
+                set "cache="
+                set "nextCache="
+                for %%A in (%*) do (
+                  set "arg=%%~A"
+                  if defined nextCache (
+                    set "cache=!arg!"
+                    set "nextCache="
+                  ) else if "!arg!"=="-XX:AOTCacheOutput" set "nextCache=1"
+                )
+                if not defined cache exit /b 1
+                > "!cache!" echo aot-cache
+                """
+                    .trimIndent()
+            )
+            return
+        }
         java.writeText(
             """
             #!/bin/sh
@@ -267,15 +343,17 @@ class AotTrainingTaskContractTest {
         inputJar.parent.createDirectories()
         inputJar.writeText("normalized application bytes")
         Files.setLastModifiedTime(inputJar, FileTime.fromMillis(1_700_000_000_000L))
-        Files.setPosixFilePermissions(
-            inputJar,
-            setOf(
-                PosixFilePermission.OWNER_READ,
-                PosixFilePermission.OWNER_WRITE,
-                PosixFilePermission.GROUP_READ,
-                PosixFilePermission.OTHERS_READ,
-            ),
-        )
+        if (!isWindows) {
+            Files.setPosixFilePermissions(
+                inputJar,
+                setOf(
+                    PosixFilePermission.OWNER_READ,
+                    PosixFilePermission.OWNER_WRITE,
+                    PosixFilePermission.GROUP_READ,
+                    PosixFilePermission.OTHERS_READ,
+                ),
+            )
+        }
     }
 
     private fun writeTrainingFixture() {
@@ -287,8 +365,18 @@ class AotTrainingTaskContractTest {
             .writeText("package sample\nclass Panel\n")
     }
 
-    private fun runGradle(task: String, hostileJvmEnvironment: Boolean) =
-        runner(hostileJvmEnvironment).withArguments(task, "--stacktrace").build()
+    private fun runGradle(
+        task: String,
+        hostileJvmEnvironment: Boolean,
+        rerunTasks: Boolean = false,
+    ) =
+        runner(hostileJvmEnvironment)
+            .withArguments(
+                task,
+                "--stacktrace",
+                *if (rerunTasks) arrayOf("--rerun-tasks") else emptyArray(),
+            )
+            .build()
 
     private fun runGradleAndFail(task: String) =
         runner(hostileJvmEnvironment = false).withArguments(task, "--stacktrace").buildAndFail()

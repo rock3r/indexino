@@ -6,10 +6,12 @@ import java.io.IOException;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.DosFileAttributeView;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -312,6 +314,14 @@ public abstract class AotTrainingTask extends DefaultTask {
                     @Override
                     public FileVisitResult visitFile(Path file, BasicFileAttributes attributes)
                             throws IOException {
+                        if (attributes.isRegularFile()) {
+                            var dosView =
+                                    Files.getFileAttributeView(
+                                            file, DosFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+                            if (dosView != null && dosView.readAttributes().isReadOnly()) {
+                                dosView.setReadOnly(false);
+                            }
+                        }
                         Files.delete(file);
                         return FileVisitResult.CONTINUE;
                     }

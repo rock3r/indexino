@@ -54,11 +54,13 @@ starts from a restrictive input mode, perturbs only the output's mtime, and prov
 invocation repairs both `0644` POSIX permissions and the timestamp instead of reporting
 `UP-TO-DATE`; warm-cache checksum tests drive extraction tasks and prove rejection happens first.
 
-`verifyAotTrainingContract` uses Gradle TestKit and a fake POSIX target launcher to prove a full SDK
+`verifyAotTrainingContract` uses Gradle TestKit and fake target launchers to prove a full SDK
 is rejected, the final runtime and normalized JAR remain immutable, only `java` is restored into a
 task-private staging copy, the relative Roast classpath/main/options are exact, hostile ambient JVM
 option variables are removed, the normalized JAR metadata survives training, the cache is published
 atomically at its separate output, and a second unchanged invocation is locally `UP-TO-DATE`.
+Forced retraining also clears read-only Git objects in its task-private staging directory on Windows;
+the deletion walker does not follow staging symlinks into external directories.
 Matching-host `trainAot<Target>` runs exercise the real JBR 25 one-step `AOTCacheOutput` workflow on
 the committed Kotlin/Java/XML selection-context fixture. Git attributes enforce LF checkouts for
 those text sources so the Kotlin PSI workload is identical on Windows; build-cache storage and
