@@ -227,10 +227,9 @@ their referenced packs remain available for reconstruction. If a current fork ba
 snapshot is unavailable, expanded-store reclamation is skipped for that pass while existing pack
 collection continues. Abandoned private client refs are removed only when the exclusive lock
 proves that no live client or pinned snapshot can still use them, even if the workspace's current
-generation remains published. The CLI compatibility projection holds a shared activity lease
-while reading expanded stores, including when a daemon completed the refresh. This prevents
-publication and pinned-generation races across cooperating processes. It intentionally
-defers all reclamation while any client is live.
+generation remains published. CLI lookups pin published snapshots through an in-process client;
+their shared activity lease protects expanded stores, including after daemon refreshes. The
+collector intentionally defers all reclamation while any client is live.
 An in-process client acquires its activity lock before resolving the writer staging path: a new
 cache beneath a symlinked parent must use the same canonical root before and after creation, or a
 second refresh can miss its compatible overlay base.
@@ -324,10 +323,9 @@ and disposal. Within it, `kotlin-parser-setup` measures PSI environment construc
 `kotlin-declarations` measures the first parse and symbol collection, and `kotlin-fact-write`
 measures the second parse and transactional fact writes. These durations are nested, not additive;
 the remaining `kotlin-parser` time includes project-symbol assembly and PSI disposal.
-The legacy CLI `index` projection
-described in [CLI.md](CLI.md) materializes the merged store after
-publication. These remaining whole-scope costs need measurement and reduction before promising
-subsecond updates for large Bazel workspaces.
+The CLI no longer materializes a merged project-local store after publication. Cumulative delta
+materialization and the remaining whole-scope costs still need measurement and reduction before
+promising subsecond updates for large Bazel workspaces.
 
 Before mutation, the build owner streams the physical writable store into a temporary Xodus
 checkpoint beside the compatibility manifest (`manifest.json.rollback/`), while retaining the

@@ -129,18 +129,13 @@ topology is not yet an embedded public `IndexScope` factory. Auto-refresh watche
 manifest, its included documents, and the local-manifest directory so changes to the project set
 trigger a full topology resolution even on nonrecursive filesystem watchers.
 
-**Current shipping behaviour (transitional):** resolves `git rev-parse HEAD`, discovers sources via
-Bazel/Gradle/repo, may open a commit-addressed store under the project, runs core producers plus
-`--applications`. **Product behaviour:** publishes a generation under the user-local cache;
-commit is provenance only. Core producers build Kotlin/Java symbols, references, and XML facts;
-plugins (e.g. selection-context) are loaded explicitly or bundled in the fat JAR.
-
+The `index` CLI discovers sources through Bazel/Gradle/repo and publishes a generation in the
+user-local cache; commit is provenance only. Core producers build Kotlin/Java symbols, references,
+and XML facts; plugins (e.g. selection-context) are loaded explicitly or bundled in the fat JAR.
 The daemon and embedded refresh path can publish a small overlay delta for a compatible edit,
-without repacking its base. The transitional `index` CLI still projects an overlay into a full
-physical store for legacy lookup commands after the refresh completes. That projection scans and
-packs the merged facts, so CLI indexing is not yet a bounded one-file operation; it does not affect
-daemon-owned watcher refresh or embedded publication. Use published snapshots for latency
-measurement, not this compatibility projection.
+without repacking its base. `index` no longer copies that merged store into a project-local
+compatibility projection. Transitional direct-build callers can still create commit-addressed
+stores; the CLI reads their older indexes as a fallback. Measure published snapshots for latency.
 
 Progress lines (producer names and `[N/M] file` per source file) go to stderr. Text progress also
 marks topology, source resolution, source capture, aggregate source preview, origin resolution
@@ -278,8 +273,10 @@ See `examples/compose-pair.indexino.kts` for the motivating A/content-slot/B que
 
 ### Session overlay
 
-Query with `--session-id <id>` is a **transitional** CLI feature reading a delta store. Product
-storage does not use project-local session paths; do not extend this layout.
+Query with `--session-id <id>` is a **transitional** CLI feature reading a delta store. Supported
+legacy lookups merge that delta with a pinned published snapshot, or an older project-local base
+when no published generation exists. Product storage does not use project-local session paths; do
+not extend this layout.
 
 ### `find-symbol`
 
@@ -308,9 +305,10 @@ Rows include source qualifier, referenced name, arity, language, and candidate t
 client can reconstruct cross-language edges.
 
 For `--symbol @type/name` without `--session-id`, the CLI reads all matching resource references
-from a one-shot published snapshot, retaining the existing JSONL rows and order without the
-project-local compatibility copy. Transitional session overlays and indexes without a published
-snapshot still use the legacy store. Other symbol IDs use the embedded paged query.
+from a one-shot published snapshot, retaining the existing JSONL rows and order without a
+project-local copy. A session overlay merges its delta with the published snapshot; older indexes
+without a published generation still use the legacy store. Other symbol IDs use the embedded paged
+query.
 
 #### Lookup machine progress
 
@@ -362,12 +360,10 @@ indexino resolve-resource \
 ```
 
 Without `--session-id`, this command reads the published snapshot through a one-shot in-process
-client and renders its resource-symbol records as the existing JSONL rows; it does not need the
-project-local compatibility copy. Unlike the embedded paged resource query, the CLI collects all
-matching records, including results beyond the host's 10,000-item query window and declarations
-at different columns on the same line. Older indexes and transitional session overlays still use
-the legacy store.
-The `index` command continues to create that copy for other legacy lookup paths.
+client and renders its resource-symbol records as the existing JSONL rows. Unlike the embedded
+paged resource query, the CLI collects all matching records, including results beyond the host's
+10,000-item query window and declarations at different columns on the same line. A session overlay
+merges its delta with the pinned published snapshot; older indexes use their project-local store.
 
 ### `query`
 

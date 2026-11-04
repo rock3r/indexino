@@ -10,6 +10,7 @@ import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.io.TempDir
@@ -119,8 +120,8 @@ class ShrunkCliDistributionTest {
 
         val commit = runCommand(workspace, "git", "rev-parse", "HEAD").stdout.trim()
         val indexRoot = workspace.resolve(".indexino/index/$commit")
-        assertTrue(Files.isDirectory(indexRoot.resolve("base.xodus")))
-        assertTrue(Files.isRegularFile(indexRoot.resolve("manifest.json")))
+        assertFalse(Files.exists(indexRoot.resolve("base.xodus")))
+        assertFalse(Files.exists(indexRoot.resolve("manifest.json")))
     }
 
     @Test

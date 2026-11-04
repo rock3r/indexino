@@ -1,9 +1,12 @@
 package dev.sebastiano.indexino.cli
 
 import com.github.ajalt.clikt.testing.test
+import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.core.record.PluginFactRecord
+import dev.sebastiano.indexino.core.record.ReferenceRecord
+import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.topology.BuildSystem
 import dev.sebastiano.indexino.topology.TopologyRequest
@@ -13,6 +16,7 @@ import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -68,6 +72,134 @@ class GradleIndexCommandTest {
     }
 
     @Test
+    fun `index avoids local projection while session lookup merges published and delta facts`() {
+        val workspace = createGitWorkspace()
+        val values = workspace.resolve("ui/src/main/res/values/strings.xml")
+        Files.createDirectories(values.parent)
+        Files.writeString(values, "<resources>\n<string name=\"title\">Hi</string>\n</resources>\n")
+        val layout = workspace.resolve("ui/src/main/res/layout/main.xml")
+        Files.createDirectories(layout.parent)
+        Files.writeString(
+            layout,
+            """<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android">""" +
+                "\n<TextView android:text=\"@string/title\"/>\n</LinearLayout>\n",
+        )
+        val indexed =
+            MainCommand()
+                .test(
+                    listOf(
+                        "index",
+                        "--project",
+                        workspace.toString(),
+                        "--build-system",
+                        "gradle",
+                        "--gradle-module",
+                        ":ui",
+                        "--no-auto-refresh",
+                    )
+                )
+        assertEquals(0, indexed.statusCode, indexed.output)
+        val resolver = IndexPathResolver(workspace)
+        assertFalse(Files.exists(resolver.resolveBaseStore(gitHead(workspace))))
+        assertFalse(Files.exists(resolver.resolveManifest(gitHead(workspace))))
+
+        writeSessionResourceDelta(resolver)
+        val result =
+            MainCommand()
+                .test(
+                    listOf(
+                        "resolve-resource",
+                        "--project",
+                        workspace.toString(),
+                        "--type",
+                        "string",
+                        "--name",
+                        "title",
+                        "--session-id",
+                        "session",
+                    )
+                )
+        assertEquals(0, result.statusCode, result.output)
+        assertEquals(
+            listOf("2", "4"),
+            result.stdout
+                .lineSequence()
+                .filter(String::isNotBlank)
+                .map {
+                    Json.parseToJsonElement(it).jsonObject.getValue("line").jsonPrimitive.content
+                }
+                .toList(),
+        )
+        val references =
+            MainCommand()
+                .test(
+                    listOf(
+                        "find-references",
+                        "--project",
+                        workspace.toString(),
+                        "--symbol",
+                        "@string/title",
+                        "--session-id",
+                        "session",
+                    )
+                )
+        assertEquals(0, references.statusCode, references.output)
+        assertEquals(
+            listOf("2", "4"),
+            references.stdout
+                .lineSequence()
+                .filter(String::isNotBlank)
+                .map {
+                    Json.parseToJsonElement(it).jsonObject.getValue("line").jsonPrimitive.content
+                }
+                .toList(),
+        )
+        assertFalse(Files.exists(resolver.resolveBaseStore(gitHead(workspace))))
+    }
+
+    private fun writeSessionResourceDelta(resolver: IndexPathResolver) {
+        val delta = resolver.resolveSessionDeltaStore("session")
+        Files.createDirectories(delta.parent)
+        XodusCodeIndexStore.open(delta).use { store ->
+            store.put(
+                CodeIndexKey.resource(
+                    "string",
+                    "title",
+                    "workspace",
+                    "ui/src/main/res/values/strings.xml",
+                    4,
+                    1,
+                ),
+                SymbolRecord(
+                    fqn = "res:string:title",
+                    relativeFile = "ui/src/main/res/values/strings.xml",
+                    line = 4,
+                    kind = "resource",
+                    name = "title",
+                    language = "xml",
+                ),
+            )
+            store.put(
+                CodeIndexKey.ref(
+                    "res:string:title",
+                    "workspace",
+                    "ui/src/main/res/layout/main.xml",
+                    4,
+                    1,
+                ),
+                ReferenceRecord(
+                    symbolFqn = "res:string:title",
+                    relativeFile = "ui/src/main/res/layout/main.xml",
+                    line = 4,
+                    column = 1,
+                    context = "resource",
+                    language = "xml",
+                ),
+            )
+        }
+    }
+
+    @Test
     fun `resolve resource reads published snapshot without project compatibility store`() {
         val workspace = createGitWorkspace()
         for (configuration in listOf("values", "values-night")) {
@@ -101,8 +233,8 @@ class GradleIndexCommandTest {
         assertEquals(0, indexed.statusCode, indexed.output)
         val resolver = IndexPathResolver(workspace)
         val projection = resolver.resolveBaseStore(gitHead(workspace))
-        assertTrue(projection.toFile().deleteRecursively())
-        assertTrue(Files.deleteIfExists(resolver.resolveManifest(gitHead(workspace))))
+        assertFalse(Files.exists(projection))
+        assertFalse(Files.exists(resolver.resolveManifest(gitHead(workspace))))
 
         val result =
             MainCommand()
@@ -180,8 +312,8 @@ class GradleIndexCommandTest {
         assertEquals(0, indexed.statusCode, indexed.output)
         val resolver = IndexPathResolver(workspace)
         val projection = resolver.resolveBaseStore(gitHead(workspace))
-        assertTrue(projection.toFile().deleteRecursively())
-        assertTrue(Files.deleteIfExists(resolver.resolveManifest(gitHead(workspace))))
+        assertFalse(Files.exists(projection))
+        assertFalse(Files.exists(resolver.resolveManifest(gitHead(workspace))))
 
         val result =
             MainCommand()
@@ -241,8 +373,8 @@ class GradleIndexCommandTest {
         assertEquals(0, indexed.statusCode, indexed.output)
         val resolver = IndexPathResolver(workspace)
         val projection = resolver.resolveBaseStore(gitHead(workspace))
-        assertTrue(projection.toFile().deleteRecursively())
-        assertTrue(Files.deleteIfExists(resolver.resolveManifest(gitHead(workspace))))
+        assertFalse(Files.exists(projection))
+        assertFalse(Files.exists(resolver.resolveManifest(gitHead(workspace))))
 
         val result =
             MainCommand()
