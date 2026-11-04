@@ -210,6 +210,80 @@ class GradleIndexCommandTest {
         assertTrue(!Files.exists(projection), "Lookup recreated the compatibility store")
     }
 
+    @Test
+    fun `find resource references reads published snapshot without compatibility store`() {
+        val workspace = createGitWorkspace()
+        val values = workspace.resolve("ui/src/main/res/values/strings.xml")
+        Files.createDirectories(values.parent)
+        Files.writeString(values, "<resources>\n<string name=\"title\">Hi</string>\n</resources>\n")
+        val layout = workspace.resolve("ui/src/main/res/layout/main.xml")
+        Files.createDirectories(layout.parent)
+        Files.writeString(
+            layout,
+            """<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android">""" +
+                "\n<TextView android:text=\"@string/title\" android:contentDescription=\"@android:string/title\"/>" +
+                "\n<TextView android:text=\"@string/title\"/>\n</LinearLayout>\n",
+        )
+        val indexed =
+            MainCommand()
+                .test(
+                    listOf(
+                        "index",
+                        "--project",
+                        workspace.toString(),
+                        "--build-system",
+                        "gradle",
+                        "--gradle-module",
+                        ":ui",
+                        "--no-auto-refresh",
+                    )
+                )
+        assertEquals(0, indexed.statusCode, indexed.output)
+        val resolver = IndexPathResolver(workspace)
+        val projection = resolver.resolveBaseStore(gitHead(workspace))
+        assertTrue(projection.toFile().deleteRecursively())
+        assertTrue(Files.deleteIfExists(resolver.resolveManifest(gitHead(workspace))))
+
+        val result =
+            MainCommand()
+                .test(
+                    listOf(
+                        "find-references",
+                        "--project",
+                        workspace.toString(),
+                        "--symbol",
+                        "@string/title",
+                        "--progress-format",
+                        "jsonl",
+                    )
+                )
+        assertEquals(0, result.statusCode, result.output)
+        val rows =
+            result.stdout
+                .lineSequence()
+                .filter(String::isNotBlank)
+                .map { Json.parseToJsonElement(it).jsonObject }
+                .toList()
+        assertEquals(listOf("2", "3"), rows.map { it.getValue("line").jsonPrimitive.content })
+        assertTrue(rows.all { it.getValue("column").jsonPrimitive.content == "25" })
+        assertTrue(
+            rows.all {
+                it.getValue("relativeFile").jsonPrimitive.content ==
+                    "ui/src/main/res/layout/main.xml" &&
+                    it.getValue("symbolFqn").jsonPrimitive.content == "res:string:title" &&
+                    it.getValue("context").jsonPrimitive.content == "resource" &&
+                    it.getValue("language").jsonPrimitive.content == "xml" &&
+                    it.getValue("referencedName").jsonPrimitive.content == "title" &&
+                    it.getValue("qualifier").jsonPrimitive.content == "string" &&
+                    it.getValue("candidateSymbolFqns").jsonArray.map { candidate ->
+                        candidate.jsonPrimitive.content
+                    } == listOf("res:string:title")
+            }
+        )
+        assertTrue(result.stderr.contains("\"totalMatchCount\":2"))
+        assertTrue(!Files.exists(projection), "Lookup recreated the compatibility store")
+    }
+
     private fun createGitWorkspace(): java.nio.file.Path {
         val workspace = createTempDirectory("gradle-index-")
         tempDirs.add(workspace)

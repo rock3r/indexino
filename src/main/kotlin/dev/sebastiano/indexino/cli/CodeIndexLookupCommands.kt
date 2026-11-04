@@ -116,7 +116,7 @@ internal class FindReferencesCommand : CliktCommand(name = "find-references") {
             progressOutput = { echo(it, err = true) },
         ) {
             requireJsonl(format)
-            if (symbol.startsWith("@")) {
+            if (symbol.startsWith("@") && sessionId != null) {
                 return@runLookup withStore(project.toPath(), sessionId) {
                     findReferences(it, symbol)
                 }
@@ -128,25 +128,29 @@ internal class FindReferencesCommand : CliktCommand(name = "find-references") {
                 runBlocking {
                     CliOneShotConnect.connect(project.toPath()).use { indexino ->
                         indexino.snapshot().use { snapshot ->
-                            snapshot
-                                .findSymbols(
-                                    SymbolQuery.named(
-                                        symbol.substringAfterLast('#').substringAfterLast('.')
-                                    ),
-                                    QueryOptions.page(LOOKUP_PAGE_SIZE),
-                                )
-                                .items
-                                .filter { symbol in it.aliases }
-                                .flatMap { definition ->
-                                    snapshot
-                                        .findReferences(
-                                            ReferenceQuery.to(definition.id),
-                                            QueryOptions.page(LOOKUP_PAGE_SIZE),
-                                        )
-                                        .items
-                                }
-                                .distinctBy { it.location }
-                                .map { referenceRecord(it, legacySymbolFqn(symbol)) }
+                            if (symbol.startsWith("@")) {
+                                snapshot.findResourceReferencesForCli(symbol)
+                            } else {
+                                snapshot
+                                    .findSymbols(
+                                        SymbolQuery.named(
+                                            symbol.substringAfterLast('#').substringAfterLast('.')
+                                        ),
+                                        QueryOptions.page(LOOKUP_PAGE_SIZE),
+                                    )
+                                    .items
+                                    .filter { symbol in it.aliases }
+                                    .flatMap { definition ->
+                                        snapshot
+                                            .findReferences(
+                                                ReferenceQuery.to(definition.id),
+                                                QueryOptions.page(LOOKUP_PAGE_SIZE),
+                                            )
+                                            .items
+                                    }
+                                    .distinctBy { it.location }
+                                    .map { referenceRecord(it, legacySymbolFqn(symbol)) }
+                            }
                         }
                     }
                 }

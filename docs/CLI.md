@@ -307,6 +307,11 @@ indexino find-references \
 Rows include source qualifier, referenced name, arity, language, and candidate target IDs so a
 client can reconstruct cross-language edges.
 
+For `--symbol @type/name` without `--session-id`, the CLI reads all matching resource references
+from a one-shot published snapshot, retaining the existing JSONL rows and order without the
+project-local compatibility copy. Transitional session overlays and indexes without a published
+snapshot still use the legacy store. Other symbol IDs use the embedded paged query.
+
 #### Lookup machine progress
 
 `find-symbol`, `find-references`, and `resolve-resource` also accept
