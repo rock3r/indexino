@@ -239,6 +239,39 @@ private constructor(
         }
     }
 
+    // Resource-alias CLI rows need every legacy reference field, beyond the public page window.
+    internal fun findResourceReferencesForCli(symbol: String): List<ReferenceRecord> {
+        ensureOpen()
+        return mapUnexpectedFailures {
+            val targetIds = linkedSetOf(symbol)
+            sequenceOf("sym:", "res:")
+                .flatMap(localStore::prefixScan)
+                .map { it.second }
+                .filterIsInstance<SymbolRecord>()
+                .filter { it.fqn == symbol || symbol in it.aliases }
+                .forEach {
+                    targetIds += it.fqn
+                    targetIds += it.aliases
+                }
+            localStore
+                .prefixScan("ref:")
+                .map { it.second }
+                .filterIsInstance<ReferenceRecord>()
+                .filter { reference ->
+                    reference.symbolFqn in targetIds ||
+                        reference.candidateSymbolFqns.any { it in targetIds }
+                }
+                .sortedWith(
+                    compareBy(
+                        ReferenceRecord::relativeFile,
+                        ReferenceRecord::line,
+                        ReferenceRecord::column,
+                    )
+                )
+                .toList()
+        }
+    }
+
     override suspend fun findResourceUsages(
         query: ResourceQuery,
         options: QueryOptions,
