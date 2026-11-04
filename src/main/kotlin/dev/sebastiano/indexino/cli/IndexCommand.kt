@@ -14,16 +14,11 @@ import dev.sebastiano.indexino.api.Indexino
 import dev.sebastiano.indexino.api.IndexinoConfiguration
 import dev.sebastiano.indexino.api.RefreshRequest
 import dev.sebastiano.indexino.api.RuntimeAttachMode
-import dev.sebastiano.indexino.engine.IndexBuildRunner
 import dev.sebastiano.indexino.engine.extension.DistributionCapabilities
 import dev.sebastiano.indexino.model.PluginId
-import dev.sebastiano.indexino.producer.IndexBuildProgressReporter
 import dev.sebastiano.indexino.producer.JsonlIndexBuildProgressReporter
 import dev.sebastiano.indexino.topology.BuildSystem
 import dev.sebastiano.indexino.topology.BuildSystemDetector
-import dev.sebastiano.indexino.topology.TopologyRequest
-import dev.sebastiano.indexino.topology.bazel.BazelProcessRunner
-import dev.sebastiano.indexino.topology.bazel.BazelQueryExecutor
 import java.nio.file.Path
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -189,61 +184,6 @@ internal class IndexCommand : CliktCommand(name = "index") {
                 noAutoRefresh -> RuntimeAttachMode.IN_PROCESS
                 else -> RuntimeAttachMode.PREFER_DAEMON
             }
-    }
-
-    fun runIndexedBuild(
-        project: Path,
-        bazelTarget: String,
-        applications: List<String>,
-        queryExecutor: BazelQueryExecutor? = null,
-        processRunner: BazelProcessRunner? = null,
-        progress: (String) -> Unit = {},
-        machineProgress: IndexBuildProgressReporter? = null,
-    ): Int =
-        runIndexedBuild(
-            project = project,
-            topologyRequest =
-                TopologyRequest(
-                    buildSystem = BuildSystem.BAZEL,
-                    bazelTarget = bazelTarget,
-                    includeDeps = true,
-                ),
-            applications = applications,
-            bazelQueryExecutor = queryExecutor,
-            bazelProcessRunner = processRunner,
-            progress = progress,
-            machineProgress = machineProgress,
-        )
-
-    @Suppress("TooGenericExceptionCaught")
-    fun runIndexedBuild(
-        project: Path,
-        topologyRequest: TopologyRequest,
-        applications: List<String>,
-        bazelQueryExecutor: BazelQueryExecutor? = null,
-        bazelProcessRunner: BazelProcessRunner? = null,
-        progress: (String) -> Unit = {},
-        machineProgress: IndexBuildProgressReporter? = null,
-    ): Int {
-        machineProgress?.discoveryStarted()
-        return try {
-            IndexBuildRunner(
-                    project = project,
-                    topologyRequest = topologyRequest,
-                    applications = applications,
-                    bazelQueryExecutor = bazelQueryExecutor,
-                    bazelProcessRunner = bazelProcessRunner,
-                    progress = progress,
-                    machineProgress = machineProgress,
-                )
-                .run()
-        } catch (exception: Exception) {
-            machineProgress?.failed(
-                CliExitCodes.ANALYSIS_ERROR,
-                exception.message ?: exception.javaClass.name,
-            )
-            throw exception
-        }
     }
 
     private fun parseBuildSystem(raw: String): BuildSystem =

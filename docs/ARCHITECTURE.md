@@ -74,9 +74,10 @@ types. Host constructs SPI contexts with public constructors annotated `@Indexin
 ### Refresh and publication boundaries
 
 The in-process facade constructs the internal `engine/IndexBuildRunner` in `Indexino.runRefresh`;
-the CLI uses the same build owner for transitional direct indexing. Origin provenance, checkpoint
-rollback, and build outcomes live alongside it rather than under the CLI. `IndexingCoordinator`
-deduplicates active refresh requests and runs their tasks. Publication still belongs to the facade;
+the production CLI publishes only through the facade. Legacy direct-store tests still use the same
+build owner from a test-only fixture. Origin provenance, checkpoint rollback, and build outcomes
+live alongside it rather than under the CLI. `IndexingCoordinator` deduplicates active refresh
+requests and runs their tasks. Publication still belongs to the facade;
 the build owner returns the exact manifest, changes, and outcome used by the completed run, so
 callers need not re-resolve `HEAD` or re-derive a result from mutable storage.
 
