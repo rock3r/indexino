@@ -59,19 +59,28 @@ internal class MacFseventsWatcher(
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
-        if (::stream.isInitialized && stream != NULL) {
-            fsevents("FSEventStreamStop", STOP, stream)
-            fsevents("FSEventStreamInvalidate", INVALIDATE, stream)
+        var interrupted = Thread.interrupted()
+        try {
+            if (::stream.isInitialized && stream != NULL) {
+                fsevents("FSEventStreamStop", STOP, stream)
+                fsevents("FSEventStreamInvalidate", INVALIDATE, stream)
+            }
+            while (thread.isAlive) {
+                if (::runLoop.isInitialized) coreFoundation("CFRunLoopStop", RUN_LOOP_STOP, runLoop)
+                try {
+                    thread.join(RUN_LOOP_STOP_RETRY_MILLIS)
+                } catch (_: InterruptedException) {
+                    interrupted = true
+                }
+            }
+            INSTANCES.remove(id)
+            if (::stream.isInitialized) STREAMS.remove(stream.address())
+            if (::stream.isInitialized && stream != NULL)
+                fsevents("FSEventStreamRelease", RELEASE, stream)
+            arena.close()
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt()
         }
-        while (thread.isAlive) {
-            if (::runLoop.isInitialized) coreFoundation("CFRunLoopStop", RUN_LOOP_STOP, runLoop)
-            thread.join(RUN_LOOP_STOP_RETRY_MILLIS)
-        }
-        INSTANCES.remove(id)
-        if (::stream.isInitialized) STREAMS.remove(stream.address())
-        if (::stream.isInitialized && stream != NULL)
-            fsevents("FSEventStreamRelease", RELEASE, stream)
-        arena.close()
     }
 
     private fun run() {
