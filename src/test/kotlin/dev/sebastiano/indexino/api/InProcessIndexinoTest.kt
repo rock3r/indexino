@@ -20,6 +20,8 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.io.path.Path
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
@@ -81,8 +83,15 @@ class InProcessIndexinoTest {
     }
 
     @Test
+    fun `rejected tentative parent hint audits an aliased source`() =
+        parentRefreshScenario(forceLaterFallback = true)
+
+    @Test
+    fun `tentative parent refresh includes a same-length sibling without its own callback`() =
+        parentRefreshScenario(forceLaterFallback = false)
+
     @Suppress("CyclomaticComplexMethod", "LongMethod", "NestedBlockDepth")
-    fun `tentative parent refresh includes a same-length sibling without its own callback`() {
+    private fun parentRefreshScenario(forceLaterFallback: Boolean) {
         val workspace = createGitWorkspace().toRealPath()
         val source = workspace.resolve("ui/src/main/kotlin/Panel.kt")
         val sibling = source.resolveSibling("Other.kt")
@@ -100,7 +109,10 @@ class InProcessIndexinoTest {
             Indexino.connectBlocking(workspace).use { index ->
                 lateinit var controller: AutoRefreshController
                 val hinted = CopyOnWriteArrayList<Set<java.nio.file.Path>>()
+                val tentativeLaunches = CopyOnWriteArrayList<Boolean>()
                 val seeded = CopyOnWriteArrayList<Int>()
+                val rejectLaterHint = AtomicBoolean(false)
+                val fullCaptures = AtomicInteger()
                 controller =
                     AutoRefreshController(
                         workspace,
@@ -114,6 +126,7 @@ class InProcessIndexinoTest {
                         refreshWithTopology = { received, topology, paths, coverage, root, tentative
                             ->
                             hinted += paths
+                            tentativeLaunches += tentative
                             val handle = runSuspend {
                                 index.refresh(
                                     received,
@@ -136,11 +149,17 @@ class InProcessIndexinoTest {
                                 override fun close() = Unit
                             }
                         },
-                        tentativeParentHint = index::tentativeParentHint,
+                        tentativeParentHint = { received, unknown, known ->
+                            if (rejectLaterHint.get()) null
+                            else index.tentativeParentHint(received, unknown, known)
+                        },
                         nativeFlushForTests = {},
                     )
                 try {
-                    index.onSourcesResolvedForRuntime = controller::register
+                    index.onSourcesResolvedForRuntime = { received, sources, roots ->
+                        fullCaptures.incrementAndGet()
+                        controller.register(received, sources, roots)
+                    }
                     index.onNativeFenceForRuntime = controller::beforeDiscoveryFence
                     index.onBoundedParentInventoryForRuntime = { received, sources ->
                         controller.captureWarmParents(received, sources).also { seeded += it.size }
@@ -219,6 +238,7 @@ class InProcessIndexinoTest {
                             hinted.any { it.containsAll(setOf(source, sibling)) },
                             "No two-source hint: $hinted",
                         )
+                        assertTrue(tentativeLaunches.any { it }, "No tentative refresh")
                         assertEquals(1, symbolCount(pinned, "SourceB0"))
                         assertEquals(0, symbolCount(pinned, "SourceB1"))
 
@@ -256,6 +276,8 @@ class InProcessIndexinoTest {
                                         ordinary.freshnessAtAcquisition,
                                     )
                                 }
+                            val priorFullCaptures = fullCaptures.get()
+                            rejectLaterHint.set(forceLaterFallback)
                             Files.createLink(temporary, remote)
                             Files.writeString(temporary, "package sample\nclass RemoteB1\n")
                             Files.delete(temporary)
@@ -272,9 +294,30 @@ class InProcessIndexinoTest {
                                     break
                                 Thread.sleep(25)
                             }
+                            val fullAudit = fullCaptures.get() > priorFullCaptures
+                            if (forceLaterFallback)
+                                assertTrue(fullAudit, "No full audit on rejection")
                             runSuspend { index.snapshot() }
                                 .use { current ->
                                     assertEquals(1, symbolCount(current, "ChangedAgain"))
+                                    if (fullAudit) {
+                                        // A rejected bounded parent hint audits all sources.
+                                        assertEquals(1, symbolCount(current, "RemoteB1"))
+                                        assertEquals(0, symbolCount(current, "RemoteB0"))
+                                        assertEquals(
+                                            SnapshotFreshness.UNKNOWN,
+                                            current.freshnessAtAcquisition,
+                                        )
+                                        runSuspend { index.snapshot(FreshnessPolicy.AWAIT_CURRENT) }
+                                            .use { audited ->
+                                                assertEquals(
+                                                    SnapshotFreshness.CURRENT,
+                                                    audited.freshnessAtAcquisition,
+                                                )
+                                                assertEquals(1, symbolCount(audited, "RemoteB1"))
+                                            }
+                                        return
+                                    }
                                     assertEquals(0, symbolCount(current, "RemoteB1"))
                                     assertEquals(1, symbolCount(current, "RemoteB0"))
                                     assertEquals(
