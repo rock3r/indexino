@@ -40,6 +40,47 @@ class InProcessIndexinoTest {
     private val tempDirs = mutableListOf<java.nio.file.Path>()
 
     @Test
+    fun `repo scope publishes each manifest project without indexing workspace root`() {
+        val workspace = createGitWorkspace()
+        val manifest = workspace.resolve(".repo/manifest.xml")
+        Files.createDirectories(manifest.parent)
+        Files.writeString(
+            manifest,
+            """
+            <manifest>
+              <project name="widgets" path="ui" revision="expected-ui"/>
+              <project name="library" path="core" revision="expected-core"/>
+            </manifest>
+            """
+                .trimIndent(),
+        )
+        val cache = createTempDirectory("indexino-repo-scope-cache-")
+        tempDirs.add(cache)
+        val prior = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cache.toString())
+        try {
+            Indexino.connectBlocking(workspace).use { index ->
+                val scope = IndexScope.repo()
+                val result = runSuspend { index.refresh(RefreshRequest.forScope(scope)).await() }
+                assertEquals(scope, result.scope)
+                assertEquals(
+                    mapOf("repo:widgets" to "expected-ui", "repo:library" to "expected-core"),
+                    result.revision.origins.associate { it.originId.value to it.expectedRevision },
+                )
+                runSuspend { index.snapshot() }
+                    .use { snapshot ->
+                        assertEquals(1, symbolCount(snapshot, "ActionButton"))
+                        assertEquals(1, symbolCount(snapshot, "coreUtil"))
+                        assertEquals(0, symbolCount(snapshot, "RootPanel"))
+                    }
+            }
+        } finally {
+            if (prior == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", prior)
+        }
+    }
+
+    @Test
     @Suppress("CyclomaticComplexMethod", "LongMethod", "NestedBlockDepth")
     fun `tentative parent refresh includes a same-length sibling without its own callback`() {
         val workspace = createGitWorkspace().toRealPath()

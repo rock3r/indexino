@@ -899,18 +899,25 @@ private constructor(
     }
 
     private fun IndexScope.toTopologyRequest(): TopologyRequest =
-        if (buildSystem == BuildSystem.GRADLE) {
-            TopologyRequest(
-                buildSystem = InternalBuildSystem.GRADLE,
-                gradleModule = value,
-                includeDeps = includesDependencies,
-            )
-        } else {
-            TopologyRequest(
-                buildSystem = InternalBuildSystem.BAZEL,
-                bazelTarget = value,
-                includeDeps = includesDependencies,
-            )
+        when (buildSystem) {
+            BuildSystem.GRADLE ->
+                TopologyRequest(
+                    buildSystem = InternalBuildSystem.GRADLE,
+                    gradleModule = value,
+                    includeDeps = includesDependencies,
+                )
+            BuildSystem.REPO ->
+                TopologyRequest(
+                    buildSystem = InternalBuildSystem.REPO,
+                    repoManifest = workspace.resolve(value),
+                    includeDeps = includesDependencies,
+                )
+            else ->
+                TopologyRequest(
+                    buildSystem = InternalBuildSystem.BAZEL,
+                    bazelTarget = value,
+                    includeDeps = includesDependencies,
+                )
         }
 
     @OptIn(IndexinoInternalApi::class)

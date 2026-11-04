@@ -1,5 +1,8 @@
 package dev.sebastiano.indexino.cli
 
+import com.github.ajalt.clikt.core.main
+import dev.sebastiano.indexino.api.InProcessCacheLayout
+import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.core.record.FileHashRecord
@@ -24,6 +27,46 @@ class IndexCommandTest {
     fun tearDown() {
         tempDirs.forEach { dir -> dir.toFile().deleteRecursively() }
         tempDirs.clear()
+    }
+
+    @Test
+    fun `cli indexes a detected repo manifest through the runtime`() {
+        val workspace = createTempDirectory("indexino-repo-cli-").also(tempDirs::add)
+        val manifest = workspace.resolve(".repo/manifest.xml")
+        Files.createDirectories(manifest.parent)
+        Files.writeString(
+            manifest,
+            "<manifest><project name=\"example\" path=\"module\"/></manifest>",
+        )
+        val source = workspace.resolve("module/src/main/kotlin/Example.kt")
+        Files.createDirectories(source.parent)
+        Files.writeString(source, "class RepoExample")
+        runGit(workspace, "init")
+        runGit(workspace, "config", "user.email", "test@example.com")
+        runGit(workspace, "config", "user.name", "Test User")
+        runGit(workspace, "add", ".")
+        runGit(workspace, "commit", "-m", "fixture")
+        val cache = createTempDirectory("indexino-repo-cli-cache-").also(tempDirs::add)
+        val prior = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cache.toString())
+        try {
+            MainCommand()
+                .main(arrayOf("index", "--project", workspace.toString(), "--no-auto-refresh"))
+            val published =
+                requireNotNull(
+                    WorkspaceGenerationManifestStore(
+                            cache,
+                            InProcessCacheLayout.workspaceId(workspace.toRealPath()),
+                        )
+                        .current()
+                )
+            assertEquals("REPO", published.scopeBuildSystem)
+            assertEquals(".repo/manifest.xml", published.scopeValue)
+            assertEquals(listOf("repo:example"), published.origins.map { it.originId })
+        } finally {
+            if (prior == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", prior)
+        }
     }
 
     @Test

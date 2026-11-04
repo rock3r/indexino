@@ -69,6 +69,10 @@ private constructor(
             when (manifest.scopeBuildSystem) {
                 BuildSystem.GRADLE.value -> IndexScope.gradle(manifest.scopeValue)
                 BuildSystem.BAZEL.value -> IndexScope.bazel(manifest.scopeValue)
+                BuildSystem.REPO.value ->
+                    IndexScope.repo().takeIf {
+                        manifest.scopeValue == it.value && manifest.includesDependencies
+                    } ?: return
                 else -> return
             }
         var request =

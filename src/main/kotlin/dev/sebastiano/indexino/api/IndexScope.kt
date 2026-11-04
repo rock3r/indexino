@@ -34,6 +34,9 @@ private constructor(
             return IndexScope(BuildSystem.GRADLE, module, false)
         }
 
+        /** CLI repo-manifest scope; not part of the embedded API contract yet. */
+        internal fun repo(): IndexScope = IndexScope(BuildSystem.REPO, ".repo/manifest.xml", true)
+
         private fun requireValidGradleModulePath(module: String) {
             // Colon-separated Gradle module identifiers never use filesystem path segments.
             // Reject them here as a structural factory invariant (same shape as SourceFile paths).

@@ -320,6 +320,58 @@ class WorkspaceRuntimeTest {
     }
 
     @Test
+    fun `restarted runtime watches and refreshes a repo manifest scope`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-runtime-repo-")
+        val workspace = createGradleWorkspace()
+        Files.createDirectories(workspace.resolve(".repo"))
+        Files.writeString(
+            workspace.resolve(".repo/manifest.xml"),
+            "<manifest><project name=\"sample\" path=\"app\"/></manifest>",
+        )
+        val previousCacheRoot = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cacheRoot.toString())
+        val request = RefreshRequest.forScope(IndexScope.repo())
+        val first = WorkspaceRuntime.start(workspace, cacheRoot)
+        val initial =
+            try {
+                RuntimeConnection.connect(first.endpoint).use { connection ->
+                    RuntimeRefreshClient(connection)
+                        .refresh(request)
+                        .await()
+                        .result
+                        .also {
+                            assertEquals(request.scope, it.scope)
+                            assertEquals("repo:sample", it.revision.origins.single().originId.value)
+                        }
+                        .generation
+                }
+            } finally {
+                first.close()
+            }
+        val restarted = WorkspaceRuntime.start(workspace, cacheRoot)
+        try {
+            Files.writeString(
+                workspace.resolve("app/src/main/kotlin/Panel.kt"),
+                "package sample\nclass RepoSuccessor\n",
+            )
+            waitUntil {
+                RuntimeConnection.connect(restarted.endpoint).use { connection ->
+                    val snapshots = RuntimeSnapshotClient(connection)
+                    val lease = snapshots.acquire(FreshnessPolicy.PUBLISHED)
+                    snapshots.release(lease.id)
+                    lease.generation != initial
+                }
+            }
+        } finally {
+            restarted.close()
+            cacheRoot.toFile().deleteRecursively()
+            workspace.toFile().deleteRecursively()
+            if (previousCacheRoot == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", previousCacheRoot)
+        }
+    }
+
+    @Test
     fun `disconnecting a client releases its daemon snapshot leases`() {
         val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-disconnect-pin-")
         val workspace = createGradleWorkspace()

@@ -201,6 +201,11 @@ internal object RuntimeRefreshProtocol {
             when (buildSystem) {
                 BuildSystem.GRADLE.value -> IndexScope.gradle(scopeValue)
                 BuildSystem.BAZEL.value -> IndexScope.bazel(scopeValue)
+                BuildSystem.REPO.value ->
+                    IndexScope.repo().also { scope ->
+                        if (scopeValue != scope.value || !includesDependencies)
+                            throw RuntimeProtocolException("Unsupported repo scope $scopeValue")
+                    }
                 else -> throw RuntimeProtocolException("Unsupported build system $buildSystem")
             }
         var request =
@@ -319,6 +324,11 @@ internal object RuntimeRefreshProtocol {
             when (buildSystem) {
                 BuildSystem.GRADLE.value -> IndexScope.gradle(value)
                 BuildSystem.BAZEL.value -> IndexScope.bazel(value)
+                BuildSystem.REPO.value ->
+                    IndexScope.repo().also { scope ->
+                        if (value != scope.value || !includesDependencies)
+                            throw RuntimeProtocolException("Unsupported repo scope $value")
+                    }
                 else -> throw RuntimeProtocolException("Unsupported build system $buildSystem")
             }
         return if (includesDependencies) scope.includingDependencies() else scope
