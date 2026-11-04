@@ -90,7 +90,9 @@ internal object RuntimeClientBootstrap {
                 RuntimePaths.leasePath(cacheRoot, InProcessCacheLayout.workspaceId(workspace))
             )
         if (lease == null || !RuntimeLeaseStore.isLive(lease)) {
-            val java = Path.of(System.getProperty("java.home"), "bin", "java")
+            val executable =
+                if (System.getProperty("os.name").startsWith("Windows")) "java.exe" else "java"
+            val java = Path.of(System.getProperty("java.home"), "bin", executable)
             if (Files.isExecutable(java)) {
                 val command = buildList {
                     add(java.toString())
