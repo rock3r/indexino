@@ -56,7 +56,7 @@ class AutoRefreshControllerTest {
 
     @Test
     fun `repo scope watches manifest includes and local manifests for topology changes`() {
-        val workspace = Files.createTempDirectory("indexino-repo-manifest-watch-")
+        val workspace = Files.createTempDirectory("indexino-repo-manifest-watch-").toRealPath()
         val manifestRoot = workspace.resolve(".repo")
         val included = manifestRoot.resolve("manifests/projects.xml")
         val local = manifestRoot.resolve("local_manifests")
