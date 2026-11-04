@@ -5,6 +5,7 @@ import dev.sebastiano.indexino.core.record.CodeIndexRecord
 import dev.sebastiano.indexino.core.record.FileHashRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
+import dev.sebastiano.indexino.engine.BuildStoreCheckpoint
 import java.nio.file.FileSystemException
 import java.nio.file.Files
 import java.nio.file.Path

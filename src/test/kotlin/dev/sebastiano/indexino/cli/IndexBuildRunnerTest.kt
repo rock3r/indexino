@@ -5,6 +5,10 @@ import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
 import dev.sebastiano.indexino.core.record.ResourceUsageRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
+import dev.sebastiano.indexino.engine.BuildStoreCheckpoint
+import dev.sebastiano.indexino.engine.IndexBuildExecution
+import dev.sebastiano.indexino.engine.IndexBuildRunner
+import dev.sebastiano.indexino.engine.ManifestOriginResolver
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.JsonlIndexBuildProgressReporter
 import dev.sebastiano.indexino.topology.BuildSystem

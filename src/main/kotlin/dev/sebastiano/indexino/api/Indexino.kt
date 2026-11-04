@@ -2,9 +2,6 @@
 
 package dev.sebastiano.indexino.api
 
-import dev.sebastiano.indexino.cli.CliExitCodes
-import dev.sebastiano.indexino.cli.IndexBuildExecution
-import dev.sebastiano.indexino.cli.IndexBuildRunner
 import dev.sebastiano.indexino.core.BASIC_FACT_SCHEMA_VERSION
 import dev.sebastiano.indexino.core.cache.CacheActivityLock
 import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
@@ -22,8 +19,12 @@ import dev.sebastiano.indexino.core.manifest.workspaceRevisionFingerprint
 import dev.sebastiano.indexino.core.path.IndexPathResolver
 import dev.sebastiano.indexino.core.sourcelink.LinkIndexService
 import dev.sebastiano.indexino.core.store.CodeIndexStore
+import dev.sebastiano.indexino.engine.BuildExitCodes
 import dev.sebastiano.indexino.engine.InFlightRefresh
+import dev.sebastiano.indexino.engine.IndexBuildExecution
+import dev.sebastiano.indexino.engine.IndexBuildRunner
 import dev.sebastiano.indexino.engine.IndexingCoordinator
+import dev.sebastiano.indexino.engine.OriginGitState
 import dev.sebastiano.indexino.engine.PluginRegistry
 import dev.sebastiano.indexino.engine.RuntimeClientBootstrap
 import dev.sebastiano.indexino.engine.RuntimeConnection
@@ -87,7 +88,7 @@ private constructor(
         val generation: String,
         val hashes: Map<IndexedSource, String>,
         val sources: List<IndexedSource>,
-        val originStates: Map<String, dev.sebastiano.indexino.cli.OriginGitState>,
+        val originStates: Map<String, OriginGitState>,
         val observationEpoch: Long?,
         val parents: Map<Path, TentativeParentInventory>,
         val evidence: SnapshotFreshness,
@@ -1369,7 +1370,7 @@ private constructor(
     private fun buildFailure(execution: IndexBuildExecution, message: String): IndexinoException =
         failure(
             category =
-                if (execution.exitCode == CliExitCodes.TOPOLOGY_FAILED) {
+                if (execution.exitCode == BuildExitCodes.TOPOLOGY_FAILED) {
                     IndexFailureCategory.TOPOLOGY
                 } else {
                     IndexFailureCategory.INTERNAL
