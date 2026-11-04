@@ -66,7 +66,9 @@ internal class ContentAddressedPackCache(
         val pack = packPath(contentKey)
         require(Files.isRegularFile(pack)) { "Content pack does not exist: $contentKey" }
         if (Files.isDirectory(destination)) return
-        if (Files.exists(destination, LinkOption.NOFOLLOW_LINKS)) {
+        if (
+            Files.exists(destination, LinkOption.NOFOLLOW_LINKS) && !Files.isDirectory(destination)
+        ) {
             throw FileAlreadyExistsException(destination.toString())
         }
         Files.createDirectories(destination.parent)
