@@ -215,8 +215,10 @@ internal class AutoRefreshController(
                     }
                     topologyRoots.filter(Files::isDirectory).forEach { root ->
                         add(root)
-                        discoverSourceRoots(root).forEach { sourceRoot ->
-                            discoverDirectories(sourceRoot).forEach(::add)
+                        if (!nativelyCovered(root)) {
+                            discoverSourceRoots(root).forEach { sourceRoot ->
+                                discoverDirectories(sourceRoot).forEach(::add)
+                            }
                         }
                     }
                     topologyInputs.forEach { input ->
@@ -255,6 +257,7 @@ internal class AutoRefreshController(
                 if (!registerDirectory(directory)) coverageComplete = false
             }
         }
+        checkNativeCoverage()
         if (coverageComplete && !nativeCoverageLost.get()) uncovered.remove(request)
         else uncovered.add(request)
         // IndexBuildRunner calls this before capturing source bytes. Earlier source edits are

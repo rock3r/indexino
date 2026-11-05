@@ -154,6 +154,15 @@ merged baseline read all 65,149 sources and matched generations, provenance, cha
 snapshots, and query semantics. Median registration fell from 2,458 to 1,718.5 ms and median
 refresh from 14,541.5 to 13,851 ms. These are shared-host full-scope measurements, not a
 save-to-query latency measurement or permission to infer unchanged files from watcher silence.
+A live recursive native stream already observes unseen workspace paths through the workspace-root
+watch, so registration skips that redundant empty-source-root tree walk. External roots and later
+registrations after native coverage is lost still enumerate directories for polling; native loss
+revokes coverage and schedules full reconciliation before claiming currency.
+In four guarded alternating Mac corpus pairs against the prior merged build, all 65,149 sources
+were read per run; each pair matched generation, origin provenance, changes, public queries, and
+pinned snapshots. Median registration fell from 1,717 to 1,076 ms and edited explicit full
+refresh-to-query from 11,932 to 11,259 ms. These are whole-scope measurements, not save-to-query
+incremental latency or a promise that every host will improve by the same amount.
 The stream uses NoDefer to deliver the first event after a quiet period without waiting for the
 100 ms native coalescing window; later events still coalesce, and the controller's 150 ms debounce
 still applies before a refresh starts.
