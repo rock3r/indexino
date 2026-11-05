@@ -212,6 +212,121 @@ class IndexBuildRunnerTest {
     }
 
     @Test
+    @Suppress("LongMethod")
+    fun `full capture overlaps origin resolution only after source bytes are captured`() {
+        val workspace =
+            Files.createDirectories(tempDir.resolve("full-overlap-workspace")).toRealPath()
+        val source = workspace.resolve("src/main/java/Panel.java")
+        Files.createDirectories(source.parent)
+        source.writeText("class Before {}")
+        val storeRoot = tempDir.resolve("full-overlap-store")
+        val topology =
+            TopologyResult(
+                sourceFiles = listOf("src/main/java/Panel.java"),
+                topology = "bazel-query",
+                includeDeps = false,
+                scope = "//:main",
+            )
+        fun runner(progress: (String) -> Unit = {}) =
+            IndexBuildRunner(
+                project = workspace,
+                topologyRequest =
+                    TopologyRequest(buildSystem = BuildSystem.BAZEL, bazelTarget = "//:main"),
+                applications = emptyList(),
+                bazelQueryExecutor = null,
+                bazelProcessRunner = null,
+                progress = progress,
+                machineProgress = null,
+                storeRootOverride = storeRoot,
+                topologyOverride = topology,
+                captureOriginStates = true,
+            )
+        val initial = runner().runDetailed()
+        assertEquals(CliExitCodes.SUCCESS, initial.exitCode)
+        val manifestPath =
+            IndexPathResolver(workspace, storeRootOverride = storeRoot)
+                .resolveManifest(checkNotNull(initial.manifest).commit)
+
+        source.writeText("class FullCapture {}")
+        val fullBefore = manifestPath.readText()
+        val fullCaptureComplete = CountDownLatch(1)
+        val fullOriginStarted = CountDownLatch(1)
+        val releaseFullOrigin = CountDownLatch(1)
+        val fullStoreStarted = CountDownLatch(1)
+        val full = CompletableFuture.supplyAsync {
+            runner(
+                    progress = { message ->
+                        when {
+                            message.startsWith("index phase=source-capture state=completed") ->
+                                fullCaptureComplete.countDown()
+                            message == "index phase=origin-resolution state=started" -> {
+                                check(fullCaptureComplete.count == 0L)
+                                fullOriginStarted.countDown()
+                                check(releaseFullOrigin.await(15, TimeUnit.SECONDS))
+                            }
+                            message == "index phase=store-build state=started" ->
+                                fullStoreStarted.countDown()
+                        }
+                    }
+                )
+                .runDetailed()
+        }
+        try {
+            assertTrue(fullOriginStarted.await(5, TimeUnit.SECONDS))
+            assertTrue(fullStoreStarted.await(3, TimeUnit.SECONDS), "full capture must overlap Git")
+            assertEquals(fullBefore, manifestPath.readText(), "Git must join before publication")
+        } finally {
+            releaseFullOrigin.countDown()
+            full.get(20, TimeUnit.SECONDS)
+        }
+        val fullExecution = full.get(20, TimeUnit.SECONDS)
+        assertEquals(CliExitCodes.SUCCESS, fullExecution.exitCode)
+        assertEquals(
+            checkNotNull(initial.manifest).origins.map { it.originId },
+            checkNotNull(fullExecution.manifest).origins.map { it.originId },
+        )
+        XodusCodeIndexStore.open(
+                IndexPathResolver(workspace, storeRootOverride = storeRoot)
+                    .resolveBaseStore(checkNotNull(fullExecution.manifest).commit)
+            )
+            .use { indexed ->
+                assertEquals(
+                    setOf("FullCapture"),
+                    indexed
+                        .prefixScan("sym:")
+                        .map { (_, record) -> (record as SymbolRecord).name }
+                        .toSet(),
+                )
+            }
+
+        val fullNoopStarted = CountDownLatch(1)
+        val releaseFullNoop = CountDownLatch(1)
+        val fullNoopStoreStarted = CountDownLatch(1)
+        val fullNoop = CompletableFuture.supplyAsync {
+            runner(
+                    progress = { message ->
+                        when (message) {
+                            "index phase=origin-resolution state=started" -> {
+                                fullNoopStarted.countDown()
+                                check(releaseFullNoop.await(15, TimeUnit.SECONDS))
+                            }
+                            "index phase=store-build state=started" ->
+                                fullNoopStoreStarted.countDown()
+                        }
+                    }
+                )
+                .runDetailed()
+        }
+        try {
+            assertTrue(fullNoopStarted.await(5, TimeUnit.SECONDS))
+            assertFalse(fullNoopStoreStarted.await(100, TimeUnit.MILLISECONDS))
+        } finally {
+            releaseFullNoop.countDown()
+        }
+        assertTrue(fullNoop.get(20, TimeUnit.SECONDS).reusedFreshIndex)
+    }
+
+    @Test
     fun `hinted refresh inherits unchanged source hashes while updating edited facts`() {
         val workspace =
             Files.createDirectories(tempDir.resolve("hinted-capture-workspace")).toRealPath()
