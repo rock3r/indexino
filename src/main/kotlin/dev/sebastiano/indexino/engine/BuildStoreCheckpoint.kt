@@ -5,11 +5,15 @@ import dev.sebastiano.indexino.core.record.CodeIndexRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.exists
@@ -19,6 +23,7 @@ internal class BuildStoreCheckpoint(
     private val store: CodeIndexStore,
     private val manifestPath: Path,
     private val progress: (String) -> Unit = {},
+    private val overlay: Boolean = false,
 ) : AutoCloseable {
     val directory: Path = directoryFor(manifestPath)
     private var backup: XodusCodeIndexStore? = null
@@ -26,8 +31,8 @@ internal class BuildStoreCheckpoint(
     private var retain = false
 
     fun <T> run(action: () -> T): T {
-        capture()
         retain = true
+        capture()
         try {
             return action().also { retain = false }
         } catch (@Suppress("TooGenericExceptionCaught") failure: Throwable) {
@@ -51,6 +56,15 @@ internal class BuildStoreCheckpoint(
         val target = XodusCodeIndexStore.open(directory.resolve("records"))
         backup = target
         copyRecords(store, target)
+        target.flushAndSync()
+        val marker = directory.resolve("ready.tmp")
+        FileChannel.open(marker, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE).use {
+            channel ->
+            val content = ByteBuffer.wrap(if (overlay) OVERLAY_MARKER else BASE_MARKER)
+            while (content.hasRemaining()) channel.write(content)
+            channel.force(true)
+        }
+        Files.move(marker, directory.resolve("ready"), StandardCopyOption.ATOMIC_MOVE)
         val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
         progress("index phase=checkpoint state=completed durationMillis=$elapsedMillis")
     }
@@ -65,7 +79,12 @@ internal class BuildStoreCheckpoint(
             if (keys.isEmpty()) break
             store.transaction { keys.forEach(store::delete) }
         }
-        copyRecords(checkNotNull(backup), store)
+        val source = backup
+        if (source != null) copyRecords(source, store)
+        else
+            XodusCodeIndexStore.open(directory.resolve("records"), readOnly = true).use {
+                copyRecords(it, store)
+            }
         val oldManifest = directory.resolve("manifest.json")
         if (oldManifest.exists()) {
             Files.copy(oldManifest, manifestPath, StandardCopyOption.REPLACE_EXISTING)
@@ -101,6 +120,8 @@ internal class BuildStoreCheckpoint(
                 throw failure
             }
             if (created && !retain) {
+                // A crash during deletion must not leave a ready marker beside a partial backup.
+                Files.deleteIfExists(directory.resolve("ready"))
                 cleanupPhase("checkpoint-delete") {
                     Files.walkFileTree(
                         directory,
@@ -147,11 +168,62 @@ internal class BuildStoreCheckpoint(
     companion object {
         private const val DELETE_BATCH_SIZE = 256
         private const val COPY_BATCH_SIZE = 16
+        private val BASE_MARKER = "base\n".toByteArray()
+        private val OVERLAY_MARKER = "overlay\n".toByteArray()
 
         fun requireRecovered(manifestPath: Path) {
-            check(!directoryFor(manifestPath).exists()) {
-                "An active or unfinished index build checkpoint requires recovery"
+            val directory = directoryFor(manifestPath)
+            if (!Files.exists(directory, LinkOption.NOFOLLOW_LINKS)) return
+            val ready = directory.resolve("ready")
+            check(
+                Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS) &&
+                    Files.isRegularFile(ready, LinkOption.NOFOLLOW_LINKS) &&
+                    Files.size(ready) <= OVERLAY_MARKER.size &&
+                    Files.isDirectory(directory.resolve("records"), LinkOption.NOFOLLOW_LINKS)
+            ) {
+                "An incomplete index build checkpoint requires manual recovery: $directory"
             }
+            val marker = Files.readAllBytes(ready)
+            val destination =
+                when (marker.toList()) {
+                    BASE_MARKER.toList() -> manifestPath.resolveSibling("base.xodus")
+                    OVERLAY_MARKER.toList() ->
+                        manifestPath.parent.parent.parent
+                            .resolve("overlay-build")
+                            .resolve(manifestPath.parent.fileName.toString())
+                            .resolve("delta")
+                    else -> error("Unknown index build checkpoint destination: $ready")
+                }
+            check(Files.isDirectory(destination, LinkOption.NOFOLLOW_LINKS)) {
+                "Missing index build checkpoint destination: $destination"
+            }
+            val checkpoint =
+                XodusCodeIndexStore.open(destination).use { store ->
+                    // Another writer may have completed and removed this checkpoint while
+                    // opening the destination waited for its Xodus lock.
+                    if (!Files.exists(directory, LinkOption.NOFOLLOW_LINKS)) return
+                    check(
+                        Files.isRegularFile(ready, LinkOption.NOFOLLOW_LINKS) &&
+                            Files.size(ready) == marker.size.toLong() &&
+                            Files.readAllBytes(ready).contentEquals(marker) &&
+                            Files.isDirectory(
+                                directory.resolve("records"),
+                                LinkOption.NOFOLLOW_LINKS,
+                            )
+                    ) {
+                        "An incomplete index build checkpoint requires manual recovery: $directory"
+                    }
+                    BuildStoreCheckpoint(store, manifestPath).also { pending ->
+                        pending.created = true
+                        pending.retain = true
+                        // A partial restore can be repeated; do not release the backup until
+                        // both the records and the prior manifest are restored and the store
+                        // closes.
+                        pending.restore()
+                    }
+                }
+            checkpoint.retain = false
+            checkpoint.close()
         }
 
         private fun directoryFor(manifestPath: Path): Path =
