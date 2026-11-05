@@ -512,6 +512,18 @@ and was recorded rather than mistaken for external contention. This shared-host,
 observation is diagnostic, not a clean baseline or a latency guarantee; earlier runs stopped by
 the host-load gate are excluded from these results.
 
+In a subsequent sequential comparison on that audited disposable copy, replacing per-byte
+`String.format` SHA-256 hex encoding with JDK `HexFormat` kept the exact persisted hashes and all
+eight public-query, pinned-snapshot and post-run corpus checks. Both runs used the same selected
+edits, Temurin 25.0.3 and heap, but separate empty Indexino caches; each refresh still read all
+65,149 sources. All nine published generation IDs, aggregate source hashes and origin states
+matched across the two caches; physical pack keys need not match. Median source-capture time was
+5,153 ms before and 4,837 ms after; median whole-scope refresh was 12,361 ms before and
+12,096 ms after. Seven of eight matched captures improved, while the first treatment capture was
+1,379 ms slower. Host load and the uncontrolled OS page cache make this a small diagnostic
+improvement, not a statistically isolated or guaranteed latency reduction. Git origin resolution
+and Bazel topology still retain whole-scope costs.
+
 After changing default store-interface methods, rebuild nonincrementally before packaging a
 measurement artifact. An observed incremental Kotlin build retained an older delegated snapshot
 wrapper and silently used the scanning defaults. The shared-snapshot indexed-lookup regression

@@ -6,7 +6,7 @@ import dev.sebastiano.indexino.core.store.CodeIndexStore
 import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
-import java.util.Locale
+import java.util.HexFormat
 import kotlin.io.path.readText
 
 internal class FileHashProducer : IndexProducer {
@@ -53,7 +53,7 @@ internal class FileHashProducer : IndexProducer {
 
         fun contentHash(content: ByteArray): String {
             val digest = MessageDigest.getInstance("SHA-256").digest(content)
-            return "sha256:" + digest.joinToString("") { "%02x".format(Locale.ROOT, it) }
+            return "sha256:" + HexFormat.of().formatHex(digest)
         }
 
         fun combinedSourcesHash(context: IndexBuildContext, sourceFiles: List<String>): String =
