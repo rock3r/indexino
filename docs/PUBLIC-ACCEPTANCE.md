@@ -403,8 +403,8 @@ counts. Baseline, post-close and post-GC snapshots support resource-trend compar
 boundary samples, not peaks or leak thresholds. RSS and allocated disk bytes remain null with
 explicit reasons; logical file sizes are not allocated blocks. Descendant observations **do not
 prove containment**, and this in-process soak does not exercise daemon teardown. The report labels
-pack age and persisted observation as implemented; dead-workspace age, quota, and daemon-purge
-policy remain pending.
+pack age and persisted observation as implemented. It records the 20 GiB quota backstop but does
+not reach that size; dead-workspace age and daemon-purge policy remain pending.
 
 The driver has a ten-minute cooperative coroutine deadline and thirty-second Git command bounds.
 Failures remain nonzero, retain completed-cycle JSON with only the exception class, restore the

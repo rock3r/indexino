@@ -70,9 +70,8 @@ internal object LifecycleSoakAcceptanceDriver {
             report["containmentProof"] = JsonPrimitive(false)
             report["agePolicy"] = JsonPrimitive("unreferenced-packs-30d; dead-workspaces-pending")
             report["gracePolicy"] = JsonPrimitive("persisted-pack-observation")
-            for (policy in listOf("quota", "daemonPurge")) {
-                report["${policy}Policy"] = JsonPrimitive("not-implemented")
-            }
+            report["quotaPolicy"] = JsonPrimitive("20GiB-backstop; not-probed-by-soak")
+            report["daemonPurgePolicy"] = JsonPrimitive("not-implemented")
             Files.writeString(output, JsonObject(report).toString() + "\n")
         }
     }
