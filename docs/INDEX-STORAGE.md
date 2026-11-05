@@ -356,10 +356,11 @@ plugin failures restore that checkpoint. Capture and restore copy at most 16 rec
 rollback deletes at most 256 keys per transaction, rather than committing each record individually. Rollback
 and close failures are suppressed onto the original failure rather than replacing it. Successful
 builds and successful restores make the checkpoint's regular files writable (Xodus leaves
-completed logs read-only) and remove them without following symbolic links. Filesystem deletion
-errors retain their affected path and cause. A failed restore retains the checkpoint, without changing
-its file permissions. A checkpoint without a valid ready marker (including older or interrupted
-captures) remains intact and fails closed; it is never interpreted as a complete backup.
+completed logs read-only) and remove them without following symbolic links. They remove the ready
+marker first, so interrupted deletion cannot leave a partial backup marked recoverable. Filesystem
+deletion errors retain their affected path and cause. A failed restore retains the checkpoint,
+without changing its file permissions. A checkpoint without a valid ready marker (including older
+or interrupted captures) remains intact and fails closed; it is never interpreted as a complete backup.
 The diagnostic `checkpoint` phase measures this record-copy capture separately from change
 detection and producers. `checkpoint-release` includes `checkpoint-backup-close` and
 `checkpoint-delete`.

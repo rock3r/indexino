@@ -120,6 +120,8 @@ internal class BuildStoreCheckpoint(
                 throw failure
             }
             if (created && !retain) {
+                // A crash during deletion must not leave a ready marker beside a partial backup.
+                Files.deleteIfExists(directory.resolve("ready"))
                 cleanupPhase("checkpoint-delete") {
                     Files.walkFileTree(
                         directory,

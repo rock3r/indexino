@@ -88,6 +88,51 @@ class BuildStoreCheckpointTest {
     }
 
     @Test
+    fun `interrupted checkpoint deletion cannot recover a partly deleted backup`(
+        @TempDir root: Path
+    ) {
+        assumeTrue(Files.getFileStore(root).supportsFileAttributeView("posix"))
+        val manifest = root.resolve("manifest.json")
+        val checkpointDirectory = root.resolve("manifest.json.rollback")
+        var readyAtDeletionStart = true
+        XodusCodeIndexStore.open(root.resolve("base.xodus")).use { store ->
+            val checkpoint =
+                BuildStoreCheckpoint(
+                    store,
+                    manifest,
+                    progress = { message ->
+                        if (message == "index phase=checkpoint-delete state=started") {
+                            readyAtDeletionStart = checkpointDirectory.resolve("ready").exists()
+                        }
+                    },
+                )
+            checkpoint.run {
+                store.put(
+                    CodeIndexKey.file("Current.kt", "hash"),
+                    FileHashRecord("Current.kt", "published"),
+                )
+            }
+            val records = checkpointDirectory.resolve("records")
+            Files.setPosixFilePermissions(records, PosixFilePermissions.fromString("r-x------"))
+            try {
+                assumeTrue(!Files.isWritable(records))
+                assertFailsWith<FileSystemException> { checkpoint.close() }
+                assertFalse(checkpointDirectory.resolve("ready").exists())
+            } finally {
+                Files.setPosixFilePermissions(records, PosixFilePermissions.fromString("rwx------"))
+            }
+        }
+        assertFalse(readyAtDeletionStart, "A partial cleanup must never advertise a ready backup")
+        assertFailsWith<IllegalStateException> { BuildStoreCheckpoint.requireRecovered(manifest) }
+        XodusCodeIndexStore.open(root.resolve("base.xodus")).use { store ->
+            assertEquals(
+                FileHashRecord("Current.kt", "published"),
+                store.get(CodeIndexKey.file("Current.kt", "hash")),
+            )
+        }
+    }
+
+    @Test
     fun `rollback batches writes and restores the final partial batch`(@TempDir root: Path) {
         XodusCodeIndexStore.open(root.resolve("store")).use { actual ->
             val before =
