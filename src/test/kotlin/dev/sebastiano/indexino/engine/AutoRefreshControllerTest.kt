@@ -1605,6 +1605,40 @@ class AutoRefreshControllerTest {
         }
     }
 
+    @Test
+    fun `overlapping external origins retain ancestor topology watches`() {
+        val root = Files.createTempDirectory("indexino-overlapping-origins-")
+        val workspace = Files.createDirectory(root.resolve("workspace"))
+        val external = Files.createDirectory(root.resolve("external"))
+        val nested = external.resolve("module")
+        val source = nested.resolve("src/main/kotlin/Same.kt")
+        Files.createDirectories(source.parent)
+        Files.writeString(source, "class Same")
+        val refreshes = AtomicInteger()
+        val controller =
+            AutoRefreshController(
+                workspace,
+                AutoRefreshMode.ENABLED,
+                refresh = { refreshes.incrementAndGet() },
+            )
+        try {
+            val request = RefreshRequest.forScope(IndexScope.gradle(":module"))
+            controller.register(
+                request,
+                listOf(
+                    IndexedSource("nested", nested, "src/main/kotlin/Same.kt"),
+                    IndexedSource("outer", external, "module/src/main/kotlin/Same.kt"),
+                ),
+            )
+            assertTrue(external in controller.directoriesForTests(request))
+            controller.onPathChangedForTests(external.resolve("BUILD"))
+            awaitRefresh(refreshes)
+        } finally {
+            controller.close()
+            root.toFile().deleteRecursively()
+        }
+    }
+
     private fun awaitRefresh(refreshes: AtomicInteger) {
         repeat(100) {
             if (refreshes.get() > 0) return

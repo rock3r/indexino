@@ -872,11 +872,18 @@ internal class AutoRefreshController(
     private fun topologyInputs(request: RefreshRequest, sources: List<IndexedSource>): List<Path> =
         buildSet {
                 addTopologyInputs(this, workspace)
+                val visited = hashSetOf<Pair<Path, Path>>()
                 sources.forEach { source ->
                     val sourcePath = source.originRoot.resolve(source.path).normalize()
-                    generateSequence(sourcePath.parent) { current -> current.parent }
-                        .takeWhile { current -> current.startsWith(source.originRoot) }
-                        .forEach { directory -> addTopologyInputs(this, directory) }
+                    var directory = sourcePath.parent
+                    while (
+                        directory != null &&
+                            directory.startsWith(source.originRoot) &&
+                            visited.add(source.originRoot to directory)
+                    ) {
+                        addTopologyInputs(this, directory)
+                        directory = directory.parent
+                    }
                 }
                 if (request.scope.buildSystem == BuildSystem.REPO) {
                     val manifest = workspace.resolve(request.scope.value)

@@ -140,6 +140,13 @@ but only after the previous worker retires from the coordinator.
 
 On macOS a recursive FSEvents stream covers the workspace, so only directories outside it (for
 example external included builds) are registered with the JDK `WatchService`, which polls there.
+Registration constructs build-input watches once per (origin root, source ancestor), even when
+many sources share a directory; distinct external origins, empty source roots and fallback keys
+retain their existing coverage. On four guarded matched explicit full-refresh edits of the
+433,534-entry macOS corpus, all 65,149 sources were read in both arms and each pair published the
+same generation and provenance. Median registration fell from 2,767 to 2,400 ms and median
+end-to-end refresh from 14,952 to 14,580.5 ms. This shared-host diagnostic is not a bound on
+full-scope time or a measurement of save-to-query incremental latency.
 The stream uses NoDefer to deliver the first event after a quiet period without waiting for the
 100 ms native coalescing window; later events still coalesce, and the controller's 150 ms debounce
 still applies before a refresh starts.
