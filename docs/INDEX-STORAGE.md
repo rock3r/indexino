@@ -254,9 +254,9 @@ workspace's current overlay recursively references the selected base; otherwise 
 its manifest and shared materialized store. Forget dependent workspaces first. `daemon stop --purge`
 uses the same forget operation after stopping the runtime; it removes only this workspace's local
 state and leaves shared packs for `cache gc`.
-Dead-workspace age and automatic recovery of interrupted checkpoints remain follow-up work rather
-than guarantees of the current collector. All participating processes must use the updated locking
-protocol; stop older in-process clients before running this collector against their cache.
+Dead-workspace age remains follow-up work rather than a guarantee of the current collector. All
+participating processes must use the updated locking protocol; stop older in-process clients before
+running this collector against their cache.
 
 ## Current implementation layout
 
@@ -346,6 +346,11 @@ promising subsecond updates for large Bazel workspaces.
 Before mutation, the build owner streams the physical writable store into a temporary Xodus
 checkpoint beside the compatibility manifest (`manifest.json.rollback/`), while retaining the
 writer's existing Xodus lock. The checkpoint also preserves the prior manifest's bytes or absence.
+It syncs the Xodus backup before atomically marking it ready, recording whether the destination is
+the base store or the writable overlay delta. A process interrupted after that marker can restore
+the records and compatibility manifest on the next build for the same commit, before reading the
+compatibility manifest or replacing an overlay delta. Recovery keeps the checkpoint until both the
+restored writer and manifest are complete; a failed or interrupted restore can be repeated.
 An overlay checkpoints only its writable delta, never its inherited read-only base. Producer and
 plugin failures restore that checkpoint. Capture and restore copy at most 16 records per transaction;
 rollback deletes at most 256 keys per transaction, rather than committing each record individually. Rollback
@@ -353,8 +358,8 @@ and close failures are suppressed onto the original failure rather than replacin
 builds and successful restores make the checkpoint's regular files writable (Xodus leaves
 completed logs read-only) and remove them without following symbolic links. Filesystem deletion
 errors retain their affected path and cause. A failed restore retains the checkpoint, without changing
-its file permissions. Subsequent builds reject the active/unfinished checkpoint before accepting even
-a fresh compatibility index.
+its file permissions. A checkpoint without a valid ready marker (including older or interrupted
+captures) remains intact and fails closed; it is never interpreted as a complete backup.
 The diagnostic `checkpoint` phase measures this record-copy capture separately from change
 detection and producers. `checkpoint-release` includes `checkpoint-backup-close` and
 `checkpoint-delete`.
@@ -362,10 +367,10 @@ detection and producers. `checkpoint-release` includes `checkpoint-backup-close`
 checkpoint; `store-close` measures closing the store after the build. When a prior overlay delta
 exists, `overlay-restore` measures unpacking it before `store-open`. These nested phases separate
 otherwise hidden costs within `store-build`; they do not change rollback semantics.
-This is recovery for mutable staging, not a crash-atomic transaction or an automatic crash-recovery
-service. Preserve retained checkpoints for investigation; removing only the checkpoint can expose
-partially restored staging as valid. Published generation manifests and immutable packs are not
-rewritten by this rollback.
+This is recovery for mutable staging after a process interruption, not a crash-atomic transaction
+or a power-loss guarantee. Preserve incomplete or failed checkpoints for investigation; removing
+only the checkpoint can expose partially restored staging as valid. Published generation manifests
+and immutable packs are not rewritten by this rollback.
 
 All clients and compatible forks read the same expanded, immutable Xodus base under
 `generations/<generation-id>/materialized/`. They open it through a read-only Xodus provider

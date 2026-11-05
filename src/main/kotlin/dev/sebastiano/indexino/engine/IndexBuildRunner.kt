@@ -589,8 +589,14 @@ internal class IndexBuildRunner(
                 "index phase=store-open state=completed durationMillis=" +
                     TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - storeOpenStart)
             )
-            BuildStoreCheckpoint(writableStore, resolver.resolveManifest(commit), progress).use {
-                checkpoint ->
+            val checkpoint =
+                BuildStoreCheckpoint(
+                    writableStore,
+                    resolver.resolveManifest(commit),
+                    progress,
+                    overlay = forkBase != null,
+                )
+            checkpoint.use { checkpoint ->
                 checkpoint.run {
                     val changes =
                         timedPhase("change-detection") {

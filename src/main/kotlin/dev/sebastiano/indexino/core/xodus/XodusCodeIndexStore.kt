@@ -11,6 +11,7 @@ import jetbrains.exodus.ArrayByteIterable
 import jetbrains.exodus.bindings.StringBinding
 import jetbrains.exodus.env.Environment
 import jetbrains.exodus.env.EnvironmentConfig
+import jetbrains.exodus.env.EnvironmentImpl
 import jetbrains.exodus.env.Environments
 import jetbrains.exodus.env.Store
 import jetbrains.exodus.env.StoreConfig
@@ -446,6 +447,13 @@ private constructor(
 
     override fun <T> transaction(block: () -> T): T =
         environment.computeInTransaction(TransactionalComputable { block() })
+
+    /**
+     * Persist a checkpoint before publishing its recovery marker without closing its environment.
+     */
+    fun flushAndSync() {
+        (environment as EnvironmentImpl).flushAndSync()
+    }
 
     override fun close() {
         environment.close()

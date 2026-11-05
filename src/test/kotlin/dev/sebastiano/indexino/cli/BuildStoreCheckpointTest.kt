@@ -75,7 +75,7 @@ class BuildStoreCheckpointTest {
             try {
                 assumeTrue(!Files.isWritable(checkpoint.directory))
                 val failure = assertFailsWith<FileSystemException> { checkpoint.close() }
-                assertEquals(checkpoint.directory.resolve("records").toString(), failure.file)
+                assertTrue(Path.of(failure.file).startsWith(checkpoint.directory))
                 assertTrue(checkpoint.directory.exists())
             } finally {
                 Files.setPosixFilePermissions(
@@ -288,6 +288,102 @@ class BuildStoreCheckpointTest {
         } finally {
             store.close()
         }
+    }
+
+    @Test
+    fun `interrupted build restores its checkpoint before the next build`(@TempDir root: Path) {
+        val manifest = root.resolve("manifest.json").also { it.writeText("previous manifest") }
+        val key = CodeIndexKey.file("Original.kt", "hash")
+        val original = FileHashRecord("Original.kt", "before")
+        XodusCodeIndexStore.open(root.resolve("base.xodus")).use { it.put(key, original) }
+        val output = root.resolve("interrupted.log")
+        val process =
+            ProcessBuilder(
+                    Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+                    "-cp",
+                    System.getProperty("java.class.path"),
+                    BuildStoreCheckpointInterruptedProbe::class.java.name,
+                    manifest.toString(),
+                    root.resolve("base.xodus").toString(),
+                )
+                .redirectErrorStream(true)
+                .redirectOutput(output.toFile())
+                .start()
+        try {
+            assertTrue(process.waitFor(60, TimeUnit.SECONDS), "Interrupted probe timed out")
+            assertEquals(0, process.exitValue(), output.readText().takeLast(4000))
+        } finally {
+            if (process.isAlive) process.destroyForcibly().waitFor()
+        }
+
+        BuildStoreCheckpoint.requireRecovered(manifest)
+        assertEquals("previous manifest", manifest.readText())
+        XodusCodeIndexStore.open(root.resolve("base.xodus")).use { store ->
+            assertEquals(original, store.get(key))
+            assertEquals(null, store.get(CodeIndexKey.file("Added.kt", "hash")))
+        }
+        assertFalse(root.resolve("manifest.json.rollback").exists())
+    }
+
+    @Test
+    fun `interrupted overlay restores its delta without changing the base`(@TempDir root: Path) {
+        val manifest = root.resolve("index/commit-1/manifest.json")
+        Files.createDirectories(manifest.parent)
+        manifest.writeText("previous manifest")
+        val base = root.resolve("index/commit-1/base.xodus")
+        val delta = root.resolve("overlay-build/commit-1/delta")
+        val key = CodeIndexKey.file("Original.kt", "hash")
+        val original = FileHashRecord("Original.kt", "before")
+        val baseRecord = FileHashRecord("Original.kt", "base")
+        XodusCodeIndexStore.open(base).use { it.put(key, baseRecord) }
+        XodusCodeIndexStore.open(delta).use { it.put(key, original) }
+        val output = root.resolve("interrupted-overlay.log")
+        val process =
+            ProcessBuilder(
+                    Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+                    "-cp",
+                    System.getProperty("java.class.path"),
+                    BuildStoreCheckpointInterruptedProbe::class.java.name,
+                    manifest.toString(),
+                    delta.toString(),
+                )
+                .redirectErrorStream(true)
+                .redirectOutput(output.toFile())
+                .start()
+        try {
+            assertTrue(process.waitFor(60, TimeUnit.SECONDS), "Overlay probe timed out")
+            assertEquals(0, process.exitValue(), output.readText().takeLast(4000))
+        } finally {
+            if (process.isAlive) process.destroyForcibly().waitFor()
+        }
+
+        BuildStoreCheckpoint.requireRecovered(manifest)
+        assertEquals("previous manifest", manifest.readText())
+        XodusCodeIndexStore.open(base).use { assertEquals(baseRecord, it.get(key)) }
+        XodusCodeIndexStore.open(delta).use { store ->
+            assertEquals(original, store.get(key))
+            assertEquals(null, store.get(CodeIndexKey.file("Added.kt", "hash")))
+        }
+        assertFalse(manifest.resolveSibling("manifest.json.rollback").exists())
+    }
+}
+
+internal object BuildStoreCheckpointInterruptedProbe {
+    @JvmStatic
+    fun main(args: Array<String>) {
+        val manifest = Path.of(args[0])
+        val storePath = Path.of(args[1])
+        val store = XodusCodeIndexStore.open(storePath)
+        BuildStoreCheckpoint(store, manifest, overlay = storePath.fileName.toString() == "delta")
+            .run {
+                store.put(
+                    CodeIndexKey.file("Original.kt", "hash"),
+                    FileHashRecord("Original.kt", "partial"),
+                )
+                store.put(CodeIndexKey.file("Added.kt", "hash"), FileHashRecord("Added.kt", "new"))
+                manifest.writeText("partial manifest")
+                Runtime.getRuntime().halt(0)
+            }
     }
 }
 
