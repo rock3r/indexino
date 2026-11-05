@@ -747,11 +747,43 @@ internal class AutoRefreshController(
         }
     }
 
-    private fun discoverSourceRoots(root: Path): Set<Path> =
-        discoverDirectories(root, MAX_MODULE_DISCOVERY_DEPTH).filterTo(linkedSetOf()) { directory ->
-            directory.fileName.toString() in SOURCE_ROOT_NAMES &&
-                directory.parent?.parent?.fileName?.toString() == "src"
+    private fun discoverSourceRoots(root: Path): Set<Path> = buildSet {
+        runCatching {
+            Files.walkFileTree(
+                root,
+                emptySet(),
+                MAX_MODULE_DISCOVERY_DEPTH,
+                object : SimpleFileVisitor<Path>() {
+                    override fun preVisitDirectory(
+                        directory: Path,
+                        attributes: BasicFileAttributes,
+                    ): FileVisitResult {
+                        if (excluded(directory)) return FileVisitResult.SKIP_SUBTREE
+                        val name = directory.fileName.toString()
+                        val parent = directory.parent
+                        if (
+                            name in SOURCE_ROOT_NAMES &&
+                                parent?.parent?.fileName?.toString() == "src"
+                        ) {
+                            add(directory)
+                        }
+                        // A new root requires src/<source set>/<source type>. No descendant
+                        // of this directory can fit in the remaining discovery depth otherwise.
+                        val steps =
+                            when {
+                                name == "src" -> 2
+                                parent?.fileName?.toString() == "src" -> 1
+                                else -> 3
+                            }
+                        val depth = directory.nameCount - root.nameCount
+                        return if (depth + steps > MAX_MODULE_DISCOVERY_DEPTH)
+                            FileVisitResult.SKIP_SUBTREE
+                        else FileVisitResult.CONTINUE
+                    }
+                },
+            )
         }
+    }
 
     private fun discoverDirectories(root: Path, maxDepth: Int = Int.MAX_VALUE): Set<Path> =
         buildSet {

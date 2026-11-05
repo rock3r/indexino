@@ -147,6 +147,13 @@ retain their existing coverage. On four guarded matched explicit full-refresh ed
 same generation and provenance. Median registration fell from 2,767 to 2,400 ms and median
 end-to-end refresh from 14,952 to 14,580.5 ms. This shared-host diagnostic is not a bound on
 full-scope time or a measurement of save-to-query incremental latency.
+Empty source-root discovery skips directory branches where `src/<source set>/<source type>` cannot
+fit inside its existing depth limit; it still walks every discovered source root fully to watch
+empty descendants. Four more guarded, alternating full-refresh edit pairs against that exact
+merged baseline read all 65,149 sources and matched generations, provenance, changes, pinned
+snapshots, and query semantics. Median registration fell from 2,458 to 1,718.5 ms and median
+refresh from 14,541.5 to 13,851 ms. These are shared-host full-scope measurements, not a
+save-to-query latency measurement or permission to infer unchanged files from watcher silence.
 The stream uses NoDefer to deliver the first event after a quiet period without waiting for the
 100 ms native coalescing window; later events still coalesce, and the controller's 150 ms debounce
 still applies before a refresh starts.
