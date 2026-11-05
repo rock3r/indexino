@@ -28,6 +28,22 @@ class FileHashProducerTest {
     }
 
     @Test
+    fun `content hashes retain the persisted lowercase SHA-256 encoding`() {
+        assertEquals(
+            "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            FileHashProducer.contentHash(byteArrayOf()),
+        )
+        assertEquals(
+            "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            FileHashProducer.contentHash("abc"),
+        )
+        assertEquals(
+            "sha256:89273d2f70b93285bb7ddb4bcee86a5347ca7159352e3cbdd20c23e9d1e507d3",
+            FileHashProducer.contentHash(byteArrayOf(0, 0x7f, 0x80.toByte(), 0xff.toByte())),
+        )
+    }
+
+    @Test
     fun `writes file hash records for each source file`() {
         val workspace = Path("src/test/resources/fixtures/bazel")
         val context =
