@@ -537,6 +537,17 @@ This sequential shared-host comparison is evidence for this corpus and path, not
 bound or a watcher-refresh claim. A stalled, uninterruptible filesystem read may delay failure or
 stop while the capture waits for all workers to exit; the refresh never retires with live readers.
 
+A further matched eight-edit run on the same audited disposable corpus cached missing `.git`
+markers only during each source-origin resolution. All 65,149 source reads per refresh, public
+queries, pinned snapshots, nine generation IDs, aggregate hashes and origin states matched the
+four-reader baseline; the original, source and disposable trees again passed their 433,534-entry
+post-audits. Median source-resolution time fell from 1,566 to 1,189 ms (all eight steps improved)
+and median manual full-scope refresh from 8,842 to 8,405 ms; topology and capture medians changed
+by only −15 and −4 ms. These shared-host timings do not measure save-to-query watcher latency or
+establish a worst-case full-scope bound. A separate experiment disabling automatic index refresh
+for full-origin Git diffs preserved the same nine generations, but did not improve measured origin
+resolution; it was not shipped despite a faster standalone Git command.
+
 After changing default store-interface methods, rebuild nonincrementally before packaging a
 measurement artifact. An observed incremental Kotlin build retained an older delegated snapshot
 wrapper and silently used the scanning defaults. The shared-snapshot indexed-lookup regression
