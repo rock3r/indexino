@@ -54,9 +54,10 @@ indexino cache forget --project /path/to/repo
 ```
 
 Not an agent-query API. Reclamation policy: [INDEX-STORAGE.md](INDEX-STORAGE.md).
-`cache gc` reports reclaimed packs, pack bytes, expanded-generation directories, and abandoned
-client-ref directories; it leaves mutable staging intact and defers reclamation while clients are
-active. Unreferenced packs are retained for 30 days from their first recorded GC observation;
+`cache gc` reports reclaimed packs, pack bytes, expanded-generation directories, abandoned
+client-ref directories, and retired writer staging. It defers reclamation while clients are active
+and preserves staging with unfinished rollback checkpoints. Unreferenced packs are retained for
+30 days from their first recorded GC observation;
 when logical cache-file bytes exceed 20 GiB, the oldest unreferenced packs can be evicted after
 24 hours of recorded grace. Referenced generations remain protected even over quota. Expanded
 stores and abandoned client refs can be reclaimed earlier.

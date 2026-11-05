@@ -79,12 +79,12 @@ internal object CacheMaintenance {
             collectGarbage(cacheRoot, nowEpochMillis, maxCacheBytes)
         }
             ?: "reclaimedPacks=0 reclaimedBytes=0 reclaimedMaterializations=0 " +
-                "reclaimedClientRefs=0 activeRuntime=true"
+                "reclaimedClientRefs=0 reclaimedStaging=0 activeRuntime=true"
 
     private fun collectGarbage(cacheRoot: Path, nowEpochMillis: Long, maxCacheBytes: Long): String {
         if (hasLiveRuntime(cacheRoot))
             return "reclaimedPacks=0 reclaimedBytes=0 reclaimedMaterializations=0 " +
-                "reclaimedClientRefs=0 activeRuntime=true"
+                "reclaimedClientRefs=0 reclaimedStaging=0 activeRuntime=true"
         val retainedGenerations = retainedGenerations(cacheRoot)
         val referenced =
             referencedPackKeys(cacheRoot).toMutableSet().apply {
@@ -133,9 +133,10 @@ internal object CacheMaintenance {
         val reclaimedMaterializations =
             retainedGenerations?.let { reclaimObsoleteMaterializations(cacheRoot, it) } ?: 0
         val reclaimedClientRefs = reclaimAbandonedClientRefs(cacheRoot)
+        val reclaimedStaging = reclaimOldWriterStaging(cacheRoot, nowEpochMillis)
         return "reclaimedPacks=$reclaimedPacks reclaimedBytes=$reclaimedBytes " +
             "reclaimedMaterializations=$reclaimedMaterializations " +
-            "reclaimedClientRefs=$reclaimedClientRefs"
+            "reclaimedClientRefs=$reclaimedClientRefs reclaimedStaging=$reclaimedStaging"
     }
 
     private fun selectPackEvictions(
@@ -412,6 +413,33 @@ internal object CacheMaintenance {
         return reclaimed
     }
 
+    private fun reclaimOldWriterStaging(cacheRoot: Path, nowEpochMillis: Long): Int {
+        val workspaces = cacheRoot.resolve("workspaces")
+        var reclaimed = 0
+        WorkspaceRegistryStore(cacheRoot).entries().forEach { entry ->
+            if (
+                entry.lastUsedEpochMillis < 0 ||
+                    nowEpochMillis < entry.lastUsedEpochMillis ||
+                    nowEpochMillis - entry.lastUsedEpochMillis < packRetentionMillis
+            )
+                return@forEach
+            val workspace = workspaces.resolve(entry.workspaceId).normalize()
+            if (!workspace.startsWith(workspaces)) return@forEach
+            if (!Files.isDirectory(workspace, LinkOption.NOFOLLOW_LINKS)) return@forEach
+            val staging = workspace.resolve("staging/in-process-writer")
+            if (!Files.isDirectory(staging, LinkOption.NOFOLLOW_LINKS)) return@forEach
+            // A rollback checkpoint may be the only way to recover an interrupted writer.
+            val needsRecovery =
+                Files.walk(staging).use { paths ->
+                    paths.anyMatch { it.fileName.toString().endsWith(".rollback") }
+                }
+            if (needsRecovery) return@forEach
+            deleteTree(staging)
+            reclaimed++
+        }
+        return reclaimed
+    }
+
     private const val CONTENT_KEY_LENGTH = 64
     private const val FORGET_SHUTDOWN_WAIT_ATTEMPTS = 250
     private const val FORGET_SHUTDOWN_WAIT_MILLIS = 20L
@@ -428,7 +456,13 @@ internal object CacheMaintenance {
     private fun deleteTree(root: Path) {
         if (!Files.exists(root)) return
         Files.walk(root).use { paths ->
-            paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+            paths.sorted(Comparator.reverseOrder()).forEach { path ->
+                // Closed Xodus staging logs can be read-only on Windows; never follow links.
+                if (Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+                    path.toFile().setWritable(true)
+                }
+                Files.deleteIfExists(path)
+            }
         }
     }
 }

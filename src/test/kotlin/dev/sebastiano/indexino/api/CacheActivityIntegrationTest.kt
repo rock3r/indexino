@@ -3,6 +3,7 @@ package dev.sebastiano.indexino.api
 import dev.sebastiano.indexino.cli.CacheMaintenance
 import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
+import dev.sebastiano.indexino.core.cache.WorkspaceRegistryStore
 import dev.sebastiano.indexino.model.PluginId
 import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.SymbolQuery
@@ -197,6 +198,50 @@ internal class CacheActivityIntegrationTest {
                     assertTrue(
                         snapshot
                             .findSymbols(SymbolQuery.named("Replacement"), QueryOptions.page(10))
+                            .items
+                            .isEmpty()
+                    )
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `refresh reconstructs writer staging after GC retires the old copy`() = runBlocking {
+        withIndex { first, workspace, cache ->
+            val request = RefreshRequest.forScope(IndexScope.gradle(":").includingDependencies())
+            first.refresh(request).await()
+            val workspaceId = InProcessCacheLayout.workspaceId(workspace)
+            val staging = InProcessCacheLayout.writerRoot(workspace)
+            assertTrue(Files.isDirectory(staging))
+            val lastUsed =
+                checkNotNull(WorkspaceRegistryStore(cache).entry(workspaceId)).lastUsedEpochMillis
+            val aged = lastUsed + Duration.ofDays(30).toMillis()
+            val active = CacheMaintenance.gc(cache, nowEpochMillis = aged)
+            assertTrue(active.contains("activeRuntime=true"), active)
+            assertTrue(Files.exists(staging), active)
+            first.close()
+            val report = CacheMaintenance.gc(cache, nowEpochMillis = aged)
+            assertFalse(Files.exists(staging), report)
+
+            Files.writeString(workspace.resolve("src/main/kotlin/Marker.kt"), "class Replacement")
+            val configuration =
+                IndexinoConfiguration.forWorkspace(workspace)
+                    .withRuntimeAttach(RuntimeAttachMode.IN_PROCESS)
+                    .withAutoRefresh(AutoRefreshMode.DISABLED)
+            Indexino.connect(configuration).use { reopened ->
+                reopened.refresh(request).await()
+                reopened.snapshot().use { snapshot ->
+                    assertEquals(
+                        listOf("Replacement"),
+                        snapshot
+                            .findSymbols(SymbolQuery.named("Replacement"), QueryOptions.page(10))
+                            .items
+                            .map { it.name },
+                    )
+                    assertTrue(
+                        snapshot
+                            .findSymbols(SymbolQuery.named("Marker"), QueryOptions.page(10))
                             .items
                             .isEmpty()
                     )
