@@ -127,7 +127,7 @@ internal object ResourceMetadata {
         val existing = sourcePaths.toSet()
         return sourcePaths
             .filter { path ->
-                isResourceXml(path) || path.endsWith(".kt") || path.endsWith(".java")
+                path.endsWith(".kt") || path.endsWith(".java") || isResourceXml(path)
             }
             .flatMap(::metadataPathsForResource)
             .distinct()

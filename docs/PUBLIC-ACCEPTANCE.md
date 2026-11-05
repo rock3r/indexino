@@ -548,6 +548,15 @@ establish a worst-case full-scope bound. A separate experiment disabling automat
 for full-origin Git diffs preserved the same nine generations, but did not improve measured origin
 resolution; it was not shipped despite a faster standalone Git command.
 
+A subsequent matched run on that restored corpus first checked Kotlin/Java suffixes before
+running the resource-path regex during source-resolution metadata discovery. All eight
+source-resolution steps improved, with a median of 1,189 to 1,003 ms. Whole manual refresh
+medians were 8,405 and 8,303 ms, but only five of eight paired refreshes improved; other phases
+still varied. The 65,149 reads per refresh, public queries, pinned snapshots, nine generation IDs,
+aggregate hashes, origin states and 433,534-entry three-root post-audits all matched or passed.
+This isolates a cheaper metadata filter without establishing a repeatable whole-refresh gain or
+changing watcher save-to-query behavior.
+
 After changing default store-interface methods, rebuild nonincrementally before packaging a
 measurement artifact. An observed incremental Kotlin build retained an older delegated snapshot
 wrapper and silently used the scanning defaults. The shared-snapshot indexed-lookup regression
