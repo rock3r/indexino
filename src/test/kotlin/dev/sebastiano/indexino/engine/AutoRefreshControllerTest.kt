@@ -1562,6 +1562,46 @@ class AutoRefreshControllerTest {
     }
 
     @Test
+    fun `recursive native coverage needs only the workspace root for unseen sources`() {
+        val root = Files.createTempDirectory("indexino-native-root-watch-")
+        val workspace = Files.createDirectories(root.resolve("workspace"))
+        val sourceRoot = Files.createDirectories(workspace.resolve("module/src/commonMain/kotlin"))
+        val request = RefreshRequest.forScope(IndexScope.gradle(":module"))
+        val refreshes = AtomicInteger()
+        val native =
+            object : NativeWorkspaceWatcher {
+                @Volatile override var isAlive = true
+
+                override fun close() {
+                    isAlive = false
+                }
+            }
+        val controller =
+            AutoRefreshController(
+                workspace,
+                AutoRefreshMode.ENABLED,
+                refresh = { refreshes.incrementAndGet() },
+                nativeWorkspaceWatcher = { _, _, _ -> native },
+            )
+        try {
+            controller.register(request, sources = emptyList(), topologyRoots = listOf(workspace))
+            assertEquals(setOf(workspace), controller.directoriesForTests(request))
+            controller.onPathChangedForTests(sourceRoot.resolve("New.kt"))
+            awaitRefresh(refreshes)
+            native.isAlive = false
+            controller.register(request, sources = emptyList(), topologyRoots = listOf(workspace))
+            assertTrue(sourceRoot in controller.directoriesForTests(request))
+            assertEquals(
+                SnapshotFreshness.UNKNOWN,
+                controller.freshness(FreshnessPolicy.AWAIT_CURRENT),
+            )
+        } finally {
+            controller.close()
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `refreshed closure stops watching removed external roots`() {
         val root = Files.createTempDirectory(Path.of("/tmp"), "indexino-watch-replace-")
         val workspace = root.resolve("workspace")
