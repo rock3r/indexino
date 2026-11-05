@@ -524,6 +524,19 @@ matched across the two caches; physical pack keys need not match. Median source-
 improvement, not a statistically isolated or guaranteed latency reduction. Git origin resolution
 and Bazel topology still retain whole-scope costs.
 
+A following four-reader full-capture run on the same restored disposable copy used a separately
+empty cache and the same eight edits. All refreshes still read 65,149 sources; all public queries,
+pinned snapshots, and 781 selected source restorations passed. The protected original, source
+baseline, and disposable copy passed 433,534-entry physical and semantic post-audits. All nine
+generation IDs, aggregate source hashes, and origin states matched the sequential `HexFormat`
+run. On steps 2–8, median capture fell from 4,836 to 1,643 ms and median whole refresh from
+12,034 to 8,836 ms; every matched step improved. Topology medians were 1,374 and 1,399 ms, and
+origin-resolution medians 3,993 and 3,809 ms. Pre-run admissions saw load 3.16–3.71, normal
+pressure, zero swap, more than 35 GiB reclaimable RAM, 74 GiB free disk and no ATC contention.
+This sequential shared-host comparison is evidence for this corpus and path, not a worst-case
+bound or a watcher-refresh claim. A stalled, uninterruptible filesystem read may delay failure or
+stop while the capture waits for all workers to exit; the refresh never retires with live readers.
+
 After changing default store-interface methods, rebuild nonincrementally before packaging a
 measurement artifact. An observed incremental Kotlin build retained an older delegated snapshot
 wrapper and silently used the scanning defaults. The shared-snapshot indexed-lookup regression

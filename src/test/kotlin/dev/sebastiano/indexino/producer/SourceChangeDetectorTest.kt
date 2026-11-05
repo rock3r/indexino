@@ -2,7 +2,13 @@ package dev.sebastiano.indexino.producer
 
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.producer.xml.ResourceMetadata
+import java.nio.file.NoSuchFileException
 import java.nio.file.Path
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.writeText
@@ -13,6 +19,111 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class SourceChangeDetectorTest {
+    @Test
+    fun `full capture reads independent sources concurrently without changing source order`() {
+        val root = Path.of("first")
+        val other = Path.of("second")
+        val sources =
+            (0 until 68).map { IndexedSource("first", root, "$it.kt") } +
+                IndexedSource("second", other, "0.kt")
+        val readers = CountDownLatch(4)
+        val snapshot =
+            SourceContentSnapshot.capture(
+                sources,
+                readBytes = { path ->
+                    readers.countDown()
+                    assertTrue(readers.await(3, TimeUnit.SECONDS), "Full capture serialized reads")
+                    "${path.parent}/${path.fileName}".toByteArray()
+                },
+            )
+
+        assertEquals(sources, snapshot.capturedSources)
+        assertEquals(sources, snapshot.hashes().keys.toList())
+        assertEquals("first/0.kt", snapshot.content(sources.first()))
+        assertEquals("first/33.kt", snapshot.content(sources[33]))
+        assertEquals("second/0.kt", snapshot.content(sources.last()))
+        assertNotEquals(snapshot.contentHash(sources.first()), snapshot.contentHash(sources.last()))
+    }
+
+    @Test
+    fun `failed full capture propagates the missing file and stops other readers`() {
+        val sources = (0 until 68).map { IndexedSource.workspace(Path.of("root"), "$it.kt") }
+        val readers = CountDownLatch(4)
+        val stopped = CountDownLatch(3)
+        val interrupted = AtomicInteger()
+        val neverReleased = CountDownLatch(1)
+
+        assertFailsWith<NoSuchFileException> {
+            SourceContentSnapshot.capture(
+                sources,
+                readBytes = { path ->
+                    readers.countDown()
+                    assertTrue(readers.await(3, TimeUnit.SECONDS))
+                    if (path.fileName.toString() == "0.kt")
+                        throw NoSuchFileException(path.toString())
+                    try {
+                        assertTrue(
+                            neverReleased.await(10, TimeUnit.SECONDS),
+                            "Reader was not cancelled",
+                        )
+                    } catch (error: InterruptedException) {
+                        interrupted.incrementAndGet()
+                        throw error
+                    } finally {
+                        stopped.countDown()
+                    }
+                    byteArrayOf()
+                },
+            )
+        }
+        assertEquals(0, stopped.count, "Capture returned while readers were still running")
+        assertEquals(3, interrupted.get(), "Sibling readers were not interrupted")
+    }
+
+    @Test
+    fun `interrupted full capture stops its readers before returning`() {
+        val sources = (0 until 68).map { IndexedSource.workspace(Path.of("root"), "$it.kt") }
+        val readers = CountDownLatch(4)
+        val stopped = CountDownLatch(4)
+        val release = CountDownLatch(1)
+        val failure = AtomicReference<Throwable>()
+        val interruptedOwner = AtomicBoolean()
+        val owner = Thread {
+            try {
+                SourceContentSnapshot.capture(
+                    sources,
+                    readBytes = {
+                        readers.countDown()
+                        try {
+                            release.await()
+                        } finally {
+                            stopped.countDown()
+                        }
+                        byteArrayOf()
+                    },
+                )
+            } catch (error: Throwable) {
+                failure.set(error)
+                interruptedOwner.set(Thread.currentThread().isInterrupted)
+            }
+        }
+        owner.isDaemon = true
+        owner.start()
+        try {
+            assertTrue(readers.await(3, TimeUnit.SECONDS))
+            owner.interrupt()
+            owner.join(3_000)
+            assertTrue(!owner.isAlive, "Interrupted capture did not finish")
+            assertTrue(failure.get() is InterruptedException)
+            assertTrue(interruptedOwner.get())
+            assertEquals(0, stopped.count, "Capture returned while readers were still running")
+        } finally {
+            owner.interrupt()
+            release.countDown()
+            owner.join(3_000)
+        }
+    }
+
     @Test
     fun `watcher hash inventory detects only edited paths and preserves origin identity`() {
         val first = createTempDirectory("indexino-hint-diff-a-")
