@@ -13,6 +13,7 @@ internal object SourceOriginResolver {
     fun resolve(workspace: Path, sourceFiles: List<String>): List<ResolvedSourceOrigin> {
         val canonicalWorkspace = workspace.toRealPath()
         val gitRoots = mutableMapOf<Path, Path?>()
+        val withoutGitMarker = mutableSetOf<Path>()
         val origins = linkedMapOf<Path, MutableList<String>>()
         sourceFiles.forEach { sourceFile ->
             val sourcePath = canonicalWorkspace.resolve(sourceFile).normalize()
@@ -22,7 +23,7 @@ internal object SourceOriginResolver {
             if (Files.isDirectory(sourcePath)) return@forEach
             val sourceDirectory = sourcePath.parent
             val gitRoot =
-                cachedGitRoot(sourceDirectory, gitRoots)
+                cachedGitRoot(sourceDirectory, gitRoots, withoutGitMarker)
                     ?: gitRoots.getOrPut(sourceDirectory) { findGitRoot(sourceDirectory) }
             val originRoot =
                 gitRoot?.takeIf { it.startsWith(canonicalWorkspace) } ?: canonicalWorkspace
@@ -49,6 +50,7 @@ internal object SourceOriginResolver {
     ): List<ResolvedSourceOrigin> {
         val canonicalMountRoot = mountRoot.toRealPath()
         val gitRoots = mutableMapOf<Path, Path?>()
+        val withoutGitMarker = mutableSetOf<Path>()
         val origins = linkedMapOf<Path, MutableList<String>>()
         sourceFiles.forEach { sourceFile ->
             val sourcePath = canonicalMountRoot.resolve(sourceFile).normalize()
@@ -58,7 +60,7 @@ internal object SourceOriginResolver {
             if (Files.isDirectory(sourcePath)) return@forEach
             val sourceDirectory = sourcePath.parent
             val gitRoot =
-                cachedGitRoot(sourceDirectory, gitRoots)
+                cachedGitRoot(sourceDirectory, gitRoots, withoutGitMarker)
                     ?: gitRoots.getOrPut(sourceDirectory) { findGitRoot(sourceDirectory) }
             val originRoot =
                 gitRoot?.takeIf { it.startsWith(canonicalMountRoot) && it != canonicalMountRoot }
@@ -79,7 +81,11 @@ internal object SourceOriginResolver {
             .sortedBy { it.id }
     }
 
-    private fun cachedGitRoot(directory: Path, gitRoots: Map<Path, Path?>): Path? {
+    private fun cachedGitRoot(
+        directory: Path,
+        gitRoots: Map<Path, Path?>,
+        withoutGitMarker: MutableSet<Path>,
+    ): Path? {
         val cachedRoot =
             gitRoots.values
                 .filterNotNull()
@@ -87,7 +93,10 @@ internal object SourceOriginResolver {
                 .maxByOrNull(Path::getNameCount) ?: return null
         var ancestor = directory
         while (ancestor != cachedRoot) {
-            if (Files.exists(ancestor.resolve(".git"))) return null
+            if (ancestor !in withoutGitMarker) {
+                if (Files.exists(ancestor.resolve(".git"))) return null
+                withoutGitMarker.add(ancestor)
+            }
             ancestor = ancestor.parent ?: return null
         }
         return cachedRoot

@@ -235,6 +235,9 @@ passes `-c diff.autoRefreshIndex=false`. A clean file restored after an edit oth
 stat-refresh every index entry despite the literal one-file pathspec. Full-origin diffs, `status`,
 the original index, and before/after Git stamps keep their existing behavior. The source content
 hash and publication checks still decide whether a generation can be reused or published.
+Source-origin discovery remembers directories without a `.git` marker only within one resolution;
+unseen nested directories are still checked, and a later refresh starts with an empty memo. The
+resolved origin and source inventories retain their existing ordering and full-scope discovery.
 For a captured source snapshot, each origin computes its source fingerprint alongside its Git
 state, then joins both before constructing provenance. Callers without a captured snapshot retain
 sequential reads so a live source read does not race with its Git-state observation.
