@@ -206,6 +206,11 @@ source; if an analyzer needs inherited source text, that read must match the inh
 refresh fails for full reconciliation. Change detection, analyzers, the aggregate source hash, and
 origin source fingerprints use this logical immutable snapshot. A read or refresh may fail and
 retry, but no generation may publish facts beside a hash from a different read of the file.
+Full capture of at least 64 sources without inherited hashes uses up to four readers, assembling
+their results in source order; each hash comes from the captured bytes. On failure or stop, it
+interrupts sibling readers and waits for them to exit before the refresh retires. A filesystem read
+that does not respond to interruption can therefore delay error reporting, as it can in a serial
+capture. Watcher-hinted captures retain their sequential inheritance path.
 
 ### Reclamation
 
