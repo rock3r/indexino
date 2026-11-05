@@ -343,8 +343,10 @@ cumulative delta materialization has a cost.
 For a changed captured source with unchanged topology and the exact prior origin IDs, origin
 provenance may resolve concurrently with staging-store mutation. The full origin result joins
 inside the checkpoint before writing the compatibility manifest; failure restores the previous
-store and manifest. Unchanged sources, missing or source-less origins, and incompatible generations
-retain sequential provenance checks before any reuse decision.
+store and manifest. This also applies to an explicit full refresh only after it captures all
+discovered source bytes; it does not overlap Git-state reads with source capture. Unchanged sources,
+missing or source-less origins, and incompatible generations retain sequential provenance checks
+before any reuse decision.
 The Kotlin producer skips PSI environment initialization when no Kotlin source needs analysis, after
 performing any required cleanup for deleted Kotlin sources. Its diagnostic `kotlin-cleanup` phase
 measures writable-store record removal; `kotlin-parser` encloses parser initialization, both passes,

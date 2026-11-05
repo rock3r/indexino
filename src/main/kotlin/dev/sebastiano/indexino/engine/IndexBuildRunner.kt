@@ -215,13 +215,13 @@ internal class IndexBuildRunner(
                 ?.compatibilityManifest
         val sourceOriginIds = sources.map { it.originId }.distinct().sorted()
         val sourceRoots = sources.mapTo(linkedSetOf()) { it.originRoot }
-        // Only a known-source edit can skip the freshness decision while provenance is pending.
-        // Source-less mounts and implicit workspace origins may change the origin inventory.
+        // A full capture can build alongside provenance after all its source bytes are pinned.
+        // Source-less mounts and implicit workspace origins still require sequential resolution.
         val overlapOrigins =
-            inheritedSources != null &&
+            ((inheritedSources != null &&
                 inheritedOriginStates != null &&
                 recursiveWatchRoot != null &&
-                hintedPaths.isNotEmpty() &&
+                hintedPaths.isNotEmpty()) || (captureOriginStates && inheritedCount == 0)) &&
                 existingManifest != null &&
                 existingManifest.commit == commit &&
                 existingManifest.sourcesContentHash != previewHash &&

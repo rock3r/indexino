@@ -264,12 +264,13 @@ pipe. Failure cancels sibling reads; interruption cancels the resolution and wai
 Cleanup terminates observed descendants deepest-first while their parents can still reap them,
 then terminates and reaps Git before returning the permit. Git hooks are trusted local code;
 deliberately daemonized descendants that escape observation are not an OS-sandbox guarantee.
-On a watcher-hinted changed-source refresh with the same topology, origin inventory, applications,
-and current published generation, the store builds from the captured sources while origin
-provenance resolves. The build uses known origin IDs only for fact ownership; resolved provenance
-joins inside the rollback checkpoint before the compatibility manifest is written. An origin
-failure rolls back staging. Fresh/no-op, missing-origin, cold, and fork-reuse decisions still wait
-for origin resolution before building or publishing.
+On a watcher-hinted changed-source refresh, or a changed full-source capture, with the same
+topology, origin inventory, applications, and current published generation, the store builds from
+the already captured sources while origin provenance resolves. Full capture still reads every
+discovered source before this overlap begins. The build uses known origin IDs only for fact
+ownership; resolved provenance joins inside the rollback checkpoint before the compatibility
+manifest is written. An origin failure rolls back staging. Fresh/no-op, missing-origin, cold, and
+fork-reuse decisions still wait for origin resolution before building or publishing.
 The overlapped resolver has a dedicated build-owned blocking bridge, not a detached common-pool
 future. Its publication join is interruptible; the build's `finally` interrupts the resolver and
 joins actual worker termination even if the refresh owner was interrupted. The coordinator's
