@@ -199,6 +199,134 @@ class CacheMaintenanceTest {
     }
 
     @Test
+    fun `gc retires a missing workspace only after observed grace and resets on reappearance`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-missing-gc-")
+        val workspace = Files.createTempDirectory(Path.of("/tmp"), "indexino-missing-workspace-")
+        val id = InProcessCacheLayout.workspaceId(workspace)
+        val root = cacheRoot.resolve("workspaces/$id")
+        val pack = packPath(cacheRoot, "a".repeat(64))
+        WorkspaceGenerationManifestStore(cacheRoot, id)
+            .publish(
+                WorkspaceGenerationManifest(
+                    generation = "current",
+                    workspaceRevisionFingerprint = "current",
+                    originId = "workspace",
+                    revision = null,
+                    stateFingerprint = "current",
+                    packKeys = listOf(pack.fileName.toString()),
+                )
+            )
+        Files.createDirectories(pack.parent)
+        Files.writeString(pack, "shared")
+        val registry = WorkspaceRegistryStore(cacheRoot)
+        registry.upsert(id, workspace, null)
+        val firstMissing =
+            checkNotNull(registry.entry(id)).lastUsedEpochMillis + Duration.ofDays(30).toMillis()
+        val grace = Duration.ofDays(30).toMillis()
+        val registryPath = cacheRoot.resolve("registry/workspaces.json")
+        try {
+            Files.delete(workspace)
+            CacheMaintenance.gc(cacheRoot, nowEpochMillis = firstMissing)
+            assertTrue(Files.exists(root))
+            assertTrue(
+                Files.readString(registryPath).contains("\"missingSinceEpochMillis\":$firstMissing")
+            )
+            CacheMaintenance.gc(cacheRoot, nowEpochMillis = firstMissing + grace - 1)
+            assertTrue(Files.exists(root))
+
+            Files.createDirectories(workspace)
+            CacheMaintenance.gc(cacheRoot, nowEpochMillis = firstMissing + grace)
+            assertFalse(
+                Files.readString(registryPath).contains("\"missingSinceEpochMillis\":$firstMissing")
+            )
+            Files.delete(workspace)
+            CacheMaintenance.gc(cacheRoot, nowEpochMillis = firstMissing + grace + 1)
+            val expired =
+                CacheMaintenance.gc(cacheRoot, nowEpochMillis = firstMissing + grace * 2 + 1)
+            assertFalse(Files.exists(root), expired)
+            assertEquals(null, registry.entry(id))
+            assertTrue(Files.exists(pack), expired)
+            assertTrue(expired.contains("reclaimedWorkspaces=1"), expired)
+        } finally {
+            cacheRoot.toFile().deleteRecursively()
+            workspace.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `gc keeps missing fork bases and unfinished rollback checkpoints`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-missing-dependency-")
+        val base = Files.createTempDirectory(Path.of("/tmp"), "indexino-missing-base-")
+        val fork = Files.createTempDirectory(Path.of("/tmp"), "indexino-live-fork-")
+        val checkpointWorkspace = Files.createTempDirectory(Path.of("/tmp"), "indexino-checkpoint-")
+        val baseId = InProcessCacheLayout.workspaceId(base)
+        val forkId = InProcessCacheLayout.workspaceId(fork)
+        val checkpointId = InProcessCacheLayout.workspaceId(checkpointWorkspace)
+        val baseRoot = cacheRoot.resolve("workspaces/$baseId")
+        val checkpoint =
+            cacheRoot.resolve("workspaces/$checkpointId/staging/in-process-writer/state.rollback")
+        val pack = packPath(cacheRoot, "b".repeat(64))
+        val registry = WorkspaceRegistryStore(cacheRoot)
+        WorkspaceGenerationManifestStore(cacheRoot, baseId)
+            .publish(
+                WorkspaceGenerationManifest(
+                    generation = "base-old",
+                    workspaceRevisionFingerprint = "base",
+                    originId = "workspace",
+                    revision = null,
+                    stateFingerprint = "base",
+                    packKeys = listOf(pack.fileName.toString()),
+                )
+            )
+        WorkspaceGenerationManifestStore(cacheRoot, forkId)
+            .publish(
+                WorkspaceGenerationManifest(
+                    generation = "fork-current",
+                    workspaceRevisionFingerprint = "fork",
+                    originId = "workspace",
+                    revision = null,
+                    stateFingerprint = "fork",
+                    packKeys = emptyList(),
+                    representation = "overlay",
+                    baseWorkspaceId = baseId,
+                    baseGeneration = "base-old",
+                )
+            )
+        Files.createDirectories(pack.parent)
+        Files.writeString(pack, "base facts")
+        Files.createDirectories(checkpoint)
+        Files.writeString(checkpoint.resolve("state"), "recoverable")
+        registry.upsert(baseId, base, null)
+        registry.upsert(checkpointId, checkpointWorkspace, null)
+        val observed =
+            maxOf(
+                checkNotNull(registry.entry(baseId)).lastUsedEpochMillis,
+                checkNotNull(registry.entry(checkpointId)).lastUsedEpochMillis,
+            ) + Duration.ofDays(30).toMillis()
+        try {
+            Files.delete(base)
+            Files.delete(checkpointWorkspace)
+            CacheMaintenance.gc(cacheRoot, nowEpochMillis = observed)
+            val report =
+                CacheMaintenance.gc(
+                    cacheRoot,
+                    nowEpochMillis = observed + Duration.ofDays(30).toMillis(),
+                )
+            assertTrue(report.contains("reclaimedWorkspaces=0"), report)
+            assertTrue(Files.exists(baseRoot), report)
+            assertTrue(Files.exists(pack), report)
+            assertTrue(Files.exists(checkpoint.resolve("state")), report)
+            assertTrue(registry.entry(baseId) != null)
+            assertTrue(registry.entry(checkpointId) != null)
+        } finally {
+            cacheRoot.toFile().deleteRecursively()
+            base.toFile().deleteRecursively()
+            fork.toFile().deleteRecursively()
+            checkpointWorkspace.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `quota evicts only an observed old unreferenced pack after minimum grace`() {
         val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-cache-quota-")
         val protectedKey = "c".repeat(64)

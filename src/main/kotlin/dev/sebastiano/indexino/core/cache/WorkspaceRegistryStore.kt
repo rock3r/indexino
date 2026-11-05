@@ -14,6 +14,7 @@ internal data class WorkspaceRegistryEntry(
     val path: String,
     val gitCommonDir: String? = null,
     val lastUsedEpochMillis: Long = Instant.now().toEpochMilli(),
+    val missingSinceEpochMillis: Long? = null,
 )
 
 @Serializable
@@ -53,6 +54,16 @@ internal class WorkspaceRegistryStore(private val cacheRoot: Path) {
         val current = read()
         if (workspaceId !in current.workspaces) return
         write(current.copy(workspaces = current.workspaces - workspaceId))
+    }
+
+    fun updateMissingSince(observations: Map<String, Long?>) {
+        val current = read()
+        val updated =
+            current.workspaces.mapValues { (id, entry) ->
+                if (id in observations) entry.copy(missingSinceEpochMillis = observations[id])
+                else entry
+            }
+        if (updated != current.workspaces) write(current.copy(workspaces = updated))
     }
 
     fun entries(): Collection<WorkspaceRegistryEntry> = read().workspaces.values

@@ -79,12 +79,12 @@ internal object CacheMaintenance {
             collectGarbage(cacheRoot, nowEpochMillis, maxCacheBytes)
         }
             ?: "reclaimedPacks=0 reclaimedBytes=0 reclaimedMaterializations=0 " +
-                "reclaimedClientRefs=0 reclaimedStaging=0 activeRuntime=true"
+                "reclaimedClientRefs=0 reclaimedStaging=0 reclaimedWorkspaces=0 activeRuntime=true"
 
     private fun collectGarbage(cacheRoot: Path, nowEpochMillis: Long, maxCacheBytes: Long): String {
         if (hasLiveRuntime(cacheRoot))
             return "reclaimedPacks=0 reclaimedBytes=0 reclaimedMaterializations=0 " +
-                "reclaimedClientRefs=0 reclaimedStaging=0 activeRuntime=true"
+                "reclaimedClientRefs=0 reclaimedStaging=0 reclaimedWorkspaces=0 activeRuntime=true"
         val retainedGenerations = retainedGenerations(cacheRoot)
         val referenced =
             referencedPackKeys(cacheRoot).toMutableSet().apply {
@@ -134,9 +134,11 @@ internal object CacheMaintenance {
             retainedGenerations?.let { reclaimObsoleteMaterializations(cacheRoot, it) } ?: 0
         val reclaimedClientRefs = reclaimAbandonedClientRefs(cacheRoot)
         val reclaimedStaging = reclaimOldWriterStaging(cacheRoot, nowEpochMillis)
+        val reclaimedWorkspaces = reclaimMissingWorkspaces(cacheRoot, nowEpochMillis)
         return "reclaimedPacks=$reclaimedPacks reclaimedBytes=$reclaimedBytes " +
             "reclaimedMaterializations=$reclaimedMaterializations " +
-            "reclaimedClientRefs=$reclaimedClientRefs reclaimedStaging=$reclaimedStaging"
+            "reclaimedClientRefs=$reclaimedClientRefs reclaimedStaging=$reclaimedStaging " +
+            "reclaimedWorkspaces=$reclaimedWorkspaces"
     }
 
     private fun selectPackEvictions(
@@ -290,7 +292,10 @@ internal object CacheMaintenance {
         return keys
     }
 
-    private fun retainedGenerations(cacheRoot: Path): Set<Pair<String, String>>? {
+    private fun retainedGenerations(
+        cacheRoot: Path,
+        excludedWorkspaceId: String? = null,
+    ): Set<Pair<String, String>>? {
         val workspaces = cacheRoot.resolve("workspaces")
         if (!Files.isDirectory(workspaces, LinkOption.NOFOLLOW_LINKS)) return emptySet()
         val roots =
@@ -312,13 +317,16 @@ internal object CacheMaintenance {
             return true
         }
         var complete = true
-        roots.forEach { root ->
-            val currentPath = root.resolve("current")
-            val current =
-                WorkspaceGenerationManifestStore(cacheRoot, root.fileName.toString()).current()
-            if (current != null) complete = retain(root.fileName.toString(), current) && complete
-            else if (Files.exists(currentPath)) complete = false
-        }
+        roots
+            .filterNot { it.fileName.toString() == excludedWorkspaceId }
+            .forEach { root ->
+                val currentPath = root.resolve("current")
+                val current =
+                    WorkspaceGenerationManifestStore(cacheRoot, root.fileName.toString()).current()
+                if (current != null)
+                    complete = retain(root.fileName.toString(), current) && complete
+                else if (Files.exists(currentPath)) complete = false
+            }
         return retained.takeIf { complete }
     }
 
@@ -417,28 +425,68 @@ internal object CacheMaintenance {
         val workspaces = cacheRoot.resolve("workspaces")
         var reclaimed = 0
         WorkspaceRegistryStore(cacheRoot).entries().forEach { entry ->
-            if (
-                entry.lastUsedEpochMillis < 0 ||
-                    nowEpochMillis < entry.lastUsedEpochMillis ||
-                    nowEpochMillis - entry.lastUsedEpochMillis < packRetentionMillis
-            )
-                return@forEach
+            if (!ageExpired(entry.lastUsedEpochMillis, nowEpochMillis)) return@forEach
             val workspace = workspaces.resolve(entry.workspaceId).normalize()
             if (!workspace.startsWith(workspaces)) return@forEach
             if (!Files.isDirectory(workspace, LinkOption.NOFOLLOW_LINKS)) return@forEach
             val staging = workspace.resolve("staging/in-process-writer")
             if (!Files.isDirectory(staging, LinkOption.NOFOLLOW_LINKS)) return@forEach
             // A rollback checkpoint may be the only way to recover an interrupted writer.
-            val needsRecovery =
-                Files.walk(staging).use { paths ->
-                    paths.anyMatch { it.fileName.toString().endsWith(".rollback") }
-                }
-            if (needsRecovery) return@forEach
+            if (hasRollbackCheckpoint(staging)) return@forEach
             deleteTree(staging)
             reclaimed++
         }
         return reclaimed
     }
+
+    private fun reclaimMissingWorkspaces(cacheRoot: Path, nowEpochMillis: Long): Int {
+        val registry = WorkspaceRegistryStore(cacheRoot)
+        val entries = registry.entries().toList()
+        val missingSince = entries.associate { entry ->
+            val missing = Files.notExists(Path.of(entry.path))
+            entry.workspaceId to
+                if (missing) {
+                    entry.missingSinceEpochMillis?.takeIf {
+                        it >= entry.lastUsedEpochMillis && it in 0..nowEpochMillis
+                    } ?: nowEpochMillis
+                } else null
+        }
+        // Persist the first observed absence before a subsequent pass may unlink anything.
+        registry.updateMissingSince(missingSince)
+        val workspaces = cacheRoot.resolve("workspaces")
+        var reclaimed = 0
+        entries.forEach { entry ->
+            val observed = missingSince[entry.workspaceId] ?: return@forEach
+            if (
+                !ageExpired(entry.lastUsedEpochMillis, nowEpochMillis) ||
+                    !ageExpired(observed, nowEpochMillis) ||
+                    !Files.notExists(Path.of(entry.path))
+            )
+                return@forEach
+            val workspace = workspaces.resolve(entry.workspaceId).normalize()
+            if (!workspace.startsWith(workspaces)) return@forEach
+            val staging = workspace.resolve("staging/in-process-writer")
+            if (
+                Files.isDirectory(staging, LinkOption.NOFOLLOW_LINKS) &&
+                    hasRollbackCheckpoint(staging)
+            )
+                return@forEach
+            val retained = retainedGenerations(cacheRoot, entry.workspaceId) ?: return@forEach
+            if (retained.any { it.first == entry.workspaceId }) return@forEach
+            deleteTree(workspace)
+            registry.remove(entry.workspaceId)
+            reclaimed++
+        }
+        return reclaimed
+    }
+
+    private fun hasRollbackCheckpoint(staging: Path): Boolean =
+        Files.walk(staging).use { paths ->
+            paths.anyMatch { it.fileName.toString().endsWith(".rollback") }
+        }
+
+    private fun ageExpired(since: Long, now: Long): Boolean =
+        since >= 0 && now >= since && now - since >= packRetentionMillis
 
     private const val CONTENT_KEY_LENGTH = 64
     private const val FORGET_SHUTDOWN_WAIT_ATTEMPTS = 250

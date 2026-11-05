@@ -249,14 +249,22 @@ update, but only while the exclusive activity lock excludes all clients and refr
 published manifests and packs untouched; a later refresh rebuilds the writer from those immutable
 facts and current sources. A staging tree containing an unfinished `.rollback` checkpoint remains
 intact for recovery, regardless of age. Unregistered staging is not collected automatically.
+For a registered workspace whose path is definitely absent, GC records its first missing
+observation in the registry. After 30 days of persisted absence and at least 30 days since its
+last use, it rechecks the path under the exclusive activity lock, then removes that workspace's
+local cache tree and registry entry. Reappearance or a registry update resets the observation.
+Current recursive fork bases and source-link providers, incomplete dependency scans, and staging
+with an unfinished `.rollback` checkpoint prevent deletion. Shared packs retain their separate
+age/quota grace; external workspace-loss tombstones remain available for diagnostics. A checkout
+that briefly reappears between GC passes without using indexino cannot be observed as present.
+Unregistered workspace trees are not collected automatically.
 `cache forget` also takes the exclusive activity lock and refuses deletion while another live
 workspace's current overlay recursively references the selected base; otherwise a fork could lose
 its manifest and shared materialized store. Forget dependent workspaces first. `daemon stop --purge`
 uses the same forget operation after stopping the runtime; it removes only this workspace's local
 state and leaves shared packs for `cache gc`.
-Dead-workspace age remains follow-up work rather than a guarantee of the current collector. All
-participating processes must use the updated locking protocol; stop older in-process clients before
-running this collector against their cache.
+All participating processes must use the updated locking protocol; stop older in-process clients
+before running this collector against their cache.
 
 ## Current implementation layout
 
