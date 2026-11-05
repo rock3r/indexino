@@ -244,14 +244,19 @@ even when they alone exceed the quota. An incomplete fork or source-link reachab
 accelerated quota eviction for that pass. The size calculation counts logical cache-file bytes,
 including expanded stores, not allocated disk blocks. A pass never uses filesystem `atime`.
 Expanded stores and abandoned client refs retain their separate immediate reclamation rules.
+GC may retire a registered workspace's `staging/in-process-writer` after 30 days without a registry
+update, but only while the exclusive activity lock excludes all clients and refreshes. It leaves
+published manifests and packs untouched; a later refresh rebuilds the writer from those immutable
+facts and current sources. A staging tree containing an unfinished `.rollback` checkpoint remains
+intact for recovery, regardless of age. Unregistered staging is not collected automatically.
 `cache forget` also takes the exclusive activity lock and refuses deletion while another live
 workspace's current overlay recursively references the selected base; otherwise a fork could lose
 its manifest and shared materialized store. Forget dependent workspaces first. `daemon stop --purge`
 uses the same forget operation after stopping the runtime; it removes only this workspace's local
 state and leaves shared packs for `cache gc`.
-Dead-workspace age and mutable-staging collection remain follow-up work rather than guarantees of
-the current collector. All participating processes must use the updated locking protocol; stop
-older in-process clients before running this collector against their cache.
+Dead-workspace age and automatic recovery of interrupted checkpoints remain follow-up work rather
+than guarantees of the current collector. All participating processes must use the updated locking
+protocol; stop older in-process clients before running this collector against their cache.
 
 ## Current implementation layout
 
@@ -382,8 +387,9 @@ A move failure without a directory at the destination still propagates.
 Closing one snapshot does not close another snapshot's environment. Snapshot pins retain private
 overlay refs until close; client close never deletes a shared base that another process or fork may
 read. Current `cache gc` reclaims obsolete expanded generations and abandoned private refs only
-when no client is active. Mutable staging remains outside that collector. ZIP compression still
-serves transport and pack reachability, not random-access queries. There is no runtime
+when no client is active. Old reconstructible writer staging is also retired, but a retained
+rollback checkpoint is never removed. ZIP compression still serves transport and pack
+reachability, not random-access queries. There is no runtime
 `legacy-store` layout. Do **not**
 extend `<project>/.indexino/index/<commit>/`; new features must assume user-local composite storage.
 

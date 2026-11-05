@@ -4,6 +4,7 @@ import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.core.cache.CacheActivityLock
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifest
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
+import dev.sebastiano.indexino.core.cache.WorkspaceRegistryStore
 import dev.sebastiano.indexino.core.sourcelink.SerializedSourceLinkRegistration
 import dev.sebastiano.indexino.core.sourcelink.SourceLinkRegistrySnapshot
 import dev.sebastiano.indexino.core.sourcelink.SourceLinkRegistryStore
@@ -119,6 +120,81 @@ class CacheMaintenanceTest {
             assertFalse(Files.exists(pack), expired)
         } finally {
             cacheRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `gc retires old reconstructible writer staging without deleting its published pack`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-staging-gc-")
+        val workspace = Files.createTempDirectory(Path.of("/tmp"), "indexino-staging-workspace-")
+        val workspaceId = InProcessCacheLayout.workspaceId(workspace)
+        val key = "a".repeat(64)
+        val pack = packPath(cacheRoot, key)
+        val staging = cacheRoot.resolve("workspaces/$workspaceId/staging/in-process-writer")
+        WorkspaceGenerationManifestStore(cacheRoot, workspaceId)
+            .publish(
+                WorkspaceGenerationManifest(
+                    generation = "current",
+                    workspaceRevisionFingerprint = "current",
+                    originId = "workspace",
+                    revision = null,
+                    stateFingerprint = "current",
+                    packKeys = listOf(key),
+                )
+            )
+        Files.createDirectories(pack.parent)
+        Files.writeString(pack, "published")
+        Files.createDirectories(staging.resolve("index/commit"))
+        val writer = staging.resolve("index/commit/writer")
+        Files.writeString(writer, "reconstructible")
+        writer.toFile().setWritable(false)
+        val registry = WorkspaceRegistryStore(cacheRoot)
+        registry.upsert(workspaceId, workspace, null)
+        val lastUsed = checkNotNull(registry.entry(workspaceId)).lastUsedEpochMillis
+        try {
+            val tooYoung =
+                CacheMaintenance.gc(
+                    cacheRoot,
+                    nowEpochMillis = lastUsed + Duration.ofDays(30).toMillis() - 1,
+                )
+            assertTrue(Files.exists(staging), tooYoung)
+            val expired =
+                CacheMaintenance.gc(
+                    cacheRoot,
+                    nowEpochMillis = lastUsed + Duration.ofDays(30).toMillis(),
+                )
+            assertFalse(Files.exists(staging), expired)
+            assertTrue(Files.exists(pack), expired)
+            assertTrue(expired.contains("reclaimedStaging=1"), expired)
+        } finally {
+            cacheRoot.toFile().deleteRecursively()
+            workspace.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `gc preserves writer staging with an unfinished recovery checkpoint`() {
+        val cacheRoot = Files.createTempDirectory(Path.of("/tmp"), "indexino-staging-checkpoint-")
+        val workspace = Files.createTempDirectory(Path.of("/tmp"), "indexino-staging-workspace-")
+        val workspaceId = InProcessCacheLayout.workspaceId(workspace)
+        val staging = cacheRoot.resolve("workspaces/$workspaceId/staging/in-process-writer")
+        val checkpoint = staging.resolve("index/commit/manifest.json.rollback")
+        Files.createDirectories(checkpoint)
+        Files.writeString(checkpoint.resolve("manifest.json"), "preserve for recovery")
+        val registry = WorkspaceRegistryStore(cacheRoot)
+        registry.upsert(workspaceId, workspace, null)
+        val lastUsed = checkNotNull(registry.entry(workspaceId)).lastUsedEpochMillis
+        try {
+            val report =
+                CacheMaintenance.gc(
+                    cacheRoot,
+                    nowEpochMillis = lastUsed + Duration.ofDays(31).toMillis(),
+                )
+            assertTrue(Files.exists(checkpoint.resolve("manifest.json")), report)
+            assertTrue(report.contains("reclaimedStaging=0"), report)
+        } finally {
+            cacheRoot.toFile().deleteRecursively()
+            workspace.toFile().deleteRecursively()
         }
     }
 
