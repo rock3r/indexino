@@ -484,6 +484,34 @@ Never point them at a developer checkout. The worktree driver creates local comm
 the original heads and source bytes, and removes its own sibling worktrees. Declare nested
 repositories in the plan's `nestedRepositories` list so sibling checkouts preserve their origins.
 
+`CumulativeOverlayCorpusDriver <owned-root> <plan.json> <report.json> <edit-count> <seed-wait-minutes>`
+uses the same test-only archive and marked disposable-root contract. Use a plan with one group
+containing at least `<edit-count>` distinct source files plus an unchanged control (for the
+representative corpus, include the cross-module `large` group). It starts from an empty private
+cache, seeds the full Bazel/Gradle dependency scope, then edits evenly spaced group sources one
+at a time without resetting prior edits, for 2–30 cumulative overlays. Each step checks the newly
+published generation through public queries against all edited sources and an unchanged control,
+checks the previous and seed snapshots, and records write, refresh, query-ready, overlay-pack bytes
+and refresh-phase timings. A final bounded audit checks every selected and unchanged plan source;
+source bytes are restored even on failure. Seed and each edit have separate limits; the driver
+reports partial samples and failure stage. Use an external process-tree deadline for blocking work
+that cannot be cooperatively cancelled. These manual full-scope refresh measurements do not
+establish watcher latency, cold process-launch time or a subsecond large-workspace guarantee.
+
+On 2026-11-05, a manually admitted run on a separately copied, 433,534-entry IntelliJ composite
+corpus (781 independently pinned plan sources) completed eight distinct cross-module cumulative
+edits. Temurin 25.0.3 with a 6 GiB heap seeded in 309.14 s; each whole-scope manual refresh took
+12.13–13.36 s and public query verification took 26–64 ms. Overlay packs grew from 4.5 to 53.1 KiB,
+but restoring a previous overlay took only 1–2 ms per later edit. The dominant refresh phases were
+source capture (4.99–5.24 s), Git origin resolution (3.79–4.05 s), and topology (1.35–1.49 s). All
+edited and unchanged facts, pinned snapshots, source restoration and post-run physical/semantic
+corpus audits passed. Two spaced pre-run host admissions met load ≤8, no swap, normal pressure,
+at least 18 GiB reclaimable RAM and 50 GiB free disk, without ATC contention; those resource gates
+held throughout. In-run load reached 14.04, primarily from the driver's own Java/Git processes,
+and was recorded rather than mistaken for external contention. This shared-host, warm-OS-cache
+observation is diagnostic, not a clean baseline or a latency guarantee; earlier runs stopped by
+the host-load gate are excluded from these results.
+
 After changing default store-interface methods, rebuild nonincrementally before packaging a
 measurement artifact. An observed incremental Kotlin build retained an older delegated snapshot
 wrapper and silently used the scanning defaults. The shared-snapshot indexed-lookup regression
