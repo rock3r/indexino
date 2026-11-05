@@ -39,6 +39,51 @@ internal class IncrementalAcceptanceDriverTest {
     @TempDir lateinit var temporary: Path
 
     @Test
+    fun `successive edits retain earlier public facts while the base stays pinned`() {
+        val root = Files.createDirectory(temporary.resolve("owned-cumulative"))
+        Files.writeString(root.resolve(".indexino-benchmark-owned"), "fixture")
+        val workspace = Files.createDirectory(root.resolve("workspace"))
+        Files.writeString(workspace.resolve("settings.gradle.kts"), "include(\":alpha\")\n")
+        val files =
+            (0..2).map { ordinal ->
+                "alpha/src/main/java/sample/Source$ordinal.java"
+                    .also { relative ->
+                        val source = workspace.resolve(relative)
+                        Files.createDirectories(source.parent)
+                        Files.writeString(source, "package sample; class Source$ordinal {}\n")
+                    }
+            }
+        val plan = temporary.resolve("cumulative-plan.json")
+        Files.writeString(
+            plan,
+            """{"schema":1,"buildSystem":"gradle","target":":alpha","files":${
+                files.joinToString(prefix = "[", postfix = "]") { path ->
+                    """{"path":"$path","module":":alpha","package":"sample"}"""
+                }
+            },"groups":[{"id":"all","files":[0,1,2]}]}""",
+        )
+        val output = temporary.resolve("cumulative-report.json")
+        CumulativeOverlayCorpusDriver.main(
+            arrayOf(root.toString(), plan.toString(), output.toString(), "2", "1")
+        )
+        val report = Json.parseToJsonElement(Files.readString(output)).jsonObject
+        assertEquals("passed", report.getValue("status").jsonPrimitive.content)
+        val samples = report.getValue("samples").jsonArray.map { it.jsonObject }
+        assertEquals(2, samples.size)
+        samples.forEach { sample ->
+            assertTrue(sample.getValue("refreshNanos").jsonPrimitive.content.toLong() > 0)
+            assertTrue(sample.getValue("overlayPackBytes").jsonPrimitive.content.toLong() > 0)
+            assertEquals("true", sample.getValue("queriesVerified").jsonPrimitive.content)
+        }
+        files.forEachIndexed { ordinal, relative ->
+            assertEquals(
+                "package sample; class Source$ordinal {}\n",
+                Files.readString(workspace.resolve(relative)),
+            )
+        }
+    }
+
+    @Test
     fun `stage heartbeat remains visible before a sample finishes`() {
         val lines = CopyOnWriteArrayList<String>()
         val heartbeat = CountDownLatch(1)
