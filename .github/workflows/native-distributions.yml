@@ -85,6 +85,23 @@ jobs:
         with:
           path: ${{ steps.pins.outputs.cache_path }}
           key: native-inputs-${{ runner.os }}-${{ matrix.target }}-${{ steps.pins.outputs.cache_key }}
+      - name: Prepare signed macOS JAR inputs
+        if: inputs.release && matrix.target == 'macos-arm64'
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          ./gradlew normalizedCliJar normalizedExtensionWorkerJar \
+            -PVERSION_NAME="$INDEXINO_RELEASE_VERSION" --no-daemon --console=plain
+          signed_jars="build/release-distributions/signed-jars"
+          .github/scripts/sign-notarize-macos-distribution.sh --prepare-jars \
+            build/native-distributions/application/indexino-cli.jar \
+            build/native-distributions/application/indexino-extension-worker.jar \
+            "$signed_jars"
+          echo "INDEXINO_SIGNED_MAC_CLI_JAR=$GITHUB_WORKSPACE/$signed_jars/indexino-cli.jar" >> "$GITHUB_ENV"
+          echo "INDEXINO_SIGNED_MAC_WORKER_JAR=$GITHUB_WORKSPACE/$signed_jars/indexino-extension-worker.jar" >> "$GITHUB_ENV"
       - name: Verify native distribution
         shell: bash
         run: |

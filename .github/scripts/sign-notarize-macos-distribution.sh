@@ -32,6 +32,7 @@ codesign_macho() {
 }
 
 sign_nested_natives_in_jars() {
+  local directory="$1"
   local jar nest_dir entry
   # Apple notarization inspects Mach-O payloads inside JARs (JNA, Jansi, …).
   while IFS= read -r -d '' jar; do
@@ -47,21 +48,47 @@ sign_nested_natives_in_jars() {
       )
       rm -rf "$nest_dir"
     done < <(zipinfo -1 "$jar" | grep -E '\.(jnilib|dylib)$' || true)
-  done < <(find "$PAYLOAD_DIRECTORY" -type f -name '*.jar' -print0)
+  done < <(find "$directory" -type f -name '*.jar' -print0)
 }
 
-[[ "$#" == 2 ]] || fail "usage: $0 <unsigned-zip> <signed-zip>"
-readonly INPUT_ARCHIVE="$1"
-readonly OUTPUT_ARCHIVE="$2"
-[[ -f "$INPUT_ARCHIVE" ]] || fail "missing input archive $INPUT_ARCHIVE"
-[[ "$INPUT_ARCHIVE" != "$OUTPUT_ARCHIVE" ]] || fail "input and output archives must differ"
+verify_nested_natives_in_jars() {
+  local directory="$1"
+  local jar nest_dir entry
+  while IFS= read -r -d '' jar; do
+    while IFS= read -r entry; do
+      [[ -n "$entry" ]] || continue
+      nest_dir="$(mktemp -d "$WORK_DIRECTORY/jar-native.XXXXXX")"
+      mkdir -p "$nest_dir/$(dirname "$entry")"
+      unzip -p "$jar" "$entry" > "$nest_dir/$entry"
+      /usr/bin/codesign --verify --strict --verbose=2 "$nest_dir/$entry" ||
+        fail "JAR native was not signed before AOT training: $jar: $entry"
+      rm -rf "$nest_dir"
+    done < <(zipinfo -1 "$jar" | grep -E '\.(jnilib|dylib)$' || true)
+  done < <(find "$directory" -type f -name '*.jar' -print0)
+}
+
+if [[ "${1:-}" == "--prepare-jars" ]]; then
+  [[ "$#" == 4 ]] || fail "usage: $0 --prepare-jars <cli-jar> <worker-jar> <output-dir>"
+  readonly INPUT_CLI_JAR="$2"
+  readonly INPUT_WORKER_JAR="$3"
+  readonly OUTPUT_DIRECTORY="$4"
+  [[ -f "$INPUT_CLI_JAR" && -f "$INPUT_WORKER_JAR" ]] || fail "missing input JAR"
+else
+  [[ "$#" == 2 ]] || fail "usage: $0 <unsigned-zip> <signed-zip>"
+  readonly INPUT_ARCHIVE="$1"
+  readonly OUTPUT_ARCHIVE="$2"
+  [[ -f "$INPUT_ARCHIVE" ]] || fail "missing input archive $INPUT_ARCHIVE"
+  [[ "$INPUT_ARCHIVE" != "$OUTPUT_ARCHIVE" ]] || fail "input and output archives must differ"
+fi
 
 require_environment MACOS_CERTIFICATE_P12
 require_environment MACOS_CERTIFICATE_PASSWORD
 require_environment MACOS_SIGNING_IDENTITY
-require_environment APPLE_ID
-require_environment APPLE_APP_SPECIFIC_PASSWORD
-require_environment APPLE_TEAM_ID
+if [[ "${1:-}" != "--prepare-jars" ]]; then
+  require_environment APPLE_ID
+  require_environment APPLE_APP_SPECIFIC_PASSWORD
+  require_environment APPLE_TEAM_ID
+fi
 
 readonly WORK_DIRECTORY="$(mktemp -d)"
 readonly KEYCHAIN="$WORK_DIRECTORY/indexino-signing.keychain-db"
@@ -97,6 +124,17 @@ if ! security find-identity -v -p codesigning "$KEYCHAIN" | grep -F "$MACOS_SIGN
   fail "signing identity not found in keychain: $MACOS_SIGNING_IDENTITY"
 fi
 
+if [[ "${1:-}" == "--prepare-jars" ]]; then
+  mkdir -p "$OUTPUT_DIRECTORY"
+  cp -p "$INPUT_CLI_JAR" "$OUTPUT_DIRECTORY/indexino-cli.jar"
+  cp -p "$INPUT_WORKER_JAR" "$OUTPUT_DIRECTORY/indexino-extension-worker.jar"
+  sign_nested_natives_in_jars "$OUTPUT_DIRECTORY"
+  touch -r "$INPUT_CLI_JAR" "$OUTPUT_DIRECTORY/indexino-cli.jar"
+  touch -r "$INPUT_WORKER_JAR" "$OUTPUT_DIRECTORY/indexino-extension-worker.jar"
+  verify_nested_natives_in_jars "$OUTPUT_DIRECTORY"
+  exit 0
+fi
+
 readonly EXTRACTED_DIRECTORY="$WORK_DIRECTORY/extracted"
 mkdir -p "$EXTRACTED_DIRECTORY"
 /usr/bin/ditto -x -k "$INPUT_ARCHIVE" "$EXTRACTED_DIRECTORY"
@@ -105,7 +143,7 @@ readonly PAYLOAD_DIRECTORY="$EXTRACTED_DIRECTORY/indexino"
 readonly LAUNCHER="$PAYLOAD_DIRECTORY/indexino"
 [[ -f "$LAUNCHER" ]] || fail "archive does not contain the Indexino launcher"
 
-sign_nested_natives_in_jars
+verify_nested_natives_in_jars "$PAYLOAD_DIRECTORY"
 
 find "$PAYLOAD_DIRECTORY" -type f -print0 | while IFS= read -r -d '' candidate; do
   if [[ "$candidate" != "$LAUNCHER" ]] && /usr/bin/file "$candidate" | grep -q 'Mach-O'; then

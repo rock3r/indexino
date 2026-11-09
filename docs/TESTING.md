@@ -119,8 +119,10 @@ Roast distribution from an arbitrary directory inside `ubuntu:22.04`, whose glib
 declared Linux baseline, and performs an index/query workload. The manually dispatched
 `native-distributions.yml` workflow repeats full native verification on all Tier 1 runners.
 The tag workflow checks Maven and macOS signing/notarization credentials before any publication,
-signs macOS packages, and reruns the matching-host verifier against final signed macOS bytes before
-Maven upload. Windows remains unsigned Authenticode and passes its matching-host native verifier;
+signs nested macOS JAR libraries before AOT training, signs the remaining macOS package payload,
+and reruns the matching-host verifier against final signed macOS bytes before Maven upload. The
+final signer verifies the JAR libraries without changing the JAR trained against the AOT cache.
+Windows remains unsigned Authenticode and passes its matching-host native verifier;
 the final checksums detect corruption and the tag-bound Sigstore bundles authenticate the exact
 archives attached to the draft release. Unsigned pull-request macOS artifacts do not prove that
 the credentialed signing path works; a candidate still needs a matching-host credentialed macOS

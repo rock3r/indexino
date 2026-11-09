@@ -104,9 +104,11 @@ Credential presence is an early gate; it does not prove a certificate is trusted
 macOS signing and all matching-host native verification must complete before Maven upload begins,
 so an incompatible signed macOS AOT cache cannot leave a partially uploaded Central train.
 
-The macOS job signs all Mach-O payloads, creates the immutable final ZIP, submits those exact bytes
-for notarization, exercises online Gatekeeper, and reruns the complete native verifier against the
-signed archive before replacing its checksum. The workflow never auto-publishes the GitHub draft.
+The macOS job signs nested JAR Mach-O payloads before training AOT against the signed application
+JAR. It then signs the remaining Mach-O files without changing the trained JAR, creates the
+immutable final ZIP, submits those exact bytes for notarization, exercises online Gatekeeper, and
+reruns the complete native verifier against the signed archive before replacing its checksum. The
+workflow never auto-publishes the GitHub draft.
 The Windows launcher is **unsigned Authenticode** by decision; no Windows certificate or signing
 secrets are required. Its matching-host AOT, differential, and relocation verifier still gates the
 ZIP and checksum. The bundled JBR files retain their upstream provenance. Linux has no

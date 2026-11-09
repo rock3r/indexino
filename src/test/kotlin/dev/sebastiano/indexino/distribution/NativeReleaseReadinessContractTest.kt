@@ -242,6 +242,32 @@ class NativeReleaseReadinessContractTest {
         )
     }
 
+    @Test
+    fun `macOS release signs JAR natives before AOT training and leaves them unchanged after`() {
+        val workflow = projectFile(".github/workflows/native-distributions.yml").readText()
+        val build = projectFile("build.gradle.kts").readText()
+        val signingScript =
+            projectFile(".github/scripts/sign-notarize-macos-distribution.sh").readText()
+
+        assertTrue(
+            workflow.indexOf("Prepare signed macOS JAR inputs") <
+                workflow.indexOf("- name: Verify native distribution") &&
+                workflow.contains("- name: Prepare signed macOS JAR inputs"),
+            "Nested Mach-O code signatures must precede AOT cache training",
+        )
+        assertContains(workflow, "INDEXINO_SIGNED_MAC_CLI_JAR")
+        assertContains(workflow, "INDEXINO_SIGNED_MAC_WORKER_JAR")
+        assertContains(build, "INDEXINO_SIGNED_MAC_CLI_JAR")
+        assertContains(build, "INDEXINO_SIGNED_MAC_WORKER_JAR")
+        assertContains(signingScript, "verify_nested_natives_in_jars")
+        assertFalse(
+            signingScript
+                .substringAfter("readonly PAYLOAD_DIRECTORY=")
+                .contains("sign_nested_natives_in_jars"),
+            "Final archive signing must not mutate an AOT-trained JAR",
+        )
+    }
+
     private fun projectFile(path: String): File {
         val file = projectDirectory.resolve(path)
         assertTrue(file.isFile, "Missing project file: $path")

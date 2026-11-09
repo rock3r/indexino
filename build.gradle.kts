@@ -342,7 +342,12 @@ val normalizedCliJarTimestampMillis = 1_700_000_000_000L
 val normalizedCliJar by
     tasks.registering(NormalizedJar::class) {
         description = "Build the metadata-normalized application JAR used by native distributions"
-        inputJar.set(shrunkCliJar.flatMap(ShadowJar::getArchiveFile))
+        inputJar.set(
+            providers
+                .environmentVariable("INDEXINO_SIGNED_MAC_CLI_JAR")
+                .map(layout.projectDirectory::file)
+                .orElse(shrunkCliJar.flatMap(ShadowJar::getArchiveFile))
+        )
         archiveFileName.set("indexino-cli.jar")
         destinationDirectory.set(layout.buildDirectory.dir("native-distributions/application"))
         normalizedTimestampMillis.set(normalizedCliJarTimestampMillis)
@@ -352,7 +357,12 @@ val normalizedExtensionWorkerJar by
     tasks.registering(NormalizedJar::class) {
         description =
             "Build the metadata-normalized extension worker JAR packaged beside native installs"
-        inputJar.set(tasks.shadowJar.flatMap(ShadowJar::getArchiveFile))
+        inputJar.set(
+            providers
+                .environmentVariable("INDEXINO_SIGNED_MAC_WORKER_JAR")
+                .map(layout.projectDirectory::file)
+                .orElse(tasks.shadowJar.flatMap(ShadowJar::getArchiveFile))
+        )
         archiveFileName.set("indexino-extension-worker.jar")
         destinationDirectory.set(layout.buildDirectory.dir("native-distributions/application"))
         normalizedTimestampMillis.set(normalizedCliJarTimestampMillis)
