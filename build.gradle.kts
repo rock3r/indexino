@@ -342,6 +342,7 @@ val normalizedCliJarTimestampMillis = 1_700_000_000_000L
 val normalizedCliJar by
     tasks.registering(NormalizedJar::class) {
         description = "Build the metadata-normalized application JAR used by native distributions"
+        dependsOn(shrunkCliJar)
         inputJar.set(
             providers
                 .environmentVariable("INDEXINO_SIGNED_MAC_CLI_JAR")
@@ -357,6 +358,7 @@ val normalizedExtensionWorkerJar by
     tasks.registering(NormalizedJar::class) {
         description =
             "Build the metadata-normalized extension worker JAR packaged beside native installs"
+        dependsOn(tasks.shadowJar)
         inputJar.set(
             providers
                 .environmentVariable("INDEXINO_SIGNED_MAC_WORKER_JAR")
