@@ -71,7 +71,8 @@ if [[ "${1:-}" == "--prepare-jars" ]]; then
   [[ "$#" == 4 ]] || fail "usage: $0 --prepare-jars <cli-jar> <worker-jar> <output-dir>"
   readonly INPUT_CLI_JAR="$2"
   readonly INPUT_WORKER_JAR="$3"
-  readonly OUTPUT_DIRECTORY="$4"
+  mkdir -p "$4"
+  readonly OUTPUT_DIRECTORY="$(cd "$4" && pwd)"
   [[ -f "$INPUT_CLI_JAR" && -f "$INPUT_WORKER_JAR" ]] || fail "missing input JAR"
 else
   [[ "$#" == 2 ]] || fail "usage: $0 <unsigned-zip> <signed-zip>"
