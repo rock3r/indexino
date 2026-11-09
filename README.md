@@ -115,6 +115,7 @@ publication verification and the release flow.
 
 | Doc | Topic |
 |-----|--------|
+| [docs/USER-GUIDE.md](docs/USER-GUIDE.md) | Install, authenticate, index, and query |
 | [docs/CLI.md](docs/CLI.md) | Commands, flags, JSONL schema |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layers |
 | [docs/INDEX-STORAGE.md](docs/INDEX-STORAGE.md) | User-local cache + keys |

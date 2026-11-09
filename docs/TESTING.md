@@ -118,6 +118,13 @@ complete Linux x64 native verifier in a separate matching-host job. That job als
 Roast distribution from an arbitrary directory inside `ubuntu:22.04`, whose glibc 2.35 is the oldest
 declared Linux baseline, and performs an index/query workload. The manually dispatched
 `native-distributions.yml` workflow repeats full native verification on all Tier 1 runners.
+The tag workflow checks Maven and macOS signing/notarization credentials before any publication,
+signs macOS packages, and reruns the matching-host verifier against final signed macOS bytes before
+Maven upload. Windows remains unsigned Authenticode and passes its matching-host native verifier;
+the final checksums detect corruption and the tag-bound Sigstore bundles authenticate the exact
+archives attached to the draft release. Unsigned pull-request macOS artifacts do not prove that
+the credentialed signing path works; a candidate still needs a matching-host credentialed macOS
+run and inspection of its final signature and notarization assessment.
 
 The native archive cache shell contract in the ordinary JVM `test` task requires Git for Windows
 Bash on Windows. The test resolves its `bash.exe` beside Git's executable, avoiding the Windows

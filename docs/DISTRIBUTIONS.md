@@ -3,7 +3,7 @@
 Indexino native distributions are self-contained command-line installations built around the same
 JVM 25 bytecode as the thin Maven and fat-JAR variants. Each target ZIP contains a Roast launcher,
 a stripped JBR 25 runtime, the R8 application JAR, a target-trained AOT cache, and the applicable
-license files. Native ZIPs are built on every release tag after Maven upload succeeds; the GitHub
+license files. Native ZIPs are built and verified on every release tag before Maven upload; the GitHub
 release draft attaches the three Tier 1 archives, their SHA-256 sidecars, and the generated
 `bundled-dependencies.txt` inventory.
 
@@ -24,8 +24,10 @@ the permanent smoke matrix.
 ## Installation
 
 Download the ZIP and adjacent `.sha256` file from the same trusted CI run. Verify the checksum before
-extracting it. The checksum format is compatible with `sha256sum -c` on Linux and with equivalent
-SHA-256 tools on macOS and Windows.
+extracting it. This detects corruption but is not proof of who built the archive. A tagged release
+also attaches a `.zip.sigstore.json` bundle for each ZIP. Verify it against the exact release tag
+and the repository workflow identity, as described in [USER-GUIDE.md](USER-GUIDE.md). Ordinary CI
+artifacts have checksums but no release signature.
 
 Extract the complete `indexino/` directory without rearranging its contents. The executable is:
 
@@ -106,8 +108,10 @@ startup. Reinstall the complete ZIP to restore the matching cache.
   carry a stapled notarization ticket, so a first launch on a quarantined machine needs network
   access for Gatekeeper to retrieve the ticket. After successful online assessment macOS may cache
   the ticket; an offline first launch can be rejected and should be retried online.
-- Windows security warnings: the first public Windows ZIP is **unsigned** Authenticode. Verify the
-  published SHA-256 sidecar before extracting; SmartScreen reputation warnings are expected.
+- Windows security warnings: the 0.3.0 launcher is **not Authenticode-signed**. Windows may show
+  SmartScreen or unknown-publisher warnings. Verify the tag-bound Sigstore bundle for the ZIP to
+  authenticate its release-workflow origin; the `.sha256` sidecar alone detects corruption, not
+  publisher identity. The bundled JBR binaries retain their upstream provenance.
 
 For a tagged release, download the ZIP and adjacent `.sha256` file from the official GitHub release
 for that version. Verify the checksum before extracting:
@@ -124,5 +128,12 @@ Roast under Apache 2.0, and Indexino under the project license. The release draf
 
 No native release may be created until the manual Tier 1 matrix is green for the intended source
 commit and the tag workflow's publish plus native-distribution jobs succeed. macOS release bytes are
-codesigned and notarized before checksum generation; Linux and Windows archives repeat the full
-Roast, AOT, relocation, mode, and differential verifier before upload.
+codesigned and notarized before checksum generation; the unsigned Windows launcher still passes the
+matching-host AOT, relocation, and differential verifier before its final checksum is generated.
+All three final archives must pass checksum verification and have a verified tag-bound Sigstore
+bundle before the draft release is created. Linux has no platform-native executable signature;
+its archive is signed as an immutable blob. Sigstore signs each archive as a whole, **not** its
+individual executable. The published 0.2.x archives predate these gates.
+The macOS signer can change nested native JAR bytes after the initial AOT training; a passing
+unsigned verifier or signed `--help` smoke is **not** evidence that the signed archive's strict AOT
+cache remains valid. A signed-byte verifier failure blocks the release before Maven upload.

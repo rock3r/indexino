@@ -93,14 +93,26 @@ JVM dependency bundled into the native JAR and attaches it to the GitHub release
 The build uses `automaticRelease = false`, matching Spectre's cautious release flow. A successful
 workflow leaves the validated deployment waiting for manual promotion in the Central Portal.
 
-Every release tag runs the full check suite, uploads the Maven train, builds the Tier 1 native CLI
-ZIPs, and creates a **draft** GitHub release with `release/RELEASE_NOTES-<version>.md`, the three
-native archives, their SHA-256 sidecars, and `bundled-dependencies.txt`. Publish that draft only
-after Central promotion and external resolution checks succeed.
+Every release tag first checks that release notes and required publication/platform credentials are
+present, **before** any Maven publication. It builds and verifies the Tier 1 native CLI ZIPs,
+then runs the full check suite and uploads the Maven train. Finally it creates a **draft** GitHub
+release with
+`release/RELEASE_NOTES-<version>.md`, the three native archives, their SHA-256 sidecars, verified
+tag-bound Sigstore `.zip.sigstore.json` bundles, and `bundled-dependencies.txt`. Publish that draft
+only after Central promotion, external resolution checks, and review of the final signatures.
+Credential presence is an early gate; it does not prove a certificate is trusted or usable. Native
+macOS signing and all matching-host native verification must complete before Maven upload begins,
+so an incompatible signed macOS AOT cache cannot leave a partially uploaded Central train.
 
 The macOS job signs all Mach-O payloads, creates the immutable final ZIP, submits those exact bytes
 for notarization, exercises online Gatekeeper, and reruns the complete native verifier against the
 signed archive before replacing its checksum. The workflow never auto-publishes the GitHub draft.
+The Windows launcher is **unsigned Authenticode** by decision; no Windows certificate or signing
+secrets are required. Its matching-host AOT, differential, and relocation verifier still gates the
+ZIP and checksum. The bundled JBR files retain their upstream provenance. Linux has no
+platform-native signature either. The verified tag-bound Sigstore bundle authenticates each final
+ZIP as a release-workflow artifact, **not** as a platform-signed executable. A checksum detects
+corruption but cannot authenticate the publisher.
 
 To sign and notarize macOS bytes without a new tag, for example for a version that Central has
 already promoted, dispatch `native-distributions.yml` manually with `release` set to true. The
@@ -137,12 +149,14 @@ The script reads:
   attached `.cer`/`.key` → base64 `.p12`
 - **Apple ID** — account email (`username` → `APPLE_ID`) and `team ID` → `APPLE_TEAM_ID`
 
-Before the first release, confirm that the Central Portal account can publish under the verified
-`dev.sebastiano` namespace. Then push an already-reviewed release commit and its version tag:
+Before the next release, confirm that the Central Portal account can publish under the verified
+`dev.sebastiano` namespace and review the matching-host Tier 1 and credentialed macOS results.
+**0.3.0 is the approved next version** after 0.2.6, but version approval does not authorize its
+tag, Maven publication, or GitHub release. Push a version tag only after separate release approval:
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v<approved-next-version>
+git push origin v<approved-next-version>
 ```
 
 After the workflow succeeds, inspect the deployment in the Central Portal and promote it manually.

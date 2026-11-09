@@ -25,10 +25,34 @@ jobs:
             exit 1
           fi
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          test -f "release/RELEASE_NOTES-${GITHUB_REF_NAME#v}.md"
+      - name: Require all release credentials before publication
+        shell: bash
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          SIGNING_IN_MEMORY_KEY: ${{ secrets.SIGNING_IN_MEMORY_KEY }}
+          SIGNING_IN_MEMORY_KEY_PASSWORD: ${{ secrets.SIGNING_IN_MEMORY_KEY_PASSWORD }}
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in MAVEN_CENTRAL_USERNAME MAVEN_CENTRAL_PASSWORD \
+            SIGNING_IN_MEMORY_KEY SIGNING_IN_MEMORY_KEY_PASSWORD \
+            MACOS_CERTIFICATE_P12 MACOS_CERTIFICATE_PASSWORD MACOS_SIGNING_IDENTITY \
+            APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing required release credential: $name" >&2
+              exit 1
+            fi
+          done
 
   publish:
     name: Verify and upload to Maven Central for manual promotion
-    needs: release-gate
+    needs: [release-gate, native-distributions]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -65,7 +89,7 @@ jobs:
 
   native-distributions:
     name: Build final native release candidates
-    needs: [release-gate, publish]
+    needs: release-gate
     uses: ./.github/workflows/native-distributions.yml
     with:
       version: ${{ needs.release-gate.outputs.version }}
@@ -81,8 +105,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v6
+      - uses: sigstore/cosign-installer@v4.1.3
       - name: Download native release candidates
         uses: actions/download-artifact@v5
         with:
@@ -98,6 +124,20 @@ jobs:
           test "$(find release-assets -maxdepth 1 -name '*.zip' | wc -l)" -eq 3
           test "$(find release-assets -maxdepth 1 -name '*.sha256' | wc -l)" -eq 3
           test -f release-assets/bundled-dependencies.txt
+      - name: Verify final archive checksums and sign release assets
+        shell: bash
+        env:
+          SIGNER_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}
+        run: |
+          cd release-assets
+          for archive in *.zip; do
+            sha256sum -c "$archive.sha256"
+            cosign sign-blob --yes --bundle "$archive.sigstore.json" "$archive"
+            cosign verify-blob "$archive" \
+              --bundle "$archive.sigstore.json" \
+              --certificate-identity "$SIGNER_IDENTITY" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          done
       - name: Create draft GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
