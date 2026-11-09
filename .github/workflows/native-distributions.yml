@@ -119,6 +119,22 @@ jobs:
               "${version_arguments[@]}" \
               --no-daemon --console=plain 2>&1 | \
             tee "build/ci-logs/${{ matrix.target }}/verification.log"
+      - name: Report Windows native verification failures
+        if: failure() && matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          $directory = 'build/test-results/verifyNativeDistributionWindowsX64'
+          if (Test-Path $directory) {
+            Get-ChildItem $directory -Filter '*.xml' -Recurse | ForEach-Object {
+              [xml]$report = Get-Content -LiteralPath $_.FullName -Raw
+              $failure = $report.SelectSingleNode('//testcase/failure')
+              if ($failure) {
+                $message = $failure.GetAttribute('message')
+                $excerpt = $message.Substring(0, [Math]::Min($message.Length, 1500))
+                Write-Host "$($_.Name): $excerpt"
+              }
+            }
+          }
       - name: Smoke oldest supported Linux baseline (ubuntu:22.04 / glibc 2.35)
         if: matrix.target == 'linux-x64'
         shell: bash
