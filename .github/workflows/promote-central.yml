@@ -71,11 +71,7 @@ jobs:
               except urllib.error.HTTPError as error:
                   return error.code, error.read()
 
-          status, raw = request(
-              "GET",
-              "/api/v1/publisher/deployments",
-              {"namespace": "dev.sebastiano.indexino"},
-          )
+          status, raw = request("GET", "/api/v1/publisher/deployments")
           if status != 200:
               print(f"Listing deployments failed with HTTP {status}.")
               raise SystemExit(1)
