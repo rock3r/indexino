@@ -131,6 +131,47 @@ After the initial GitHub import, all changes go through **pull request → CI ba
 squash merge** cycles. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow,
 local checks, and agent conventions.
 
+## Measured public corpora
+
+These numbers are from one serial run of the pinned public acceptance harness on 11 Nov 2026,
+against commit `f2eaf99fd2f3223926be21b71adb8859620e63d9`. The pins and method are in
+[docs/PUBLIC-ACCEPTANCE.md](docs/PUBLIC-ACCEPTANCE.md) and
+[scripts/public-acceptance/corpora.json](scripts/public-acceptance/corpora.json). Exact inventory
+equality, query assertions, and verified cleanup passed. Timings are report-only: the host was
+shared, the OS page cache was uncontrolled, and the IntelliJ job reached its 16 GiB accounted-memory
+cap without an observed OOM kill. They are not an SLA and not an IntelliJ IDEA comparison.
+
+| Corpus | Pinned scope | Captured inputs |
+|---|---|---|
+| [Spectre](https://github.com/rock3r/spectre) `9ccbcfc` | `:core`, target only | 47 |
+| Spectre, syntactic dependency whitelist | `:core` plus reviewed dependency roots | 68 |
+| [IntelliJ Community](https://github.com/JetBrains/intellij-community) `9b85e06` | `//:main`, dependencies required | 65,149 |
+
+IntelliJ exclusions, counted separately and not dropped from the denominator: 2,285 external labels,
+1 generated label, 5,221 unsupported paths, and 1,015 directories. Each scope ran three cold JVMs.
+All three repeats published the same generation. A separate instrumented repeat showed core producer
+work on the cold refresh and none on five unchanged refreshes.
+
+![Cold indexing, three independent JVMs](docs/assets/public-corpus-cold.svg)
+
+![Unchanged refresh, nearest-rank p50 of five samples](docs/assets/public-corpus-refresh.svg)
+
+An exact-symbol query against an already acquired snapshot, 100 samples after 10 warmups, had p95
+below 0.22 ms on these scopes. Spectre queried `ComposeAutomator` and `AutomatorNode`. IntelliJ
+queried `ApplicationManager`, with per-repeat p95 of 0.139, 0.159, and 0.166 ms. That excludes
+process launch, snapshot acquisition, and daemon protocol overhead. Reconnecting an in-process
+client and checking the published generation took 12–19 ms on IntelliJ and 26–43 ms on Spectre.
+That is not a fresh process.
+
+The invented `retrieval-v1` fixture passed its syntactic cases exactly, including the held-out
+alias case, on both manual and watcher lanes. Two same-arity semantic cases remain precision 0.5
+and recall 1.0. They are labelled compiler-resolution gaps, not syntactic failures. See
+[docs/RETRIEVAL-FIXTURES.md](docs/RETRIEVAL-FIXTURES.md).
+
+These measurements do not include save-to-query watcher latency. A cold IntelliJ index is minutes,
+not subsecond, and an unchanged IntelliJ refresh is several seconds. macOS and Windows cannot run
+this corpus lane: the harness requires Linux cgroup v2 containment for a detached Bazel server.
+
 ## Status
 
 Core **C0–C1** and application **A1–A3** milestones implemented. See

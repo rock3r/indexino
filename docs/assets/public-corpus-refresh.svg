@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="200" viewBox="0 0 980 200" role="img" aria-label="Unchanged refresh, nearest-rank p50 of five samples">
+<style>
+text { font-family: ui-sans-serif, system-ui, sans-serif; fill: #1f2328; }
+.title { font-size: 16px; font-weight: 650; }
+.note { font-size: 12px; fill: #57606a; }
+.label { font-size: 13px; }
+.value { font-size: 12px; }
+</style>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text class="title" x="16" y="26">Unchanged refresh, nearest-rank p50 of five samples</text>
+<text class="label" x="16" y="66">Spectre :core</text>
+<rect x="166" y="50" width="7" height="8" rx="2" fill="#0969da"/>
+<rect x="166" y="60" width="7" height="8" rx="2" fill="#2da44e"/>
+<rect x="166" y="70" width="8" height="8" rx="2" fill="#bf8700"/>
+<text class="value" x="762" y="68">54 ms   56 ms   60 ms</text>
+<text class="label" x="16" y="106">Spectre + deps</text>
+<rect x="166" y="90" width="9" height="8" rx="2" fill="#0969da"/>
+<rect x="166" y="100" width="9" height="8" rx="2" fill="#2da44e"/>
+<rect x="166" y="110" width="8" height="8" rx="2" fill="#bf8700"/>
+<text class="value" x="762" y="108">72 ms   69 ms   63 ms</text>
+<text class="label" x="16" y="146">IntelliJ //:main</text>
+<rect x="166" y="130" width="584" height="8" rx="2" fill="#0969da"/>
+<rect x="166" y="140" width="544" height="8" rx="2" fill="#2da44e"/>
+<rect x="166" y="150" width="524" height="8" rx="2" fill="#bf8700"/>
+<text class="value" x="762" y="148">4.5s   4.2s   4.1s</text>
+<text class="note" x="16" y="188">Three p50 values per scope. Linear scale: IntelliJ is about 4 seconds, Spectre is under 80 ms.</text></svg>
