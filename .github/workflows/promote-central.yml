@@ -1,0 +1,102 @@
+name: Promote Maven Central deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version to promote, without a leading v
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    name: Promote one validated deployment
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Promote the unique validated deployment
+        env:
+          VERSION: ${{ inputs.version }}
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          version = os.environ["VERSION"]
+          if not version.replace(".", "").isdigit() or version.count(".") != 2:
+              raise SystemExit("Version must be a release number, not a tag.")
+          username = os.environ.get("MAVEN_CENTRAL_USERNAME", "")
+          password = os.environ.get("MAVEN_CENTRAL_PASSWORD", "")
+          if not username or not password:
+              raise SystemExit("Missing Maven Central credentials.")
+          token = base64.b64encode(f"{username}:{password}".encode()).decode()
+          del os.environ["MAVEN_CENTRAL_USERNAME"]
+          del os.environ["MAVEN_CENTRAL_PASSWORD"]
+          expected = {
+              f"pkg:maven/dev.sebastiano.indexino/{artifact}@{version}"
+              for artifact in (
+                  "indexino",
+                  "indexino-bom",
+                  "indexino-model",
+                  "indexino-plugin-api",
+                  "indexino-selection-context",
+                  "indexino-compose-decoration",
+                  "indexino-script-host",
+              )
+          }
+
+          def request(method, path, query=None):
+              url = "https://central.sonatype.com" + path
+              if query:
+                  url += "?" + urllib.parse.urlencode(query)
+              call = urllib.request.Request(
+                  url,
+                  method=method,
+                  headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+              )
+              try:
+                  with urllib.request.urlopen(call, timeout=60) as response:
+                      raw = response.read()
+                      return response.status, raw
+              except urllib.error.HTTPError as error:
+                  return error.code, error.read()
+
+          status, raw = request(
+              "GET",
+              "/api/v1/publisher/deployments",
+              {"namespace": "dev.sebastiano.indexino", "state": "VALIDATED"},
+          )
+          if status != 200:
+              print(f"Listing deployments failed with HTTP {status}.")
+              raise SystemExit(1)
+          body = json.loads(raw)
+          deployments = body.get("deployments", body if isinstance(body, list) else None)
+          if not isinstance(deployments, list):
+              print("Deployment list response had no deployments array.")
+              raise SystemExit(1)
+          matches = []
+          for deployment in deployments:
+              purls = set(deployment.get("purls") or [])
+              if deployment.get("deploymentState") == "VALIDATED" and expected <= purls:
+                  matches.append(deployment)
+          print(f"Validated deployments containing all seven {version} artifacts: {len(matches)}")
+          if len(matches) != 1:
+              raise SystemExit(1)
+          deployment_id = matches[0]["deploymentId"]
+          print(f"Publishing deployment {deployment_id}")
+          status, _ = request("POST", f"/api/v1/publisher/deployment/{deployment_id}")
+          if status not in (200, 204):
+              print(f"Publishing deployment failed with HTTP {status}.")
+              raise SystemExit(1)
+          print(f"Publish request accepted for {deployment_id}")
+          PY
