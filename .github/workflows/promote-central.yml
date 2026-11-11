@@ -74,7 +74,7 @@ jobs:
           status, raw = request(
               "GET",
               "/api/v1/publisher/deployments",
-              {"namespace": "dev.sebastiano.indexino", "state": "VALIDATED"},
+              {"namespace": "dev.sebastiano.indexino"},
           )
           if status != 200:
               print(f"Listing deployments failed with HTTP {status}.")
@@ -89,6 +89,16 @@ jobs:
               purls = set(deployment.get("purls") or [])
               if deployment.get("deploymentState") == "VALIDATED" and expected <= purls:
                   matches.append(deployment)
+          print(f"Deployments returned: {len(deployments)}")
+          for deployment in deployments:
+              purls = deployment.get("purls") or []
+              wanted = sum(1 for purl in purls if purl in expected)
+              print(
+                  deployment.get("deploymentState"),
+                  deployment.get("deploymentId"),
+                  f"matching_purls={wanted}",
+                  f"purl_count={len(purls)}",
+              )
           print(f"Validated deployments containing all seven {version} artifacts: {len(matches)}")
           if len(matches) != 1:
               raise SystemExit(1)
