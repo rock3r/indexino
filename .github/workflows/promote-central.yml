@@ -80,22 +80,44 @@ jobs:
           if not isinstance(deployments, list):
               print("Deployment list response had no deployments array.")
               raise SystemExit(1)
+          print(f"Deployments returned: {len(deployments)}")
           matches = []
           for deployment in deployments:
-              purls = set(deployment.get("purls") or [])
-              if deployment.get("deploymentState") == "VALIDATED" and expected <= purls:
-                  matches.append(deployment)
-          print(f"Deployments returned: {len(deployments)}")
-          for deployment in deployments:
-              purls = deployment.get("purls") or []
-              wanted = sum(1 for purl in purls if purl in expected)
-              print(
-                  deployment.get("deploymentState"),
-                  deployment.get("deploymentId"),
-                  f"matching_purls={wanted}",
-                  f"purl_count={len(purls)}",
+              if deployment.get("deploymentState") != "VALIDATED":
+                  continue
+              deployment_id = deployment["deploymentId"]
+              file_status, file_raw = request(
+                  "POST",
+                  "/api/v1/publisher/deployments/files",
+                  {"deploymentId": deployment_id},
               )
-          print(f"Validated deployments containing all seven {version} artifacts: {len(matches)}")
+              if file_status != 200:
+                  print(f"File listing failed for {deployment_id} with HTTP {file_status}.")
+                  raise SystemExit(1)
+              file_body = json.loads(file_raw)
+              names = []
+
+              def collect(node):
+                  if isinstance(node, dict):
+                      name = node.get("name") or node.get("path") or node.get("relativePath")
+                      if isinstance(name, str):
+                          names.append(name)
+                      for value in node.values():
+                          collect(value)
+                  elif isinstance(node, list):
+                      for value in node:
+                          collect(value)
+
+              collect(file_body)
+              artifacts = {
+                  name.split("/")[-2]
+                  for name in names
+                  if name.endswith(f"/{version}.pom") or name.endswith(f"-{version}.pom")
+              }
+              print(deployment_id, f"pom_artifacts={sorted(artifacts)}")
+              if artifacts == {purl.rsplit("/", 1)[-1].split("@", 1)[0] for purl in expected}:
+                  matches.append(deployment)
+          print(f"Validated deployments containing exactly the seven {version} artifacts: {len(matches)}")
           if len(matches) != 1:
               raise SystemExit(1)
           deployment_id = matches[0]["deploymentId"]
