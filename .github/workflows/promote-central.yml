@@ -93,6 +93,11 @@ jobs:
               )
               if file_status != 200:
                   print(f"File listing failed for {deployment_id} with HTTP {file_status}.")
+                  try:
+                      error_body = json.loads(file_raw)
+                  except json.JSONDecodeError:
+                      error_body = {}
+                  print({key: error_body.get(key) for key in ("error", "message", "status") if key in error_body})
                   raise SystemExit(1)
               file_body = json.loads(file_raw)
               names = []
