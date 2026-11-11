@@ -114,6 +114,7 @@ jobs:
                   for name in names
                   if name.endswith(f"/{version}.pom") or name.endswith(f"-{version}.pom")
               }
+              print(deployment_id, f"status_fields={sorted(file_body)}")
               print(deployment_id, f"pom_artifacts={sorted(artifacts)}")
               if artifacts == {purl.rsplit("/", 1)[-1].split("@", 1)[0] for purl in expected}:
                   matches.append(deployment)
