@@ -85,7 +85,8 @@ jobs:
         run: |
           ./gradlew \
             publishToMavenCentral \
-            -PVERSION_NAME="${{ needs.release-gate.outputs.version }}"
+            -PVERSION_NAME="${{ needs.release-gate.outputs.version }}" \
+            -PcentralAutomaticRelease=true
 
   native-distributions:
     name: Build final native release candidates

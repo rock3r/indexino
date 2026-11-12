@@ -135,6 +135,11 @@ class NativeReleaseReadinessContractTest {
         assertContains(workflow, "RELEASE_NOTES-")
         assertContains(workflow, "Upload complete Maven Central release train")
         assertContains(workflow, "publishToMavenCentral")
+        assertContains(workflow, "-PcentralAutomaticRelease=true")
+        assertContains(
+            projectFile("build.gradle.kts").readText(),
+            "publishToMavenCentral(automaticRelease = centralAutomaticRelease)",
+        )
         assertContains(workflow, "MAVEN_CENTRAL_USERNAME")
         assertContains(workflow, "SIGNING_IN_MEMORY_KEY")
         assertContains(workflow, "generateBundledDependencyInventory")

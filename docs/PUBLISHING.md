@@ -90,8 +90,10 @@ The project does not currently enable Gradle dependency locking. The release wor
 `bundled-dependencies.txt` inventory with the resolved coordinate, filename, and SHA-256 of every
 JVM dependency bundled into the native JAR and attaches it to the GitHub release draft.
 
-The build uses `automaticRelease = false`, matching Spectre's cautious release flow. A successful
-workflow leaves the validated deployment waiting for manual promotion in the Central Portal.
+The tag workflow passes `-PcentralAutomaticRelease=true`, matching Maradona's release flow.
+After native verification, the upload validates and publishes to Maven Central without a portal
+click. A local `publishToMavenCentral` without that property stays manual. The plugin does not
+print the deployment ID; the release property is the upload-time publication decision.
 
 Every release tag first checks that release notes and required publication/platform credentials are
 present, **before** any Maven publication. It builds and verifies the Tier 1 native CLI ZIPs,
@@ -161,7 +163,8 @@ git tag v<approved-next-version>
 git push origin v<approved-next-version>
 ```
 
-After the workflow succeeds, inspect the deployment in the Central Portal and promote it manually.
-Verify public Maven coordinates from a clean consumer, then publish the GitHub draft
-(`gh release edit <tag> --draft=false`). Before publishing, inspect the draft release assets,
-checksum sidecars, bundled-dependency inventory, and the native verification logs from CI.
+After the workflow succeeds, verify public Maven coordinates from a clean consumer, then publish
+the GitHub draft (`gh release edit <tag> --draft=false`). Before publishing, inspect the draft
+release assets, checksum sidecars, bundled-dependency inventory, and the native verification logs
+from CI. The draft stays unpublished if Central validation fails, because the release job fails
+before creating it.
