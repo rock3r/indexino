@@ -688,7 +688,13 @@ val publicationGroupId = group.toString()
 val publicationVersion = version.toString()
 
 mavenPublishing {
-    publishToMavenCentral(automaticRelease = false)
+    // Tag releases pass -PcentralAutomaticRelease=true after native verification.
+    // Local and test publication stay manual so a developer upload is not promoted.
+    val centralAutomaticRelease =
+        providers.gradleProperty("centralAutomaticRelease")
+            .map { it.equals("true", ignoreCase = true) }
+            .getOrElse(false)
+    publishToMavenCentral(automaticRelease = centralAutomaticRelease)
     configure(KotlinJvm(javadocJar = JavadocJar.Empty(), sourcesJar = SourcesJar.Sources()))
 
     val hasSigningKey = providers.gradleProperty("signingInMemoryKey").orNull?.isNotBlank() == true
