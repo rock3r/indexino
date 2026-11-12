@@ -91,9 +91,12 @@ The project does not currently enable Gradle dependency locking. The release wor
 JVM dependency bundled into the native JAR and attaches it to the GitHub release draft.
 
 The tag workflow passes `-PcentralAutomaticRelease=true`, matching Maradona's release flow.
-After native verification, the upload validates and publishes to Maven Central without a portal
-click. A local `publishToMavenCentral` without that property stays manual. The plugin does not
-print the deployment ID; the release property is the upload-time publication decision.
+That tells the publisher plugin to request automatic promotion at upload time. Plugin
+`DeploymentValidation.PUBLISHED` waits for the portal deployment state, not for public Maven
+resolution. The release job therefore runs `scripts/verify-maven-central-resolution.py` after
+upload and fails unless all seven POMs return HTTP 200 from `repo1.maven.org`. A pending or
+failed resolution does not create the GitHub draft. A local `publishToMavenCentral` without the
+release property stays manual.
 
 Every release tag first checks that release notes and required publication/platform credentials are
 present, **before** any Maven publication. It builds and verifies the Tier 1 native CLI ZIPs,
