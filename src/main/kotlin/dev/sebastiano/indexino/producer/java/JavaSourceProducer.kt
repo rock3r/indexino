@@ -56,7 +56,20 @@ internal class JavaSourceProducer : IndexProducer {
         check(parsed.size == javaFiles.size) { "Java parse result count changed" }
         check(parsed.map { file -> file.source } == javaFiles) { "Java parse result order changed" }
 
-        val symbols = JavaProjectSymbols(parsed.flatMap { file -> file.facts.symbols }, store)
+        val processedSources =
+            javaFiles.mapTo(HashSet()) { source -> source.originId to source.path }
+        val mergeStoredSymbols =
+            context.sources.any { source ->
+                source.isCode &&
+                    source.path.endsWith(".java") &&
+                    (source.originId to source.path) !in processedSources
+            }
+        val symbols =
+            JavaProjectSymbols(
+                parsed.flatMap { file -> file.facts.symbols },
+                store,
+                mergeStoredSymbols,
+            )
         val resourceDefinitions = JavaResourceDefinitionLookup(store)
         var processed = 0
         parsed.chunked(EMIT_BATCH_SIZE).forEach { batch ->
@@ -196,25 +209,25 @@ internal class JavaSourceProducer : IndexProducer {
     }
 
     /**
-     * Cross-file lookups for the current run stay in memory. Symbols owned by files outside the run
-     * fall back to the store once per FQN instead of once per candidate.
+     * Cross-file lookups for the current run stay in memory. When this run leaves Java sources
+     * unprocessed, their stored declarations remain candidates; merge them by FQN before applying
+     * caller-origin preference so an incremental result matches a full rebuild.
      */
     private class JavaProjectSymbols(
         currentRunSymbols: List<SymbolRecord>,
         private val store: CodeIndexStore,
+        private val mergeStoredSymbols: Boolean,
     ) {
         private val byFqn = currentRunSymbols.groupBy { symbol -> symbol.fqn }
         private val storedByFqn = mutableMapOf<String, List<SymbolRecord>>()
         private val presenceByFqn = mutableMapOf<String, Boolean>()
 
         fun parameterNames(fqn: String, argumentCount: Int, originId: String): List<String> {
-            val currentRun = byFqn[fqn].orEmpty().filter { symbol -> symbol.arity == argumentCount }
+            val currentRun = byFqn[fqn].orEmpty()
             val candidates =
-                if (currentRun.isNotEmpty()) {
-                    currentRun
-                } else {
-                    storedSymbols(fqn).filter { symbol -> symbol.arity == argumentCount }
-                }
+                (if (mergeStoredSymbols) currentRun + storedSymbols(fqn) else currentRun)
+                    .distinct()
+                    .filter { symbol -> symbol.arity == argumentCount }
             return (candidates.singleOrNull { symbol -> symbol.originId == originId }
                     ?: candidates.singleOrNull())
                 ?.parameterNames
@@ -227,8 +240,8 @@ internal class JavaSourceProducer : IndexProducer {
         private fun storedSymbols(fqn: String): List<SymbolRecord> =
             storedByFqn.getOrPut(fqn) {
                 val matches = mutableListOf<SymbolRecord>()
-                store.forEachPrefix("sym:$fqn:") { _, record ->
-                    if (record is SymbolRecord && record.fqn == fqn) matches += record
+                store.forEachSymbolMatching(fqn, prefix = false) { _, record ->
+                    if (record.fqn == fqn) matches += record
                     true
                 }
                 matches

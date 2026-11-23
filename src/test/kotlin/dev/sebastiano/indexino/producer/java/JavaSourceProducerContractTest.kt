@@ -11,11 +11,14 @@ import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.producer.IndexBuildContext
+import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.ProducerRegistry
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
+import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -127,6 +130,85 @@ class JavaSourceProducerContractTest {
                     .sortedBy { it.enclosingSymbolFqn }
                     .map { call -> call.arguments.single().resolvedName },
             )
+        }
+    }
+
+    @Test
+    fun `prefers the caller origin when another origin redeclares the same method`() {
+        val originA = createTempDirectory("java-contract-origin-a-")
+        val originB = createTempDirectory("java-contract-origin-b-")
+        try {
+            originA.resolve("ATarget.java").apply {
+                parent.createDirectories()
+                writeText(
+                    "package sample; class Target { " +
+                        "static int take(int alpha) { return alpha; } }"
+                )
+            }
+            originB.resolve("BTarget.java").apply {
+                parent.createDirectories()
+                writeText(
+                    "package sample; class Target { " +
+                        "static int take(int beta) { return beta; } }"
+                )
+            }
+            originB.resolve("Caller.java").apply {
+                parent.createDirectories()
+                writeText(
+                    "package sample; class Caller { " + "int call() { return Target.take(1); } }"
+                )
+            }
+            withStore { store ->
+                val producer = javaProducer()
+                val sources =
+                    listOf(
+                        IndexedSource("git:a", originA, "ATarget.java"),
+                        IndexedSource("git:b", originB, "BTarget.java"),
+                        IndexedSource("git:b", originB, "Caller.java"),
+                    )
+                val sourceFiles = sources.map { source -> source.path }
+                producer.produce(
+                    IndexBuildContext(
+                        store = store,
+                        commitHash = "initial",
+                        sourceFiles = sourceFiles,
+                        sources = sources,
+                    )
+                )
+
+                originA
+                    .resolve("ATarget.java")
+                    .writeText(
+                        "package sample; class Target { " +
+                            "static int take(int gamma) { return gamma; } }"
+                    )
+                originB
+                    .resolve("Caller.java")
+                    .writeText(
+                        "package sample; class Caller { " +
+                            "int call() { return Target.take(2); } }"
+                    )
+                producer.produce(
+                    IndexBuildContext(
+                        store = store,
+                        commitHash = "changed",
+                        sourceFiles = sourceFiles,
+                        sources = sources,
+                        changedSourceFiles = setOf("ATarget.java", "Caller.java"),
+                    )
+                )
+
+                val call =
+                    store
+                        .prefixScan("call:")
+                        .map { it.second }
+                        .filterIsInstance<CallSiteRecord>()
+                        .single()
+                assertEquals("beta", call.arguments.single().resolvedName)
+            }
+        } finally {
+            originA.toFile().deleteRecursively()
+            originB.toFile().deleteRecursively()
         }
     }
 
