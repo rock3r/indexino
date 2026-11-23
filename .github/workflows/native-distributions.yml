@@ -85,6 +85,23 @@ jobs:
         with:
           path: ${{ steps.pins.outputs.cache_path }}
           key: native-inputs-${{ runner.os }}-${{ matrix.target }}-${{ steps.pins.outputs.cache_key }}
+      - name: Prepare signed macOS JAR inputs
+        if: inputs.release && matrix.target == 'macos-arm64'
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          ./gradlew normalizedCliJar normalizedExtensionWorkerJar \
+            -PVERSION_NAME="$INDEXINO_RELEASE_VERSION" --no-daemon --console=plain
+          signed_jars="build/release-distributions/signed-jars"
+          .github/scripts/sign-notarize-macos-distribution.sh --prepare-jars \
+            build/native-distributions/application/indexino-cli.jar \
+            build/native-distributions/application/indexino-extension-worker.jar \
+            "$signed_jars"
+          echo "INDEXINO_SIGNED_MAC_CLI_JAR=$GITHUB_WORKSPACE/$signed_jars/indexino-cli.jar" >> "$GITHUB_ENV"
+          echo "INDEXINO_SIGNED_MAC_WORKER_JAR=$GITHUB_WORKSPACE/$signed_jars/indexino-extension-worker.jar" >> "$GITHUB_ENV"
       - name: Verify native distribution
         shell: bash
         run: |
@@ -102,6 +119,22 @@ jobs:
               "${version_arguments[@]}" \
               --no-daemon --console=plain 2>&1 | \
             tee "build/ci-logs/${{ matrix.target }}/verification.log"
+      - name: Report Windows native verification failures
+        if: failure() && matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          $directory = 'build/test-results/verifyNativeDistributionWindowsX64'
+          if (Test-Path $directory) {
+            Get-ChildItem $directory -Filter '*.xml' -Recurse | ForEach-Object {
+              [xml]$report = Get-Content -LiteralPath $_.FullName -Raw
+              $failure = $report.SelectSingleNode('//testcase/failure')
+              if ($failure) {
+                $message = $failure.GetAttribute('message')
+                $excerpt = $message.Substring(0, [Math]::Min($message.Length, 1500))
+                Write-Host "$($_.Name): $excerpt"
+              }
+            }
+          }
       - name: Smoke oldest supported Linux baseline (ubuntu:22.04 / glibc 2.35)
         if: matrix.target == 'linux-x64'
         shell: bash
@@ -131,8 +164,13 @@ jobs:
           test -n "$signed_archive"
           mkdir -p build/ci-logs/macos-arm64
           set -o pipefail
-          .github/scripts/smoke-macos-release-distribution.sh "$signed_archive" 2>&1 | \
+          INDEXINO_NATIVE_MACOS_ARM64_VERIFICATION_ARCHIVE="$signed_archive" \
+            .github/scripts/native-archive-cache.sh run macos-arm64 .native-download-cache -- \
+              ./gradlew verifyNativeDistributionMacArm64 \
+                -PVERSION_NAME="$INDEXINO_RELEASE_VERSION" --no-daemon --console=plain 2>&1 | \
             tee build/ci-logs/macos-arm64/final-release-verification.log
+          .github/scripts/smoke-macos-release-distribution.sh "$signed_archive" 2>&1 | \
+            tee build/ci-logs/macos-arm64/final-release-smoke.log
 
           unsigned_archive="$(find build/distributions -maxdepth 1 -name '*-macos-arm64.zip' -print -quit)"
           cp "$signed_archive" "$unsigned_archive"

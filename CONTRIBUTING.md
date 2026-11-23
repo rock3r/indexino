@@ -9,7 +9,8 @@ After the initial GitHub bootstrap, **all changes land through pull requests**:
 
 1. Branch from `main` (feature branches, worktrees, or topic branches are all fine).
 2. Make focused changes; keep `./gradlew check` green locally before pushing.
-3. Open a PR against `main`.
+3. Open a PR against `main`. Never open a fix PR against a `release/*` branch; see
+   [Release branches](docs/PUBLISHING.md#release-branches).
 4. **Babysit CI** — wait for the [`check`](.github/workflows/check.yml) workflow (and any
    review bots enabled on the repo) to finish. Fix failures locally, batch fixes into one
    push per cycle, and re-run `./gradlew check` before pushing again.

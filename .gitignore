@@ -38,3 +38,5 @@ scratch/
 
 # VS Code / misc
 /bin/
+
+__pycache__/

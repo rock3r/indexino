@@ -6,11 +6,9 @@ described in [PUBLIC-API-DESIGN.html](PUBLIC-API-DESIGN.html) (Accepted 2026-07-
 ## Storage
 
 The product cache lives under the user-local root described in [INDEX-STORAGE.md](INDEX-STORAGE.md).
-The current CLI also writes a compatibility copy after each successful `index` command:
-`<project>/.indexino/index/<commit>/base.xodus` and `manifest.json`.
-`IndexCommand.materializeCliCompatibilityProjection` creates this copy from the published generation.
-Deleting the copy does not delete the user-local cache; the next successful `index` recreates it.
-Do not extend this transitional layout or use it as the product cache contract.
+The current CLI does not create a project-local `.indexino` compatibility copy. Older direct-build
+callers may still have legacy stores; their contents are not the CLI's cache or a supported storage
+contract. Use `indexino cache status` to inspect the user-local cache.
 
 ## Lifecycle commands (product surface)
 

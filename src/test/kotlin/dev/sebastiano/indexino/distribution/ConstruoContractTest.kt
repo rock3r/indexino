@@ -194,7 +194,7 @@ class ConstruoContractTest {
             requiredProperty("indexino.construoVersion"),
             pins.getProperty("construo.version"),
         )
-        assertEquals("v1.6.0", pins.getProperty("roast.version"))
+        assertEquals("v1.8.0", pins.getProperty("roast.version"))
         assertEquals(
             "https://github.com/fourlastor-alexandria/roast/releases/download",
             pins.getProperty("roast.baseUrl"),

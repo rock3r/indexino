@@ -78,6 +78,20 @@ The task publishes to an isolated repository under `build/test-maven-repository/
 `./gradlew publishToMavenLocal` is also available for testing a consumer build against the local
 Maven repository.
 
+## Release branches
+
+- Keep `release/*` branches identical to `main` except for trivial mechanical changes: version
+  bumps, release notes, changelog entries and similar.
+- Land every other fix on `main` first. Then cherry-pick or merge it into the release branch.
+- Never open a fix PR against a release branch.
+
+Release checklist:
+
+1. Cut or update the release branch from `main`. Apply only mechanical changes on it.
+2. Tag and run the release.
+3. If the release branch diverged from `main` in any non-mechanical way, open a PR that merges it
+   back into `main` right after the release. Do not start the next release until that PR lands.
+
 ## Tag-driven release flow
 
 `.github/workflows/release.yml` runs for tags shaped like `v<semver>`. It strips the leading `v`,
@@ -90,17 +104,43 @@ The project does not currently enable Gradle dependency locking. The release wor
 `bundled-dependencies.txt` inventory with the resolved coordinate, filename, and SHA-256 of every
 JVM dependency bundled into the native JAR and attaches it to the GitHub release draft.
 
-The build uses `automaticRelease = false`, matching Spectre's cautious release flow. A successful
-workflow leaves the validated deployment waiting for manual promotion in the Central Portal.
+The tag workflow passes `-PcentralAutomaticRelease=true`, matching Maradona's release flow.
+That tells the publisher plugin to request automatic promotion at upload time. Plugin
+`DeploymentValidation.PUBLISHED` waits for the portal deployment state, not for public Maven
+resolution. The release job therefore runs `scripts/verify-maven-central-resolution.py` after
+upload and fails unless all seven POMs return HTTP 200 from `repo1.maven.org`. HTTP 404 counts as
+pending. Network errors, HTTP 408, 429 and 5xx are retried with backoff capped at five minutes,
+inside the same 30-minute window. Any other HTTP status fails at once. A pending or failed
+resolution does not create the GitHub draft. A local `publishToMavenCentral` without the
+release property stays manual.
 
-Every release tag runs the full check suite, uploads the Maven train, builds the Tier 1 native CLI
-ZIPs, and creates a **draft** GitHub release with `release/RELEASE_NOTES-<version>.md`, the three
-native archives, their SHA-256 sidecars, and `bundled-dependencies.txt`. Publish that draft only
-after Central promotion and external resolution checks succeed.
+`promote-central.yml` is the manual fallback for a deployment left in `VALIDATED`, such as a local
+upload or a tag release from before automatic promotion. Dispatch it with the version. It promotes
+only when exactly one validated deployment contains exactly the seven POMs for that version. Run `scripts/verify-maven-central-resolution.py --version <version>` afterwards
+before publishing the GitHub draft.
 
-The macOS job signs all Mach-O payloads, creates the immutable final ZIP, submits those exact bytes
-for notarization, exercises online Gatekeeper, and reruns the complete native verifier against the
-signed archive before replacing its checksum. The workflow never auto-publishes the GitHub draft.
+Every release tag first checks that release notes and required publication/platform credentials are
+present, **before** any Maven publication. It builds and verifies the Tier 1 native CLI ZIPs,
+then runs the full check suite and uploads the Maven train. Finally it creates a **draft** GitHub
+release with
+`release/RELEASE_NOTES-<version>.md`, the three native archives, their SHA-256 sidecars, verified
+tag-bound Sigstore `.zip.sigstore.json` bundles, and `bundled-dependencies.txt`. Publish that draft
+only after Central promotion, external resolution checks, and review of the final signatures.
+Credential presence is an early gate; it does not prove a certificate is trusted or usable. Native
+macOS signing and all matching-host native verification must complete before Maven upload begins,
+so an incompatible signed macOS AOT cache cannot leave a partially uploaded Central train.
+
+The macOS job signs nested JAR Mach-O payloads before training AOT against the signed application
+JAR. It then signs the remaining Mach-O files without changing the trained JAR, creates the
+immutable final ZIP, submits those exact bytes for notarization, exercises online Gatekeeper, and
+reruns the complete native verifier against the signed archive before replacing its checksum. The
+workflow never auto-publishes the GitHub draft.
+The Windows launcher is **unsigned Authenticode** by decision; no Windows certificate or signing
+secrets are required. Its matching-host AOT, differential, and relocation verifier still gates the
+ZIP and checksum. The bundled JBR files retain their upstream provenance. Linux has no
+platform-native signature either. The verified tag-bound Sigstore bundle authenticates each final
+ZIP as a release-workflow artifact, **not** as a platform-signed executable. A checksum detects
+corruption but cannot authenticate the publisher.
 
 To sign and notarize macOS bytes without a new tag, for example for a version that Central has
 already promoted, dispatch `native-distributions.yml` manually with `release` set to true. The
@@ -137,15 +177,18 @@ The script reads:
   attached `.cer`/`.key` → base64 `.p12`
 - **Apple ID** — account email (`username` → `APPLE_ID`) and `team ID` → `APPLE_TEAM_ID`
 
-Before the first release, confirm that the Central Portal account can publish under the verified
-`dev.sebastiano` namespace. Then push an already-reviewed release commit and its version tag:
+Before the next release, confirm that the Central Portal account can publish under the verified
+`dev.sebastiano` namespace and review the matching-host Tier 1 and credentialed macOS results.
+**0.3.0 is the approved next version** after 0.2.6, but version approval does not authorize its
+tag, Maven publication, or GitHub release. Push a version tag only after separate release approval:
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v<approved-next-version>
+git push origin v<approved-next-version>
 ```
 
-After the workflow succeeds, inspect the deployment in the Central Portal and promote it manually.
-Verify public Maven coordinates from a clean consumer, then publish the GitHub draft
-(`gh release edit <tag> --draft=false`). Before publishing, inspect the draft release assets,
-checksum sidecars, bundled-dependency inventory, and the native verification logs from CI.
+After the workflow succeeds, verify public Maven coordinates from a clean consumer, then publish
+the GitHub draft (`gh release edit <tag> --draft=false`). Before publishing, inspect the draft
+release assets, checksum sidecars, bundled-dependency inventory, and the native verification logs
+from CI. The draft stays unpublished if Central validation fails, because the release job fails
+before creating it.
