@@ -96,7 +96,7 @@ class KotlinPsiSymbolProducerTest {
     }
 
     @Test
-    fun `batches Kotlin writes per file while preserving forward calls`() {
+    fun `batches Kotlin writes per emit batch while preserving forward calls`() {
         var depth = 0
         var unbatched = 0
         var batches = 0
@@ -133,8 +133,33 @@ class KotlinPsiSymbolProducerTest {
             store.prefixScan("call:").map { it.second }.filterIsInstance<CallSiteRecord>().single()
         assertEquals(listOf("sample.target"), call.candidateSymbolFqns)
         assertEquals("expected", call.arguments.single().resolvedName)
-        assertEquals(0, unbatched, "Every fact write must join its file transaction")
-        assertEquals(2, batches, "Keep transaction scope bounded to one file")
+        assertEquals(0, unbatched, "Every fact write must join an emit batch transaction")
+        assertEquals(1, batches, "Two files fit in one bounded emit batch")
+    }
+
+    @Test
+    fun `bounds Kotlin emit transactions for large changed source sets`() {
+        var batches = 0
+        val tracked =
+            object : CodeIndexStore by store {
+                override fun <T> transaction(block: () -> T): T = store.transaction {
+                    batches++
+                    block()
+                }
+            }
+        val sources =
+            (0 until 65).associate { index ->
+                "File$index.kt" to "package sample\nfun call$index() = value$index(1)"
+            } +
+                (0 until 65).associate { index ->
+                    "Value$index.kt" to "package sample\nfun value$index(expected: Int) = expected"
+                }
+        KotlinPsiSymbolProducer()
+            .produce(
+                IndexBuildContext.forInlineSources(tracked, "batched-kotlin-large", sources),
+                tracked,
+            )
+        assertEquals(3, batches, "Capped batches keep transactions bounded per emit batch")
     }
 
     @Test
