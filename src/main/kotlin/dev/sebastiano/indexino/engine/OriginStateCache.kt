@@ -269,7 +269,14 @@ internal class OriginStateCache(
 
     private class ConfiguredPath(val path: Path?, val ambiguous: Boolean = false)
 
-    private fun configFingerprint(layout: GitLayout): ConfigSnapshot? {
+    private class ConfigPaths(
+        val repo: Path,
+        val worktree: Path,
+        val all: List<Path>,
+        val basePrecedence: List<Path>,
+    )
+
+    private fun configPaths(layout: GitLayout): ConfigPaths {
         val overridden = homeOverride != null || xdgConfigHomeOverride != null
         val envGlobal =
             if (!overridden) {
@@ -285,45 +292,111 @@ internal class OriginStateCache(
                 environment("GIT_CONFIG_SYSTEM")?.takeIf(String::isNotBlank)?.let(Path::of)
                     ?: systemConfigPath()
             } else null
-        val repoConfig = layout.commonDir.resolve("config")
-        val worktreeConfig = layout.gitDir.resolve("config.worktree")
-        val paths =
+        val repo = layout.commonDir.resolve("config")
+        val worktree = layout.gitDir.resolve("config.worktree")
+        val all =
             buildList {
-                    add(repoConfig)
-                    add(worktreeConfig)
+                    add(repo)
+                    add(worktree)
                     addAll(globalPaths)
                     systemPath?.let(::add)
                 }
                 .distinct()
-        // Ascending precedence; the last value of a key in this order is the effective one.
-        val precedence =
+        val basePrecedence =
             buildList {
                     systemPath?.let(::add)
                     addAll(globalPaths)
-                    add(repoConfig)
-                    add(worktreeConfig)
+                    add(repo)
                 }
                 .distinct()
+        return ConfigPaths(repo, worktree, all, basePrecedence)
+    }
+
+    private fun configFingerprint(layout: GitLayout): ConfigSnapshot? {
+        val paths = configPaths(layout)
         return runCatching {
-                val texts = paths.associateWith { path ->
-                    if (Files.isRegularFile(path)) Files.readString(path) else null
-                }
-                texts.values.filterNotNull().forEach { text ->
-                    if (!supportedConfig(text)) return null
-                }
+                val texts =
+                    paths.all.associateWith { path ->
+                        if (Files.isRegularFile(path)) Files.readString(path) else null
+                    }
+                // A present but unreadable repository config hides the extension state.
+                if (Files.exists(paths.repo) && texts[paths.repo] == null) return null
+                val worktreeEnabled = worktreeConfigEnabled(texts[paths.repo]) ?: return null
+                if (texts.values.filterNotNull().any { !supportedConfig(it) }) return null
+                // Git applies config.worktree only when extensions.worktreeConfig is enabled.
+                val precedence =
+                    if (worktreeEnabled) paths.basePrecedence + listOf(paths.worktree)
+                    else paths.basePrecedence
                 val excludes = effectiveValue(texts, precedence, "excludesfile", layout.originRoot)
                 val attributes =
                     effectiveValue(texts, precedence, "attributesfile", layout.originRoot)
                 if (excludes.ambiguous || attributes.ambiguous) return null
-                val fingerprint = buildString {
-                    paths.forEach { path ->
-                        append(stableContent(path))
-                        append('\u0000')
-                    }
-                }
-                ConfigSnapshot(fingerprint, excludes.path, attributes.path)
+                ConfigSnapshot(configDigest(paths.all), excludes.path, attributes.path)
             }
             .getOrNull()
+    }
+
+    private fun configDigest(paths: List<Path>): String = buildString {
+        paths.forEach { path ->
+            append(stableContent(path))
+            append('\u0000')
+        }
+    }
+
+    /**
+     * Reads `extensions.worktreeConfig` from the repository config. Null means the value is
+     * ambiguous (Git would reject it), so the caller declines reuse; false means absent or off.
+     */
+    private fun worktreeConfigEnabled(repoText: String?): Boolean? {
+        if (repoText == null) return false
+        var inExtensions = false
+        var enabled: Boolean? = null
+        for (line in repoText.lineSequence()) {
+            val trimmed = line.trim()
+            val section = sectionName(trimmed)
+            when {
+                trimmed.isEmpty() || trimmed.startsWith('#') || trimmed.startsWith(';') -> Unit
+                section != null -> inExtensions = section.equals("extensions", ignoreCase = true)
+                inExtensions -> {
+                    val (key, value) = configEntry(trimmed)
+                    if (key.equals("worktreeconfig", ignoreCase = true)) {
+                        enabled = parseBoolean(value) ?: return null
+                    }
+                }
+            }
+        }
+        return enabled ?: false
+    }
+
+    private fun sectionName(line: String): String? =
+        if (line.startsWith('[')) line.removePrefix("[").substringBefore(']').trim() else null
+
+    /** Returns the key and its raw value; null means a bare key with no value. */
+    private fun configEntry(line: String): Pair<String, String?> {
+        val separator = line.indexOf('=')
+        if (separator >= 0) {
+            return line.substring(0, separator).trim() to line.substring(separator + 1).trim()
+        }
+        val whitespace = line.indexOfFirst(Char::isWhitespace)
+        if (whitespace >= 0) {
+            val key = line.substring(0, whitespace).trim()
+            val value = line.substring(whitespace + 1).trim()
+            return key to value.takeUnless { it.startsWith('#') || it.startsWith(';') }
+        }
+        return line to null
+    }
+
+    private fun parseBoolean(raw: String?): Boolean? {
+        // A bare key is true; an explicit empty value is false (Git's own parser).
+        if (raw == null) return true
+        val normalized =
+            raw.removeSurrounding("\"").substringBefore('#').substringBefore(';').trim().lowercase()
+        return when {
+            normalized.isEmpty() -> false
+            normalized in TRUE_CONFIG_VALUES -> true
+            normalized in FALSE_CONFIG_VALUES -> false
+            else -> null
+        }
     }
 
     private fun effectiveValue(
@@ -787,6 +860,8 @@ internal class OriginStateCache(
             )
         private val INCLUDE_SECTION = Regex("(?im)^\\s*\\[\\s*include(?:if)?\\b")
         private val MSYS_DRIVE_PATH = Regex("^/([A-Za-z])(/.*)?$")
+        private val TRUE_CONFIG_VALUES = setOf("true", "yes", "on", "1")
+        private val FALSE_CONFIG_VALUES = setOf("false", "no", "off", "0")
         private val NESTED_SKIPPED_DIRECTORIES =
             setOf("objects", "logs", "hooks", "lfs", "rr-cache")
         private val NESTED_METADATA_FILES =

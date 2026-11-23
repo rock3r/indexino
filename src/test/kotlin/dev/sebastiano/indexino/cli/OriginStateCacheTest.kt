@@ -297,6 +297,61 @@ class OriginStateCacheTest {
     }
 
     @Test
+    fun `worktree config values apply only when the extension is enabled`() {
+        val workspace = committedWorkspace()
+        val repoExcludes = tempDir.resolve("repo-excludes")
+        repoExcludes.writeText("repo-one.txt\n")
+        val worktreeExcludes = tempDir.resolve("worktree-excludes")
+        worktreeExcludes.writeText("worktree-one.txt\n")
+        val config = workspace.resolve(".git/config")
+        config.writeText(config.readText() + "\n[core]\n\texcludesFile = $repoExcludes\n")
+        workspace
+            .resolve(".git/config.worktree")
+            .writeText("[core]\n\texcludesFile = $worktreeExcludes\n")
+        val cache = newCache()
+
+        val disabled = cache.stamp(workspace.toRealPath(), null)
+        assertNotNull(disabled)
+        repoExcludes.writeText("repo-one.txt\nrepo-two.txt\n")
+        val afterRepoEdit = cache.stamp(workspace.toRealPath(), null)
+        assertNotNull(afterRepoEdit)
+        assertNotEquals(
+            disabled.value,
+            afterRepoEdit.value,
+            "Git ignores config.worktree without extensions.worktreeConfig",
+        )
+
+        config.writeText(config.readText() + "\n[extensions]\n\tworktreeConfig = true\n")
+        val enabled = cache.stamp(workspace.toRealPath(), null)
+        assertNotNull(enabled)
+        repoExcludes.writeText("repo-one.txt\nrepo-two.txt\nrepo-three.txt\n")
+        val afterUnusedRepoEdit = cache.stamp(workspace.toRealPath(), null)
+        assertNotNull(afterUnusedRepoEdit)
+        assertEquals(
+            enabled.value,
+            afterUnusedRepoEdit.value,
+            "The worktree excludes file is effective once the extension is enabled",
+        )
+        worktreeExcludes.writeText("worktree-one.txt\nworktree-two.txt\n")
+        val afterWorktreeEdit = cache.stamp(workspace.toRealPath(), null)
+        assertNotNull(afterWorktreeEdit)
+        assertNotEquals(
+            enabled.value,
+            afterWorktreeEdit.value,
+            "Editing the effective worktree excludes file must invalidate",
+        )
+    }
+
+    @Test
+    fun `an ambiguous worktree config extension declines reuse`() {
+        val workspace = committedWorkspace()
+        val config = workspace.resolve(".git/config")
+        config.writeText(config.readText() + "\n[extensions]\n\tworktreeConfig = maybe\n")
+
+        assertNull(newCache().stamp(workspace.toRealPath(), null))
+    }
+
+    @Test
     fun `effective git inputs are stamped or decline reuse`() {
         data class Case(val name: String, val setup: (Path) -> Unit, val declines: Boolean)
 
