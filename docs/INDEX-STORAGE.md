@@ -173,8 +173,11 @@ candidates; cross-file symbols resolve against a run-local symbol table, falling
 symbols for files outside the run. Fact writes are batched per parsed batch. Syntax-only parsing
 does not need host dependencies or auto-starting javac plugins; `-proc:none` alone does not exclude
 them.
-Kotlin also batches fact
-writes per file; it still retains declaration metadata rather than project-wide syntax trees.
+Kotlin parses every source once on a bounded worker pool. Each worker gets its own PSI factory from
+one shared `KotlinCoreEnvironment`; the walk returns detached declaration and unresolved
+call/reference/resource records (~1–2 KB per file), so no project-wide syntax trees stay in heap.
+Cross-file candidates resolve against a run-local symbol table with memoized stored-symbol
+fallbacks, and fact writes use bounded multi-file transactions.
 Build contexts lazily index source identities for metadata lookup, avoiding repeated inventory
 scans while keeping origin-specific captured-source reads and unindexed-file fallback unchanged.
 
@@ -352,12 +355,14 @@ missing or source-less origins, and incompatible generations retain sequential p
 before any reuse decision.
 The Kotlin producer skips PSI environment initialization when no Kotlin source needs analysis, after
 performing any required cleanup for deleted Kotlin sources. Its diagnostic `kotlin-cleanup` phase
-measures writable-store record removal; `kotlin-parser` encloses parser initialization, both passes,
-and disposal. Within it, `kotlin-parser-setup` measures PSI environment construction,
-`kotlin-declarations` measures the first parse and symbol collection, and `kotlin-fact-write`
-measures the second parse and transactional fact writes. These durations are nested, not additive;
-the remaining `kotlin-parser` time includes project-symbol assembly and PSI disposal.
-The CLI no longer materializes a merged project-local store after publication. Cumulative delta
+measures writable-store record removal; `kotlin-parser` encloses parser initialization, the single
+parse pass, resolution, fact writes, and disposal. Within it, `kotlin-parser-setup` measures the
+shared PSI environment and worker factories, `kotlin-declarations` measures the parallel parse and
+single walk per file, and `kotlin-fact-write` measures in-memory candidate resolution and bounded
+transactional fact writes. There is no declaration-only parse followed by a fact-write reparse.
+These durations are nested, not additive; the remaining `kotlin-parser` time includes project-symbol
+assembly and PSI disposal. The CLI no longer materializes a merged project-local store after
+publication. Cumulative delta
 materialization and the remaining whole-scope costs still need measurement and reduction before
 promising subsecond updates for large Bazel workspaces.
 
