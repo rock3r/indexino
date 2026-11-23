@@ -259,6 +259,150 @@ class JavaSourceProducerContractTest {
         }
     }
 
+    @Test
+    fun `keeps stored foreign language candidates when a Java FQN collides`() {
+        val originA = createTempDirectory("java-contract-collision-a-")
+        val originB = createTempDirectory("java-contract-collision-b-")
+        try {
+            originA.resolve("ATarget.java").apply {
+                parent.createDirectories()
+                writeText(
+                    "package sample; class Target { " +
+                        "static int take(int alpha) { return alpha; } }"
+                )
+            }
+            originB.resolve("Caller.java").apply {
+                parent.createDirectories()
+                writeText(
+                    "package sample; class Caller { " + "int call() { return Target.take(1); } }"
+                )
+            }
+            withStore { store ->
+                store.put(
+                    CodeIndexKey.symbolDefinition(
+                        fqn = "sample.Target#take",
+                        originId = "git:b",
+                        relativeFile = "Target.kt",
+                        line = 3,
+                        column = 5,
+                    ),
+                    SymbolRecord(
+                        fqn = "sample.Target#take",
+                        relativeFile = "Target.kt",
+                        originId = "git:b",
+                        line = 3,
+                        column = 5,
+                        kind = "method",
+                        name = "take",
+                        language = "kotlin",
+                        ownerFqn = "sample.Target",
+                        arity = 1,
+                        parameterNames = listOf("beta"),
+                    ),
+                )
+                val sources =
+                    listOf(
+                        IndexedSource("git:a", originA, "ATarget.java"),
+                        IndexedSource("git:b", originB, "Caller.java"),
+                        IndexedSource("git:b", originB, "Target.kt"),
+                    )
+                javaProducer()
+                    .produce(
+                        IndexBuildContext(
+                            store = store,
+                            commitHash = "collision",
+                            sourceFiles = sources.map { source -> source.path },
+                            sources = sources,
+                            changedSourceFiles = setOf("ATarget.java", "Caller.java"),
+                        )
+                    )
+
+                val call =
+                    store
+                        .prefixScan("call:")
+                        .map { it.second }
+                        .filterIsInstance<CallSiteRecord>()
+                        .single()
+                assertEquals("beta", call.arguments.single().resolvedName)
+            }
+        } finally {
+            originA.toFile().deleteRecursively()
+            originB.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `keeps stored Kotlin parameter names when colliding declarations differ in arity`() {
+        val originA = createTempDirectory("java-contract-arity-a-")
+        val originB = createTempDirectory("java-contract-arity-b-")
+        try {
+            originA.resolve("ATarget.java").apply {
+                parent.createDirectories()
+                writeText(
+                    "package sample; class Target { " +
+                        "static int take(int alpha, int beta) { return alpha + beta; } }"
+                )
+            }
+            originB.resolve("Caller.java").apply {
+                parent.createDirectories()
+                writeText(
+                    "package sample; class Caller { " + "int call() { return Target.take(1); } }"
+                )
+            }
+            withStore { store ->
+                store.put(
+                    CodeIndexKey.symbolDefinition(
+                        fqn = "sample.Target#take",
+                        originId = "git:b",
+                        relativeFile = "Target.kt",
+                        line = 3,
+                        column = 5,
+                    ),
+                    SymbolRecord(
+                        fqn = "sample.Target#take",
+                        relativeFile = "Target.kt",
+                        originId = "git:b",
+                        line = 3,
+                        column = 5,
+                        kind = "method",
+                        name = "take",
+                        language = "kotlin",
+                        ownerFqn = "sample.Target",
+                        arity = 1,
+                        parameterNames = listOf("kotlinValue"),
+                    ),
+                )
+                val sources =
+                    listOf(
+                        IndexedSource("git:a", originA, "ATarget.java"),
+                        IndexedSource("git:b", originB, "Caller.java"),
+                        IndexedSource("git:b", originB, "Target.kt"),
+                    )
+                javaProducer()
+                    .produce(
+                        IndexBuildContext(
+                            store = store,
+                            commitHash = "arity",
+                            sourceFiles = sources.map { source -> source.path },
+                            sources = sources,
+                            changedSourceFiles = setOf("ATarget.java", "Caller.java"),
+                        )
+                    )
+
+                val call =
+                    store
+                        .prefixScan("call:")
+                        .map { it.second }
+                        .filterIsInstance<CallSiteRecord>()
+                        .single()
+                assertEquals("kotlinValue", call.arguments.single().resolvedName)
+            }
+        } finally {
+            originA.toFile().deleteRecursively()
+            originB.toFile().deleteRecursively()
+        }
+    }
+
     private fun javaProducer() = assertNotNull(ProducerRegistry.get("java-source"))
 
     private fun CodeIndexRecord.languageNamespace(): Boolean =

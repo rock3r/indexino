@@ -60,9 +60,7 @@ internal class JavaSourceProducer : IndexProducer {
             javaFiles.mapTo(HashSet()) { source -> source.originId to source.path }
         val mergeStoredSymbols =
             context.sources.any { source ->
-                source.isCode &&
-                    source.path.endsWith(".java") &&
-                    (source.originId to source.path) !in processedSources
+                source.isCode && (source.originId to source.path) !in processedSources
             }
         val symbols =
             JavaProjectSymbols(
@@ -210,10 +208,10 @@ internal class JavaSourceProducer : IndexProducer {
 
     /**
      * Cross-file lookups for the current run stay in memory. Targets absent from the run-local
-     * table (for example unchanged Kotlin declarations) fall back to stored symbols. When this run
-     * leaves Java sources unprocessed, stored declarations for the same FQN remain candidates;
-     * merge them before applying caller-origin preference so an incremental result matches a full
-     * rebuild.
+     * table fall back to stored symbols. When any code source is unprocessed, stored declarations
+     * for the same FQN also remain candidates (the symbol namespace is shared across language
+     * producers); merge them before applying caller-origin preference so an incremental result
+     * matches a full rebuild.
      */
     private class JavaProjectSymbols(
         currentRunSymbols: List<SymbolRecord>,
