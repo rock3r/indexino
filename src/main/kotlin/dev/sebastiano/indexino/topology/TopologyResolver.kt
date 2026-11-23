@@ -16,25 +16,76 @@ internal data class TopologyRequest(
 )
 
 internal object TopologyResolver {
+    /**
+     * Resolves topology, reusing a persisted result when [cacheRoot] is set, no test executor is
+     * injected, and every build-definition input and file name below the workspace is unchanged.
+     */
     fun resolve(
         project: Path,
         request: TopologyRequest,
         bazelQueryExecutor: BazelQueryExecutor? = null,
         bazelProcessRunner: BazelProcessRunner? = null,
         onStderr: (String) -> Unit = {},
+        cacheRoot: Path? = null,
     ): TopologyResult {
-        val effective: BuildSystem =
-            when (request.buildSystem) {
-                BuildSystem.AUTO ->
-                    BuildSystemDetector.detect(project)
-                        ?: error(
-                            "Cannot detect build system: no MODULE.bazel/WORKSPACE or settings.gradle(.kts)"
-                        )
-                BuildSystem.BAZEL -> BuildSystem.BAZEL
-                BuildSystem.GRADLE -> BuildSystem.GRADLE
-                BuildSystem.REPO -> BuildSystem.REPO
+        val effective = effectiveBuildSystem(project, request)
+        val fresh: () -> TopologyResult = {
+            resolveFresh(
+                effective,
+                project,
+                request,
+                bazelQueryExecutor,
+                bazelProcessRunner,
+                onStderr,
+            )
+        }
+        if (
+            cacheRoot == null ||
+                bazelQueryExecutor != null ||
+                bazelProcessRunner != null ||
+                (effective != BuildSystem.BAZEL && effective != BuildSystem.GRADLE)
+        ) {
+            return fresh()
+        }
+        val preDiscoveryRoots: () -> List<Path> =
+            if (effective == BuildSystem.GRADLE) {
+                { GradleTopology.includedBuildRoots(project) }
+            } else {
+                { emptyList() }
             }
-        return when (effective) {
+        return TopologyCache.resolve(
+            project = project,
+            request = request,
+            buildSystem = effective,
+            cacheRoot = cacheRoot,
+            toolchain = ToolchainIdentity.capture(project, effective),
+            progress = onStderr,
+            preDiscoveryRoots = preDiscoveryRoots,
+            resolveFresh = fresh,
+        )
+    }
+
+    fun effectiveBuildSystem(project: Path, request: TopologyRequest): BuildSystem =
+        when (request.buildSystem) {
+            BuildSystem.AUTO ->
+                BuildSystemDetector.detect(project)
+                    ?: error(
+                        "Cannot detect build system: no MODULE.bazel/WORKSPACE or settings.gradle(.kts)"
+                    )
+            BuildSystem.BAZEL -> BuildSystem.BAZEL
+            BuildSystem.GRADLE -> BuildSystem.GRADLE
+            BuildSystem.REPO -> BuildSystem.REPO
+        }
+
+    private fun resolveFresh(
+        effective: BuildSystem,
+        project: Path,
+        request: TopologyRequest,
+        bazelQueryExecutor: BazelQueryExecutor?,
+        bazelProcessRunner: BazelProcessRunner?,
+        onStderr: (String) -> Unit,
+    ): TopologyResult =
+        when (effective) {
             BuildSystem.BAZEL -> {
                 val target =
                     requireNotNull(request.bazelTarget) {
@@ -65,5 +116,4 @@ internal object TopologyResolver {
                 )
             BuildSystem.AUTO -> error("unreachable")
         }
-    }
 }

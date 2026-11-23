@@ -81,6 +81,16 @@ requests and runs their tasks. Publication still belongs to the facade;
 the build owner returns the exact manifest, changes, and outcome used by the completed run, so
 callers need not re-resolve `HEAD` or re-derive a result from mutable storage.
 
+Unchanged and small-delta manual/CLI refreshes consult three rebuildable per-workspace accelerators
+under `workspaces/<workspace-id>/refresh-cache/`: a topology cache keyed by build-definition content,
+the complete file-name inventory and toolchain versions (retaining `codeSourceFiles` roles and
+external mounts); a stat-indexed source content-hash cache; and a per-origin Git state cache keyed by
+`HEAD`, the resolved ref, `packed-refs`, the index, Git configuration and every working-tree file
+stat. Each validates current state before use, re-queries, re-hashes or re-reads on any change, and
+falls back to the full path on corruption, watcher overflow or unsupported repository configuration.
+Source content hashes and publication checks remain authoritative. See
+[INDEX-STORAGE.md](INDEX-STORAGE.md#refresh-accelerators).
+
 The storage layer publishes refresh output as immutable content-addressed packs with generation manifests and an
 atomic workspace `current` pointer. Mutable incremental writer state is confined to workspace
 `staging/in-process-writer`; compatible forks and clients query one immutable materialized base
@@ -251,8 +261,9 @@ and observed maximum from 978.34 to 811.36 ms. Origin-resolution and concurrent 
 medians fell from 316 to 279 ms and from 346 to 302.5 ms. The protected original and both
 disposable copies passed PRE/POST, Git/index and immutable-base checks. This sequential pair is
 not a worst-case latency bound or proof that every later save improves.
-Origin reads never write the user's index: `status` runs with optional locks disabled and daemon
-`diff` reads a private copy of the index, because `git diff` otherwise refreshes the index.
+Origin reads never write the user's index: `status` runs with optional locks disabled and every
+`diff` reads a private copy of the index, because `git diff` otherwise refreshes the index. The copy
+also keeps the origin-state cache stamp valid across the read.
 For an incremental, path-limited binary diff against that private full-index copy only, Indexino
 passes `-c diff.autoRefreshIndex=false`. A clean file restored after an edit otherwise makes Git
 stat-refresh every index entry despite the literal one-file pathspec. Full-origin diffs, `status`,
