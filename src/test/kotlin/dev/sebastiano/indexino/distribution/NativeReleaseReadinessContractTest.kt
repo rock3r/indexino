@@ -135,6 +135,18 @@ class NativeReleaseReadinessContractTest {
         assertContains(workflow, "RELEASE_NOTES-")
         assertContains(workflow, "Upload complete Maven Central release train")
         assertContains(workflow, "publishToMavenCentral")
+        assertContains(workflow, "-PcentralAutomaticRelease=true")
+        assertContains(workflow, "scripts/verify-maven-central-resolution.py")
+        val resolutionGate = workflow.substringAfter("publishToMavenCentral")
+        assertTrue(
+            resolutionGate.indexOf("verify-maven-central-resolution.py") <
+                resolutionGate.indexOf("draft-release:"),
+            "Public resolution must pass before the draft release job is eligible",
+        )
+        assertContains(
+            projectFile("build.gradle.kts").readText(),
+            "publishToMavenCentral(automaticRelease = centralAutomaticRelease)",
+        )
         assertContains(workflow, "MAVEN_CENTRAL_USERNAME")
         assertContains(workflow, "SIGNING_IN_MEMORY_KEY")
         assertContains(workflow, "generateBundledDependencyInventory")

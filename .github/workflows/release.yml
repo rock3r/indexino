@@ -85,7 +85,11 @@ jobs:
         run: |
           ./gradlew \
             publishToMavenCentral \
-            -PVERSION_NAME="${{ needs.release-gate.outputs.version }}"
+            -PVERSION_NAME="${{ needs.release-gate.outputs.version }}" \
+            -PcentralAutomaticRelease=true
+          python3 scripts/verify-maven-central-resolution.py \
+            --version "${{ needs.release-gate.outputs.version }}" \
+            --timeout-seconds 1800
 
   native-distributions:
     name: Build final native release candidates
