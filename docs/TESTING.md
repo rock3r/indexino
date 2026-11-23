@@ -10,6 +10,13 @@
    markdown `selectable = true` when configured.
 4. Run `./gradlew test` before considering a change complete.
 
+Watcher tests must select the coverage they assert: force native startup failure when checking
+per-directory fallback keys. A live recursive watcher intentionally needs only the workspace root
+for unseen sources; the native-coverage test checks that path separately, including coverage loss.
+The 300-origin admission test checks the four-worker limit while fingerprints are blocked, then
+uses a separate 120-second completion watchdog on every platform. Completion includes real Git
+process launches and is not a 30-second performance contract for non-Windows hosts.
+
 Distribution and publication contracts use dedicated tagged test tasks and are excluded from the
 ordinary unit-test task:
 
