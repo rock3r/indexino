@@ -34,24 +34,27 @@ class SegmentTableFormatTest {
 
     @Test
     fun `round-trips sorted entries with ordered iteration and point gets`() {
-        val keys = (0 until 200).map { index ->
-            CodeIndexKey.file("src/main/File$index.kt", "hash-$index")
-        }
+        val keys =
+            (0 until 200).map { index ->
+                CodeIndexKey.file("src/main/File$index.kt", "hash-$index")
+            }
         val records = keys.associateWith { key -> MetaIndexerVersionRecord(key.value) }
         writeSegment(keys.sortedBy { it.value }, records)
 
         MappedSegmentFile.open(segmentPath).use { file ->
             val table = file.primaryTable
             assertEquals(keys.size.toLong(), table.entryCount)
-            keys.sortedBy { it.value }.forEach { key ->
-                val entry = table.get(key.value)
-                assertNotNull(entry, "Missing point get for ${key.value}")
-                assertEquals(
-                    records.getValue(key),
-                    CodeIndexRecordCodec.decode(entry.value ?: error("Missing value")),
-                )
-                assertFalse(entry.tombstone)
-            }
+            keys
+                .sortedBy { it.value }
+                .forEach { key ->
+                    val entry = table.get(key.value)
+                    assertNotNull(entry, "Missing point get for ${key.value}")
+                    assertEquals(
+                        records.getValue(key),
+                        CodeIndexRecordCodec.decode(entry.value ?: error("Missing value")),
+                    )
+                    assertFalse(entry.tombstone)
+                }
             assertNull(table.get("file:absent.kt:hash"))
 
             val iterated = table.cursor().asSequence().toList()
@@ -84,10 +87,7 @@ class SegmentTableFormatTest {
         val second = CodeIndexKey.sym("com.example.Bbb")
         writeSegment(
             listOf(first, second),
-            mapOf(
-                first to MetaIndexerVersionRecord("a"),
-                second to MetaIndexerVersionRecord("b"),
-            ),
+            mapOf(first to MetaIndexerVersionRecord("a"), second to MetaIndexerVersionRecord("b")),
         )
 
         MappedSegmentFile.open(segmentPath).use { file ->

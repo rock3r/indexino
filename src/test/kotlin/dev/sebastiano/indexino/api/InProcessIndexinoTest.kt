@@ -2503,19 +2503,24 @@ class InProcessIndexinoTest {
     }
 
     /** The shared generation representation: its published content-addressed segment pack. */
-    private fun publishedPackFile(workspace: java.nio.file.Path, generation: String): java.nio.file.Path {
+    private fun publishedPackFile(
+        workspace: java.nio.file.Path,
+        generation: String,
+    ): java.nio.file.Path {
         val cacheRoot = InProcessCacheLayout.cacheRoot()
         val manifest =
-            dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore(
+            dev.sebastiano.indexino.core.cache
+                .WorkspaceGenerationManifestStore(
                     cacheRoot,
                     InProcessCacheLayout.workspaceId(workspace.toRealPath()),
                 )
-                .readGeneration(generation)
-                ?: error("Missing manifest for generation $generation")
+                .readGeneration(generation) ?: error("Missing manifest for generation $generation")
         val packKey =
             (manifest.packKeys + manifest.overlayPackKeys).firstOrNull()
                 ?: error("Generation $generation has no packs")
-        return dev.sebastiano.indexino.core.cache.ContentAddressedPackCache(cacheRoot).packPath(packKey)
+        return dev.sebastiano.indexino.core.cache
+            .ContentAddressedPackCache(cacheRoot)
+            .packPath(packKey)
     }
 
     private fun createGitWorkspace(): java.nio.file.Path {

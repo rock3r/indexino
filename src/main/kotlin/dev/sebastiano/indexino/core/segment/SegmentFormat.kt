@@ -8,20 +8,19 @@ import java.util.Arrays
  * Immutable segment table format (storage format version 2 packs).
  *
  * A segment file is one immutable, self-contained sorted table set:
- *
  * ```
  * [header 32 B][table 0: data blocks | block index | bloom][table 1 ...][directory][trailer 32 B]
  * ```
  *
- * All integers are little-endian. Keys are UTF-8 bytes compared by **unsigned lexicographic
- * order** (the same ordering Xodus `StringBinding` uses for persisted keys). Data entries are
+ * All integers are little-endian. Keys are UTF-8 bytes compared by **unsigned lexicographic order**
+ * (the same ordering Xodus `StringBinding` uses for persisted keys). Data entries are
  * prefix-compressed against the previous key *of their block*; each block index entry stores the
- * full first key so any block decodes without prior context. A bloom filter (8 bits per entry,
- * 4 probes) accelerates point lookups on the primary table. Tombstones are entries whose value
- * length is zero with the tombstone flag set; a tombstone in a newer segment shadows the same
- * key in older segments. The trailer carries a CRC-32 over the whole file prefix; mapped opens
- * verify it eagerly only up to [EAGER_VERIFY_BYTES] because published packs are additionally
- * named by the SHA-256 of their bytes.
+ * full first key so any block decodes without prior context. A bloom filter (8 bits per entry, 4
+ * probes) accelerates point lookups on the primary table. Tombstones are entries whose value length
+ * is zero with the tombstone flag set; a tombstone in a newer segment shadows the same key in older
+ * segments. The trailer carries a CRC-32 over the whole file prefix; mapped opens verify it eagerly
+ * only up to [EAGER_VERIFY_BYTES] because published packs are additionally named by the SHA-256 of
+ * their bytes.
  */
 internal object SegmentFormat {
     /** ASCII magic at the first and last eight bytes of every segment file. */
@@ -67,6 +66,8 @@ internal object SegmentFormat {
     const val BLOOM_STRIDE: Long = -0x61c8864680b583ebL // 0x9e3779b97f4a7c15 unsigned
     const val MAX_TABLES: Int = 255
     const val MAX_TABLE_NAME_BYTES: Long = 255
+    const val DIRECTORY_FLAGS_BYTES: Int = 1
+    const val DIRECTORY_LONG_FIELDS: Int = 3
 
     val JAVA_BYTE: ValueLayout.OfByte = ValueLayout.JAVA_BYTE
 
@@ -87,19 +88,26 @@ internal object SegmentFormat {
         var hash = -0x340D61667E5D869DL // 0xcbf29ce484222325 as the unsigned FNV-1a seed
         for (byte in key) {
             hash = hash xor (byte.toLong() and BYTE_MASK.toLong())
-            hash *= 0x100000001b3L
+            hash *= FNV_PRIME
         }
         return hash
     }
 
     /** SplitMix64 finalizer used to derive independent bloom probe positions. */
     fun mix64(value: Long): Long {
-        var z = value
-        z += -0x61c8864680b583ebL // golden gamma, 0x9e3779b97f4a7c15 unsigned
-        z = (z xor (z ushr 30)) * -0x40A7B892E31B1A47L
-        z = (z xor (z ushr 27)) * -0x6b2fb644ecceee15L
-        return z xor (z ushr 31)
+        var z = value + GOLDEN_GAMMA
+        z = (z xor (z ushr MIX_SHIFT_1)) * MIX_MULTIPLIER_1
+        z = (z xor (z ushr MIX_SHIFT_2)) * MIX_MULTIPLIER_2
+        return z xor (z ushr MIX_SHIFT_3)
     }
+
+    private const val FNV_PRIME = 0x100000001b3L
+    private const val GOLDEN_GAMMA = -0x61c8864680b583ebL // 0x9e3779b97f4a7c15 unsigned
+    private const val MIX_SHIFT_1 = 30
+    private const val MIX_SHIFT_2 = 27
+    private const val MIX_SHIFT_3 = 31
+    private const val MIX_MULTIPLIER_1 = -0x40A7B892E31B1A47L
+    private const val MIX_MULTIPLIER_2 = -0x6b2fb644ecceee15L
 
     /** Reads an unsigned LEB128 varint; returns (value, next absolute offset). */
     fun readVarUint(segment: MemorySegment, offset: Long): Pair<Int, Long> {
@@ -130,11 +138,8 @@ internal object SegmentKeys {
 }
 
 /** One decoded entry: a full key with either a value or a tombstone marker. */
-internal class SegmentEntry internal constructor(
-    val keyBytes: ByteArray,
-    val value: ByteArray?,
-    val tombstone: Boolean,
-) {
+internal class SegmentEntry
+internal constructor(val keyBytes: ByteArray, val value: ByteArray?, val tombstone: Boolean) {
     val key: String by lazy(LazyThreadSafetyMode.NONE) { SegmentKeys.decode(keyBytes) }
 }
 
@@ -152,11 +157,11 @@ internal abstract class SegmentTableCursor protected constructor() {
 }
 
 /** A named sorted table region inside a [MappedSegmentFile]. */
-internal abstract class SegmentTable protected constructor() {
-    abstract val entryCount: Long
+internal interface SegmentTable {
+    val entryCount: Long
 
     /** Point lookup by key; returns tombstone entries as-is. */
-    abstract fun get(key: String): SegmentEntry?
+    fun get(key: String): SegmentEntry?
 
-    abstract fun cursor(fromKeyInclusive: ByteArray? = null): SegmentTableCursor
+    fun cursor(fromKeyInclusive: ByteArray? = null): SegmentTableCursor
 }

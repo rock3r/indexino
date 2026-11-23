@@ -494,13 +494,13 @@ private constructor(
                     }
                 }
                 if (
-                    !execution.reusedFreshIndex ||
-                        current?.generation != generation.value ||
-                        current.compatibilityManifest?.copy(builtAt = manifest.builtAt) !=
-                            manifest ||
-                        current.basicFactSchemaVersion != BASIC_FACT_SCHEMA_VERSION ||
-                        current.storageFormatVersion != WorktreeOverlayPolicy.CURRENT_STORAGE_FORMAT ||
-                        current.linkGeneration != linkGeneration
+                    publicationRequired(
+                        execution.reusedFreshIndex,
+                        current,
+                        generation,
+                        manifest,
+                        linkGeneration,
+                    )
                 ) {
                     progress("index phase=publication state=started")
                     val publicationStart = System.nanoTime()
@@ -982,11 +982,8 @@ private constructor(
         val manifests = WorkspaceGenerationManifestStore(cacheRoot, workspaceId)
         val previous = manifests.readGeneration(generation.value)
         if (
-            previous?.compatibilityManifest?.copy(builtAt = compatibilityManifest.builtAt) ==
-                compatibilityManifest &&
-                previous.linkGeneration == linkGeneration &&
-                previous.basicFactSchemaVersion == BASIC_FACT_SCHEMA_VERSION &&
-                previous.storageFormatVersion == WorktreeOverlayPolicy.CURRENT_STORAGE_FORMAT &&
+            canRepointToPublishedManifest(previous, compatibilityManifest, linkGeneration) &&
+                previous != null &&
                 hasReachablePacks(cacheRoot, workspaceId, previous)
         ) {
             // Reverting to known bytes must repoint at the old immutable generation. Replacing its
@@ -1001,11 +998,9 @@ private constructor(
         }
         val current = manifests.current()
         if (
-            current?.compatibilityManifest?.copy(builtAt = compatibilityManifest.builtAt) ==
-                compatibilityManifest &&
-                current.basicFactSchemaVersion == BASIC_FACT_SCHEMA_VERSION &&
-                current.storageFormatVersion == WorktreeOverlayPolicy.CURRENT_STORAGE_FORMAT &&
-                current.generation != generation.value &&
+            canRepointToPublishedManifest(current, compatibilityManifest, linkGeneration) &&
+                current?.generation != generation.value &&
+                current != null &&
                 hasReachablePacks(cacheRoot, workspaceId, current)
         ) {
             // A changed link generation does not require copying or repacking source facts.
@@ -1068,12 +1063,47 @@ private constructor(
     ): Path {
         if (manifest.storageFormatVersion == WorktreeOverlayPolicy.STORAGE_FORMAT_SEGMENT_PACK) {
             val packs = ContentAddressedPackCache(InProcessCacheLayout.cacheRoot())
-            return (manifest.packKeys + manifest.overlayPackKeys).firstOrNull()?.let(packs::packPath)
-                ?: clientStorePath
+            return (manifest.packKeys + manifest.overlayPackKeys)
+                .firstOrNull()
+                ?.let(packs::packPath) ?: clientStorePath
         }
-        return if (manifest.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) clientStorePath
+        return if (manifest.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY)
+            clientStorePath
         else InProcessCacheLayout.sharedGenerationStore(workspace, generation.value)
     }
+
+    /**
+     * An unchanged build can repoint at an already published generation only when it carries the
+     * same compatibility manifest, current schema and current storage format.
+     */
+    private fun canRepointToPublishedManifest(
+        manifest: WorkspaceGenerationManifest?,
+        compatibilityManifest: IndexManifest,
+        linkGeneration: String?,
+    ): Boolean =
+        manifest?.compatibilityManifest?.copy(builtAt = compatibilityManifest.builtAt) ==
+            compatibilityManifest &&
+            manifest.linkGeneration == linkGeneration &&
+            manifest.basicFactSchemaVersion == BASIC_FACT_SCHEMA_VERSION &&
+            manifest.storageFormatVersion == WorktreeOverlayPolicy.CURRENT_STORAGE_FORMAT
+
+    /**
+     * Publication is required whenever the build was not an unchanged reuse of the current
+     * generation, or the current generation cannot serve the storage formats this client reads.
+     */
+    private fun publicationRequired(
+        reusedFreshIndex: Boolean,
+        current: WorkspaceGenerationManifest?,
+        generation: WorkspaceGenerationId,
+        manifest: IndexManifest,
+        linkGeneration: String?,
+    ): Boolean =
+        !reusedFreshIndex ||
+            current?.generation != generation.value ||
+            current.compatibilityManifest?.copy(builtAt = manifest.builtAt) != manifest ||
+            current.basicFactSchemaVersion != BASIC_FACT_SCHEMA_VERSION ||
+            current.storageFormatVersion != WorktreeOverlayPolicy.CURRENT_STORAGE_FORMAT ||
+            current.linkGeneration != linkGeneration
 
     @Suppress("ReturnCount")
     private fun hasReachablePacks(
@@ -1143,8 +1173,7 @@ private constructor(
             )
         // Segment-format overlays map their delta pack directly: no private refs tree and no
         // shared expanded overlay-delta directory are materialized for readers.
-        val packPath =
-            overlayPackKeys.singleOrNull()?.let(packs::packPath) ?: clientStorePath
+        val packPath = overlayPackKeys.singleOrNull()?.let(packs::packPath) ?: clientStorePath
         if (overlayPackKeys.isEmpty()) Files.createDirectories(clientStorePath.parent)
         return PublishedStore(path = packPath, created = overlayPackKeys.isNotEmpty())
     }
@@ -1186,14 +1215,12 @@ private constructor(
 
     /**
      * Converts a completed mutable staging environment into an immutable segment pack. The build
-     * owner has closed its writer by publication time, so the environment reopens read-only for
-     * one sorted streaming pass.
+     * owner has closed its writer by publication time, so the environment reopens read-only for one
+     * sorted streaming pass.
      */
     private fun installSegmentPack(packs: ContentAddressedPackCache, stagingStore: Path): String {
         val stagingSegment =
-            stagingStore.resolveSibling(
-                "${stagingStore.fileName}.segment-${UUID.randomUUID()}",
-            )
+            stagingStore.resolveSibling("${stagingStore.fileName}.segment-${UUID.randomUUID()}")
         try {
             XodusCodeIndexStore.open(stagingStore, readOnly = true).use { source ->
                 SegmentCodeIndexStore.writeStoreToFile(source, stagingSegment)

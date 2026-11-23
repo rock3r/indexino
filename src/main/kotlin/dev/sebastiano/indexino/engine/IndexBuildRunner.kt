@@ -519,14 +519,15 @@ internal class IndexBuildRunner(
 
     /**
      * Rehydrates a published segment-format overlay delta into the fresh writable staging
-     * environment the incremental writer mutates. Records stream in key order; Xodus rebuilds
-     * its derived indexes through the writes.
+     * environment the incremental writer mutates. Records stream in key order; Xodus rebuilds its
+     * derived indexes through the writes.
      */
     private fun restoreOverlayDeltaFromSegment(packPath: Path, deltaPath: Path) {
         MappedSegmentFile.open(packPath).use { mapped ->
             SegmentCodeIndexStore.open(listOf(mapped)).use { source ->
                 XodusCodeIndexStore.open(deltaPath, readOnly = false).use { target ->
-                    val batch = ArrayList<Pair<CodeIndexKey, CodeIndexRecord>>(OVERLAY_RESTORE_BATCH_SIZE)
+                    val batch =
+                        ArrayList<Pair<CodeIndexKey, CodeIndexRecord>>(OVERLAY_RESTORE_BATCH_SIZE)
                     fun flush() {
                         if (batch.isEmpty()) return
                         target.transaction {

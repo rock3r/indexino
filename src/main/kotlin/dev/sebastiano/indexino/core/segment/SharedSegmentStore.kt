@@ -5,9 +5,9 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Reference-counted [MappedSegmentFile] per canonical pack path, mirroring the Xodus
- * [dev.sebastiano.indexino.core.store.SharedReadOnlyStore] discipline: simultaneous snapshots
- * share one mapping and one shared Arena; the last release unmaps the file so Windows can delete
- * or rename it. Segment files carry no exclusive directory lock, so this is an efficiency and
+ * [dev.sebastiano.indexino.core.store.SharedReadOnlyStore] discipline: simultaneous snapshots share
+ * one mapping and one shared Arena; the last release unmaps the file so Windows can delete or
+ * rename it. Segment files carry no exclusive directory lock, so this is an efficiency and
  * unmap-ordering guard rather than a hard ownership requirement.
  */
 internal object SharedSegmentStore {
@@ -53,10 +53,7 @@ internal object SharedSegmentStore {
 
 /** One acquired mapping; [release] unmaps only when the last pin drops. */
 internal class PinnedSegmentFile
-internal constructor(
-    val file: MappedSegmentFile,
-    private val release: () -> Unit,
-) : AutoCloseable {
+internal constructor(val file: MappedSegmentFile, private val release: () -> Unit) : AutoCloseable {
     override fun close() {
         release()
     }

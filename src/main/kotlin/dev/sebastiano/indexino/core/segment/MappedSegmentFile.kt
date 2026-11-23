@@ -10,15 +10,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.zip.CRC32
 
 /**
- * A segment file mapped read-only through one shared [Arena]. Closing the file closes the arena
- * and unmaps every table; Windows callers must therefore close before deleting or renaming the
+ * A segment file mapped read-only through one shared [Arena]. Closing the file closes the arena and
+ * unmaps every table; Windows callers must therefore close before deleting or renaming the
  * underlying file. Table views stay valid only until [close].
  */
 internal class MappedSegmentFile
-private constructor(
-    private val arena: Arena,
-    private val tables: Map<String, MappedTable>,
-) : AutoCloseable {
+private constructor(private val arena: Arena, private val tables: Map<String, MappedTable>) :
+    AutoCloseable {
     private val closed = AtomicBoolean()
 
     val primaryTable: MappedTable =
@@ -39,10 +37,12 @@ private constructor(
                 val size = channel.size()
                 val arena = Arena.ofShared()
                 try {
-                    val segment = channel.map(FileChannel.MapMode.READ_ONLY, 0, size, arena).asReadOnly()
+                    val segment =
+                        channel.map(FileChannel.MapMode.READ_ONLY, 0, size, arena).asReadOnly()
                     validate(segment, size)
                     return MappedSegmentFile(arena, readTables(segment, size))
-                } catch (failure: Throwable) {
+                } catch (@Suppress("TooGenericExceptionCaught") failure: Throwable) {
+                    // Any open failure must release the arena or the mapping leaks.
                     runCatching { arena.close() }
                     throw failure
                 }
@@ -60,10 +60,13 @@ private constructor(
                 throw IOException("Unsupported segment format version: $version")
             }
             val directoryOffset =
-                SegmentFormat.readLong(segment, trailerField(segment, SegmentFormat.TRAILER_DIRECTORY_OFFSET))
+                SegmentFormat.readLong(
+                    segment,
+                    trailerField(segment, SegmentFormat.TRAILER_DIRECTORY_OFFSET),
+                )
             if (
                 directoryOffset < SegmentFormat.HEADER_SIZE ||
-                directoryOffset > size - SegmentFormat.TRAILER_SIZE
+                    directoryOffset > size - SegmentFormat.TRAILER_SIZE
             ) {
                 throw IOException("Segment directory offset is out of bounds: $directoryOffset")
             }
@@ -83,20 +86,28 @@ private constructor(
 
         private fun verifyChecksum(segment: MemorySegment, size: Long) {
             val expected =
-                SegmentFormat.readInt(segment, size - SegmentFormat.TRAILER_SIZE + SegmentFormat.TRAILER_CHECKSUM_OFFSET)
+                SegmentFormat.readInt(
+                        segment,
+                        size - SegmentFormat.TRAILER_SIZE + SegmentFormat.TRAILER_CHECKSUM_OFFSET,
+                    )
                     .toLong() and SegmentFormat.INT_MASK
             val buffer = segment.asByteBuffer()
             buffer.limit((size - SegmentFormat.TRAILER_SIZE).toInt())
             val checksum = CRC32()
             checksum.update(buffer)
             if (checksum.value != expected) {
-                throw IOException("Segment checksum mismatch: expected $expected, was ${checksum.value}")
+                throw IOException(
+                    "Segment checksum mismatch: expected $expected, was ${checksum.value}"
+                )
             }
         }
 
         private fun readTables(segment: MemorySegment, size: Long): Map<String, MappedTable> {
             val directoryOffset =
-                SegmentFormat.readLong(segment, size - SegmentFormat.TRAILER_SIZE + SegmentFormat.TRAILER_DIRECTORY_OFFSET)
+                SegmentFormat.readLong(
+                    segment,
+                    size - SegmentFormat.TRAILER_SIZE + SegmentFormat.TRAILER_DIRECTORY_OFFSET,
+                )
             var position = directoryOffset
             val count = SegmentFormat.readVarUint(segment, position)
             position = count.second
@@ -106,12 +117,14 @@ private constructor(
             val tables = LinkedHashMap<String, MappedTable>(count.first)
             repeat(count.first) {
                 val nameLength =
-                    segment.get(SegmentFormat.JAVA_BYTE, position).toLong() and SegmentFormat.BYTE_MASK.toLong()
+                    segment.get(SegmentFormat.JAVA_BYTE, position).toLong() and
+                        SegmentFormat.BYTE_MASK.toLong()
                 position += 1
                 if (nameLength == 0L || nameLength > SegmentFormat.MAX_TABLE_NAME_BYTES) {
                     throw IOException("Invalid segment table name length: $nameLength")
                 }
-                val nameBytes = segment.asSlice(position, nameLength).toArray(SegmentFormat.JAVA_BYTE)
+                val nameBytes =
+                    segment.asSlice(position, nameLength).toArray(SegmentFormat.JAVA_BYTE)
                 position += nameLength
                 val name = SegmentKeys.decode(nameBytes)
                 val blocksStart = SegmentFormat.readLong(segment, position)
@@ -119,25 +132,34 @@ private constructor(
                 val tableEnd =
                     SegmentFormat.readLong(segment, position + SegmentFormat.LONG_SIZE * 2)
                 val entryCount =
-                    SegmentFormat.readInt(segment, position + SegmentFormat.LONG_SIZE * 3)
+                    SegmentFormat.readInt(
+                            segment,
+                            position + SegmentFormat.LONG_SIZE * SegmentFormat.DIRECTORY_LONG_FIELDS,
+                        )
                         .toLong() and SegmentFormat.INT_MASK
                 val flags =
                     segment
                         .get(
                             SegmentFormat.JAVA_BYTE,
-                            position + SegmentFormat.LONG_SIZE * 3 + SegmentFormat.INT_SIZE,
+                            position +
+                                SegmentFormat.LONG_SIZE * SegmentFormat.DIRECTORY_LONG_FIELDS +
+                                SegmentFormat.INT_SIZE,
                         )
                         .toLong() and SegmentFormat.BYTE_MASK.toLong()
-                position += SegmentFormat.LONG_SIZE * 3 + SegmentFormat.INT_SIZE + 1
+                position +=
+                    SegmentFormat.LONG_SIZE * SegmentFormat.DIRECTORY_LONG_FIELDS +
+                        SegmentFormat.INT_SIZE +
+                        SegmentFormat.DIRECTORY_FLAGS_BYTES
                 if (
                     blocksStart < SegmentFormat.HEADER_SIZE ||
-                    indexStart < blocksStart ||
-                    tableEnd < indexStart ||
-                    tableEnd > directoryOffset
+                        indexStart < blocksStart ||
+                        tableEnd < indexStart ||
+                        tableEnd > directoryOffset
                 ) {
                     throw IOException("Segment table '$name' region is out of bounds")
                 }
-                val table = MappedTable(segment, blocksStart, indexStart, tableEnd, entryCount, flags)
+                val table =
+                    MappedTable(segment, blocksStart, indexStart, tableEnd, entryCount, flags)
                 if (tables.put(name, table) != null) {
                     throw IOException("Duplicate segment table name: $name")
                 }
@@ -151,12 +173,18 @@ private constructor(
 internal class MappedTable
 internal constructor(
     private val segment: MemorySegment,
-    private val blocksStart: Long,
+    blocksStart: Long,
     private val indexStart: Long,
-    private val tableEnd: Long,
+    tableEnd: Long,
     override val entryCount: Long,
     flags: Long,
-) : SegmentTable() {
+) : SegmentTable {
+    init {
+        check(indexStart >= blocksStart && tableEnd >= indexStart) {
+            "Segment table region is inverted"
+        }
+    }
+
     private val hasBloom = flags and SegmentFormat.TABLE_FLAG_BLOOM.toLong() != 0L
     private val blockIndex: BlockIndex by lazy(LazyThreadSafetyMode.NONE) { parseBlockIndex() }
 
@@ -182,7 +210,9 @@ internal constructor(
         if (fromKeyInclusive == null) {
             return tableCursor(0, blockIndex.blockStart(0), null)
         }
-        val block = blockIndex.locate(fromKeyInclusive) ?: return tableCursor(0, blockIndex.blockStart(0), null)
+        val block =
+            blockIndex.locate(fromKeyInclusive)
+                ?: return tableCursor(0, blockIndex.blockStart(0), null)
         var position = block.startOffset
         var previousKey: ByteArray? = null
         var ordinal = block.ordinal
@@ -205,8 +235,19 @@ internal constructor(
         }
     }
 
-    private fun tableCursor(ordinal: Int, position: Long, previousKey: ByteArray?): SegmentTableCursor =
-        MappedTableCursor(segment, blockIndex, ordinal, position, previousKey, blockIndex.blockEnd(ordinal))
+    private fun tableCursor(
+        ordinal: Int,
+        position: Long,
+        previousKey: ByteArray?,
+    ): SegmentTableCursor =
+        MappedTableCursor(
+            segment,
+            blockIndex,
+            ordinal,
+            position,
+            previousKey,
+            blockIndex.blockEnd(ordinal),
+        )
 
     private fun decodeEntry(position: Long, previousKey: ByteArray?): DecodedEntry {
         var offset = position
@@ -214,7 +255,8 @@ internal constructor(
         offset = shared.second
         val suffix = SegmentFormat.readVarUint(segment, offset)
         offset = suffix.second
-        val suffixBytes = segment.asSlice(offset, suffix.first.toLong()).toArray(SegmentFormat.JAVA_BYTE)
+        val suffixBytes =
+            segment.asSlice(offset, suffix.first.toLong()).toArray(SegmentFormat.JAVA_BYTE)
         offset += suffix.first
         val valueSpec = SegmentFormat.readVarUint(segment, offset)
         offset = valueSpec.second
@@ -244,7 +286,8 @@ internal constructor(
             position += SegmentFormat.LONG_SIZE
             val keyLength = SegmentFormat.readVarUint(segment, position)
             position = keyLength.second
-            firstKeys[ordinal] = segment.asSlice(position, keyLength.first.toLong()).toArray(SegmentFormat.JAVA_BYTE)
+            firstKeys[ordinal] =
+                segment.asSlice(position, keyLength.first.toLong()).toArray(SegmentFormat.JAVA_BYTE)
             position += keyLength.first
         }
         // The bloom filter, when the table flags announce one, starts exactly after the index.
@@ -266,7 +309,8 @@ internal constructor(
         private val indexStart: Long,
         private val bloomOffset: Long,
     ) {
-        val blockCount: Int get() = starts.size
+        val blockCount: Int
+            get() = starts.size
 
         fun blockStart(ordinal: Int): Long = starts[ordinal]
 
@@ -280,9 +324,11 @@ internal constructor(
             val hash = SegmentFormat.keyHash(key)
             for (probe in 0 until SegmentFormat.BLOOM_PROBES) {
                 val position =
-                    ((SegmentFormat.mix64(hash + probe * SegmentFormat.BLOOM_STRIDE) % bitCount) + bitCount) % bitCount
+                    ((SegmentFormat.mix64(hash + probe * SegmentFormat.BLOOM_STRIDE) % bitCount) +
+                        bitCount) % bitCount
                 val word = bloom[(position / SegmentFormat.BLOOM_WORD_BITS).toInt()]
-                if (word and (1L shl (position % SegmentFormat.BLOOM_WORD_BITS).toInt()) == 0L) return false
+                if (word and (1L shl (position % SegmentFormat.BLOOM_WORD_BITS).toInt()) == 0L)
+                    return false
             }
             return true
         }
@@ -298,7 +344,10 @@ internal constructor(
                 val words = LongArray(wordCount.toInt())
                 for (index in 0 until wordCount) {
                     words[index.toInt()] =
-                        SegmentFormat.readLong(segment, bloomOffset + SegmentFormat.INT_SIZE + index * SegmentFormat.LONG_SIZE)
+                        SegmentFormat.readLong(
+                            segment,
+                            bloomOffset + SegmentFormat.INT_SIZE + index * SegmentFormat.LONG_SIZE,
+                        )
                 }
                 bloomWords = if (wordCount == 0L) null else words
                 bloomParsed = true
@@ -347,7 +396,8 @@ internal constructor(
             offset = shared.second
             val suffix = SegmentFormat.readVarUint(segment, offset)
             offset = suffix.second
-            val suffixBytes = segment.asSlice(offset, suffix.first.toLong()).toArray(SegmentFormat.JAVA_BYTE)
+            val suffixBytes =
+                segment.asSlice(offset, suffix.first.toLong()).toArray(SegmentFormat.JAVA_BYTE)
             offset += suffix.first
             val valueSpec = SegmentFormat.readVarUint(segment, offset)
             offset = valueSpec.second

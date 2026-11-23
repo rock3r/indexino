@@ -15,8 +15,8 @@ import kotlinx.coroutines.runBlocking
 
 /**
  * End-to-end publication contract for the segment storage format (#136): published generations
- * install immutable MemorySegment packs instead of expanded Xodus `materialized/` environments,
- * and cold in-process reopens read them without reconstruction.
+ * install immutable MemorySegment packs instead of expanded Xodus `materialized/` environments, and
+ * cold in-process reopens read them without reconstruction.
  */
 class SegmentPublicationIntegrationTest {
     init {
@@ -42,8 +42,16 @@ class SegmentPublicationIntegrationTest {
                 index.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui"))).await()
             }
             val generation = result.revision.let { currentGeneration(cache) }
-            val generationRoot = cache.resolve("workspaces").resolve(workspaceId(workspace)).resolve("generations").resolve(generation)
-            assertTrue(Files.isRegularFile(generationRoot.resolve("manifest.json")), "manifest missing")
+            val generationRoot =
+                cache
+                    .resolve("workspaces")
+                    .resolve(workspaceId(workspace))
+                    .resolve("generations")
+                    .resolve(generation)
+            assertTrue(
+                Files.isRegularFile(generationRoot.resolve("manifest.json")),
+                "manifest missing",
+            )
             val manifest = Files.readString(generationRoot.resolve("manifest.json"))
             assertTrue(
                 manifest.contains("\"storageFormatVersion\":2"),
@@ -53,7 +61,8 @@ class SegmentPublicationIntegrationTest {
                 Files.isDirectory(generationRoot.resolve("materialized")),
                 "materialized Xodus environment still published",
             )
-            val packKey = manifest.substringAfter("\"packKeys\":[").substringBefore(']').trim().trim('"')
+            val packKey =
+                manifest.substringAfter("\"packKeys\":[").substringBefore(']').trim().trim('"')
             val pack = packFile(cache, packKey)
             assertTrue(Files.isRegularFile(pack), "pack missing for key $packKey")
             val magic = ByteArray(8)
@@ -109,7 +118,10 @@ class SegmentPublicationIntegrationTest {
             val workspaceRoot = cache.resolve("workspaces").resolve(workspaceId(workspace))
             val generationRoot = workspaceRoot.resolve("generations").resolve(generation)
             val manifest = Files.readString(generationRoot.resolve("manifest.json"))
-            assertTrue(manifest.contains("\"representation\":\"overlay\""), "not an overlay: $manifest")
+            assertTrue(
+                manifest.contains("\"representation\":\"overlay\""),
+                "not an overlay: $manifest",
+            )
             assertTrue(
                 manifest.contains("\"storageFormatVersion\":2"),
                 "overlay manifest is not segment format: $manifest",
@@ -141,10 +153,12 @@ class SegmentPublicationIntegrationTest {
         // Downgrade the current manifest to the legacy zip-pack storage format.
         val workspaceRoot = cache.resolve("workspaces").resolve(workspaceId(workspace))
         val generation = currentGeneration(cache)
-        val manifestPath = workspaceRoot.resolve("generations").resolve(generation).resolve("manifest.json")
+        val manifestPath =
+            workspaceRoot.resolve("generations").resolve(generation).resolve("manifest.json")
         Files.writeString(
             manifestPath,
-            Files.readString(manifestPath).replace("\"storageFormatVersion\":2", "\"storageFormatVersion\":1"),
+            Files.readString(manifestPath)
+                .replace("\"storageFormatVersion\":2", "\"storageFormatVersion\":1"),
         )
 
         Indexino.connectBlocking(workspace).use { index ->
@@ -155,9 +169,12 @@ class SegmentPublicationIntegrationTest {
         val rebuilt = currentGeneration(cache)
         val rebuiltManifest =
             Files.readString(
-                workspaceRoot.resolve("generations").resolve(rebuilt).resolve("manifest.json"),
+                workspaceRoot.resolve("generations").resolve(rebuilt).resolve("manifest.json")
             )
-        assertTrue(rebuiltManifest.contains("\"storageFormatVersion\":2"), "rebuilt manifest is not segment format")
+        assertTrue(
+            rebuiltManifest.contains("\"storageFormatVersion\":2"),
+            "rebuilt manifest is not segment format",
+        )
         // A fresh client restores the upgraded generation and serves queries from it.
         Indexino.connectBlocking(workspace).use { index ->
             runBlocking {
@@ -187,9 +204,7 @@ class SegmentPublicationIntegrationTest {
     private fun latestWorkspaceRoot(cache: Path): Path {
         val workspaces = cache.resolve("workspaces")
         val roots =
-            Files.list(workspaces).use { stream ->
-                stream.filter(Files::isDirectory).toList()
-            }
+            Files.list(workspaces).use { stream -> stream.filter(Files::isDirectory).toList() }
         check(roots.size == 1) { "Expected exactly one workspace, found ${roots.size}" }
         return roots.single()
     }
@@ -197,12 +212,15 @@ class SegmentPublicationIntegrationTest {
     private fun workspaceId(workspace: Path): String = InProcessCacheLayout.workspaceId(workspace)
 
     private fun packFile(cache: Path, packKey: String): Path =
-        cache.resolve("chunks").resolve(packKey.take(2)).resolve(packKey.substring(2, 4)).resolve(packKey)
+        cache
+            .resolve("chunks")
+            .resolve(packKey.take(2))
+            .resolve(packKey.substring(2, 4))
+            .resolve(packKey)
 
-    private fun symbolCount(snapshot: IndexSnapshot, name: String): Int =
-        runBlocking {
-            snapshot.findSymbols(SymbolQuery.named(name), QueryOptions.page(limit = 10)).items.size
-        }
+    private fun symbolCount(snapshot: IndexSnapshot, name: String): Int = runBlocking {
+        snapshot.findSymbols(SymbolQuery.named(name), QueryOptions.page(limit = 10)).items.size
+    }
 
     private fun createGitWorkspace(): Path {
         val fixtureRoot = Path("src/test/resources/gradle-fixtures/multi-module")

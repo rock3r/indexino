@@ -12,14 +12,14 @@ import java.util.PriorityQueue
 /**
  * Read-only [CodeIndexStore] over one or more mapped immutable segment files ordered oldest to
  * newest. Newer files override older keys; tombstones in newer files shadow the same key
- * everywhere. Derived symbol-name/file and call-file tables accelerate the matching [CodeIndexStore]
- * lookups; a missing derived table falls back to prefix scans exactly like a legacy Xodus store.
+ * everywhere. Derived symbol-name/file and call-file tables accelerate the matching
+ * [CodeIndexStore] lookups; a missing derived table falls back to prefix scans exactly like a
+ * legacy Xodus store.
  */
+@Suppress("TooManyFunctions") // Implements the full CodeIndexStore query contract.
 internal class SegmentCodeIndexStore
-private constructor(
-    private val files: List<MappedSegmentFile>,
-    private val onClosed: () -> Unit,
-) : CodeIndexStore {
+private constructor(private val files: List<MappedSegmentFile>, private val onClosed: () -> Unit) :
+    CodeIndexStore {
     /** Segment files ordered newest first; the index is the precedence rank. */
     private val newestFirst: List<MappedSegmentFile> = files.asReversed()
 
@@ -30,11 +30,11 @@ private constructor(
     }
 
     override fun put(key: CodeIndexKey, record: CodeIndexRecord) {
-        throw IllegalStateException("Segment stores are read-only: ${key.value}")
+        check(false) { "Segment stores are read-only: ${key.value}" }
     }
 
     override fun delete(key: CodeIndexKey) {
-        throw IllegalStateException("Segment stores are read-only: ${key.value}")
+        check(false) { "Segment stores are read-only: ${key.value}" }
     }
 
     override fun prefixScan(prefix: String): Sequence<Pair<CodeIndexKey, CodeIndexRecord>> =
@@ -49,29 +49,53 @@ private constructor(
     private fun mergedPrefix(prefix: String): Sequence<Pair<CodeIndexKey, CodeIndexRecord>> =
         sequence {
             val prefixBytes = SegmentKeys.utf8(prefix)
-            val pending =
-                newestFirst
-                    .mapIndexed { rank, file -> CursorState(rank, file.primaryTable.cursor(prefixBytes)) }
-                    .filter { it.advance() }
-            if (pending.isEmpty()) return@sequence
-            val queue = PriorityQueue<CursorState>()
-            pending.forEach(queue::add)
+            val queue =
+                PriorityQueue<CursorState>(
+                    newestFirst
+                        .mapIndexed { rank, file ->
+                            CursorState(rank, file.primaryTable.cursor(prefixBytes))
+                        }
+                        .filter { it.advance() }
+                )
             while (queue.isNotEmpty()) {
-                val state = queue.poll()
-                val entry = state.current ?: continue
-                // Newer files shadow the same key in older files.
-                while (queue.isNotEmpty() && queue.peek().current!!.keyBytes.contentEquals(entry.keyBytes)) {
-                    val shadowed = queue.poll()
-                    if (shadowed.advance()) queue.add(shadowed)
-                }
-                if (state.advance()) queue.add(state)
-                if (!entry.keyBytes.startsWith(prefixBytes)) return@sequence
-                if (entry.tombstone) continue
+                val visible = nextVisibleEntry(queue, prefixBytes) ?: return@sequence
                 val record =
-                    CodeIndexRecordCodec.decode(entry.value ?: error("Missing segment value"))
-                yield(CodeIndexKey.parse(entry.key) to record)
+                    CodeIndexRecordCodec.decode(visible.value ?: error("Missing segment value"))
+                yield(CodeIndexKey.parse(visible.key) to record)
             }
         }
+
+    /**
+     * Polls the next non-shadowed, non-tombstoned entry within the prefix, advancing shadowed
+     * cursors as it goes. Returns null when the prefix (or the whole table) is exhausted.
+     */
+    private fun nextVisibleEntry(
+        queue: PriorityQueue<CursorState>,
+        prefixBytes: ByteArray,
+    ): SegmentEntry? {
+        while (queue.isNotEmpty()) {
+            val state = queue.poll()
+            // States enter the queue only after a successful advance, so current is never null.
+            val entry = checkNotNull(state.current)
+            if (state.advance()) queue.add(state)
+            skipShadowedKeys(queue, entry.keyBytes)
+            if (!entry.keyBytes.startsWith(prefixBytes)) return null
+            if (entry.tombstone) continue
+            return entry
+        }
+        return null
+    }
+
+    /** Newer files shadow the same key in older files: drain duplicate keys behind the winner. */
+    private fun skipShadowedKeys(queue: PriorityQueue<CursorState>, keyBytes: ByteArray) {
+        while (queue.isNotEmpty()) {
+            val next = queue.peek() ?: return
+            val candidate = checkNotNull(next.current)
+            if (!candidate.keyBytes.contentEquals(keyBytes)) return
+            queue.poll()
+            if (next.advance()) queue.add(next)
+        }
+    }
 
     override fun forEachSymbolMatching(
         name: String,
@@ -208,7 +232,8 @@ private constructor(
             val record = CodeIndexRecordCodec.decode(entry.value ?: return@forEach)
             val recordTerm =
                 when (record) {
-                    is SymbolRecord -> SegmentFileWriter.fileTerm(record.originId, record.relativeFile)
+                    is SymbolRecord ->
+                        SegmentFileWriter.fileTerm(record.originId, record.relativeFile)
                     is CallSiteRecord ->
                         SegmentFileWriter.fileTerm(record.originId, record.relativeFile)
                     else -> return@forEach
@@ -261,8 +286,9 @@ private constructor(
         }
 
         override fun compareTo(other: CursorState): Int {
-            val comparison =
-                SegmentFormat.compareKeys(current!!.keyBytes, other.current!!.keyBytes)
+            val mine = checkNotNull(current)
+            val theirs = checkNotNull(other.current)
+            val comparison = SegmentFormat.compareKeys(mine.keyBytes, theirs.keyBytes)
             if (comparison != 0) return comparison
             return rank.compareTo(other.rank)
         }
@@ -302,8 +328,8 @@ private constructor(
 
         /**
          * Streams a store into a fresh immutable segment file — the publication conversion path.
-         * Records arrive sorted from the source store; explicit tombstone keys merge in key
-         * order, replacing an equal source key.
+         * Records arrive sorted from the source store; explicit tombstone keys merge in key order,
+         * replacing an equal source key.
          */
         fun writeStoreToFile(
             source: CodeIndexStore,
@@ -313,15 +339,18 @@ private constructor(
             val tombstones =
                 tombstoneKeys
                     .map { it.value }
-                    .sortedWith { left, right -> SegmentFormat.compareKeys(SegmentKeys.utf8(left), SegmentKeys.utf8(right)) }
+                    .sortedWith { left, right ->
+                        SegmentFormat.compareKeys(SegmentKeys.utf8(left), SegmentKeys.utf8(right))
+                    }
             SegmentFileWriter.open(target).use { writer ->
                 var tombstoneIndex = 0
                 source.forEachPrefix("") { key, record ->
-                    while (tombstoneIndex < tombstones.size &&
-                        SegmentFormat.compareKeys(
-                            SegmentKeys.utf8(tombstones[tombstoneIndex]),
-                            SegmentKeys.utf8(key.value),
-                        ) < 0
+                    while (
+                        tombstoneIndex < tombstones.size &&
+                            SegmentFormat.compareKeys(
+                                SegmentKeys.utf8(tombstones[tombstoneIndex]),
+                                SegmentKeys.utf8(key.value),
+                            ) < 0
                     ) {
                         writer.appendTombstone(CodeIndexKey.parse(tombstones[tombstoneIndex]))
                         tombstoneIndex++

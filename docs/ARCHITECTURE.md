@@ -83,11 +83,16 @@ callers need not re-resolve `HEAD` or re-derive a result from mutable storage.
 
 The storage layer publishes refresh output as immutable content-addressed packs with generation manifests and an
 atomic workspace `current` pointer. Mutable incremental writer state is confined to workspace
-`staging/in-process-writer`; compatible forks and clients query one immutable materialized base
-per generation. Xodus readers bypass its exclusive directory lock through a provider that rejects
-writes, while client-local refs contain only overlay deltas. Snapshot pins retain those private
-delta refs until close; shared bases and packs outlive individual clients. Cache GC currently
-reclaims unreachable packs and expanded stores for obsolete generations and retires old
+`staging/in-process-writer`; compatible forks and clients query the same immutable published
+representation per generation — a raw immutable segment file per pack (storage format 2), mapped
+read-only via `FileChannel.map` + `MemorySegment` with reference-counted shared arenas pinned by
+active snapshots. Legacy caches whose generations still use the Xodus zip-pack format (storage
+format 1) rebuild on their first refresh after upgrade. The Xodus writable staging writer remains
+the mutation path; publication converts a completed environment into a segment pack with one
+sorted streaming pass. Client-local refs trees are gone for current-format generations: overlay
+delta packs are mapped directly. Snapshot pins hold arena references until close; shared packs
+outlive individual clients. Cache GC currently
+reclaims unreachable packs for obsolete generations and retires old
 reconstructible writer staging. It preserves staging with an unfinished rollback checkpoint.
 
 The thin `indexino` POM deliberately omits CLI-only Clikt, JNA, and `slf4j-nop`; Gradle Module
@@ -317,7 +322,9 @@ source tree walks. The `indexino-selection-context` artifact contains this plugi
 - **kotlin-compiler-embeddable** — PSI for Kotlin/Compose (Detekt-independent)
 - **JDK compiler trees** — parse-only Java extraction
 - **JDK StAX** — XML/resource extraction for public Android/CMP resource definitions and usages
-- **Xodus** — generation-local indexes referencing content-addressed packs
+- **Xodus** — writable staging environments for incremental refreshes
+- **Immutable segment files (`MemorySegment`)** — published generation packs: block-indexed,
+  prefix-compressed sorted tables mapped read-only
 - **Clikt** — CLI only (not on library POM)
 - **Shadow + R8** — standalone / native-packaging inputs
 - **kotlinx-coroutines** — `api` of the client (suspend / Flow)

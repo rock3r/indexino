@@ -17,8 +17,8 @@ import java.util.zip.ZipOutputStream
  *
  * Two pack storage formats share the fanout: legacy version-1 ZIP archives of expanded Xodus
  * environments ([installDirectory]) and version-2 raw segment files ([installFile]) that readers
- * map directly through MemorySegment. Content keys embed the format identity, so the same bytes
- * can never collide across formats.
+ * map directly through MemorySegment. Content keys embed the format identity, so the same bytes can
+ * never collide across formats.
  */
 internal class ContentAddressedPackCache(
     private val cacheRoot: Path,
@@ -158,9 +158,9 @@ internal class ContentAddressedPackCache(
     }
 
     /**
-     * Installs a single immutable file (a storage-format-2 segment pack) under the same fanout.
-     * The content key hashes a segment-format marker plus the file bytes so segment packs and
-     * legacy directory ZIPs can never share a key.
+     * Installs a single immutable file (a storage-format-2 segment pack) under the same fanout. The
+     * content key hashes a segment-format marker plus the file bytes so segment packs and legacy
+     * directory ZIPs can never share a key.
      */
     fun installFile(file: Path, basicFactSchemaVersion: Int = 1): String {
         val digest = MessageDigest.getInstance("SHA-256")

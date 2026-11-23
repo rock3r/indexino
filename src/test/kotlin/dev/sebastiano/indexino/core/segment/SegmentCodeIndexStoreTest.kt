@@ -2,7 +2,6 @@ package dev.sebastiano.indexino.core.segment
 
 import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.CallSiteRecord
-import dev.sebastiano.indexino.core.record.CodeIndexRecord
 import dev.sebastiano.indexino.core.record.MetaIndexerVersionRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
@@ -18,12 +17,11 @@ import kotlin.test.assertNull
 
 class SegmentCodeIndexStoreTest {
     private lateinit var tempDir: Path
-    private lateinit var files: MutableList<MappedSegmentFile>
+    private val files = mutableListOf<MappedSegmentFile>()
 
     @BeforeTest
     fun setUp() {
         tempDir = createTempDirectory("segment-store-test-")
-        files = mutableListOf()
     }
 
     @AfterTest
@@ -52,24 +50,24 @@ class SegmentCodeIndexStoreTest {
             source.put(call, callRecord("call-identity-1", "one", "ui/Panel.kt"))
             source.put(file, MetaIndexerVersionRecord("meta"))
 
-            convert(source).use {
-                assertEquals(source.get(symbolA), it.get(symbolA))
-                assertEquals(source.get(aliased), it.get(aliased))
-                assertEquals(source.get(call), it.get(call))
-                assertEquals(source.get(file), it.get(file))
-                assertNull(it.get(CodeIndexKey.sym("absent")))
+            convert(source).use { store ->
+                assertEquals(source.get(symbolA), store.get(symbolA))
+                assertEquals(source.get(aliased), store.get(aliased))
+                assertEquals(source.get(call), store.get(call))
+                assertEquals(source.get(file), store.get(file))
+                assertNull(store.get(CodeIndexKey.sym("absent")))
 
                 assertEquals(
                     source.prefixScan("").map { it.first.value }.toList(),
-                    it.prefixScan("").map { it.first.value }.toList(),
+                    store.prefixScan("").map { it.first.value }.toList(),
                 )
                 assertEquals(
                     source.prefixScan("").map { it.second }.toList(),
-                    it.prefixScan("").map { it.second }.toList(),
+                    store.prefixScan("").map { it.second }.toList(),
                 )
                 assertEquals(
                     source.prefixScan("sym:").map { it.second }.toList(),
-                    it.prefixScan("sym:").map { it.second }.toList(),
+                    store.prefixScan("sym:").map { it.second }.toList(),
                 )
             }
         }
@@ -87,30 +85,33 @@ class SegmentCodeIndexStoreTest {
             source.put(button, symbol("Button", "com.example.Button", "two", "ui/Button.kt"))
             source.put(call, callRecord("call-identity-1", "one", "ui/Panel.kt"))
 
-            convert(source).use {
-                assertEquals(keys(source, "Panel", exact = true), keys(it, "Panel", exact = true))
-                assertEquals(keys(source, "Pan", exact = false), keys(it, "Pan", exact = false))
+            convert(source).use { store ->
+                assertEquals(
+                    keys(source, "Panel", exact = true),
+                    keys(store, "Panel", exact = true),
+                )
+                assertEquals(keys(source, "Pan", exact = false), keys(store, "Pan", exact = false))
                 assertEquals(
                     keys(source, "com.example.Panel", exact = true),
-                    keys(it, "com.example.Panel", exact = true),
+                    keys(store, "com.example.Panel", exact = true),
                 )
-                assertEquals(emptyList(), keys(it, "Missing", exact = true))
+                assertEquals(emptyList(), keys(store, "Missing", exact = true))
 
                 assertEquals(
                     symbolsInFile(source, "one", "ui/Panel.kt"),
-                    symbolsInFile(it, "one", "ui/Panel.kt"),
+                    symbolsInFile(store, "one", "ui/Panel.kt"),
                 )
                 assertEquals(
                     symbolsInFile(source, "one", "ui/Other.kt"),
-                    symbolsInFile(it, "one", "ui/Other.kt"),
+                    symbolsInFile(store, "one", "ui/Other.kt"),
                 )
                 assertEquals(
                     callsInFile(source, "one", "ui/Panel.kt"),
-                    callsInFile(it, "one", "ui/Panel.kt"),
+                    callsInFile(store, "one", "ui/Panel.kt"),
                 )
                 assertEquals(
                     callsInFile(source, "two", "ui/Panel.kt"),
-                    callsInFile(it, "two", "ui/Panel.kt"),
+                    callsInFile(store, "two", "ui/Panel.kt"),
                 )
             }
         }
@@ -131,11 +132,14 @@ class SegmentCodeIndexStoreTest {
                 symbol("Second", "b.Second", "two", "Second.kt").copy(aliases = listOf("Shared")),
             )
 
-            convert(source).use {
-                assertEquals(keys(source, "Shared", exact = true), keys(it, "Shared", exact = true))
+            convert(source).use { store ->
+                assertEquals(
+                    keys(source, "Shared", exact = true),
+                    keys(store, "Shared", exact = true),
+                )
                 assertEquals(
                     listOf(shared, other).map { it.value },
-                    keys(it, "Shared", exact = true),
+                    keys(store, "Shared", exact = true),
                 )
             }
         }
@@ -157,20 +161,22 @@ class SegmentCodeIndexStoreTest {
             delta.delete(removed)
         }
         val deltaSegment =
-            openXodus("delta").use { reopened -> writeSegmentFile("delta", reopened, listOf(removed)) }
+            openXodus("delta").use { reopened ->
+                writeSegmentFile("delta", reopened, listOf(removed))
+            }
 
-        val store = openStore(baseSegment, deltaSegment)
-        store.use {
-            assertEquals(MetaIndexerVersionRecord("kept"), it.get(kept))
-            assertEquals(MetaIndexerVersionRecord("new"), it.get(replaced))
-            assertNull(it.get(removed))
+        openStore(baseSegment, deltaSegment).use { store ->
+            assertEquals(MetaIndexerVersionRecord("kept"), store.get(kept))
+            assertEquals(MetaIndexerVersionRecord("new"), store.get(replaced))
+            assertNull(store.get(removed))
             assertEquals(
                 listOf(kept.value, replaced.value),
-                it.prefixScan("sym:").map { it.first.value }.toList(),
+                store.prefixScan("sym:").map { it.first.value }.toList(),
             )
             assertEquals(
                 listOf("kept", "new"),
-                it.prefixScan("sym:")
+                store
+                    .prefixScan("sym:")
                     .map { it.second }
                     .map { record -> (record as MetaIndexerVersionRecord).version }
                     .toList(),
@@ -183,10 +189,12 @@ class SegmentCodeIndexStoreTest {
         openXodus("source").use { source ->
             val key = CodeIndexKey.sym("com.example.Immutable")
             source.put(key, MetaIndexerVersionRecord("v"))
-            convert(source).use {
-                assertFailsWith<IllegalStateException> { it.put(key, MetaIndexerVersionRecord("x")) }
-                assertFailsWith<IllegalStateException> { it.delete(key) }
-                val result = it.transaction { "ran" }
+            convert(source).use { store ->
+                assertFailsWith<IllegalStateException> {
+                    store.put(key, MetaIndexerVersionRecord("x"))
+                }
+                assertFailsWith<IllegalStateException> { store.delete(key) }
+                val result = store.transaction { "ran" }
                 assertEquals("ran", result)
             }
         }
@@ -199,9 +207,9 @@ class SegmentCodeIndexStoreTest {
             val second = CodeIndexKey.sym("com.example.B")
             source.put(first, MetaIndexerVersionRecord("a"))
             source.put(second, MetaIndexerVersionRecord("b"))
-            convert(source).use {
+            convert(source).use { store ->
                 val visited = mutableListOf<CodeIndexKey>()
-                it.forEachPrefix("sym:") { key, _ ->
+                store.forEachPrefix("sym:") { key, _ ->
                     visited += key
                     false
                 }
@@ -212,15 +220,15 @@ class SegmentCodeIndexStoreTest {
 
     @Test
     fun `symbol file lookups honor newest-segment precedence`() {
-        val original =
-            CodeIndexKey.symbolDefinition("com.example.Moved", "one", "Old.kt", 1, 1)
+        val original = CodeIndexKey.symbolDefinition("com.example.Moved", "one", "Old.kt", 1, 1)
         openXodus("precedence-base").use { base ->
             base.put(original, symbol("Moved", "com.example.Moved", "one", "Old.kt"))
         }
         val baseSegment =
-            openXodus("precedence-base").use { reopened -> writeSegmentFile("precedence-base", reopened) }
-        val moved =
-            CodeIndexKey.symbolDefinition("com.example.Moved", "one", "New.kt", 2, 1)
+            openXodus("precedence-base").use { reopened ->
+                writeSegmentFile("precedence-base", reopened)
+            }
+        val moved = CodeIndexKey.symbolDefinition("com.example.Moved", "one", "New.kt", 2, 1)
         openXodus("precedence-delta").use { delta ->
             delta.put(moved, symbol("Moved", "com.example.Moved", "one", "New.kt"))
         }
@@ -229,10 +237,9 @@ class SegmentCodeIndexStoreTest {
                 writeSegmentFile("precedence-delta", reopened, listOf(original))
             }
 
-        val store = openStore(baseSegment, deltaSegment)
-        store.use {
-            assertEquals(listOf(moved), symbolsInFile(it, "one", "New.kt"))
-            assertEquals(emptyList(), symbolsInFile(it, "one", "Old.kt"))
+        openStore(baseSegment, deltaSegment).use { store ->
+            assertEquals(listOf(moved), symbolsInFile(store, "one", "New.kt"))
+            assertEquals(emptyList(), symbolsInFile(store, "one", "Old.kt"))
         }
     }
 
@@ -268,21 +275,27 @@ class SegmentCodeIndexStoreTest {
             }
         }
 
-    private fun symbolsInFile(store: CodeIndexStore, origin: String, file: String): List<CodeIndexKey> =
-        buildList {
-            store.forEachSymbolInFile(origin, file) { key, _ ->
-                add(key)
-                true
-            }
+    private fun symbolsInFile(
+        store: CodeIndexStore,
+        origin: String,
+        file: String,
+    ): List<CodeIndexKey> = buildList {
+        store.forEachSymbolInFile(origin, file) { key, _ ->
+            add(key)
+            true
         }
+    }
 
-    private fun callsInFile(store: CodeIndexStore, origin: String, file: String): List<CodeIndexKey> =
-        buildList {
-            store.forEachCallInFile(origin, file) { key, _ ->
-                add(key)
-                true
-            }
+    private fun callsInFile(
+        store: CodeIndexStore,
+        origin: String,
+        file: String,
+    ): List<CodeIndexKey> = buildList {
+        store.forEachCallInFile(origin, file) { key, _ ->
+            add(key)
+            true
         }
+    }
 
     private fun symbol(
         name: String,
@@ -299,7 +312,11 @@ class SegmentCodeIndexStoreTest {
             originId = originId,
         )
 
-    private fun callRecord(identity: String, originId: String, relativeFile: String): CallSiteRecord =
+    private fun callRecord(
+        identity: String,
+        originId: String,
+        relativeFile: String,
+    ): CallSiteRecord =
         CallSiteRecord(
             identity = identity,
             calleeName = "target",

@@ -14,17 +14,13 @@ import java.util.zip.CRC32
 
 /**
  * Writes one immutable segment file in a single sequential pass. Keys must arrive in strictly
- * increasing unsigned-lexicographic order — the natural fast path for pre-sorted bulk input and
- * for streaming an existing sorted store. Derived lookup tables (symbol names/files, call files)
- * are derived while the primary table streams and written after it, so the whole file is
- * produced with sequential writes plus one final [FileChannel.force].
+ * increasing unsigned-lexicographic order — the natural fast path for pre-sorted bulk input and for
+ * streaming an existing sorted store. Derived lookup tables (symbol names/files, call files) are
+ * derived while the primary table streams and written after it, so the whole file is produced with
+ * sequential writes plus one final [FileChannel.force].
  */
 internal class SegmentFileWriter
-private constructor(
-    path: Path,
-    maxBlockEntries: Int,
-    maxBlockBytes: Int,
-) : AutoCloseable {
+private constructor(path: Path, maxBlockEntries: Int, maxBlockBytes: Int) : AutoCloseable {
     private val channel =
         FileChannel.open(path, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
     private val sink = SegmentSink(channel)
@@ -64,9 +60,7 @@ private constructor(
         check(!closed) { "Segment writer is closed" }
         val lastKey = primary.lastKey
         if (lastKey != null && SegmentFormat.compareKeys(keyBytes, lastKey) <= 0) {
-            throw IllegalStateException(
-                "Segment keys must be strictly increasing: ${SegmentKeys.decode(keyBytes)}",
-            )
+            error("Segment keys must be strictly increasing: ${SegmentKeys.decode(keyBytes)}")
         }
         primary.append(keyBytes, value, sink)
     }
@@ -158,23 +152,23 @@ internal fun writeVarUint(value: Int, out: ByteArrayOutputStream) {
 }
 
 internal fun writeInt(out: ByteArrayOutputStream, value: Int) {
-    out.write(value and BYTE_MASK)
-    out.write((value ushr 8) and BYTE_MASK)
-    out.write((value ushr 16) and BYTE_MASK)
-    out.write((value ushr 24) and BYTE_MASK)
+    repeat(Int.SIZE_BYTES) { byte -> out.write((value ushr (byte * BITS_PER_BYTE)) and BYTE_MASK) }
 }
 
 internal fun writeLong(out: ByteArrayOutputStream, value: Long) {
     writeInt(out, value.toInt())
-    writeInt(out, (value ushr 32).toInt())
+    writeInt(out, (value ushr Int.SIZE_BITS).toInt())
 }
+
+private const val BITS_PER_BYTE: Int = 8
 
 private const val VAR_UINT_PAYLOAD = 0x7f
 private const val VAR_UINT_CONTINUATION = 0x80
 private const val VAR_UINT_SHIFT = 7
 private const val BYTE_MASK = 0xff
 
-internal class TableRegion internal constructor(
+internal class TableRegion
+internal constructor(
     internal val name: String,
     internal val blocksStart: Long,
     internal val indexStart: Long,
@@ -187,6 +181,7 @@ internal class TableRegion internal constructor(
 private class SegmentSink(private val channel: FileChannel) {
     var offset = 0L
         private set
+
     val checksum = CRC32()
 
     fun write(bytes: ByteArray): Long {
@@ -212,9 +207,11 @@ private class TableWriterState(
     private var bloomHashCount = 0
     var lastKey: ByteArray? = null
         private set
+
     var entryCount = 0
         private set
-    private var currentBlock = ByteArrayOutputStream()
+
+    private val currentBlock = ByteArrayOutputStream()
     private var currentBlockEntryCount = 0
     private var currentBlockFirstKey: ByteArray? = null
     private var currentBlockStart = -1L
@@ -224,7 +221,8 @@ private class TableWriterState(
             currentBlockFirstKey = keyBytes
             currentBlockStart = sink.offset
         }
-        val sharedPrefix = if (currentBlockEntryCount == 0) 0 else commonPrefixLength(lastKey, keyBytes)
+        val sharedPrefix =
+            if (currentBlockEntryCount == 0) 0 else commonPrefixLength(lastKey, keyBytes)
         writeVarUint(sharedPrefix, currentBlock)
         writeVarUint(keyBytes.size - sharedPrefix, currentBlock)
         currentBlock.write(keyBytes, sharedPrefix, keyBytes.size - sharedPrefix)
@@ -271,7 +269,7 @@ private class TableWriterState(
     private fun flushCurrentBlock(sink: SegmentSink) {
         if (currentBlockEntryCount == 0) return
         sink.write(currentBlock.toByteArray())
-        blockFirstKeys += currentBlockFirstKey!!
+        blockFirstKeys += checkNotNull(currentBlockFirstKey)
         blockStartOffsets += currentBlockStart
         currentBlockFirstKey = null
         currentBlockEntryCount = 0
@@ -299,9 +297,11 @@ private class TableWriterState(
             val hash = bloomHashes[index]
             for (probe in 0 until SegmentFormat.BLOOM_PROBES) {
                 val position =
-                    ((SegmentFormat.mix64(hash + probe * SegmentFormat.BLOOM_STRIDE) % bitCount) + bitCount) % bitCount
+                    ((SegmentFormat.mix64(hash + probe * SegmentFormat.BLOOM_STRIDE) % bitCount) +
+                        bitCount) % bitCount
                 val word = (position / SegmentFormat.BLOOM_WORD_BITS).toInt()
-                words[word] = words[word] or (1L shl (position % SegmentFormat.BLOOM_WORD_BITS).toInt())
+                words[word] =
+                    words[word] or (1L shl (position % SegmentFormat.BLOOM_WORD_BITS).toInt())
             }
         }
         return words
@@ -323,10 +323,7 @@ private class TableWriterState(
 }
 
 /** Collects derived symbol-name/file and call-file rows while the primary table streams. */
-private class DerivedTableState(
-    private val maxBlockEntries: Int,
-    private val maxBlockBytes: Int,
-) {
+private class DerivedTableState(private val maxBlockEntries: Int, private val maxBlockBytes: Int) {
     private val symbolNames = mutableListOf<Pair<String, String>>()
     private val symbolFiles = mutableListOf<Pair<String, String>>()
     private val callFiles = mutableListOf<Pair<String, String>>()
