@@ -1526,17 +1526,24 @@ class AutoRefreshControllerTest {
     }
 
     @Test
-    fun `watches empty non-main source roots discovered from topology`() {
+    fun `watches empty non-main source roots discovered from topology without native coverage`() {
         val root = Files.createTempDirectory(Path.of("/tmp"), "indexino-empty-source-root-")
         val workspace = root.resolve("workspace")
         val sourceRoot = workspace.resolve("module/src/commonMain/kotlin")
         Files.createDirectories(sourceRoot)
-        val controller = AutoRefreshController(workspace, AutoRefreshMode.ENABLED, refresh = {})
+        val controller =
+            AutoRefreshController(
+                workspace,
+                AutoRefreshMode.ENABLED,
+                refresh = {},
+                nativeWorkspaceWatcher = { _, _, _ -> error("native coverage unavailable") },
+            )
         try {
             val request = RefreshRequest.forScope(IndexScope.gradle(":module"))
             controller.register(request, sources = emptyList(), topologyRoots = listOf(workspace))
 
             assertTrue(sourceRoot in controller.directoriesForTests(request))
+            assertTrue(sourceRoot in controller.polledDirectoriesForTests())
         } finally {
             controller.close()
             root.toFile().deleteRecursively()
@@ -1544,17 +1551,24 @@ class AutoRefreshControllerTest {
     }
 
     @Test
-    fun `watches compose resources roots discovered from topology`() {
+    fun `watches compose resources roots discovered from topology without native coverage`() {
         val root = Files.createTempDirectory(Path.of("/tmp"), "indexino-compose-resource-watch-")
         val workspace = root.resolve("workspace")
         val sourceRoot = workspace.resolve("module/src/commonMain/composeResources")
         Files.createDirectories(sourceRoot)
-        val controller = AutoRefreshController(workspace, AutoRefreshMode.ENABLED, refresh = {})
+        val controller =
+            AutoRefreshController(
+                workspace,
+                AutoRefreshMode.ENABLED,
+                refresh = {},
+                nativeWorkspaceWatcher = { _, _, _ -> error("native coverage unavailable") },
+            )
         try {
             val request = RefreshRequest.forScope(IndexScope.gradle(":module"))
             controller.register(request, sources = emptyList(), topologyRoots = listOf(workspace))
 
             assertTrue(sourceRoot in controller.directoriesForTests(request))
+            assertTrue(sourceRoot in controller.polledDirectoriesForTests())
         } finally {
             controller.close()
             root.toFile().deleteRecursively()
