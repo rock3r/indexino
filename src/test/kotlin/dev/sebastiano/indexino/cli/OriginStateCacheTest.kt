@@ -15,6 +15,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.io.TempDir
 
@@ -198,6 +199,7 @@ class OriginStateCacheTest {
             OriginStateCache.open(
                 tempDir.resolve("stamp-cache"),
                 tempDir,
+                homeOverride = home,
                 xdgConfigHomeOverride = home,
             )
 
@@ -212,6 +214,140 @@ class OriginStateCacheTest {
         val third = cache.stamp(workspace.toRealPath(), null)
         assertNotNull(third)
         assertNotEquals(second.value, third.value)
+    }
+
+    @Test
+    fun `tilde gitconfig overrides xdg for excludes and attributes`() {
+        val workspace = committedWorkspace()
+        val home = Files.createDirectories(tempDir.resolve("precedence-home"))
+        val xdg = home.resolve(".config")
+        xdg.resolve("git").createDirectories()
+        val homeExcludes = home.resolve("home-excludes")
+        val xdgExcludes = xdg.resolve("xdg-excludes")
+        homeExcludes.writeText("home.txt\n")
+        xdgExcludes.writeText("xdg.txt\n")
+        home.resolve(".gitconfig").writeText("[core]\n\texcludesFile = $homeExcludes\n")
+        xdg.resolve("git/config").writeText("[core]\n\texcludesFile = $xdgExcludes\n")
+        val cache =
+            OriginStateCache.open(
+                tempDir.resolve("precedence-cache"),
+                tempDir,
+                homeOverride = home,
+                xdgConfigHomeOverride = xdg,
+            )
+
+        val first = cache.stamp(workspace.toRealPath(), null)
+        assertNotNull(first)
+        xdgExcludes.writeText("xdg.txt\nxdg-extra.txt\n")
+        val afterXdg = cache.stamp(workspace.toRealPath(), null)
+        assertNotNull(afterXdg)
+        assertEquals(
+            first.value,
+            afterXdg.value,
+            "The non-effective XDG excludes file changed the stamp",
+        )
+        homeExcludes.writeText("home.txt\nhome-extra.txt\n")
+        val afterHome = cache.stamp(workspace.toRealPath(), null)
+        assertNotNull(afterHome)
+        assertNotEquals(first.value, afterHome.value)
+    }
+
+    @Test
+    fun `a replacement ref invalidates origin reuse`() {
+        val workspace = committedWorkspace()
+        val base = git(workspace, "rev-parse", "HEAD").trim()
+        Files.writeString(workspace.resolve("README.md"), "replacement\n")
+        git(workspace, "add", "README.md")
+        git(workspace, "commit", "-m", "replacement")
+        val replacement = git(workspace, "rev-parse", "HEAD").trim()
+        git(workspace, "reset", "--hard", base)
+        ageWorkspace(workspace)
+        val sources = sources(workspace)
+
+        resolve(workspace, sources, newCache())
+        assertEquals(1, resolve(workspace, sources, newCache()).cached)
+        git(workspace, "replace", "HEAD", replacement)
+        val replaced = resolve(workspace, sources, newCache())
+
+        assertEquals(0, replaced.cached)
+        assertTrue(replaced.origins.single().dirty, "${replaced.origins}")
+        assertEquals(replaced.origins, resolve(workspace, sources, cache = null).origins)
+    }
+
+    @Test
+    fun `effective git inputs are stamped or decline reuse`() {
+        data class Case(val name: String, val setup: (Path) -> Unit, val declines: Boolean)
+
+        fun create(path: Path, content: String) {
+            Files.createDirectories(path.parent)
+            path.writeText(content)
+        }
+        val replacementSha = "0123456789012345678901234567890123456789"
+        val cases =
+            listOf(
+                Case(
+                    "info/grafts",
+                    { create(it.resolve(".git/info/grafts"), "$replacementSha\n") },
+                    false,
+                ),
+                Case("shallow", { create(it.resolve(".git/shallow"), "$replacementSha\n") }, false),
+                Case(
+                    "info/sparse-checkout",
+                    { create(it.resolve(".git/info/sparse-checkout"), "README.md\n") },
+                    false,
+                ),
+                Case(
+                    "config.worktree",
+                    {
+                        create(
+                            it.resolve(".git/config.worktree"),
+                            "[core]\n\tsparseCheckout = true\n",
+                        )
+                    },
+                    false,
+                ),
+                Case(
+                    "objects/info/alternates",
+                    { create(it.resolve(".git/objects/info/alternates"), "/tmp/other-objects\n") },
+                    true,
+                ),
+                Case(
+                    "refs/replace",
+                    {
+                        create(
+                            it.resolve(".git/refs/replace/$replacementSha"),
+                            replacementSha + "\n",
+                        )
+                    },
+                    false,
+                ),
+                Case(
+                    "packed replacement ref",
+                    {
+                        create(
+                            it.resolve(".git/packed-refs"),
+                            "# pack-refs with: peeled fully-peeled sorted \n" +
+                                "$replacementSha refs/replace/$replacementSha\n",
+                        )
+                    },
+                    false,
+                ),
+            )
+
+        cases.forEachIndexed { index, case ->
+            val workspace = committedWorkspace("sweep-$index")
+            val cache = newCache()
+            val before = cache.stamp(workspace.toRealPath(), null)
+            assertNotNull(before, case.name)
+            case.setup(workspace)
+            val after = cache.stamp(workspace.toRealPath(), null)
+            if (case.declines) {
+                assertNull(after, case.name)
+            } else {
+                assertNotNull(after, case.name)
+                assertNotEquals(before.value, after.value, case.name)
+            }
+        }
     }
 
     @Test
@@ -321,8 +457,15 @@ class OriginStateCacheTest {
             stateCache = cache,
         )
 
-    private fun newCache(): OriginStateCache =
-        OriginStateCache.open(tempDir.resolve("origin-cache"), tempDir)
+    private fun newCache(): OriginStateCache {
+        val home = Files.createDirectories(tempDir.resolve("test-home"))
+        return OriginStateCache.open(
+            tempDir.resolve("origin-cache"),
+            tempDir,
+            homeOverride = home,
+            xdgConfigHomeOverride = home.resolve(".config"),
+        )
+    }
 
     private fun sources(workspace: Path): List<IndexedSource> =
         listOf(IndexedSource("workspace", workspace.toRealPath(), "src/A.java"))

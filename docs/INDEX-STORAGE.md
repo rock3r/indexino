@@ -265,8 +265,24 @@ removing the workspace directory (or `cache forget` / `daemon stop --purge`) dis
   effective global ignore and attributes files: `core.excludesFile`/`core.attributesFile` when
   configured, otherwise `$XDG_CONFIG_HOME/git/ignore` and `git/attributes` (falling back to
   `~/.config/git/...`). Configurations whose output depends on files the stamp cannot observe
-  (dotted or section-form `include`/`includeIf`, `core.bare`/`core.worktree`, ambiguous quoted
-  values) and Git environment overrides disable reuse instead of guessing.
+  (dotted or section-form `include`/`includeIf`, `core.bare`/`core.worktree`, textconv, ambiguous
+  quoted values) and Git environment overrides disable reuse instead of guessing.
+
+Git inputs that can change effective output without touching HEAD, the index or worktree files:
+
+| Input | Handling |
+|-------|----------|
+| HEAD, resolved ref, packed-refs, index | content/stat in the stamp |
+| repo/global/system config, `config.worktree` | content/stat in the stamp; `~/.gitconfig` overrides XDG |
+| effective global ignore/attributes | content in the stamp, resolved with Git precedence |
+| `info/exclude`, `info/attributes`, `info/grafts`, `info/sparse-checkout`, `shallow` | content in the stamp |
+| loose `refs/replace/*` | content in the stamp; packed replacement refs are covered by `packed-refs` |
+| `objects/info/alternates` | reuse declined |
+| `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_NAMESPACE`, `GIT_SUPER_PREFIX` | reuse declined |
+| `GIT_REPLACE_REF_BASE`, `GIT_NO_REPLACE_OBJECTS`, `GIT_SHALLOW_FILE`, `GIT_GRAFT_FILE`, `GIT_ATTR_NOSYSTEM`, `GIT_ATTR_SOURCE`, pathspec env | reuse declined |
+| `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_NOSYSTEM`, `XDG_CONFIG_HOME`, `HOME` | the resolved config/ignore files are stamped |
+| worktree files, symlink targets, nested submodule metadata | stamped |
+| config includes, `bare`/`worktree` layout, textconv, ambiguous values | reuse declined |
 
 A live daemon watcher still supplies changed paths for hinted refreshes and inherits unchanged
 source hashes from the published generation; these caches serve cold starts, explicit refreshes,

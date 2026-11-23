@@ -31,10 +31,12 @@ internal class OriginStateCache(
     private val directory: Path,
     private val cacheRoot: Path? = null,
     private val racyWindowNanos: Long = RACY_WINDOW_NANOS,
+    /** Test-only user home; production uses `user.home`. */
+    private val homeOverride: Path? = null,
     /** Test-only XDG config home; production resolves `$XDG_CONFIG_HOME` or `~/.config`. */
     private val xdgConfigHomeOverride: Path? = null,
 ) {
-    private val home: Path = Path.of(System.getProperty("user.home"))
+    private val home: Path = homeOverride ?: Path.of(System.getProperty("user.home"))
     private val xdgConfigHome: Path =
         xdgConfigHomeOverride
             ?: System.getenv("XDG_CONFIG_HOME")?.takeIf(String::isNotBlank)?.let(Path::of)
@@ -210,6 +212,7 @@ internal class OriginStateCache(
 
     private fun gitMetadata(layout: GitLayout): String? =
         runCatching {
+                if (hasAlternateObjectStores(layout)) return null
                 val headText =
                     Files.readString(layout.gitDir.resolve("HEAD")).trim().ifEmpty {
                         return null
@@ -250,6 +253,7 @@ internal class OriginStateCache(
                         "info=$info",
                         "gitfile=${layout.gitFileContent.orEmpty()}",
                         "commondir=${stableContent(layout.gitDir.resolve("commondir"))}",
+                        "replace=${looseReplaceRefs(layout) ?: return null}",
                         "nested=${nestedModulesDigest(layout.commonDir) ?: return null}",
                     )
                     .joinToString("\u0000")
@@ -259,19 +263,18 @@ internal class OriginStateCache(
     private class ConfiguredPath(val path: Path?, val ambiguous: Boolean = false)
 
     private fun configFingerprint(layout: GitLayout): ConfigSnapshot? {
+        val overridden = homeOverride != null || xdgConfigHomeOverride != null
         val envGlobal =
-            if (xdgConfigHomeOverride == null) {
+            if (!overridden) {
                 System.getenv("GIT_CONFIG_GLOBAL")?.takeIf(String::isNotBlank)?.let(Path::of)
             } else null
+        // Git reads XDG config before ~/.gitconfig, so ~/.gitconfig wins. Keep this list in
+        // ascending precedence because effectiveValue() takes the last value.
         val globalPaths =
             if (envGlobal != null) listOf(envGlobal)
-            else
-                buildList {
-                    if (xdgConfigHomeOverride == null) add(home.resolve(".gitconfig"))
-                    add(xdgConfigHome.resolve("git/config"))
-                }
+            else listOf(xdgConfigHome.resolve("git/config"), home.resolve(".gitconfig"))
         val systemPath =
-            if (xdgConfigHomeOverride == null && System.getenv("GIT_CONFIG_NOSYSTEM") != "1") {
+            if (!overridden && System.getenv("GIT_CONFIG_NOSYSTEM") != "1") {
                 System.getenv("GIT_CONFIG_SYSTEM")?.takeIf(String::isNotBlank)?.let(Path::of)
                     ?: systemConfigPath()
             } else null
@@ -388,6 +391,46 @@ internal class OriginStateCache(
         val lower = text.lowercase()
         return UNSUPPORTED_CONFIG_KEYS.none { lower.contains(it) }
     }
+
+    /** Alternate object stores can change object lookup without touching refs or the worktree. */
+    private fun hasAlternateObjectStores(layout: GitLayout): Boolean =
+        Files.isRegularFile(layout.commonDir.resolve("objects/info/alternates")) ||
+            Files.isRegularFile(layout.gitDir.resolve("objects/info/alternates"))
+
+    /**
+     * `git replace` changes the effective HEAD tree and diff without changing HEAD, its ref or the
+     * worktree. Packed replacement refs are covered by the `packed-refs` fingerprint; loose ones
+     * live under `refs/replace` and must be fingerprinted here.
+     */
+    private fun looseReplaceRefs(layout: GitLayout): String? =
+        runCatching {
+                val directories =
+                    listOf(
+                            layout.commonDir.resolve("refs/replace"),
+                            layout.gitDir.resolve("refs/replace"),
+                        )
+                        .distinct()
+                val entries = mutableListOf<String>()
+                directories.forEach { directory ->
+                    if (!Files.isDirectory(directory)) return@forEach
+                    Files.walkFileTree(
+                        directory,
+                        object : SimpleFileVisitor<Path>() {
+                            override fun visitFile(
+                                file: Path,
+                                attributes: BasicFileAttributes,
+                            ): FileVisitResult {
+                                val relative =
+                                    directory.relativize(file).invariantSeparatorsPathString
+                                entries += "$relative:${stableContent(file)}"
+                                return FileVisitResult.CONTINUE
+                            }
+                        },
+                    )
+                }
+                digest(entries.sorted().joinToString("\n"))
+            }
+            .getOrNull()
 
     /**
      * A tracked submodule's HEAD advances without changing the parent's working-tree files, and its
@@ -651,9 +694,16 @@ internal class OriginStateCache(
             directory: Path,
             cacheRoot: Path? = null,
             racyWindowNanos: Long = RACY_WINDOW_NANOS,
+            homeOverride: Path? = null,
             xdgConfigHomeOverride: Path? = null,
         ): OriginStateCache =
-            OriginStateCache(directory, cacheRoot, racyWindowNanos, xdgConfigHomeOverride)
+            OriginStateCache(
+                directory,
+                cacheRoot,
+                racyWindowNanos,
+                homeOverride,
+                xdgConfigHomeOverride,
+            )
 
         private const val FORMAT_VERSION = 1
         private const val GIT = ".git"
@@ -664,9 +714,25 @@ internal class OriginStateCache(
             listOf(
                 "GIT_DIR",
                 "GIT_WORK_TREE",
+                "GIT_COMMON_DIR",
                 "GIT_INDEX_FILE",
+                "GIT_OBJECT_DIRECTORY",
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                "GIT_NAMESPACE",
+                "GIT_SUPER_PREFIX",
+                "GIT_REPLACE_REF_BASE",
+                "GIT_NO_REPLACE_OBJECTS",
+                "GIT_SHALLOW_FILE",
+                "GIT_GRAFT_FILE",
                 "GIT_EXTERNAL_DIFF",
                 "GIT_DIFF_OPTS",
+                "GIT_ATTR_NOSYSTEM",
+                "GIT_ATTR_SOURCE",
+                "GIT_LITERAL_PATHSPECS",
+                "GIT_GLOB_PATHSPECS",
+                "GIT_NOGLOB_PATHSPECS",
+                "GIT_ICASE_PATHSPECS",
+                "GIT_CEILING_DIRECTORIES",
                 "GIT_CONFIG",
                 "GIT_CONFIG_COUNT",
                 "GIT_CONFIG_PARAMETERS",
@@ -687,6 +753,8 @@ internal class OriginStateCache(
                 "bare=true",
                 "worktree =",
                 "worktree=",
+                // A textconv helper's output can change without any stamped file changing.
+                "textconv",
             )
         private val json = Json {
             encodeDefaults = true
