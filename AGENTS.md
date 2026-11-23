@@ -101,6 +101,13 @@ embedded API lands. The product boundary and tracer-bullet plan live in
 public declaration requires a reviewed Metalava diff and must not introduce public data classes or
 `@JvmInline` value classes.
 
+### Release Branches
+
+Release branches never diverge from `main` except for trivial mechanical changes (version bumps,
+release notes, changelog). Land every other fix on `main` first, then cherry-pick or merge it into
+the release branch. If a release branch diverges anyway, merge it back into `main` right after the
+release. See [docs/PUBLISHING.md](docs/PUBLISHING.md#release-branches).
+
 ## Actions Requiring Explicit User Approval
 
 Never perform these without explicit user instruction:

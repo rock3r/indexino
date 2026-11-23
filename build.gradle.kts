@@ -342,7 +342,13 @@ val normalizedCliJarTimestampMillis = 1_700_000_000_000L
 val normalizedCliJar by
     tasks.registering(NormalizedJar::class) {
         description = "Build the metadata-normalized application JAR used by native distributions"
-        inputJar.set(shrunkCliJar.flatMap(ShadowJar::getArchiveFile))
+        dependsOn(shrunkCliJar)
+        inputJar.set(
+            providers
+                .environmentVariable("INDEXINO_SIGNED_MAC_CLI_JAR")
+                .map(layout.projectDirectory::file)
+                .orElse(shrunkCliJar.flatMap(ShadowJar::getArchiveFile))
+        )
         archiveFileName.set("indexino-cli.jar")
         destinationDirectory.set(layout.buildDirectory.dir("native-distributions/application"))
         normalizedTimestampMillis.set(normalizedCliJarTimestampMillis)
@@ -352,7 +358,13 @@ val normalizedExtensionWorkerJar by
     tasks.registering(NormalizedJar::class) {
         description =
             "Build the metadata-normalized extension worker JAR packaged beside native installs"
-        inputJar.set(tasks.shadowJar.flatMap(ShadowJar::getArchiveFile))
+        dependsOn(tasks.shadowJar)
+        inputJar.set(
+            providers
+                .environmentVariable("INDEXINO_SIGNED_MAC_WORKER_JAR")
+                .map(layout.projectDirectory::file)
+                .orElse(tasks.shadowJar.flatMap(ShadowJar::getArchiveFile))
+        )
         archiveFileName.set("indexino-extension-worker.jar")
         destinationDirectory.set(layout.buildDirectory.dir("native-distributions/application"))
         normalizedTimestampMillis.set(normalizedCliJarTimestampMillis)
@@ -676,7 +688,14 @@ val publicationGroupId = group.toString()
 val publicationVersion = version.toString()
 
 mavenPublishing {
-    publishToMavenCentral(automaticRelease = false)
+    // Tag releases pass -PcentralAutomaticRelease=true after native verification.
+    // Local and test publication stay manual so a developer upload is not promoted.
+    val centralAutomaticRelease =
+        providers
+            .gradleProperty("centralAutomaticRelease")
+            .map { it.equals("true", ignoreCase = true) }
+            .getOrElse(false)
+    publishToMavenCentral(automaticRelease = centralAutomaticRelease)
     configure(KotlinJvm(javadocJar = JavadocJar.Empty(), sourcesJar = SourcesJar.Sources()))
 
     val hasSigningKey = providers.gradleProperty("signingInMemoryKey").orNull?.isNotBlank() == true

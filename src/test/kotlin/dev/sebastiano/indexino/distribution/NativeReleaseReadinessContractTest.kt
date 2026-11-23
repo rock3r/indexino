@@ -62,8 +62,8 @@ class NativeReleaseReadinessContractTest {
         assertEquals(
             """
             jdk_sha=82e653e0e7bfc0f58f68dcae961f83be68e7f74d708bf3a3bc6c43ce959e1e31
-            roast_sha=c917fdfda3247689636a00922b4b9e522ec02dc6eaa9eb75bf7cb8d7055e8e4b
-            cache_key=82e653e0e7bfc0f58f68dcae961f83be68e7f74d708bf3a3bc6c43ce959e1e31-c917fdfda3247689636a00922b4b9e522ec02dc6eaa9eb75bf7cb8d7055e8e4b
+            roast_sha=a7fd2942410e961b0129715f6c1d6d7c19f9c59caa241d6d378f74f09aeec56b
+            cache_key=82e653e0e7bfc0f58f68dcae961f83be68e7f74d708bf3a3bc6c43ce959e1e31-a7fd2942410e961b0129715f6c1d6d7c19f9c59caa241d6d378f74f09aeec56b
             cache_path=.native-download-cache/linux-x64
             """
                 .trimIndent(),
@@ -135,9 +135,35 @@ class NativeReleaseReadinessContractTest {
         assertContains(workflow, "RELEASE_NOTES-")
         assertContains(workflow, "Upload complete Maven Central release train")
         assertContains(workflow, "publishToMavenCentral")
+        assertContains(workflow, "-PcentralAutomaticRelease=true")
+        assertContains(workflow, "scripts/verify-maven-central-resolution.py")
+        val resolutionGate = workflow.substringAfter("publishToMavenCentral")
+        assertTrue(
+            resolutionGate.indexOf("verify-maven-central-resolution.py") <
+                resolutionGate.indexOf("draft-release:"),
+            "Public resolution must pass before the draft release job is eligible",
+        )
+        assertContains(
+            projectFile("build.gradle.kts").readText(),
+            "publishToMavenCentral(automaticRelease = centralAutomaticRelease)",
+        )
         assertContains(workflow, "MAVEN_CENTRAL_USERNAME")
         assertContains(workflow, "SIGNING_IN_MEMORY_KEY")
         assertContains(workflow, "generateBundledDependencyInventory")
+        assertFalse(
+            workflow.contains("WINDOWS_CERTIFICATE_P12"),
+            "Windows release must not require Authenticode credentials",
+        )
+        assertFalse(
+            workflow.contains("WINDOWS_SIGNING_THUMBPRINT"),
+            "Windows release must not require a signing thumbprint",
+        )
+        assertFalse(
+            projectFile(".github/workflows/native-distributions.yml")
+                .readText()
+                .contains("sign-windows-distribution.ps1"),
+            "Windows release must use the verified, unsigned native archive",
+        )
         assertContains(projectFile("third-party/roast/LICENSE").readText(), "Apache License")
         assertContains(projectFile("build.gradle.kts").readText(), "licenses/roast-LICENSE")
         assertContains(projectFile("build.gradle.kts").readText(), "licenses/indexino-LICENSE")
@@ -225,6 +251,32 @@ class NativeReleaseReadinessContractTest {
         assertFalse(
             File(projectDirectory, ".github/scripts/generate-release-provenance.sh").isFile,
             "Aggregate provenance script must be removed",
+        )
+    }
+
+    @Test
+    fun `macOS release signs JAR natives before AOT training and leaves them unchanged after`() {
+        val workflow = projectFile(".github/workflows/native-distributions.yml").readText()
+        val build = projectFile("build.gradle.kts").readText()
+        val signingScript =
+            projectFile(".github/scripts/sign-notarize-macos-distribution.sh").readText()
+
+        assertTrue(
+            workflow.indexOf("Prepare signed macOS JAR inputs") <
+                workflow.indexOf("- name: Verify native distribution") &&
+                workflow.contains("- name: Prepare signed macOS JAR inputs"),
+            "Nested Mach-O code signatures must precede AOT cache training",
+        )
+        assertContains(workflow, "INDEXINO_SIGNED_MAC_CLI_JAR")
+        assertContains(workflow, "INDEXINO_SIGNED_MAC_WORKER_JAR")
+        assertContains(build, "INDEXINO_SIGNED_MAC_CLI_JAR")
+        assertContains(build, "INDEXINO_SIGNED_MAC_WORKER_JAR")
+        assertContains(signingScript, "verify_nested_natives_in_jars")
+        assertFalse(
+            signingScript
+                .substringAfter("readonly PAYLOAD_DIRECTORY=")
+                .contains("sign_nested_natives_in_jars"),
+            "Final archive signing must not mutate an AOT-trained JAR",
         )
     }
 

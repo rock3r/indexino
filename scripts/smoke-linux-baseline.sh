@@ -19,12 +19,22 @@ readonly ARCHIVE_DIRECTORY="$(cd "$(dirname "$ARCHIVE")" && pwd)"
 readonly ARCHIVE_NAME="$(basename "$ARCHIVE")"
 
 docker run --rm \
+  --dns 8.8.8.8 \
+  --dns 1.1.1.1 \
   --volume "$PROJECT_DIRECTORY:/workspace:ro" \
   --volume "$ARCHIVE_DIRECTORY:/native-archive:ro" \
   "$CONTAINER_IMAGE" \
   bash -euxo pipefail -c '
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update
+    updated=0
+    for attempt in 1 2 3; do
+      if apt-get update; then
+        updated=1
+        break
+      fi
+      sleep $((attempt * 5))
+    done
+    test "$updated" -eq 1
     apt-get install --yes --no-install-recommends git unzip
     mkdir -p /tmp/indexino-install /tmp/indexino-project /tmp/indexino-caller
     unzip -q "/native-archive/'"$ARCHIVE_NAME"'" -d /tmp/indexino-install
