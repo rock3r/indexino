@@ -35,11 +35,15 @@ internal class OriginStateCache(
     private val homeOverride: Path? = null,
     /** Test-only XDG config home; production resolves `$XDG_CONFIG_HOME` or `~/.config`. */
     private val xdgConfigHomeOverride: Path? = null,
+    /** Test-only environment lookup; production uses `System.getenv`. */
+    private val environment: (String) -> String? = { System.getenv(it) },
 ) {
-    private val home: Path = homeOverride ?: Path.of(System.getProperty("user.home"))
+    private val resolvedHome: Path? = homeOverride ?: resolveGitHome()
+    private val home: Path = resolvedHome ?: Path.of(System.getProperty("user.home"))
+    private val homeSettled: Boolean = homeOverride != null || resolvedHome != null
     private val xdgConfigHome: Path =
         xdgConfigHomeOverride
-            ?: System.getenv("XDG_CONFIG_HOME")?.takeIf(String::isNotBlank)?.let(Path::of)
+            ?: environment("XDG_CONFIG_HOME")?.takeIf(String::isNotBlank)?.let(Path::of)
             ?: home.resolve(".config")
 
     /**
@@ -47,6 +51,9 @@ internal class OriginStateCache(
      * the working tree undecidable without Git.
      */
     fun stamp(originRoot: Path, externalExpectedRevision: String?): OriginStateStamp? {
+        // On Windows, Git's home is HOME, then HOMEDRIVE+HOMEPATH, then USERPROFILE. If none is
+        // present we cannot know which config Git will read, so reuse is unsafe.
+        if (!homeSettled) return null
         val canonicalRoot = runCatching { originRoot.toRealPath() }.getOrNull() ?: return null
         val layout = gitLayout(canonicalRoot, externalExpectedRevision) ?: return null
         val metadata = gitMetadata(layout) ?: return null
@@ -157,7 +164,7 @@ internal class OriginStateCache(
     )
 
     private fun gitLayout(originRoot: Path, externalExpectedRevision: String?): GitLayout? {
-        if (UNSUPPORTED_ENVIRONMENT_VARIABLES.any { System.getenv(it) != null }) return null
+        if (UNSUPPORTED_ENVIRONMENT_VARIABLES.any { environment(it) != null }) return null
         val dotGit = originRoot.resolve(GIT)
         return runCatching {
                 when {
@@ -266,7 +273,7 @@ internal class OriginStateCache(
         val overridden = homeOverride != null || xdgConfigHomeOverride != null
         val envGlobal =
             if (!overridden) {
-                System.getenv("GIT_CONFIG_GLOBAL")?.takeIf(String::isNotBlank)?.let(Path::of)
+                environment("GIT_CONFIG_GLOBAL")?.takeIf(String::isNotBlank)?.let(Path::of)
             } else null
         // Git reads XDG config before ~/.gitconfig, so ~/.gitconfig wins. Keep this list in
         // ascending precedence because effectiveValue() takes the last value.
@@ -274,8 +281,8 @@ internal class OriginStateCache(
             if (envGlobal != null) listOf(envGlobal)
             else listOf(xdgConfigHome.resolve("git/config"), home.resolve(".gitconfig"))
         val systemPath =
-            if (!overridden && System.getenv("GIT_CONFIG_NOSYSTEM") != "1") {
-                System.getenv("GIT_CONFIG_SYSTEM")?.takeIf(String::isNotBlank)?.let(Path::of)
+            if (!overridden && environment("GIT_CONFIG_NOSYSTEM") != "1") {
+                environment("GIT_CONFIG_SYSTEM")?.takeIf(String::isNotBlank)?.let(Path::of)
                     ?: systemConfigPath()
             } else null
         val repoConfig = layout.commonDir.resolve("config")
@@ -489,11 +496,50 @@ internal class OriginStateCache(
     }
 
     private fun systemConfigPath(): Path =
-        if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
-            Path.of(System.getenv("PROGRAMDATA").orEmpty(), "Git", "config")
+        if (isWindows()) {
+            Path.of(environment("PROGRAMDATA").orEmpty(), "Git", "config")
         } else {
             Path.of("/etc/gitconfig")
         }
+
+    /**
+     * Git's own home resolution: `$HOME` when set, then (on Windows) `%HOMEDRIVE%%HOMEPATH%`, then
+     * `%USERPROFILE%`. Unix falls back to the account home that `user.home` also reports. Windows
+     * Git Bash reports `$HOME` as an MSYS path (`/c/Users/...`); translate that form, and decline
+     * any other POSIX form we cannot map to the path Git will actually read.
+     */
+    private fun resolveGitHome(): Path? {
+        environment("HOME")?.takeIf(String::isNotBlank)?.let { raw ->
+            return gitHomePath(raw)
+        }
+        if (isWindows()) {
+            val drive = environment("HOMEDRIVE")
+            val path = environment("HOMEPATH")
+            if (!drive.isNullOrBlank() && !path.isNullOrBlank()) return Path.of(drive + path)
+            environment("USERPROFILE")?.takeIf(String::isNotBlank)?.let {
+                return Path.of(it)
+            }
+            return null
+        }
+        return Path.of(System.getProperty("user.home"))
+    }
+
+    private fun gitHomePath(raw: String): Path? {
+        if (!isWindows()) return Path.of(raw).takeIf(Path::isAbsolute)
+        val path =
+            if (raw.startsWith('/')) {
+                val match = MSYS_DRIVE_PATH.matchEntire(raw) ?: return null
+                val drive = match.groupValues[1].uppercase()
+                val rest = match.groupValues[2].ifEmpty { "/" }
+                Path.of("$drive:$rest")
+            } else {
+                Path.of(raw)
+            }
+        return path.takeIf(Path::isAbsolute)
+    }
+
+    private fun isWindows(): Boolean =
+        System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
 
     private class WorktreeDigest(val digest: String, val newestChangeNanos: Long)
 
@@ -696,6 +742,7 @@ internal class OriginStateCache(
             racyWindowNanos: Long = RACY_WINDOW_NANOS,
             homeOverride: Path? = null,
             xdgConfigHomeOverride: Path? = null,
+            environment: (String) -> String? = { System.getenv(it) },
         ): OriginStateCache =
             OriginStateCache(
                 directory,
@@ -703,6 +750,7 @@ internal class OriginStateCache(
                 racyWindowNanos,
                 homeOverride,
                 xdgConfigHomeOverride,
+                environment,
             )
 
         private const val FORMAT_VERSION = 1
@@ -738,6 +786,7 @@ internal class OriginStateCache(
                 "GIT_CONFIG_PARAMETERS",
             )
         private val INCLUDE_SECTION = Regex("(?im)^\\s*\\[\\s*include(?:if)?\\b")
+        private val MSYS_DRIVE_PATH = Regex("^/([A-Za-z])(/.*)?$")
         private val NESTED_SKIPPED_DIRECTORIES =
             setOf("objects", "logs", "hooks", "lfs", "rr-cache")
         private val NESTED_METADATA_FILES =

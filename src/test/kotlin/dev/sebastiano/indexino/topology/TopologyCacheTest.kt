@@ -7,6 +7,7 @@ import kotlin.io.path.readText
 import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeFalse
@@ -375,6 +376,37 @@ class TopologyCacheTest {
         resolve()
         resolve()
         assertEquals(3, resolutions, "A complete closure is cacheable")
+    }
+
+    @Test
+    fun `a target-only build-parse result is cached when bazel is absent`() {
+        val workspace = bazelWorkspace("no-bazel")
+        val toolchain =
+            ToolchainIdentity.capture(workspace, BuildSystem.BAZEL) { "unavailable:IOException" }
+        assertFalse(toolchain.bazelAvailable)
+        var resolutions = 0
+        fun resolve(): TopologyResult =
+            TopologyCache.resolve(
+                project = workspace,
+                request = bazelRequest(includeDeps = false),
+                buildSystem = BuildSystem.BAZEL,
+                cacheRoot = tempDir.resolve("cache"),
+                toolchain = toolchain,
+                resolveFresh = {
+                    resolutions++
+                    TopologyResult(
+                        sourceFiles = listOf("app/Main.kt"),
+                        codeSourceFiles = setOf("app/Main.kt"),
+                        topology = "build-parse",
+                        includeDeps = false,
+                        scope = "//app:app",
+                    )
+                },
+            )
+
+        resolve()
+        resolve()
+        assertEquals(1, resolutions, "A no-Bazel build-parse result must be cacheable")
     }
 
     @Test

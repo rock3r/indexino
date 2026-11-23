@@ -29,10 +29,21 @@ private constructor(
         ): ToolchainIdentity =
             ToolchainIdentity("bazel=$bazel\u0000jvm=$jvm\u0000kotlin=$kotlin", bazelAvailable)
 
-        fun capture(project: Path, buildSystem: BuildSystem): ToolchainIdentity {
+        /** [versionProbe] is a test seam; production probes the workspace's Bazel launcher. */
+        fun capture(
+            project: Path,
+            buildSystem: BuildSystem,
+            versionProbe: ((Path) -> String)? = null,
+        ): ToolchainIdentity {
             val bazel =
-                if (buildSystem == BuildSystem.BAZEL) bazelProbe(project)
-                else BazelProbe("not-bazel", available = true)
+                if (buildSystem != BuildSystem.BAZEL) {
+                    BazelProbe("not-bazel", available = true)
+                } else if (versionProbe != null) {
+                    val version = versionProbe(project)
+                    BazelProbe("probe=$version", available = bazelAvailable(version))
+                } else {
+                    bazelProbe(project)
+                }
             return of(
                 bazel = bazel.identity,
                 jvm = "${Runtime.version()}:${System.getProperty("java.vm.version")}",
@@ -42,6 +53,10 @@ private constructor(
         }
 
         private class BazelProbe(val identity: String, val available: Boolean)
+
+        /** `unavailable:<reason>` and `exit=<code>` both mean Bazel could not be run. */
+        private fun bazelAvailable(version: String): Boolean =
+            !version.startsWith(UNAVAILABLE) && !version.startsWith(EXIT_PREFIX)
 
         private val bazelProbes = ConcurrentHashMap<String, BazelProbe>()
 
@@ -58,7 +73,7 @@ private constructor(
             val probe =
                 BazelProbe(
                     "pinned=$pinned\u0000exe=$executable\u0000probe=$version",
-                    available = version != UNAVAILABLE && !version.startsWith(EXIT_PREFIX),
+                    available = bazelAvailable(version),
                 )
             bazelProbes[key] = probe
             return probe

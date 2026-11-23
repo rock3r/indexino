@@ -217,6 +217,28 @@ class OriginStateCacheTest {
     }
 
     @Test
+    fun `git home environment overrides java user home`() {
+        val workspace = committedWorkspace()
+        val envHome = Files.createDirectories(tempDir.resolve("env-home"))
+        val excludes = envHome.resolve("env-excludes")
+        excludes.writeText("notes.txt\n")
+        envHome.resolve(".gitconfig").writeText("[core]\n\texcludesFile = $excludes\n")
+        val cache =
+            OriginStateCache.open(
+                tempDir.resolve("env-home-cache"),
+                tempDir,
+                environment = { name -> if (name == "HOME") envHome.toString() else null },
+            )
+
+        val first = cache.stamp(workspace.toRealPath(), null)
+        assertNotNull(first)
+        excludes.writeText("notes.txt\nother.txt\n")
+        val second = cache.stamp(workspace.toRealPath(), null)
+        assertNotNull(second)
+        assertNotEquals(first.value, second.value)
+    }
+
+    @Test
     fun `tilde gitconfig overrides xdg for excludes and attributes`() {
         val workspace = committedWorkspace()
         val home = Files.createDirectories(tempDir.resolve("precedence-home"))
