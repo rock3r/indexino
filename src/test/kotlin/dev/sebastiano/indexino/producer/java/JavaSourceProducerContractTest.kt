@@ -212,6 +212,53 @@ class JavaSourceProducerContractTest {
         }
     }
 
+    @Test
+    fun `keeps stored Kotlin parameter names when every Java source changes`() {
+        withStore { store ->
+            store.put(
+                CodeIndexKey.symbolDefinition(
+                    fqn = "KotlinTarget#render",
+                    originId = "workspace",
+                    relativeFile = "Target.kt",
+                    line = 3,
+                    column = 5,
+                ),
+                SymbolRecord(
+                    fqn = "KotlinTarget#render",
+                    relativeFile = "Target.kt",
+                    originId = "workspace",
+                    line = 3,
+                    column = 5,
+                    kind = "method",
+                    name = "render",
+                    language = "kotlin",
+                    ownerFqn = "KotlinTarget",
+                    arity = 1,
+                    parameterNames = listOf("kotlinValue"),
+                ),
+            )
+            javaProducer()
+                .produce(
+                    IndexBuildContext.forInlineSources(
+                        store,
+                        "all-java",
+                        mapOf(
+                            "Caller.java" to
+                                "class Caller { int run() { " + "return KotlinTarget.render(1); } }"
+                        ),
+                    )
+                )
+
+            val call =
+                store
+                    .prefixScan("call:")
+                    .map { it.second }
+                    .filterIsInstance<CallSiteRecord>()
+                    .single()
+            assertEquals("kotlinValue", call.arguments.single().resolvedName)
+        }
+    }
+
     private fun javaProducer() = assertNotNull(ProducerRegistry.get("java-source"))
 
     private fun CodeIndexRecord.languageNamespace(): Boolean =

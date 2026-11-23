@@ -209,9 +209,11 @@ internal class JavaSourceProducer : IndexProducer {
     }
 
     /**
-     * Cross-file lookups for the current run stay in memory. When this run leaves Java sources
-     * unprocessed, their stored declarations remain candidates; merge them by FQN before applying
-     * caller-origin preference so an incremental result matches a full rebuild.
+     * Cross-file lookups for the current run stay in memory. Targets absent from the run-local
+     * table (for example unchanged Kotlin declarations) fall back to stored symbols. When this run
+     * leaves Java sources unprocessed, stored declarations for the same FQN remain candidates;
+     * merge them before applying caller-origin preference so an incremental result matches a full
+     * rebuild.
      */
     private class JavaProjectSymbols(
         currentRunSymbols: List<SymbolRecord>,
@@ -225,7 +227,11 @@ internal class JavaSourceProducer : IndexProducer {
         fun parameterNames(fqn: String, argumentCount: Int, originId: String): List<String> {
             val currentRun = byFqn[fqn].orEmpty()
             val candidates =
-                (if (mergeStoredSymbols) currentRun + storedSymbols(fqn) else currentRun)
+                (if (mergeStoredSymbols || currentRun.isEmpty()) {
+                        currentRun + storedSymbols(fqn)
+                    } else {
+                        currentRun
+                    })
                     .distinct()
                     .filter { symbol -> symbol.arity == argumentCount }
             return (candidates.singleOrNull { symbol -> symbol.originId == originId }
