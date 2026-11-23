@@ -233,9 +233,10 @@ removing the workspace directory (or `cache forget` / `daemon stop --purge`) dis
   `includeDeps` value, including `codeSourceFiles` roles and external included-build mount
   metadata. Validation recomputes the content digest of build-definition files and the digest of
   every file name below the workspace (and included-build roots). Bazel inputs are
-  `BUILD`/`BUILD.bazel`, `*.bzl`, `MODULE.bazel` and its lock, `WORKSPACE`/`WORKSPACE.bazel` and
-  locks, `.bazelproject` and `.bazelrc*`. Gradle inputs are `settings.gradle(.kts)`,
-  `build.gradle(.kts)`, `gradle.properties`, version catalogs, wrapper properties, and the
+  `BUILD`/`BUILD.bazel`, `*.bzl`, `MODULE.bazel` and its lock, every `*.MODULE.bazel` include
+  segment, `WORKSPACE`/`WORKSPACE.bazel` and locks, `WORKSPACE.bzlmod`, `REPO.bazel`,
+  `.bazelignore`, `.bazelproject` and `.bazelrc*`. Gradle inputs are every `*.gradle`/`*.gradle.kts`
+  script, every `*.versions.toml` catalog, `gradle.properties`, wrapper properties, and the
   included-build roots. The key also contains the Bazel client version (`.bazelversion`, the
   launcher identity and `bazel --version`), the JVM version and the Kotlin version. The file-name
   inventory is required because BUILD globs and Gradle source roots change when files are added or

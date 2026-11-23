@@ -13,10 +13,12 @@ import kotlin.io.path.invariantSeparatorsPathString
  * One root's build-definition content and file-name inventory.
  *
  * [definitionDigest] covers the contents of files that can change discovery output: Bazel
- * `BUILD(.bazel)`, `.bzl`, `MODULE.bazel`, `WORKSPACE(.bazel)`, `.bazelproject`, `.bazelrc` and
- * lock files; Gradle settings, build scripts, properties and version catalogs. [inventoryDigest]
- * covers every file name below the root, because BUILD globs and Gradle source roots react to added
- * or removed files without any build-definition edit.
+ * `BUILD(.bazel)`, `.bzl`, `MODULE.bazel` and `*.MODULE.bazel` include segments,
+ * `WORKSPACE(.bazel)`, `WORKSPACE.bzlmod`, `REPO.bazel`, `.bazelignore`, `.bazelproject`,
+ * `.bazelrc*` and lock files; Gradle `*.gradle`/`*.gradle.kts` scripts, every `*.versions.toml`
+ * catalog, properties and wrapper properties. [inventoryDigest] covers every file name below the
+ * root, because BUILD globs and Gradle source roots react to added or removed files without any
+ * build-definition edit.
  */
 internal class RootFingerprint(
     val root: String,
@@ -148,8 +150,13 @@ internal object BuildDefinitionInputs {
             BuildSystem.BAZEL ->
                 fileName in BAZEL_DEFINITIONS ||
                     fileName.startsWith(".bazelrc") ||
-                    fileName.endsWith(".bzl")
-            BuildSystem.GRADLE -> fileName in GRADLE_DEFINITIONS
+                    fileName.endsWith(".bzl") ||
+                    fileName.endsWith(".MODULE.bazel")
+            BuildSystem.GRADLE ->
+                fileName in GRADLE_DEFINITIONS ||
+                    fileName.endsWith(".gradle") ||
+                    fileName.endsWith(".gradle.kts") ||
+                    fileName.endsWith(".versions.toml")
             else -> false
         }
 
@@ -193,17 +200,12 @@ internal object BuildDefinitionInputs {
             "WORKSPACE",
             "WORKSPACE.bazel",
             "WORKSPACE.bazel.lock",
+            "WORKSPACE.bzlmod",
+            "REPO.bazel",
+            ".bazelignore",
             ".bazelproject",
         )
 
-    private val GRADLE_DEFINITIONS =
-        setOf(
-            "settings.gradle",
-            "settings.gradle.kts",
-            "build.gradle",
-            "build.gradle.kts",
-            "gradle.properties",
-            "libs.versions.toml",
-            "gradle-wrapper.properties",
-        )
+    /** Scripts and catalogs are matched by suffix; properties files keep their exact names. */
+    private val GRADLE_DEFINITIONS = setOf("gradle.properties", "gradle-wrapper.properties")
 }

@@ -410,6 +410,26 @@ class TopologyCacheTest {
     }
 
     @Test
+    fun `editing bazelignore invalidates the cached topology`() {
+        val workspace = bazelWorkspace("bazelignore")
+        val ignore = workspace.resolve(".bazelignore")
+        ignore.writeText("ignored\n")
+        var resolutions = 0
+        fun resolve(): TopologyResult =
+            cached(workspace) {
+                resolutions++
+                fresh(workspace)
+            }
+
+        resolve()
+        resolve()
+        assertEquals(1, resolutions)
+        ignore.writeText("other-ignored\n")
+        resolve()
+        assertEquals(2, resolutions, "Editing .bazelignore must invalidate the topology")
+    }
+
+    @Test
     fun `a bazel result with unknown code roles is not cached`() {
         val workspace = bazelWorkspace("code-roles")
         var resolutions = 0

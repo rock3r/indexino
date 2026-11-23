@@ -205,9 +205,10 @@ external mount metadata. See [INDEX-STORAGE.md](INDEX-STORAGE.md#refresh-acceler
 
 The key covers the requested target, `includeDeps`, the Bazel client/pin/launcher identity, the JVM
 and Kotlin versions, the content digest of every `BUILD`/`BUILD.bazel`, `*.bzl`, `MODULE.bazel`
-(+lock), `WORKSPACE`/`WORKSPACE.bazel` (+lock), `.bazelproject` and `.bazelrc*` file, and the digest
-of every file name below the workspace. File names participate because `glob()` evaluation changes
-when files are added or removed without any BUILD edit.
+(+lock) and every `*.MODULE.bazel` include segment, `WORKSPACE`/`WORKSPACE.bazel` (+lock),
+`WORKSPACE.bzlmod`, `REPO.bazel`, `.bazelignore`, `.bazelproject` and `.bazelrc*` file, and the
+digest of every file name below the workspace. File names participate because `glob()` evaluation
+changes when files are added or removed without any BUILD edit.
 
 An edit to any of those inputs invalidates the entry and re-runs discovery. A fresh result is stored
 only when the inputs are identical immediately before and after discovery; an edit racing the query
