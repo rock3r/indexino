@@ -47,6 +47,12 @@ internal object TopologyResolver {
         ) {
             return fresh()
         }
+        val preDiscoveryRoots: () -> List<Path> =
+            if (effective == BuildSystem.GRADLE) {
+                { GradleTopology.includedBuildRoots(project) }
+            } else {
+                { emptyList() }
+            }
         return TopologyCache.resolve(
             project = project,
             request = request,
@@ -54,6 +60,7 @@ internal object TopologyResolver {
             cacheRoot = cacheRoot,
             toolchain = ToolchainIdentity.capture(project, effective),
             progress = onStderr,
+            preDiscoveryRoots = preDiscoveryRoots,
             resolveFresh = fresh,
         )
     }

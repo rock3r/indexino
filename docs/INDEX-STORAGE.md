@@ -242,9 +242,14 @@ removing the workspace directory (or `cache forget` / `daemon stop --purge`) dis
   removed without a build-file edit. Gradle output directories are skipped only outside `src`, so a
   package directory named `build` (or `out`, `target`, `node_modules`) remains covered. A fresh
   result is stored only when both digests are identical before and after discovery, so an edit
-  racing a query cannot be recorded as the state that produced the older answer. Injected query
-  executors, `repo` topology, a Bazel `build-parse` fallback while the Bazel client is healthy, and
-  a dependency-inclusive request served by a target-only fallback bypass the cache.
+  racing a query cannot be recorded as the state that produced the older answer. Included-build
+  roots are fingerprinted before and after discovery as well, so a source added to a mount during
+  discovery is not paired with an older source list. Injected query executors, `repo` topology, a
+  Bazel `build-parse` fallback while the Bazel client is healthy, an unknown `codeSourceFiles`
+  classification, and a dependency-inclusive request served by a target-only fallback bypass the
+  cache. A workspace containing a symlinked directory also bypasses the cache, because Bazel globs
+  follow directory links the inventory cannot certify; root-level `bazel-*` convenience links are
+  recorded by target and remain cacheable because they point at build outputs.
 - **`source-hashes`** — append-safe text index from `(originId, origin-path)` to
   `(size, mtimeNs, ctimeNs, fileKey) -> sha256`. A hit skips the file read; any metadata change
   re-reads and re-hashes. Entries observed within a two-second timestamp-granularity window are
@@ -256,10 +261,12 @@ removing the workspace directory (or `cache forget` / `daemon stop --purge`) dis
   without spawning `git`. Linked worktrees are supported through their `.git` file and
   `commondir`; a parent with submodules also fingerprints each submodule's HEAD, refs, packed-refs
   and index under `.git/modules`, so a gitlink advance invalidates the parent state. Submodules
-  used as their own origin require a caller-provided expected revision. Configurations whose output
-  depends on files the stamp cannot observe (dotted or section-form `include`/`includeIf`,
-  `core.excludesFile`, `core.attributesFile`, `core.bare`/`core.worktree`) and Git environment
-  overrides disable reuse instead of guessing.
+  used as their own origin require a caller-provided expected revision. The stamp includes the
+  effective global ignore and attributes files: `core.excludesFile`/`core.attributesFile` when
+  configured, otherwise `$XDG_CONFIG_HOME/git/ignore` and `git/attributes` (falling back to
+  `~/.config/git/...`). Configurations whose output depends on files the stamp cannot observe
+  (dotted or section-form `include`/`includeIf`, `core.bare`/`core.worktree`, ambiguous quoted
+  values) and Git environment overrides disable reuse instead of guessing.
 
 A live daemon watcher still supplies changed paths for hinted refreshes and inherits unchanged
 source hashes from the published generation; these caches serve cold starts, explicit refreshes,

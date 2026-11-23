@@ -31,7 +31,15 @@ internal class OriginStateCache(
     private val directory: Path,
     private val cacheRoot: Path? = null,
     private val racyWindowNanos: Long = RACY_WINDOW_NANOS,
+    /** Test-only XDG config home; production resolves `$XDG_CONFIG_HOME` or `~/.config`. */
+    private val xdgConfigHomeOverride: Path? = null,
 ) {
+    private val home: Path = Path.of(System.getProperty("user.home"))
+    private val xdgConfigHome: Path =
+        xdgConfigHomeOverride
+            ?: System.getenv("XDG_CONFIG_HOME")?.takeIf(String::isNotBlank)?.let(Path::of)
+            ?: home.resolve(".config")
+
     /**
      * Stat-only evidence for [originRoot]. Null when the repository shape or configuration makes
      * the working tree undecidable without Git.
@@ -133,10 +141,17 @@ internal class OriginStateCache(
             .getOrNull()
 
     private class GitLayout(
+        val originRoot: Path,
         val gitDir: Path,
         val commonDir: Path,
         val gitFileContent: String?,
         val externalExpectedRevision: String?,
+    )
+
+    private class ConfigSnapshot(
+        val fingerprint: String,
+        val excludesFile: Path?,
+        val attributesFile: Path?,
     )
 
     private fun gitLayout(originRoot: Path, externalExpectedRevision: String?): GitLayout? {
@@ -145,7 +160,7 @@ internal class OriginStateCache(
         return runCatching {
                 when {
                     Files.isDirectory(dotGit) ->
-                        GitLayout(dotGit, dotGit, null, externalExpectedRevision)
+                        GitLayout(originRoot, dotGit, dotGit, null, externalExpectedRevision)
                     Files.isRegularFile(dotGit) -> {
                         val content = Files.readString(dotGit).trim()
                         if (!content.startsWith(GITDIR_PREFIX)) return null
@@ -163,6 +178,7 @@ internal class OriginStateCache(
                             if (common.isEmpty()) return null
                             val commonPath = Path.of(common)
                             GitLayout(
+                                originRoot = originRoot,
                                 gitDir = gitDir,
                                 commonDir =
                                     (if (commonPath.isAbsolute) commonPath
@@ -176,7 +192,14 @@ internal class OriginStateCache(
                             // A gitlink without a common dir is a submodule. Its owner's HEAD
                             // decides expectedRevision unless the caller supplied one.
                             if (externalExpectedRevision == null) null
-                            else GitLayout(gitDir, gitDir, content, externalExpectedRevision)
+                            else
+                                GitLayout(
+                                    originRoot,
+                                    gitDir,
+                                    gitDir,
+                                    content,
+                                    externalExpectedRevision,
+                                )
                         }
                     }
                     else -> null
@@ -204,6 +227,9 @@ internal class OriginStateCache(
                 val packedRefs = stableContent(layout.commonDir.resolve("packed-refs"))
                 val index = statOnly(layout.gitDir.resolve("index"))
                 val config = configFingerprint(layout) ?: return null
+                val globalIgnore = config.excludesFile ?: xdgConfigHome.resolve("git/ignore")
+                val globalAttributes =
+                    config.attributesFile ?: xdgConfigHome.resolve("git/attributes")
                 val info =
                     listOf(
                             layout.commonDir.resolve("info/exclude"),
@@ -211,6 +237,8 @@ internal class OriginStateCache(
                             layout.commonDir.resolve("info/grafts"),
                             layout.gitDir.resolve("info/sparse-checkout"),
                             layout.commonDir.resolve("shallow"),
+                            globalIgnore,
+                            globalAttributes,
                         )
                         .joinToString("\u0000") { stableContent(it) }
                 listOf(
@@ -218,7 +246,7 @@ internal class OriginStateCache(
                         "ref=$looseRef",
                         "packed=$packedRefs",
                         "index=$index",
-                        "config=$config",
+                        "config=${config.fingerprint}",
                         "info=$info",
                         "gitfile=${layout.gitFileContent.orEmpty()}",
                         "commondir=${stableContent(layout.gitDir.resolve("commondir"))}",
@@ -228,41 +256,129 @@ internal class OriginStateCache(
             }
             .getOrNull()
 
-    private fun configFingerprint(layout: GitLayout): String? {
+    private class ConfiguredPath(val path: Path?, val ambiguous: Boolean = false)
+
+    private fun configFingerprint(layout: GitLayout): ConfigSnapshot? {
+        val envGlobal =
+            if (xdgConfigHomeOverride == null) {
+                System.getenv("GIT_CONFIG_GLOBAL")?.takeIf(String::isNotBlank)?.let(Path::of)
+            } else null
+        val globalPaths =
+            if (envGlobal != null) listOf(envGlobal)
+            else
+                buildList {
+                    if (xdgConfigHomeOverride == null) add(home.resolve(".gitconfig"))
+                    add(xdgConfigHome.resolve("git/config"))
+                }
+        val systemPath =
+            if (xdgConfigHomeOverride == null && System.getenv("GIT_CONFIG_NOSYSTEM") != "1") {
+                System.getenv("GIT_CONFIG_SYSTEM")?.takeIf(String::isNotBlank)?.let(Path::of)
+                    ?: systemConfigPath()
+            } else null
+        val repoConfig = layout.commonDir.resolve("config")
+        val worktreeConfig = layout.gitDir.resolve("config.worktree")
         val paths =
             buildList {
-                    add(layout.commonDir.resolve("config"))
-                    add(layout.gitDir.resolve("config.worktree"))
-                    val global = System.getenv("GIT_CONFIG_GLOBAL")
-                    if (global != null) add(Path.of(global))
-                    else {
-                        add(Path.of(System.getProperty("user.home"), ".gitconfig"))
-                        val xdg = System.getenv("XDG_CONFIG_HOME")?.takeIf(String::isNotBlank)
-                        add(
-                            (xdg?.let(Path::of)
-                                    ?: Path.of(System.getProperty("user.home"), ".config"))
-                                .resolve("git/config")
-                        )
-                    }
-                    if (System.getenv("GIT_CONFIG_NOSYSTEM") != "1") {
-                        val system = System.getenv("GIT_CONFIG_SYSTEM")
-                        if (system != null) add(Path.of(system)) else add(systemConfigPath())
-                    }
+                    add(repoConfig)
+                    add(worktreeConfig)
+                    addAll(globalPaths)
+                    systemPath?.let(::add)
+                }
+                .distinct()
+        // Ascending precedence; the last value of a key in this order is the effective one.
+        val precedence =
+            buildList {
+                    systemPath?.let(::add)
+                    addAll(globalPaths)
+                    add(repoConfig)
+                    add(worktreeConfig)
                 }
                 .distinct()
         return runCatching {
-                buildString {
+                val texts = paths.associateWith { path ->
+                    if (Files.isRegularFile(path)) Files.readString(path) else null
+                }
+                texts.values.filterNotNull().forEach { text ->
+                    if (!supportedConfig(text)) return null
+                }
+                val excludes = effectiveValue(texts, precedence, "excludesfile", layout.originRoot)
+                val attributes =
+                    effectiveValue(texts, precedence, "attributesfile", layout.originRoot)
+                if (excludes.ambiguous || attributes.ambiguous) return null
+                val fingerprint = buildString {
                     paths.forEach { path ->
                         append(stableContent(path))
                         append('\u0000')
-                        if (Files.isRegularFile(path)) {
-                            if (!supportedConfig(Files.readString(path))) return null
-                        }
+                    }
+                }
+                ConfigSnapshot(fingerprint, excludes.path, attributes.path)
+            }
+            .getOrNull()
+    }
+
+    private fun effectiveValue(
+        texts: Map<Path, String?>,
+        precedence: List<Path>,
+        key: String,
+        originRoot: Path,
+    ): ConfiguredPath {
+        var raw: String? = null
+        precedence.forEach { path ->
+            texts[path]?.let { text -> configValue(text, "core", key)?.let { raw = it } }
+        }
+        val value = raw ?: return ConfiguredPath(null)
+        if (value.contains('#') || value.contains(';'))
+            return ConfiguredPath(null, ambiguous = true)
+        val path = resolveConfiguredPath(value, originRoot)
+        return ConfiguredPath(path, ambiguous = path == null)
+    }
+
+    /** Reads `[section] key = value` from a raw config file; later values win. */
+    private fun configValue(text: String, section: String, key: String): String? {
+        var currentSection: String? = null
+        var result: String? = null
+        text.lines().forEach { line ->
+            val trimmed = line.trim()
+            if (trimmed.isEmpty() || trimmed.startsWith('#') || trimmed.startsWith(';')) {
+                return@forEach
+            }
+            if (trimmed.startsWith('[')) {
+                currentSection =
+                    trimmed
+                        .removePrefix("[")
+                        .substringBefore(']')
+                        .substringBefore('"')
+                        .trim()
+                        .lowercase()
+            } else if (currentSection == section) {
+                val separator = trimmed.indexOf('=')
+                val name =
+                    (if (separator >= 0) trimmed.substring(0, separator) else trimmed)
+                        .trim()
+                        .lowercase()
+                if (name == key) {
+                    val value =
+                        if (separator >= 0) trimmed.substring(separator + 1).trim()
+                        else trimmed.substringAfter(' ', "").trim()
+                    if (value.isNotEmpty()) result = value.removeSurrounding("\"")
+                }
+            }
+        }
+        return result
+    }
+
+    private fun resolveConfiguredPath(value: String, originRoot: Path): Path? =
+        runCatching {
+                when {
+                    value == "~" -> home
+                    value.startsWith("~/") -> home.resolve(value.drop(2))
+                    else -> {
+                        val path = Path.of(value)
+                        if (path.isAbsolute) path else originRoot.resolve(path).normalize()
                     }
                 }
             }
             .getOrNull()
-    }
 
     private fun supportedConfig(text: String): Boolean {
         // Both `include.path = ...` and the section form `[include] path = ...` can pull in a file
@@ -535,7 +651,9 @@ internal class OriginStateCache(
             directory: Path,
             cacheRoot: Path? = null,
             racyWindowNanos: Long = RACY_WINDOW_NANOS,
-        ): OriginStateCache = OriginStateCache(directory, cacheRoot, racyWindowNanos)
+            xdgConfigHomeOverride: Path? = null,
+        ): OriginStateCache =
+            OriginStateCache(directory, cacheRoot, racyWindowNanos, xdgConfigHomeOverride)
 
         private const val FORMAT_VERSION = 1
         private const val GIT = ".git"
@@ -565,8 +683,6 @@ internal class OriginStateCache(
             listOf(
                 "include.path",
                 "includeif",
-                "excludesfile",
-                "attributesfile",
                 "bare = true",
                 "bare=true",
                 "worktree =",

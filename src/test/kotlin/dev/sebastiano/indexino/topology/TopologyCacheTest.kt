@@ -9,6 +9,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeFalse
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.io.TempDir
 
 class TopologyCacheTest {
@@ -182,6 +184,7 @@ class TopologyCacheTest {
                 buildSystem = request.buildSystem,
                 cacheRoot = tempDir.resolve("cache"),
                 toolchain = TOOLCHAIN,
+                preDiscoveryRoots = { listOf(included) },
                 resolveFresh = {
                     resolutions++
                     TopologyResult(
@@ -229,6 +232,7 @@ class TopologyCacheTest {
                     resolutions++
                     TopologyResult(
                         sourceFiles = listOf("app/Main.kt"),
+                        codeSourceFiles = setOf("app/Main.kt"),
                         topology = "build-parse",
                         includeDeps = false,
                         scope = "//app:app",
@@ -355,6 +359,7 @@ class TopologyCacheTest {
                     resolutions++
                     TopologyResult(
                         sourceFiles = listOf("app/Main.kt"),
+                        codeSourceFiles = if (degraded) null else setOf("app/Main.kt"),
                         topology = "bazel-query",
                         includeDeps = !degraded,
                         scope = "//app:app",
@@ -370,6 +375,136 @@ class TopologyCacheTest {
         resolve()
         resolve()
         assertEquals(3, resolutions, "A complete closure is cacheable")
+    }
+
+    @Test
+    fun `a bazel result with unknown code roles is not cached`() {
+        val workspace = bazelWorkspace("code-roles")
+        var resolutions = 0
+        var classified = false
+        fun resolve(): TopologyResult =
+            TopologyCache.resolve(
+                project = workspace,
+                request = bazelRequest(),
+                buildSystem = BuildSystem.BAZEL,
+                cacheRoot = tempDir.resolve("cache"),
+                toolchain = TOOLCHAIN,
+                resolveFresh = {
+                    resolutions++
+                    TopologyResult(
+                        sourceFiles = listOf("app/Main.kt"),
+                        codeSourceFiles = if (classified) setOf("app/Main.kt") else null,
+                        topology = "bazel-query",
+                        includeDeps = false,
+                        scope = "//app:app",
+                    )
+                },
+            )
+
+        resolve()
+        resolve()
+        assertEquals(2, resolutions, "A failed code-role query must be retried")
+
+        classified = true
+        resolve()
+        resolve()
+        assertEquals(3, resolutions, "A classified result is cacheable")
+    }
+
+    @Test
+    fun `an included build change during discovery is not cached`() {
+        val workspace = Files.createDirectories(tempDir.resolve("race-workspace")).toRealPath()
+        val included = Files.createDirectories(tempDir.resolve("race-included")).toRealPath()
+        workspace
+            .resolve("settings.gradle.kts")
+            .writeText("include(\":app\")\nincludeBuild(\"../race-included\")\n")
+        workspace.resolve("build.gradle.kts").writeText("plugins {}\n")
+        workspace.resolve("app").createDirectories()
+        workspace.resolve("app/build.gradle.kts").writeText("plugins {}\n")
+        included.resolve("settings.gradle.kts").writeText("include(\":tool\")\n")
+        included.resolve("build.gradle.kts").writeText("plugins {}\n")
+        var resolutions = 0
+        var mutate = true
+        fun resolve(): TopologyResult =
+            TopologyCache.resolve(
+                project = workspace,
+                request = TopologyRequest(buildSystem = BuildSystem.GRADLE, gradleModule = ":app"),
+                buildSystem = BuildSystem.GRADLE,
+                cacheRoot = tempDir.resolve("cache"),
+                toolchain = TOOLCHAIN,
+                preDiscoveryRoots = { listOf(included) },
+                resolveFresh = {
+                    resolutions++
+                    if (mutate) {
+                        mutate = false
+                        included.resolve("New.kt").writeText("class New\n")
+                    }
+                    TopologyResult(
+                        sourceFiles = listOf("app/App.kt", "tool/Tool.kt", "tool/New.kt"),
+                        codeSourceFiles = linkedSetOf("app/App.kt", "tool/Tool.kt", "tool/New.kt"),
+                        topology = "gradle-parse",
+                        includeDeps = false,
+                        scope = ":app",
+                        externalMounts = listOf(included),
+                        externalSources =
+                            listOf(
+                                ExternalSourceMount(
+                                    root = included,
+                                    sourceFiles = listOf("tool/Tool.kt", "tool/New.kt"),
+                                    codeSourceFiles = linkedSetOf("tool/Tool.kt", "tool/New.kt"),
+                                )
+                            ),
+                    )
+                },
+            )
+
+        resolve()
+        resolve()
+        resolve()
+        assertEquals(2, resolutions, "A mount changed during discovery must not be cached")
+    }
+
+    @Test
+    fun `a symlinked source directory bypasses the topology cache`() {
+        assumeFalse(System.getProperty("os.name").startsWith("Windows", ignoreCase = true))
+        val workspace = bazelWorkspace("symlinked")
+        val real = Files.createDirectories(workspace.resolve("app/real"))
+        real.resolve("Inside.kt").writeText("class Inside\n")
+        val created =
+            runCatching { Files.createSymbolicLink(workspace.resolve("app/linked"), real) }
+                .isSuccess
+        assumeTrue(created, "Symbolic links are unavailable")
+        var resolutions = 0
+        fun resolve(): TopologyResult =
+            cached(workspace) {
+                resolutions++
+                fresh(workspace)
+            }
+
+        resolve()
+        resolve()
+        assertEquals(2, resolutions, "A symlinked directory must not be cached")
+    }
+
+    @Test
+    fun `root bazel output symlinks do not disable the cache`() {
+        assumeFalse(System.getProperty("os.name").startsWith("Windows", ignoreCase = true))
+        val workspace = bazelWorkspace("bazel-output-link")
+        val output = Files.createDirectories(workspace.resolve("bazel-out"))
+        val created =
+            runCatching { Files.createSymbolicLink(workspace.resolve("bazel-bin"), output) }
+                .isSuccess
+        assumeTrue(created, "Symbolic links are unavailable")
+        var resolutions = 0
+        fun resolve(): TopologyResult =
+            cached(workspace) {
+                resolutions++
+                fresh(workspace)
+            }
+
+        resolve()
+        resolve()
+        assertEquals(1, resolutions, "Bazel's own output links must remain cacheable")
     }
 
     @Test

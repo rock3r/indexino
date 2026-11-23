@@ -22,6 +22,11 @@ internal class RootFingerprint(
     val root: String,
     val definitionDigest: String,
     val inventoryDigest: String,
+    /**
+     * False when a symlinked directory the walker cannot certify is present. Bazel globs follow
+     * such links, so the inventory would not observe everything discovery can return.
+     */
+    val cacheable: Boolean = true,
 )
 
 internal object BuildDefinitionInputs {
@@ -30,6 +35,7 @@ internal object BuildDefinitionInputs {
                 val canonicalRoot = root.toRealPath()
                 val definitions = mutableListOf<String>()
                 val inventory = mutableListOf<String>()
+                var symlinkedDirectory = false
                 val skip =
                     cacheRoot
                         ?.let { runCatching { it.toRealPath() }.getOrNull() }
@@ -65,7 +71,20 @@ internal object BuildDefinitionInputs {
                                     attributes.isRegularFile -> FILE
                                     else -> OTHER
                                 }
-                            inventory += "$kind:$relative"
+                            if (attributes.isSymbolicLink) {
+                                val target =
+                                    runCatching { Files.readSymbolicLink(file).toString() }
+                                        .getOrElse { "unreadable" }
+                                inventory += "$kind:$relative->$target"
+                                if (
+                                    Files.isDirectory(file) &&
+                                        !isBazelOutputLink(file, canonicalRoot, buildSystem)
+                                ) {
+                                    symlinkedDirectory = true
+                                }
+                            } else {
+                                inventory += "$kind:$relative"
+                            }
                             if (
                                 (attributes.isRegularFile || attributes.isSymbolicLink) &&
                                     isDefinition(file.fileName.toString(), buildSystem)
@@ -90,16 +109,25 @@ internal object BuildDefinitionInputs {
                     root = canonicalRoot.toString(),
                     definitionDigest = digest(definitions),
                     inventoryDigest = digest(inventory),
+                    cacheable = !symlinkedDirectory,
                 )
             }
             .getOrNull()
 
     fun matches(stored: RootFingerprint, buildSystem: BuildSystem, cacheRoot: Path?): Boolean {
+        if (!stored.cacheable) return false
         val current = capture(Path.of(stored.root), buildSystem, cacheRoot) ?: return false
-        return current.root == stored.root &&
+        return current.cacheable &&
+            current.root == stored.root &&
             current.definitionDigest == stored.definitionDigest &&
             current.inventoryDigest == stored.inventoryDigest
     }
+
+    /** Bazel's own `bazel-*` convenience links point at build outputs, not source inputs. */
+    private fun isBazelOutputLink(file: Path, root: Path, buildSystem: BuildSystem): Boolean =
+        buildSystem == BuildSystem.BAZEL &&
+            file.parent == root &&
+            file.fileName.toString().startsWith(BAZEL_OUTPUT_LINK_PREFIX)
 
     /**
      * Output directories are only skipped outside source trees. Gradle discovery walks the whole
@@ -144,6 +172,7 @@ internal object BuildDefinitionInputs {
     private const val SYMLINK = "l"
     private const val OTHER = "o"
     private const val SOURCE_DIRECTORY = "src"
+    private const val BAZEL_OUTPUT_LINK_PREFIX = "bazel-"
 
     /**
      * VCS metadata and IDE state never define a package. Gradle also writes generated artifacts

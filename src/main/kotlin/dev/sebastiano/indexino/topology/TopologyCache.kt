@@ -132,7 +132,7 @@ private constructor(
  * older result.
  */
 internal object TopologyCache {
-    @Suppress("CyclomaticComplexMethod")
+    @Suppress("CyclomaticComplexMethod", "ReturnCount")
     fun resolve(
         project: Path,
         request: TopologyRequest,
@@ -140,6 +140,7 @@ internal object TopologyCache {
         cacheRoot: Path,
         toolchain: ToolchainIdentity,
         progress: (String) -> Unit = {},
+        preDiscoveryRoots: () -> List<Path> = { emptyList() },
         resolveFresh: () -> TopologyResult,
     ): TopologyResult {
         require(buildSystem == BuildSystem.BAZEL || buildSystem == BuildSystem.GRADLE) {
@@ -159,11 +160,20 @@ internal object TopologyCache {
                 return entry.result.toTopologyResult()
             }
 
+        val requestedRoots = runCatching { preDiscoveryRoots() }.getOrDefault(emptyList())
+        val preMounts = requestedRoots.map { root ->
+            BuildDefinitionInputs.capture(root, buildSystem, cacheRoot)
+        }
         val before = BuildDefinitionInputs.capture(project, buildSystem, cacheRoot)
         val resolved = resolveFresh()
         if (request.includeDeps && !resolved.includeDeps) {
             // A target-only fallback did not satisfy a dependency-inclusive request. Retry on the
             // next refresh instead of pinning the incomplete closure until an input changes.
+            return resolved
+        }
+        if (buildSystem == BuildSystem.BAZEL && resolved.codeSourceFiles == null) {
+            // A failed code-role query leaves srcs-vs-resources unknown. Retrying costs one query;
+            // caching would keep code facts for resource-only files until another input changes.
             return resolved
         }
         if (
@@ -175,20 +185,18 @@ internal object TopologyCache {
             // Reusing it until an input changes would hide a recoverable environment.
             return resolved
         }
-        val after = BuildDefinitionInputs.capture(project, buildSystem, cacheRoot)
-        if (
-            before == null ||
-                after == null ||
-                before.root != after.root ||
-                before.definitionDigest != after.definitionDigest ||
-                before.inventoryDigest != after.inventoryDigest
-        ) {
+        val after =
+            BuildDefinitionInputs.capture(project, buildSystem, cacheRoot) ?: return resolved
+        if (!sameFingerprint(before, after)) {
             return resolved
         }
         val mounts =
             resolved.externalMounts.map { mount ->
                 BuildDefinitionInputs.capture(mount, buildSystem, cacheRoot) ?: return resolved
             }
+        if (mounts.any { !it.cacheable } || !mountsStable(preMounts, mounts)) {
+            return resolved
+        }
         writeEntry(
             entryFile,
             CacheEntry(
@@ -200,6 +208,36 @@ internal object TopologyCache {
             ),
         )
         return resolved
+    }
+
+    private fun sameFingerprint(first: RootFingerprint?, second: RootFingerprint?): Boolean {
+        if (first == null || second == null) return false
+        return first.cacheable &&
+            second.cacheable &&
+            first.root == second.root &&
+            first.definitionDigest == second.definitionDigest &&
+            first.inventoryDigest == second.inventoryDigest
+    }
+
+    /**
+     * Included-build roots are captured before and after discovery, exactly like the primary
+     * workspace. A source added to a mount while Gradle collects sources therefore prevents the
+     * result from being stored instead of pairing an old source list with a new inventory.
+     */
+    private fun mountsStable(
+        before: List<RootFingerprint?>,
+        after: List<RootFingerprint?>,
+    ): Boolean {
+        if (before.size != after.size) return false
+        if (before.any { it == null } || after.any { it == null }) return false
+        val beforeByRoot = before.filterNotNull().associateBy { it.root }
+        val afterByRoot = after.filterNotNull().associateBy { it.root }
+        if (beforeByRoot.keys != afterByRoot.keys) return false
+        return afterByRoot.all { (root, post) ->
+            val pre = beforeByRoot[root] ?: return false
+            pre.definitionDigest == post.definitionDigest &&
+                pre.inventoryDigest == post.inventoryDigest
+        }
     }
 
     private fun CacheEntry.valid(
@@ -285,13 +323,19 @@ internal object TopologyCache {
         val root: String,
         val definitionDigest: String,
         val inventoryDigest: String,
+        val cacheable: Boolean = true,
     ) {
         constructor(
             fingerprint: RootFingerprint
-        ) : this(fingerprint.root, fingerprint.definitionDigest, fingerprint.inventoryDigest)
+        ) : this(
+            fingerprint.root,
+            fingerprint.definitionDigest,
+            fingerprint.inventoryDigest,
+            fingerprint.cacheable,
+        )
 
         fun toRootFingerprint(): RootFingerprint =
-            RootFingerprint(root, definitionDigest, inventoryDigest)
+            RootFingerprint(root, definitionDigest, inventoryDigest, cacheable)
     }
 
     @Serializable
@@ -361,7 +405,7 @@ internal object TopologyCache {
         }
     }
 
-    private const val FORMAT_VERSION = 1
+    private const val FORMAT_VERSION = 2
     private const val BUILD_PARSE = "build-parse"
     private val json = Json {
         encodeDefaults = true

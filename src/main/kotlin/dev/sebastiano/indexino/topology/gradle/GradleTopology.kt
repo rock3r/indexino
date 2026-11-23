@@ -7,6 +7,22 @@ import kotlin.io.path.exists
 import kotlin.io.path.readText
 
 internal object GradleTopology {
+    /**
+     * Included-build roots as the bounded parser sees them before discovery. The topology cache
+     * captures these fingerprints before and after resolution so a source added to an included
+     * build mid-discovery cannot be paired with an older source list.
+     */
+    fun includedBuildRoots(workspace: Path, onStderr: (String) -> Unit = {}): List<Path> {
+        val settingsFile =
+            listOf("settings.gradle.kts", "settings.gradle")
+                .map { workspace.resolve(it) }
+                .firstOrNull { it.exists() } ?: return emptyList()
+        return runCatching {
+                resolveExternalMounts(workspace, settingsFile, settingsFile.readText(), onStderr)
+            }
+            .getOrElse { emptyList() }
+    }
+
     fun resolveSources(
         gradleModule: String,
         workspace: Path,

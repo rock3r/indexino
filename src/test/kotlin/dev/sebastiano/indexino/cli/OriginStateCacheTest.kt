@@ -7,11 +7,14 @@ import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.SourceContentSnapshot
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.io.path.createDirectories
 import kotlin.io.path.readText
 import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.io.TempDir
 
@@ -158,6 +161,57 @@ class OriginStateCacheTest {
                 externalExpectedRevision = "0123456789012345678901234567890123456789",
             )
         assertEquals(0, mismatched.cached)
+    }
+
+    @Test
+    fun `a configured global excludes file invalidates origin reuse`() {
+        val workspace = committedWorkspace()
+        val excludes = tempDir.resolve("global-excludes")
+        excludes.writeText("notes.txt\n")
+        val config = workspace.resolve(".git/config")
+        config.writeText(config.readText() + "\n[core]\n\texcludesFile = $excludes\n")
+        Files.writeString(workspace.resolve("notes.txt"), "untracked\n")
+        ageWorkspace(workspace)
+        val sources = sources(workspace)
+
+        val clean = resolve(workspace, sources, newCache())
+        assertFalse(clean.origins.single().dirty, "${clean.origins}")
+        assertEquals(1, resolve(workspace, sources, newCache()).cached)
+
+        excludes.writeText("")
+        val dirty = resolve(workspace, sources, newCache())
+
+        assertEquals(0, dirty.cached)
+        assertTrue(dirty.origins.single().dirty, "${dirty.origins}")
+    }
+
+    @Test
+    fun `default global ignore and attributes files participate in the stamp`() {
+        val workspace = committedWorkspace()
+        val home = Files.createDirectories(tempDir.resolve("global-home"))
+        home.resolve("git").createDirectories()
+        val ignore = home.resolve("git/ignore")
+        val attributes = home.resolve("git/attributes")
+        ignore.writeText("*.tmp\n")
+        attributes.writeText("*.kt diff=kotlin\n")
+        val cache =
+            OriginStateCache.open(
+                tempDir.resolve("stamp-cache"),
+                tempDir,
+                xdgConfigHomeOverride = home,
+            )
+
+        val first = cache.stamp(workspace.toRealPath(), null)
+        assertNotNull(first)
+        ignore.writeText("*.tmp\n*.log\n")
+        val second = cache.stamp(workspace.toRealPath(), null)
+        assertNotNull(second)
+        assertNotEquals(first.value, second.value)
+
+        attributes.writeText("*.kt diff=java\n")
+        val third = cache.stamp(workspace.toRealPath(), null)
+        assertNotNull(third)
+        assertNotEquals(second.value, third.value)
     }
 
     @Test

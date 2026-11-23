@@ -110,8 +110,10 @@ digest of every file name below those roots. File names participate because a mo
 from directory conventions, so adding or deleting a source changes the result without any script
 edit. Conventional output directories are skipped only outside `src`, because discovery walks the
 whole `src` tree and a package directory there may legitimately be named `build` or `node_modules`.
-An included build's script edit invalidates the main entry as well. A missing or corrupt entry falls
-back to a fresh parse; the cache never executes the target's Gradle build.
+Included-build roots are fingerprinted before and after discovery; a source added to a mount while
+sources are being collected prevents the result from being stored. An included build's script edit
+invalidates the main entry as well. A missing or corrupt entry falls back to a fresh parse; the
+cache never executes the target's Gradle build.
 
 `GradleLiteralTopologyTest` contains newly authored asymmetric Kotlin/Groovy settings, nested
 accessors, remapped transitive dependencies, dependency/included-build cycles, root selection,
