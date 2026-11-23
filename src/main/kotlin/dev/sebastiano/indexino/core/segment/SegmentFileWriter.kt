@@ -287,10 +287,14 @@ private class TableWriterState(
     }
 
     private fun buildBloom(): LongArray {
-        val bitCount =
+        // Both writer and reader derive probe positions modulo wordCount * 64, so the bit count
+        // must stay word-aligned.
+        val targetBits =
             maxOf(entryCount * SegmentFormat.BLOOM_BITS_PER_ENTRY.toLong(), MIN_BLOOM_BITS)
-        val words =
-            LongArray(((bitCount + SegmentFormat.BLOOM_WORD_BITS - 1) / SegmentFormat.BLOOM_WORD_BITS).toInt())
+        val bitCount =
+            ((targetBits + SegmentFormat.BLOOM_WORD_BITS - 1) / SegmentFormat.BLOOM_WORD_BITS) *
+                SegmentFormat.BLOOM_WORD_BITS
+        val words = LongArray((bitCount / SegmentFormat.BLOOM_WORD_BITS).toInt())
         for (index in 0 until bloomHashCount) {
             val hash = bloomHashes[index]
             for (probe in 0 until SegmentFormat.BLOOM_PROBES) {

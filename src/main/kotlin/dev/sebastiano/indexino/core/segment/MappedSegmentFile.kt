@@ -6,6 +6,7 @@ import java.lang.foreign.MemorySegment
 import java.nio.channels.FileChannel
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.zip.CRC32
 
 /**
@@ -18,6 +19,8 @@ private constructor(
     private val arena: Arena,
     private val tables: Map<String, MappedTable>,
 ) : AutoCloseable {
+    private val closed = AtomicBoolean()
+
     val primaryTable: MappedTable =
         tables[SegmentFormat.PRIMARY_TABLE]
             ?: throw IOException("Segment file has no primary table")
@@ -25,6 +28,8 @@ private constructor(
     fun table(name: String): MappedTable? = tables[name]
 
     override fun close() {
+        // Shared arenas reject a second close; guard so callers can layer ownership safely.
+        if (!closed.compareAndSet(false, true)) return
         arena.close()
     }
 

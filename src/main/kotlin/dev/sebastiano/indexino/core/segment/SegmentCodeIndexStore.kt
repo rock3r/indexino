@@ -18,6 +18,7 @@ import java.util.PriorityQueue
 internal class SegmentCodeIndexStore
 private constructor(
     private val files: List<MappedSegmentFile>,
+    private val onClosed: () -> Unit,
 ) : CodeIndexStore {
     /** Segment files ordered newest first; the index is the precedence rank. */
     private val newestFirst: List<MappedSegmentFile> = files.asReversed()
@@ -247,7 +248,7 @@ private constructor(
     override fun <T> transaction(block: () -> T): T = block()
 
     override fun close() {
-        files.forEach { runCatching { it.close() } }
+        onClosed()
     }
 
     private class CursorState(val rank: Int, val cursor: SegmentTableCursor) :
@@ -304,11 +305,11 @@ private constructor(
          * Records arrive sorted from the source store; explicit tombstone keys merge in key
          * order, replacing an equal source key.
          */
-        fun writeFrom(
+        fun writeStoreToFile(
             source: CodeIndexStore,
             target: Path,
             tombstoneKeys: List<CodeIndexKey> = emptyList(),
-        ): MappedSegmentFile {
+        ) {
             val tombstones =
                 tombstoneKeys
                     .map { it.value }
@@ -339,11 +340,21 @@ private constructor(
                     tombstoneIndex++
                 }
             }
+        }
+
+        fun writeFrom(
+            source: CodeIndexStore,
+            target: Path,
+            tombstoneKeys: List<CodeIndexKey> = emptyList(),
+        ): MappedSegmentFile {
+            writeStoreToFile(source, target, tombstoneKeys)
             return MappedSegmentFile.open(target)
         }
 
-        fun open(files: List<MappedSegmentFile>): SegmentCodeIndexStore =
-            SegmentCodeIndexStore(files)
+        fun open(
+            files: List<MappedSegmentFile>,
+            onClosed: () -> Unit = { files.forEach { runCatching { it.close() } } },
+        ): SegmentCodeIndexStore = SegmentCodeIndexStore(files, onClosed)
     }
 }
 

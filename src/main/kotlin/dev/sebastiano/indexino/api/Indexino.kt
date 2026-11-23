@@ -17,8 +17,10 @@ import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.manifest.IndexManifest
 import dev.sebastiano.indexino.core.manifest.workspaceRevisionFingerprint
 import dev.sebastiano.indexino.core.path.IndexPathResolver
+import dev.sebastiano.indexino.core.segment.SegmentCodeIndexStore
 import dev.sebastiano.indexino.core.sourcelink.LinkIndexService
 import dev.sebastiano.indexino.core.store.CodeIndexStore
+import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.engine.BuildExitCodes
 import dev.sebastiano.indexino.engine.InFlightRefresh
 import dev.sebastiano.indexino.engine.IndexBuildExecution
@@ -497,6 +499,7 @@ private constructor(
                         current.compatibilityManifest?.copy(builtAt = manifest.builtAt) !=
                             manifest ||
                         current.basicFactSchemaVersion != BASIC_FACT_SCHEMA_VERSION ||
+                        current.storageFormatVersion != WorktreeOverlayPolicy.CURRENT_STORAGE_FORMAT ||
                         current.linkGeneration != linkGeneration
                 ) {
                     progress("index phase=publication state=started")
@@ -983,6 +986,7 @@ private constructor(
                 compatibilityManifest &&
                 previous.linkGeneration == linkGeneration &&
                 previous.basicFactSchemaVersion == BASIC_FACT_SCHEMA_VERSION &&
+                previous.storageFormatVersion == WorktreeOverlayPolicy.CURRENT_STORAGE_FORMAT &&
                 hasReachablePacks(cacheRoot, workspaceId, previous)
         ) {
             // Reverting to known bytes must repoint at the old immutable generation. Replacing its
@@ -1000,6 +1004,7 @@ private constructor(
             current?.compatibilityManifest?.copy(builtAt = compatibilityManifest.builtAt) ==
                 compatibilityManifest &&
                 current.basicFactSchemaVersion == BASIC_FACT_SCHEMA_VERSION &&
+                current.storageFormatVersion == WorktreeOverlayPolicy.CURRENT_STORAGE_FORMAT &&
                 current.generation != generation.value &&
                 hasReachablePacks(cacheRoot, workspaceId, current)
         ) {
@@ -1060,9 +1065,15 @@ private constructor(
         manifest: WorkspaceGenerationManifest,
         clientStorePath: Path,
         generation: WorkspaceGenerationId,
-    ): Path =
-        if (manifest.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) clientStorePath
+    ): Path {
+        if (manifest.storageFormatVersion == WorktreeOverlayPolicy.STORAGE_FORMAT_SEGMENT_PACK) {
+            val packs = ContentAddressedPackCache(InProcessCacheLayout.cacheRoot())
+            return (manifest.packKeys + manifest.overlayPackKeys).firstOrNull()?.let(packs::packPath)
+                ?: clientStorePath
+        }
+        return if (manifest.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) clientStorePath
         else InProcessCacheLayout.sharedGenerationStore(workspace, generation.value)
+    }
 
     @Suppress("ReturnCount")
     private fun hasReachablePacks(
@@ -1106,14 +1117,10 @@ private constructor(
         tombstonePrefixes: List<String>,
         linkGeneration: String? = null,
     ): PublishedStore {
+        val packs = ContentAddressedPackCache(cacheRoot)
         val overlayPackKeys =
             overlayDeltaPath
-                ?.let { deltaPath ->
-                    listOf(
-                        ContentAddressedPackCache(cacheRoot)
-                            .installDirectory(deltaPath, BASIC_FACT_SCHEMA_VERSION)
-                    )
-                }
+                ?.let { deltaPath -> listOf(installSegmentPack(packs, deltaPath)) }
                 .orEmpty()
         WorkspaceGenerationManifestStore(cacheRoot, workspaceId)
             .publish(
@@ -1134,17 +1141,12 @@ private constructor(
                     linkGeneration = linkGeneration,
                 )
             )
-        if (overlayPackKeys.isNotEmpty()) {
-            WorktreeOverlayStoreOpener.materializeOverlayDelta(
-                cacheRoot,
-                workspace,
-                clientId,
-                WorkspaceGenerationManifestStore(cacheRoot, workspaceId).current()
-                    ?: error("Missing published overlay manifest"),
-            )
-        }
-        Files.createDirectories(clientStorePath.parent)
-        return PublishedStore(path = clientStorePath, created = overlayPackKeys.isNotEmpty())
+        // Segment-format overlays map their delta pack directly: no private refs tree and no
+        // shared expanded overlay-delta directory are materialized for readers.
+        val packPath =
+            overlayPackKeys.singleOrNull()?.let(packs::packPath) ?: clientStorePath
+        if (overlayPackKeys.isEmpty()) Files.createDirectories(clientStorePath.parent)
+        return PublishedStore(path = packPath, created = overlayPackKeys.isNotEmpty())
     }
 
     private fun publishMaterializedGenerationStore(
@@ -1161,8 +1163,8 @@ private constructor(
     ): PublishedStore {
         val source =
             IndexPathResolver(workspace, storeRootOverride = storeRoot).resolveBaseStore(commit)
-        val packKey =
-            ContentAddressedPackCache(cacheRoot).installDirectory(source, BASIC_FACT_SCHEMA_VERSION)
+        val packs = ContentAddressedPackCache(cacheRoot)
+        val packKey = installSegmentPack(packs, source)
         WorkspaceGenerationManifestStore(cacheRoot, workspaceId)
             .publish(
                 workspaceGenerationManifest(
@@ -1177,13 +1179,29 @@ private constructor(
                     linkGeneration = linkGeneration,
                 )
             )
-        val sharedDestination =
-            InProcessCacheLayout.sharedGenerationStore(workspace, generation.value)
-        val packs = ContentAddressedPackCache(cacheRoot)
-        if (!Files.isDirectory(sharedDestination)) {
-            packs.materializeDirectory(packKey, sharedDestination)
+        // Storage-format-2 readers map the pack directly; generations/<id>/ holds only the
+        // manifest, and no expanded Xodus environment is written.
+        return PublishedStore(path = packs.packPath(packKey), created = false)
+    }
+
+    /**
+     * Converts a completed mutable staging environment into an immutable segment pack. The build
+     * owner has closed its writer by publication time, so the environment reopens read-only for
+     * one sorted streaming pass.
+     */
+    private fun installSegmentPack(packs: ContentAddressedPackCache, stagingStore: Path): String {
+        val stagingSegment =
+            stagingStore.resolveSibling(
+                "${stagingStore.fileName}.segment-${UUID.randomUUID()}",
+            )
+        try {
+            XodusCodeIndexStore.open(stagingStore, readOnly = true).use { source ->
+                SegmentCodeIndexStore.writeStoreToFile(source, stagingSegment)
+            }
+            return packs.installFile(stagingSegment, BASIC_FACT_SCHEMA_VERSION)
+        } finally {
+            Files.deleteIfExists(stagingSegment)
         }
-        return PublishedStore(path = sharedDestination, created = false)
     }
 
     private fun workspaceGenerationManifest(
@@ -1231,6 +1249,7 @@ private constructor(
             tombstonePrefixes = tombstonePrefixes,
             overlayChainDepth = overlayChainDepth,
             linkGeneration = linkGeneration,
+            storageFormatVersion = WorktreeOverlayPolicy.CURRENT_STORAGE_FORMAT,
         )
 
     private fun openPublishedStore(generation: WorkspaceGenerationId): CodeIndexStore {
@@ -1255,6 +1274,7 @@ private constructor(
                 .current() ?: return null
         return manifest
             .takeIf { it.basicFactSchemaVersion == BASIC_FACT_SCHEMA_VERSION }
+            ?.takeIf { it.storageFormatVersion == WorktreeOverlayPolicy.CURRENT_STORAGE_FORMAT }
             ?.generation
             ?.let(WorkspaceGenerationId::of)
     }
@@ -1270,30 +1290,25 @@ private constructor(
             (if (requestedGeneration == null) manifests.current()
             else manifests.readGeneration(requestedGeneration.value)) ?: return null
         if (manifest.basicFactSchemaVersion != BASIC_FACT_SCHEMA_VERSION) return null
+        if (manifest.storageFormatVersion != WorktreeOverlayPolicy.CURRENT_STORAGE_FORMAT) {
+            // Legacy zip-pack generations are never restored; the next refresh rebuilds them in
+            // the current segment storage format.
+            return null
+        }
         val generation = WorkspaceGenerationId.of(manifest.generation)
+        val packs = ContentAddressedPackCache(cacheRoot)
         val storePath =
             if (manifest.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) {
-                InProcessCacheLayout.overlayDeltaStore(workspace, clientId, generation.value)
+                manifest.overlayPackKeys.singleOrNull()?.let(packs::packPath)
+                    ?: InProcessCacheLayout.overlayDeltaStore(workspace, clientId, generation.value)
             } else {
-                InProcessCacheLayout.sharedGenerationStore(workspace, generation.value)
+                packs.packPath(manifest.packKeys.single())
             }
         if (
             manifest.representation != WorktreeOverlayPolicy.REPRESENTATION_OVERLAY &&
-                !Files.isDirectory(storePath)
+                !Files.isRegularFile(storePath)
         ) {
-            ContentAddressedPackCache(cacheRoot)
-                .materializeDirectory(manifest.packKeys.single(), storePath)
-        } else if (
-            manifest.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY &&
-                manifest.overlayPackKeys.isNotEmpty() &&
-                !Files.isDirectory(storePath)
-        ) {
-            WorktreeOverlayStoreOpener.materializeOverlayDelta(
-                cacheRoot,
-                workspace,
-                clientId,
-                manifest,
-            )
+            error("Published segment pack is missing: $storePath")
         }
         val revision =
             WorkspaceRevision(

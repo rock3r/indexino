@@ -1666,21 +1666,12 @@ class InProcessIndexinoTest {
                 runSuspend {
                     indexino.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui"))).await()
                 }
-                val storeDirs =
-                    Files.walk(cacheDirectory.toRealPath()).use { paths ->
-                        paths
-                            .filter {
-                                Files.isDirectory(it) &&
-                                    (it.fileName.toString() == "store" ||
-                                        it.fileName.toString() == "materialized")
-                            }
-                            .toList()
+                val packFiles =
+                    Files.walk(cacheDirectory.toRealPath().resolve("chunks")).use { paths ->
+                        paths.filter(Files::isRegularFile).toList()
                     }
-                assertTrue(storeDirs.isNotEmpty())
-                storeDirs.forEach {
-                    it.toFile().deleteRecursively()
-                    Files.writeString(it, "not a store directory")
-                }
+                assertTrue(packFiles.isNotEmpty())
+                packFiles.forEach { Files.writeString(it, "not a segment file") }
                 val failure =
                     assertFailsWith<IndexinoException> { runSuspend { indexino.snapshot() } }
                 assertEquals("INTERNAL", failure.failure.category.value)
@@ -1735,13 +1726,13 @@ class InProcessIndexinoTest {
                         }
                         .generation
                         .value
-                shared = InProcessCacheLayout.sharedGenerationStore(workspace, generation)
-                assertTrue(Files.isDirectory(shared))
+                shared = publishedPackFile(workspace, generation)
+                assertTrue(Files.isRegularFile(shared), "Shared segment pack missing")
                 assertFalse(generationCopyExists(workspace, generation))
             } finally {
                 indexino.close()
             }
-            assertTrue(Files.isDirectory(shared))
+            assertTrue(Files.isRegularFile(shared), "Close must retain the shared segment pack")
             assertFalse(generationCopyExists(workspace, null))
         } finally {
             if (previousCacheDirectory == null) {
@@ -1778,13 +1769,13 @@ class InProcessIndexinoTest {
                             )
                             .readGeneration(overlay.value)
                     assertEquals(base, manifest?.baseGeneration, "$manifest")
-                    val shared = InProcessCacheLayout.sharedGenerationStore(workspace, base)
-                    assertTrue(Files.isDirectory(shared), "Shared base missing")
+                    val shared = publishedPackFile(workspace, base)
+                    assertTrue(Files.isRegularFile(shared), "Shared base pack missing")
                     assertFalse(generationCopyExists(workspace, base), "Private base copy created")
                     repeat(2) {
                         runSuspend { indexino.snapshot() }
                             .use { snapshot -> assertEquals(overlay, snapshot.generation) }
-                        assertTrue(Files.isDirectory(shared), "Shared base reclaimed")
+                        assertTrue(Files.isRegularFile(shared), "Shared base pack reclaimed")
                         assertFalse(
                             generationCopyExists(workspace, base),
                             "Private base copy created",
@@ -1794,9 +1785,7 @@ class InProcessIndexinoTest {
                 } finally {
                     indexino.close()
                 }
-            assertTrue(
-                Files.isDirectory(InProcessCacheLayout.sharedGenerationStore(workspace, base))
-            )
+            assertTrue(Files.isRegularFile(publishedPackFile(workspace, base)))
             assertFalse(generationCopyExists(workspace, base), "Closed clients keep no copies")
         } finally {
             if (previousCacheDirectory == null) {
@@ -2511,6 +2500,22 @@ class InProcessIndexinoTest {
                 }
             }
         }
+    }
+
+    /** The shared generation representation: its published content-addressed segment pack. */
+    private fun publishedPackFile(workspace: java.nio.file.Path, generation: String): java.nio.file.Path {
+        val cacheRoot = InProcessCacheLayout.cacheRoot()
+        val manifest =
+            dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore(
+                    cacheRoot,
+                    InProcessCacheLayout.workspaceId(workspace.toRealPath()),
+                )
+                .readGeneration(generation)
+                ?: error("Missing manifest for generation $generation")
+        val packKey =
+            (manifest.packKeys + manifest.overlayPackKeys).firstOrNull()
+                ?: error("Generation $generation has no packs")
+        return dev.sebastiano.indexino.core.cache.ContentAddressedPackCache(cacheRoot).packPath(packKey)
     }
 
     private fun createGitWorkspace(): java.nio.file.Path {

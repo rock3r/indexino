@@ -41,6 +41,7 @@ internal data class WorkspaceGenerationManifest(
     val tombstonePrefixes: List<String> = emptyList(),
     val overlayChainDepth: Int = 0,
     val linkGeneration: String? = null,
+    val storageFormatVersion: Int = WorktreeOverlayPolicy.STORAGE_FORMAT_XODUS_PACK,
 )
 
 /** Publishes immutable workspace generation manifests through a short current pointer. */

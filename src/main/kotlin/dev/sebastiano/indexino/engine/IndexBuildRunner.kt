@@ -9,11 +9,15 @@ import dev.sebastiano.indexino.core.cache.WorktreeForkBase
 import dev.sebastiano.indexino.core.cache.WorktreeForkCompatibility
 import dev.sebastiano.indexino.core.cache.WorktreeOverlayStoreOpener
 import dev.sebastiano.indexino.core.git.GitHeadResolver
+import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.manifest.IndexManifest
 import dev.sebastiano.indexino.core.manifest.IndexManifestOrigin
 import dev.sebastiano.indexino.core.manifest.ManifestFreshness
 import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
+import dev.sebastiano.indexino.core.record.CodeIndexRecord
+import dev.sebastiano.indexino.core.segment.MappedSegmentFile
+import dev.sebastiano.indexino.core.segment.SegmentCodeIndexStore
 import dev.sebastiano.indexino.core.store.WorktreeOverlayIndexStore
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.model.PluginId
@@ -513,6 +517,34 @@ internal class IndexBuildRunner(
             }
     }
 
+    /**
+     * Rehydrates a published segment-format overlay delta into the fresh writable staging
+     * environment the incremental writer mutates. Records stream in key order; Xodus rebuilds
+     * its derived indexes through the writes.
+     */
+    private fun restoreOverlayDeltaFromSegment(packPath: Path, deltaPath: Path) {
+        MappedSegmentFile.open(packPath).use { mapped ->
+            SegmentCodeIndexStore.open(listOf(mapped)).use { source ->
+                XodusCodeIndexStore.open(deltaPath, readOnly = false).use { target ->
+                    val batch = ArrayList<Pair<CodeIndexKey, CodeIndexRecord>>(OVERLAY_RESTORE_BATCH_SIZE)
+                    fun flush() {
+                        if (batch.isEmpty()) return
+                        target.transaction {
+                            batch.forEach { (key, record) -> target.put(key, record) }
+                        }
+                        batch.clear()
+                    }
+                    source.forEachPrefix("") { key, record ->
+                        batch += key to record
+                        if (batch.size >= OVERLAY_RESTORE_BATCH_SIZE) flush()
+                        true
+                    }
+                    flush()
+                }
+            }
+        }
+    }
+
     @Suppress("LongMethod")
     private fun buildStore(
         resolver: IndexPathResolver,
@@ -540,8 +572,12 @@ internal class IndexBuildRunner(
             overlayDeltaPath.parent.toFile().deleteRecursively()
             forkBase.previousOverlayPackKey?.let { packKey ->
                 timedPhase("overlay-restore") {
-                    ContentAddressedPackCache(InProcessCacheLayout.cacheRoot())
-                        .materializeDirectory(packKey, overlayDeltaPath)
+                    val packs = ContentAddressedPackCache(InProcessCacheLayout.cacheRoot())
+                    if (packs.isSegmentPack(packKey)) {
+                        restoreOverlayDeltaFromSegment(packs.packPath(packKey), overlayDeltaPath)
+                    } else {
+                        packs.materializeDirectory(packKey, overlayDeltaPath)
+                    }
                 }
             }
         }
@@ -791,6 +827,7 @@ internal class IndexBuildRunner(
 
     private companion object {
         const val SOURCE_HASH_PREVIEW_PHASE = "source-hash-preview"
+        const val OVERLAY_RESTORE_BATCH_SIZE = 256
     }
 }
 

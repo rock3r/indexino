@@ -1,6 +1,8 @@
 package dev.sebastiano.indexino.core.cache
 
 import dev.sebastiano.indexino.api.InProcessCacheLayout
+import dev.sebastiano.indexino.core.segment.SegmentCodeIndexStore
+import dev.sebastiano.indexino.core.segment.SharedSegmentStore
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.store.SharedReadOnlyStore
 import dev.sebastiano.indexino.core.store.WorktreeOverlayIndexStore
@@ -31,6 +33,9 @@ internal object WorktreeOverlayStoreOpener {
         onBaseRef: (Path) -> Unit = {},
         isBase: Boolean = false,
     ): CodeIndexStore {
+        if (manifest.storageFormatVersion == WorktreeOverlayPolicy.STORAGE_FORMAT_SEGMENT_PACK) {
+            return openSegmentPackStore(cacheRoot, manifest)
+        }
         if (manifest.representation != WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) {
             val storePath =
                 InProcessCacheLayout.sharedGenerationStore(workspace, manifest.generation)
@@ -68,6 +73,60 @@ internal object WorktreeOverlayStoreOpener {
             }
             val overlayStore = openOverlayDeltaStore(cacheRoot, workspace, manifest, clientId)
             return WorktreeOverlayIndexStore(baseStore, overlayStore, manifest.tombstonePrefixes)
+                .also { completed = true }
+        } finally {
+            if (!completed) baseStore.close()
+        }
+    }
+
+    /**
+     * Storage-format-2 reader: packs are raw immutable segment files mapped directly through
+     * MemorySegment — no `materialized/`, `overlay-delta/` or client refs directory exists, and
+     * pack files are never registered for deletion with client refs.
+     */
+    private fun openSegmentPackStore(
+        cacheRoot: Path,
+        manifest: WorkspaceGenerationManifest,
+    ): CodeIndexStore {
+        val packs = ContentAddressedPackCache(cacheRoot)
+        if (manifest.representation != WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) {
+            val pins = manifest.packKeys.map { SharedSegmentStore.open(packs.packPath(it)) }
+            var store: SegmentCodeIndexStore? = null
+            try {
+                store =
+                    SegmentCodeIndexStore.open(pins.map { it.file }) { pins.forEach { it.close() } }
+                return store
+            } finally {
+                if (store == null) pins.forEach { runCatching { it.close() } }
+            }
+        }
+        require(manifest.baseWorkspaceId != null && manifest.baseGeneration != null) {
+            "Overlay manifest missing base generation reference"
+        }
+        val baseManifest =
+            WorkspaceGenerationManifestStore(cacheRoot, manifest.baseWorkspaceId)
+                .readGeneration(manifest.baseGeneration)
+                ?: error("Base generation ${manifest.baseGeneration} is unavailable")
+        val baseWorkspace =
+            WorkspaceRegistryStore(cacheRoot).entry(manifest.baseWorkspaceId)?.path?.let(Path::of)
+                ?: error("Base workspace ${manifest.baseWorkspaceId} is unknown")
+        val baseStore = openResolvedStore(cacheRoot, baseWorkspace, baseManifest, clientId = null)
+        var completed = false
+        try {
+            val overlayPins =
+                manifest.overlayPackKeys.map { SharedSegmentStore.open(packs.packPath(it)) }
+            var deltaStore: SegmentCodeIndexStore? = null
+            try {
+                deltaStore =
+                    if (overlayPins.isEmpty()) null
+                    else
+                        SegmentCodeIndexStore.open(overlayPins.map { it.file }) {
+                            overlayPins.forEach { it.close() }
+                        }
+            } finally {
+                if (deltaStore == null) overlayPins.forEach { runCatching { it.close() } }
+            }
+            return WorktreeOverlayIndexStore(baseStore, deltaStore, manifest.tombstonePrefixes)
                 .also { completed = true }
         } finally {
             if (!completed) baseStore.close()

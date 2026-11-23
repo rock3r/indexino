@@ -12,7 +12,14 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 
-/** Installs immutable analysis packs under the cache-root two-level content-key fanout. */
+/**
+ * Installs immutable analysis packs under the cache-root two-level content-key fanout.
+ *
+ * Two pack storage formats share the fanout: legacy version-1 ZIP archives of expanded Xodus
+ * environments ([installDirectory]) and version-2 raw segment files ([installFile]) that readers
+ * map directly through MemorySegment. Content keys embed the format identity, so the same bytes
+ * can never collide across formats.
+ */
 internal class ContentAddressedPackCache(
     private val cacheRoot: Path,
     private val moveDirectoryAction: (Path, Path) -> Unit = { source, destination ->
@@ -150,6 +157,63 @@ internal class ContentAddressedPackCache(
             .resolve(contentKey)
     }
 
+    /**
+     * Installs a single immutable file (a storage-format-2 segment pack) under the same fanout.
+     * The content key hashes a segment-format marker plus the file bytes so segment packs and
+     * legacy directory ZIPs can never share a key.
+     */
+    fun installFile(file: Path, basicFactSchemaVersion: Int = 1): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        digest.update("segment-pack:basic-fact-schema:$basicFactSchemaVersion".toByteArray())
+        digest.update(0)
+        Files.newInputStream(file).use { input ->
+            val buffer = ByteArray(BUFFER_SIZE)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        val contentKey = HexFormat.of().formatHex(digest.digest())
+        val destination = packPath(contentKey)
+        if (Files.isRegularFile(destination)) return contentKey
+        Files.createDirectories(destination.parent)
+        val staging = destination.resolveSibling("$contentKey.tmp-${UUID.randomUUID()}")
+        try {
+            Files.copy(file, staging)
+            try {
+                Files.move(staging, destination, StandardCopyOption.ATOMIC_MOVE)
+            } catch (_: java.nio.file.FileAlreadyExistsException) {
+                // A concurrent writer installed the same immutable key first.
+            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                try {
+                    Files.move(staging, destination)
+                } catch (_: java.nio.file.FileAlreadyExistsException) {
+                    // A concurrent writer installed the same immutable key first.
+                }
+            }
+        } finally {
+            Files.deleteIfExists(staging)
+        }
+        return contentKey
+    }
+
+    /** True when the pack is a raw immutable segment file rather than a legacy ZIP archive. */
+    fun isSegmentPack(contentKey: String): Boolean {
+        val pack = packPath(contentKey)
+        if (!Files.isRegularFile(pack)) return false
+        val magic = ByteArray(SEGMENT_MAGIC_BYTES.size)
+        Files.newInputStream(pack).use { input ->
+            var read = 0
+            while (read < magic.size) {
+                val count = input.read(magic, read, magic.size - read)
+                if (count < 0) return false
+                read += count
+            }
+        }
+        return magic.contentEquals(SEGMENT_MAGIC_BYTES)
+    }
+
     private fun contentKey(entries: List<Pair<String, Path>>, basicFactSchemaVersion: Int): String {
         val digest = MessageDigest.getInstance("SHA-256")
         digest.update("basic-fact-schema:$basicFactSchemaVersion".toByteArray())
@@ -173,6 +237,7 @@ internal class ContentAddressedPackCache(
     private companion object {
         const val FANOUT_PREFIX_LENGTH: Int = 2
         const val BUFFER_SIZE: Int = 8_192
+        val SEGMENT_MAGIC_BYTES: ByteArray = "IDXSEGv1".toByteArray(Charsets.US_ASCII)
 
         fun moveDirectory(source: Path, destination: Path) {
             try {
