@@ -8,6 +8,7 @@ import kotlin.io.path.createDirectories
 import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.io.TempDir
@@ -137,6 +138,26 @@ class SourceStatHashCacheTest {
         val snapshot = capture(listOf(source), SourceStatHashCache.open(cacheFile, 0), reads)
         assertEquals(1, reads.get())
         assertEquals(FileHashProducer.contentHash("content"), snapshot.contentHash(source))
+    }
+
+    @Test
+    fun `a cache hit still rejects bytes changed after capture`() {
+        val root = workspace("toctou")
+        val file = root.resolve("src/A.kt")
+        Files.createDirectories(file.parent)
+        file.writeText("before")
+        stableMtime(file)
+        val source = IndexedSource.workspace(root, "src/A.kt")
+        val cacheFile = tempDir.resolve("source-hashes")
+        capture(listOf(source), SourceStatHashCache.open(cacheFile, 0), AtomicInteger())
+
+        val reads = AtomicInteger()
+        val snapshot = capture(listOf(source), SourceStatHashCache.open(cacheFile, 0), reads)
+        assertEquals(0, reads.get(), "The second capture should be a cache hit")
+        assertTrue(snapshot.capturedSources.isEmpty())
+
+        file.writeText("changed after capture")
+        assertFailsWith<IllegalStateException> { snapshot.content(source) }
     }
 
     @Test

@@ -211,10 +211,11 @@ when files are added or removed without any BUILD edit.
 
 An edit to any of those inputs invalidates the entry and re-runs discovery. A fresh result is stored
 only when the inputs are identical immediately before and after discovery; an edit racing the query
-therefore cannot be recorded as the state that produced the older answer. Injected query executors
-and a `build-parse` fallback observed while `bazel --version` succeeds bypass the cache, so a
-transient query failure is retried on the next refresh. A missing or corrupt entry always falls back
-to a fresh query and never fails the refresh.
+therefore cannot be recorded as the state that produced the older answer. Injected query executors,
+a `build-parse` fallback observed while `bazel --version` succeeds, and a target-only fallback for a
+dependency-inclusive request all bypass the cache, so a transient query failure is retried on the
+next refresh. A missing or corrupt entry always falls back to a fresh query and never fails the
+refresh.
 
 ## Gradle Fallback
 

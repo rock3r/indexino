@@ -222,6 +222,7 @@ internal class OriginStateCache(
                         "info=$info",
                         "gitfile=${layout.gitFileContent.orEmpty()}",
                         "commondir=${stableContent(layout.gitDir.resolve("commondir"))}",
+                        "nested=${nestedModulesDigest(layout.commonDir) ?: return null}",
                     )
                     .joinToString("\u0000")
             }
@@ -264,8 +265,68 @@ internal class OriginStateCache(
     }
 
     private fun supportedConfig(text: String): Boolean {
+        // Both `include.path = ...` and the section form `[include] path = ...` can pull in a file
+        // whose changes this stamp cannot observe. `[includeIf ...]` is conditional, so refuse it
+        // as well rather than evaluate conditions here.
+        if (INCLUDE_SECTION.containsMatchIn(text)) return false
         val lower = text.lowercase()
         return UNSUPPORTED_CONFIG_KEYS.none { lower.contains(it) }
+    }
+
+    /**
+     * A tracked submodule's HEAD advances without changing the parent's working-tree files, and its
+     * refs/index live under the excluded `.git/modules` tree. Fingerprint those metadata files so
+     * the parent's diff/status cannot be reused across a gitlink move.
+     */
+    private fun nestedModulesDigest(commonDir: Path): String? {
+        val modules = commonDir.resolve("modules")
+        if (!Files.isDirectory(modules)) return "none"
+        return runCatching {
+                val entries = mutableListOf<String>()
+                Files.walkFileTree(
+                    modules,
+                    object : SimpleFileVisitor<Path>() {
+                        override fun preVisitDirectory(
+                            directory: Path,
+                            attributes: BasicFileAttributes,
+                        ): FileVisitResult {
+                            if (Thread.currentThread().isInterrupted)
+                                throw InterruptedException("Origin state stamp stopped")
+                            if (
+                                directory != modules &&
+                                    directory.fileName.toString() in NESTED_SKIPPED_DIRECTORIES
+                            ) {
+                                return FileVisitResult.SKIP_SUBTREE
+                            }
+                            return FileVisitResult.CONTINUE
+                        }
+
+                        override fun visitFile(
+                            file: Path,
+                            attributes: BasicFileAttributes,
+                        ): FileVisitResult {
+                            if (Thread.currentThread().isInterrupted)
+                                throw InterruptedException("Origin state stamp stopped")
+                            val relative = modules.relativize(file).invariantSeparatorsPathString
+                            val segments = relative.split('/')
+                            val name = segments.last()
+                            val entry =
+                                when {
+                                    name == NESTED_INDEX -> "$relative:${statOnly(file)}"
+                                    name in NESTED_METADATA_FILES ||
+                                        NESTED_REFS in segments ||
+                                        NESTED_INFO in segments ->
+                                        "$relative:${stableContent(file)}"
+                                    else -> null
+                                }
+                            if (entry != null) entries += entry
+                            return FileVisitResult.CONTINUE
+                        }
+                    },
+                )
+                digest(entries.sorted().joinToString("\n"))
+            }
+            .getOrNull()
     }
 
     private fun systemConfigPath(): Path =
@@ -492,6 +553,14 @@ internal class OriginStateCache(
                 "GIT_CONFIG_COUNT",
                 "GIT_CONFIG_PARAMETERS",
             )
+        private val INCLUDE_SECTION = Regex("(?im)^\\s*\\[\\s*include(?:if)?\\b")
+        private val NESTED_SKIPPED_DIRECTORIES =
+            setOf("objects", "logs", "hooks", "lfs", "rr-cache")
+        private val NESTED_METADATA_FILES =
+            setOf("HEAD", "packed-refs", "config", "commondir", "config.worktree")
+        private const val NESTED_INDEX = "index"
+        private const val NESTED_REFS = "refs"
+        private const val NESTED_INFO = "info"
         private val UNSUPPORTED_CONFIG_KEYS =
             listOf(
                 "include.path",

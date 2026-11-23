@@ -296,6 +296,83 @@ class TopologyCacheTest {
     }
 
     @Test
+    fun `gradle inventory covers sources under build-named directories`() {
+        val workspace = Files.createDirectories(tempDir.resolve("gradle-build-dir")).toRealPath()
+        workspace.resolve("settings.gradle.kts").writeText("include(\":app\")\n")
+        workspace.resolve("build.gradle.kts").writeText("plugins {}\n")
+        workspace.resolve("app").createDirectories()
+        workspace.resolve("app/build.gradle.kts").writeText("plugins {}\n")
+        workspace.resolve("app/src/main/kotlin/com/example/build").createDirectories()
+        workspace
+            .resolve("app/src/main/kotlin/com/example/build/Initial.kt")
+            .writeText("class Initial\n")
+        val request = TopologyRequest(buildSystem = BuildSystem.GRADLE, gradleModule = ":app")
+        val cacheRoot = tempDir.resolve("cache")
+        val messages = mutableListOf<String>()
+        fun resolve(): TopologyResult =
+            TopologyResolver.resolve(
+                project = workspace,
+                request = request,
+                onStderr = messages::add,
+                cacheRoot = cacheRoot,
+            )
+
+        val first = resolve()
+        assertTrue(
+            first.sourceFiles.contains("app/src/main/kotlin/com/example/build/Initial.kt"),
+            "${first.sourceFiles}",
+        )
+
+        workspace.resolve("app/src/main/kotlin/com/example/build/New.kt").writeText("class New\n")
+        messages.clear()
+        val second = resolve()
+        assertTrue(messages.none { it.contains("topology=cached") }, "$messages")
+        assertTrue(
+            second.sourceFiles.contains("app/src/main/kotlin/com/example/build/New.kt"),
+            "${second.sourceFiles}",
+        )
+
+        workspace.resolve("app/build").createDirectories()
+        workspace.resolve("app/build/Generated.kt").writeText("class Generated\n")
+        messages.clear()
+        resolve()
+        assertTrue(messages.any { it.contains("topology=cached") }, "$messages")
+    }
+
+    @Test
+    fun `a dependency-inclusive request retries a target-only fallback`() {
+        val workspace = bazelWorkspace("dependency-fallback")
+        var resolutions = 0
+        var degraded = true
+        fun resolve(): TopologyResult =
+            TopologyCache.resolve(
+                project = workspace,
+                request = bazelRequest(includeDeps = true),
+                buildSystem = BuildSystem.BAZEL,
+                cacheRoot = tempDir.resolve("cache"),
+                toolchain = TOOLCHAIN,
+                resolveFresh = {
+                    resolutions++
+                    TopologyResult(
+                        sourceFiles = listOf("app/Main.kt"),
+                        topology = "bazel-query",
+                        includeDeps = !degraded,
+                        scope = "//app:app",
+                    )
+                },
+            )
+
+        resolve()
+        resolve()
+        assertEquals(2, resolutions, "A degraded dependency closure must be retried")
+
+        degraded = false
+        resolve()
+        resolve()
+        assertEquals(3, resolutions, "A complete closure is cacheable")
+    }
+
+    @Test
     fun `injected bazel executors always run and never read the cache`() {
         val workspace = bazelWorkspace("bypass")
         var queries = 0

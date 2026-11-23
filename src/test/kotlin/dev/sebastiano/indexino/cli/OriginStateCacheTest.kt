@@ -7,6 +7,7 @@ import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.SourceContentSnapshot
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.io.path.readText
 import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -157,6 +158,62 @@ class OriginStateCacheTest {
                 externalExpectedRevision = "0123456789012345678901234567890123456789",
             )
         assertEquals(0, mismatched.cached)
+    }
+
+    @Test
+    fun `a section-form git config include disables origin reuse`() {
+        val workspace = committedWorkspace()
+        val shared = tempDir.resolve("shared.gitconfig")
+        shared.writeText("[core]\n\tquotepath = false\n")
+        val config = workspace.resolve(".git/config")
+        config.writeText(config.readText() + "\n[include]\n\tpath = $shared\n")
+        val sources = sources(workspace)
+
+        val first = resolve(workspace, sources, newCache())
+        val second = resolve(workspace, sources, newCache())
+
+        assertEquals(0, second.cached)
+        assertEquals(first.origins, second.origins)
+        assertEquals(first.origins, resolve(workspace, sources, cache = null).origins)
+    }
+
+    @Test
+    fun `a submodule head advance invalidates the parent state`() {
+        val child = committedWorkspace("submodule-child")
+        val parent = Files.createDirectories(tempDir.resolve("submodule-parent")).toRealPath()
+        Files.writeString(parent.resolve("README.md"), "parent\n")
+        git(parent, "init")
+        git(parent, "config", "user.email", "test@example.invalid")
+        git(parent, "config", "user.name", "Indexino Test")
+        git(parent, "add", ".")
+        git(parent, "commit", "-m", "base")
+        git(
+            parent,
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            child.toString(),
+            "module",
+        )
+        git(parent, "commit", "-m", "add submodule")
+        ageWorkspace(parent)
+        val sources = listOf(IndexedSource("workspace", parent, "README.md"))
+
+        val first = resolve(parent, sources, newCache())
+        val unchanged = resolve(parent, sources, newCache())
+        assertEquals(0, first.cached)
+        assertEquals(1, unchanged.cached)
+
+        val submodule = parent.resolve("module")
+        git(submodule, "config", "user.email", "test@example.invalid")
+        git(submodule, "config", "user.name", "Indexino Test")
+        git(submodule, "commit", "--allow-empty", "-m", "advance")
+        val advanced = resolve(parent, sources, newCache())
+
+        assertEquals(0, advanced.cached)
+        assertTrue(advanced.origins.single().dirty, "${advanced.origins}")
+        assertEquals(advanced.origins, resolve(parent, sources, cache = null).origins)
     }
 
     @Test

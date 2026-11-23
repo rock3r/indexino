@@ -519,6 +519,11 @@ internal object ManifestOriginResolver {
      * index, and so its stamp, untouched. The copy keeps the index mtime so racy-entry detection is
      * unchanged. A path-limited incremental diff can skip Git's automatic whole-index stat refresh;
      * this is restricted to the private index and does not change full-origin reads or status.
+     *
+     * Every diff uses this path, including Windows, where setting `GIT_INDEX_FILE` points Git at
+     * the copy's lock file rather than the user's index. The copy lives in a private temp directory
+     * and is removed in `finally`; if a descendant still holds a handle, the tree is registered for
+     * deletion at JVM exit so the refresh is not failed by cleanup.
      */
     private suspend fun runGitWithIndexCopy(
         originRoot: Path,
@@ -537,7 +542,11 @@ internal object ManifestOriginResolver {
                 else arguments
             runGit(originRoot, scopedArguments, indexFile = copy)
         } finally {
-            directory.toFile().deleteRecursively()
+            if (!runCatching { directory.toFile().deleteRecursively() }.getOrDefault(false)) {
+                // A Windows descendant may still hold the copy open. Do not fail the refresh;
+                // register top-down so the JVM's reverse-order hook removes children first.
+                directory.toFile().walk().forEach { it.deleteOnExit() }
+            }
         }
     }
 

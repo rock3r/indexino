@@ -44,10 +44,7 @@ internal object BuildDefinitionInputs {
                             directory: Path,
                             attributes: BasicFileAttributes,
                         ): FileVisitResult {
-                            if (
-                                directory != canonicalRoot &&
-                                    directory.fileName.toString() in skippedDirectories
-                            ) {
+                            if (shouldSkip(directory, canonicalRoot, skippedDirectories)) {
                                 return FileVisitResult.SKIP_SUBTREE
                             }
                             if (skip != null && directory == skip) {
@@ -104,6 +101,20 @@ internal object BuildDefinitionInputs {
             current.inventoryDigest == stored.inventoryDigest
     }
 
+    /**
+     * Output directories are only skipped outside source trees. Gradle discovery walks the whole
+     * `src` tree, so a package directory named `build` (or `out`, `target`, `node_modules`) is a
+     * real source location and must stay in the inventory. A directory that owns a `src` child is
+     * also kept, covering remapped module roots with an output-like name.
+     */
+    private fun shouldSkip(directory: Path, root: Path, names: Set<String>): Boolean {
+        if (directory == root) return false
+        if (directory.fileName.toString() !in names) return false
+        if (root.relativize(directory).any { it.toString() == SOURCE_DIRECTORY }) return false
+        if (Files.isDirectory(directory.resolve(SOURCE_DIRECTORY))) return false
+        return true
+    }
+
     private fun isDefinition(fileName: String, buildSystem: BuildSystem): Boolean =
         when (buildSystem) {
             BuildSystem.BAZEL ->
@@ -132,6 +143,7 @@ internal object BuildDefinitionInputs {
     private const val FILE = "f"
     private const val SYMLINK = "l"
     private const val OTHER = "o"
+    private const val SOURCE_DIRECTORY = "src"
 
     /**
      * VCS metadata and IDE state never define a package. Gradle also writes generated artifacts

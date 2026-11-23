@@ -239,10 +239,12 @@ removing the workspace directory (or `cache forget` / `daemon stop --purge`) dis
   included-build roots. The key also contains the Bazel client version (`.bazelversion`, the
   launcher identity and `bazel --version`), the JVM version and the Kotlin version. The file-name
   inventory is required because BUILD globs and Gradle source roots change when files are added or
-  removed without a build-file edit. A fresh result is stored only when both digests are identical
-  before and after discovery, so an edit racing a query cannot be recorded as the state that
-  produced the older answer. Injected query executors, `repo` topology, and a Bazel `build-parse`
-  fallback while the Bazel client is healthy bypass the cache.
+  removed without a build-file edit. Gradle output directories are skipped only outside `src`, so a
+  package directory named `build` (or `out`, `target`, `node_modules`) remains covered. A fresh
+  result is stored only when both digests are identical before and after discovery, so an edit
+  racing a query cannot be recorded as the state that produced the older answer. Injected query
+  executors, `repo` topology, a Bazel `build-parse` fallback while the Bazel client is healthy, and
+  a dependency-inclusive request served by a target-only fallback bypass the cache.
 - **`source-hashes`** — append-safe text index from `(originId, origin-path)` to
   `(size, mtimeNs, ctimeNs, fileKey) -> sha256`. A hit skips the file read; any metadata change
   re-reads and re-hashes. Entries observed within a two-second timestamp-granularity window are
@@ -252,10 +254,12 @@ removing the workspace directory (or `cache forget` / `daemon stop --purge`) dis
   `packed-refs`, the index, effective Git configuration/info files and every working-tree file stat
   are unchanged. That proof covers tracked and untracked changes outside the indexed closure
   without spawning `git`. Linked worktrees are supported through their `.git` file and
-  `commondir`; submodules require a caller-provided expected revision. Configurations whose output
-  depends on files the stamp cannot observe (config includes, `core.excludesFile`,
-  `core.attributesFile`, `core.bare`/`core.worktree`) and Git environment overrides disable reuse
-  instead of guessing.
+  `commondir`; a parent with submodules also fingerprints each submodule's HEAD, refs, packed-refs
+  and index under `.git/modules`, so a gitlink advance invalidates the parent state. Submodules
+  used as their own origin require a caller-provided expected revision. Configurations whose output
+  depends on files the stamp cannot observe (dotted or section-form `include`/`includeIf`,
+  `core.excludesFile`, `core.attributesFile`, `core.bare`/`core.worktree`) and Git environment
+  overrides disable reuse instead of guessing.
 
 A live daemon watcher still supplies changed paths for hinted refreshes and inherits unchanged
 source hashes from the published generation; these caches serve cold starts, explicit refreshes,

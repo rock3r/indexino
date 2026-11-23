@@ -132,6 +132,7 @@ private constructor(
  * older result.
  */
 internal object TopologyCache {
+    @Suppress("CyclomaticComplexMethod")
     fun resolve(
         project: Path,
         request: TopologyRequest,
@@ -160,6 +161,11 @@ internal object TopologyCache {
 
         val before = BuildDefinitionInputs.capture(project, buildSystem, cacheRoot)
         val resolved = resolveFresh()
+        if (request.includeDeps && !resolved.includeDeps) {
+            // A target-only fallback did not satisfy a dependency-inclusive request. Retry on the
+            // next refresh instead of pinning the incomplete closure until an input changes.
+            return resolved
+        }
         if (
             buildSystem == BuildSystem.BAZEL &&
                 resolved.topology == BUILD_PARSE &&

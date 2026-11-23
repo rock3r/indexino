@@ -108,8 +108,10 @@ Resolved Gradle topology is cached under
 version catalogs and wrapper properties across the workspace and every included-build root, and the
 digest of every file name below those roots. File names participate because a module's sources come
 from directory conventions, so adding or deleting a source changes the result without any script
-edit. An included build's script edit invalidates the main entry as well. A missing or corrupt entry
-falls back to a fresh parse; the cache never executes the target's Gradle build.
+edit. Conventional output directories are skipped only outside `src`, because discovery walks the
+whole `src` tree and a package directory there may legitimately be named `build` or `node_modules`.
+An included build's script edit invalidates the main entry as well. A missing or corrupt entry falls
+back to a fresh parse; the cache never executes the target's Gradle build.
 
 `GradleLiteralTopologyTest` contains newly authored asymmetric Kotlin/Groovy settings, nested
 accessors, remapped transitive dependencies, dependency/included-build cycles, root selection,
