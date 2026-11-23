@@ -25,6 +25,8 @@ class FakeOpener:
     def open(self, request, timeout):
         self.calls.append(request.full_url)
         status = self.responses.pop(0)
+        if isinstance(status, BaseException):
+            raise status
         if status != 200:
             raise urllib.error.HTTPError(request.full_url, status, "no", hdrs=None, fp=io.BytesIO())
         return FakeResponse(status)
@@ -33,7 +35,7 @@ class FakeOpener:
 class ResolutionGateTest(unittest.TestCase):
     def test_timeout_reports_pending_coordinates_and_does_not_claim_success(self):
         opener = FakeOpener([404] * len(gate.ARTIFACTS))
-        with self.assertRaises(TimeoutError) as raised:
+        with self.assertRaises(gate.ResolutionTimeout) as raised:
             gate.wait_for_resolution(
                 "https://repo1.maven.org/maven2",
                 "9.9.9",
@@ -79,6 +81,55 @@ class ResolutionGateTest(unittest.TestCase):
         self.assertTrue(all(status == 200 for status in statuses.values()))
         self.assertEqual(sleeps, [15])
         self.assertTrue(opener.calls[0].endswith("/dev/sebastiano/indexino/indexino/0.3.0/indexino-0.3.0.pom"))
+
+    def _wait(self, opener, timeout_seconds=600, interval_seconds=15):
+        sleeps = []
+        now = {"value": 0}
+
+        def sleeper(seconds):
+            sleeps.append(seconds)
+            now["value"] += seconds
+
+        statuses = gate.wait_for_resolution(
+            "https://repo1.maven.org/maven2",
+            "0.3.0",
+            timeout_seconds=timeout_seconds,
+            interval_seconds=interval_seconds,
+            clock=lambda: now["value"],
+            sleeper=sleeper,
+            opener=opener,
+        )
+        return statuses, sleeps
+
+    def test_transport_failure_is_retried_until_resolution(self):
+        n = len(gate.ARTIFACTS)
+        failures = [urllib.error.URLError("temporary failure in name resolution"), ConnectionResetError("reset"), TimeoutError("timed out")]
+        opener = FakeOpener(failures + [404] * (n - len(failures)) + [200] * n)
+        statuses, sleeps = self._wait(opener)
+        self.assertTrue(all(status == 200 for status in statuses.values()))
+        self.assertEqual(sleeps, [30])
+
+    def test_transient_http_statuses_back_off_with_a_bound(self):
+        n = len(gate.ARTIFACTS)
+        opener = FakeOpener([503] * n + [429] * n + [502] * n + [500] * n + [200] * n)
+        statuses, sleeps = self._wait(opener, timeout_seconds=3600, interval_seconds=60)
+        self.assertTrue(all(status == 200 for status in statuses.values()))
+        self.assertEqual(sleeps, [120, 240, 300, 300])
+
+    def test_backoff_never_sleeps_past_the_deadline(self):
+        n = len(gate.ARTIFACTS)
+        opener = FakeOpener([503] * n * 2)
+        with self.assertRaises(gate.ResolutionTimeout) as raised:
+            self._wait(opener, timeout_seconds=20, interval_seconds=15)
+        self.assertIn("503", str(raised.exception))
+        self.assertEqual(len(opener.calls), 2 * n)
+
+    def test_real_http_error_fails_fast(self):
+        opener = FakeOpener([200, 403])
+        with self.assertRaises(gate.ResolutionError) as raised:
+            self._wait(opener)
+        self.assertIn("HTTP 403", str(raised.exception))
+        self.assertEqual(len(opener.calls), 2)
 
 
 if __name__ == "__main__":

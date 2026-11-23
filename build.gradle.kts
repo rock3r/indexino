@@ -691,7 +691,8 @@ mavenPublishing {
     // Tag releases pass -PcentralAutomaticRelease=true after native verification.
     // Local and test publication stay manual so a developer upload is not promoted.
     val centralAutomaticRelease =
-        providers.gradleProperty("centralAutomaticRelease")
+        providers
+            .gradleProperty("centralAutomaticRelease")
             .map { it.equals("true", ignoreCase = true) }
             .getOrElse(false)
     publishToMavenCentral(automaticRelease = centralAutomaticRelease)

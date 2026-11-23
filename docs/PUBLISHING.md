@@ -94,8 +94,10 @@ The tag workflow passes `-PcentralAutomaticRelease=true`, matching Maradona's re
 That tells the publisher plugin to request automatic promotion at upload time. Plugin
 `DeploymentValidation.PUBLISHED` waits for the portal deployment state, not for public Maven
 resolution. The release job therefore runs `scripts/verify-maven-central-resolution.py` after
-upload and fails unless all seven POMs return HTTP 200 from `repo1.maven.org`. A pending or
-failed resolution does not create the GitHub draft. A local `publishToMavenCentral` without the
+upload and fails unless all seven POMs return HTTP 200 from `repo1.maven.org`. HTTP 404 counts as
+pending. Network errors, HTTP 408, 429 and 5xx are retried with backoff capped at five minutes,
+inside the same 30-minute window. Any other HTTP status fails at once. A pending or failed
+resolution does not create the GitHub draft. A local `publishToMavenCentral` without the
 release property stays manual.
 
 Every release tag first checks that release notes and required publication/platform credentials are
