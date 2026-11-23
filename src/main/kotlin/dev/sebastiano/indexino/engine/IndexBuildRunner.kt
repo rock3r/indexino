@@ -26,6 +26,7 @@ import dev.sebastiano.indexino.producer.SOURCE_CHANGE_DETECTION_PHASE
 import dev.sebastiano.indexino.producer.SourceChangeDetector
 import dev.sebastiano.indexino.producer.SourceChangeSet
 import dev.sebastiano.indexino.producer.SourceContentSnapshot
+import dev.sebastiano.indexino.producer.SourceStatHashCache
 import dev.sebastiano.indexino.producer.xml.ResourceMetadata
 import dev.sebastiano.indexino.topology.ExternalSourceMount
 import dev.sebastiano.indexino.topology.SourceOriginResolver
@@ -58,6 +59,8 @@ internal class IndexBuildRunner(
     private val progress: (String) -> Unit,
     private val machineProgress: IndexBuildProgressReporter?,
     private val storeRootOverride: Path? = null,
+    /** Test-only isolation for the rebuildable refresh accelerators. */
+    private val refreshCacheRootOverride: Path? = null,
     private val topologyOverride: TopologyResult? = null,
     private val inheritedSourceHashes: Map<IndexedSource, String> = emptyMap(),
     /** The closure resolved for [topologyOverride]; only valid with that exact topology. */
@@ -84,6 +87,8 @@ internal class IndexBuildRunner(
     private var latestForkBase: WorktreeForkBase? = null
     private var latestOverlayDeltaPath: Path? = null
     private var latestTombstonePrefixes: List<String> = emptyList()
+    private val refreshCacheRoot: Path =
+        refreshCacheRootOverride ?: InProcessCacheLayout.refreshCacheRoot(project)
 
     fun runDetailed(): IndexBuildExecution {
         val exitCode = run()
@@ -146,6 +151,7 @@ internal class IndexBuildRunner(
                         bazelQueryExecutor = bazelQueryExecutor,
                         bazelProcessRunner = bazelProcessRunner,
                         onStderr = progress,
+                        cacheRoot = refreshCacheRoot.resolve(TOPOLOGY_CACHE_DIRECTORY),
                     )
             }
         latestTopologyResult = topologyResult
@@ -191,7 +197,17 @@ internal class IndexBuildRunner(
         beforeSourceCapture?.invoke(sources)
         val sourceSnapshot =
             timedPhase("source-capture") {
-                SourceContentSnapshot.capture(sources, inheritedSourceHashes, hintedPaths)
+                SourceContentSnapshot.capture(
+                    sources,
+                    inheritedSourceHashes,
+                    hintedPaths,
+                    hashCache =
+                        if (inheritedSourceHashes.isEmpty())
+                            SourceStatHashCache.open(
+                                refreshCacheRoot.resolve(SOURCE_HASH_CACHE_FILE)
+                            )
+                        else null,
+                )
             }
         val inheritedCount = sourceSnapshot.inheritedCount()
         progress(
@@ -415,6 +431,11 @@ internal class IndexBuildRunner(
                 sourceSnapshot = sourceSnapshot,
                 captureState = captureOriginStates,
                 hint = hint,
+                stateCache =
+                    OriginStateCache.open(
+                        refreshCacheRoot.resolve(ORIGIN_STATE_CACHE_DIRECTORY),
+                        refreshCacheRoot,
+                    ),
                 progress = progress,
             )
         latestOriginStates = resolution.states
@@ -791,6 +812,9 @@ internal class IndexBuildRunner(
 
     private companion object {
         const val SOURCE_HASH_PREVIEW_PHASE = "source-hash-preview"
+        const val TOPOLOGY_CACHE_DIRECTORY = "topology"
+        const val SOURCE_HASH_CACHE_FILE = "source-hashes"
+        const val ORIGIN_STATE_CACHE_DIRECTORY = "origin-states"
     }
 }
 

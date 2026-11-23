@@ -52,6 +52,10 @@ worktree for product storage.
     source-links/registry.json           # dependency-to-source link registry snapshot
     source-links/generations/<link-generation>/snapshot.json
     change-journal
+    refresh-cache/                     # rebuildable refresh accelerators
+      topology/<request-key>.json
+      source-hashes
+      origin-states/<origin-key>.json
     legacy-store/                      # historical bridge; absent from the current layout
       index/<commit>/                  # mutable incremental writer
       clients/<client-id>/generations/<generation-id>/store/ # per-client immutable snapshot copy
@@ -218,6 +222,53 @@ interrupts sibling readers and waits for them to exit before the refresh retires
 that does not respond to interruption can therefore delay error reporting, as it can in a serial
 capture. Watcher-hinted captures retain their sequential inheritance path.
 
+### Refresh accelerators
+
+`workspaces/<workspace-id>/refresh-cache/` holds three rebuildable caches used by manual and CLI
+refreshes. They are accelerators, never fact sources: every entry is validated against current
+filesystem and Git state before use, a missing or corrupt entry falls back to the full path, and
+removing the workspace directory (or `cache forget` / `daemon stop --purge`) discards them.
+
+- **`topology/<request-key>.json`** — the complete `TopologyResult` for one build system, scope and
+  `includeDeps` value, including `codeSourceFiles` roles and external included-build mount
+  metadata. Validation recomputes the content digest of build-definition files and the digest of
+  every file name below the workspace (and included-build roots). Bazel inputs are
+  `BUILD`/`BUILD.bazel`, `*.bzl`, `MODULE.bazel` and its lock, `WORKSPACE`/`WORKSPACE.bazel` and
+  locks, `.bazelproject` and `.bazelrc*`. Gradle inputs are `settings.gradle(.kts)`,
+  `build.gradle(.kts)`, `gradle.properties`, version catalogs, wrapper properties, and the
+  included-build roots. The key also contains the Bazel client version (`.bazelversion`, the
+  launcher identity and `bazel --version`), the JVM version and the Kotlin version. The file-name
+  inventory is required because BUILD globs and Gradle source roots change when files are added or
+  removed without a build-file edit. A fresh result is stored only when both digests are identical
+  before and after discovery, so an edit racing a query cannot be recorded as the state that
+  produced the older answer. Injected query executors, `repo` topology, and a Bazel `build-parse`
+  fallback while the Bazel client is healthy bypass the cache.
+- **`source-hashes`** — append-safe text index from `(originId, origin-path)` to
+  `(size, mtimeNs, ctimeNs, fileKey) -> sha256`. A hit skips the file read; any metadata change
+  re-reads and re-hashes. Entries observed within a two-second timestamp-granularity window are
+  not trusted, so a same-tick edit cannot reuse a stale hash. Writes are atomic and best-effort.
+- **`origin-states/<origin-key>.json`** — one origin's `OriginGitState` (revision, diff sections,
+  tracked status and untracked hashes), reused while `.git/HEAD`, the ref it names,
+  `packed-refs`, the index, effective Git configuration/info files and every working-tree file stat
+  are unchanged. That proof covers tracked and untracked changes outside the indexed closure
+  without spawning `git`. Linked worktrees are supported through their `.git` file and
+  `commondir`; submodules require a caller-provided expected revision. Configurations whose output
+  depends on files the stamp cannot observe (config includes, `core.excludesFile`,
+  `core.attributesFile`, `core.bare`/`core.worktree`) and Git environment overrides disable reuse
+  instead of guessing.
+
+A live daemon watcher still supplies changed paths for hinted refreshes and inherits unchanged
+source hashes from the published generation; these caches serve cold starts, explicit refreshes,
+and watcher overflow or coverage loss. Source content hashes and publication checks still decide
+whether a generation can be reused or published.
+
+Platform note: Unix uses inode change time (`unix:ctime`) to detect a metadata rewrite that
+restores the modification time. Java NIO exposes no change time on Windows, so the Windows key is
+size, last-write time, creation time and file identity; the timestamp-granularity window plus Git
+index/source hashes are the remaining guarantees. A same-size rewrite that also restores the
+modification time is not distinguishable on Windows by stat alone; such a rewrite can keep a stale
+hash until another metadata field changes.
+
 ### Reclamation
 
 1. **Reference-based** — never drop packs reachable from `current`, pinned snapshots, or staging.
@@ -280,7 +331,8 @@ before running this collector against their cache.
 ## Current implementation layout
 
 Refresh writes mutable incremental output only beneath
-`workspaces/<workspace-id>/staging/in-process-writer/`. On a completed refresh, indexino installs an
+`workspaces/<workspace-id>/staging/in-process-writer/`; rebuildable refresh accelerators live
+separately under `refresh-cache/` and never hold published facts. On a completed refresh, indexino installs an
 immutable content-addressed pack in `chunks/<ab>/<cd>/<content-key>`, writes a generation manifest
 under `workspaces/<workspace-id>/generations/<generation-id>/manifest.json`, then atomically updates
 that workspace's `current` pointer. The manifest records the basic-fact schema coordinate, ordered

@@ -87,10 +87,13 @@ After a successful daemon refresh, a fully covered watcher can reuse that daemon
 `TopologyResult` for a modification to a known, still-present source path. It does not launch a
 new Bazel query on that path; `index topology=reused watcher-source-edit` identifies the shortcut
 in the refresh journal. An atomic save that replaces a known source can use this shortcut if the
-path exists again when refresh begins; a missing source still forces discovery. Explicit refreshes,
-unknown paths (including BUILD inputs and new files), overflow, uncovered watches and failed
-automatic retries re-run discovery. The initial seed always resolves the source closure. A
-missing source on a hinted refresh fails capture; it never publishes a truncated generation.
+path exists again when refresh begins; a missing source still forces discovery. Unknown paths
+(including BUILD inputs and new files), overflow, uncovered watches and failed automatic retries do
+not use the in-memory shortcut. They may still be served by the persistent build-definition-keyed
+cache when its validation finds every input unchanged; otherwise they re-run discovery. Explicit
+refreshes consult only that persistent cache, never the watcher's in-memory result. The initial seed
+always resolves the source closure. A missing source on a hinted refresh fails capture; it never
+publishes a truncated generation.
 Native watches are armed before the seed's source capture; subsequent covered known-source edits
 read only the hinted files and inherit unchanged hashes/facts from the matching published
 generation. Reads of inherited source text are verified against that hash. Polling-only macOS
@@ -195,10 +198,23 @@ No live monorepo or `bazel` binary required in default `./gradlew test`.
 
 ## Cache
 
-Store under `.indexino/` (gitignored):
+Resolved topology is cached in the user-local workspace cache, never under the checkout:
+`<cache-root>/workspaces/<workspace-id>/refresh-cache/topology/<request-key>.json`. The entry stores
+the complete result: source paths, `codeSourceFiles` roles, scope, observed `includeDeps`, and
+external mount metadata. See [INDEX-STORAGE.md](INDEX-STORAGE.md#refresh-accelerators).
 
-- Key: `(bazel-target, include-deps, hash of BUILD files in closure, per-file content hash)`
-- Invalidate when BUILD subtree hash changes or indexed `.kt` content changes
+The key covers the requested target, `includeDeps`, the Bazel client/pin/launcher identity, the JVM
+and Kotlin versions, the content digest of every `BUILD`/`BUILD.bazel`, `*.bzl`, `MODULE.bazel`
+(+lock), `WORKSPACE`/`WORKSPACE.bazel` (+lock), `.bazelproject` and `.bazelrc*` file, and the digest
+of every file name below the workspace. File names participate because `glob()` evaluation changes
+when files are added or removed without any BUILD edit.
+
+An edit to any of those inputs invalidates the entry and re-runs discovery. A fresh result is stored
+only when the inputs are identical immediately before and after discovery; an edit racing the query
+therefore cannot be recorded as the state that produced the older answer. Injected query executors
+and a `build-parse` fallback observed while `bazel --version` succeeds bypass the cache, so a
+transient query failure is retried on the next refresh. A missing or corrupt entry always falls back
+to a fresh query and never fails the refresh.
 
 ## Gradle Fallback
 

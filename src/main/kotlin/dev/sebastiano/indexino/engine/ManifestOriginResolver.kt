@@ -28,7 +28,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
 /** Builds current origin provenance for manifest freshness checks and publication. */
-@Suppress("TooManyFunctions")
+@Suppress("TooManyFunctions", "LargeClass")
 internal object ManifestOriginResolver {
     fun resolve(
         workspace: Path,
@@ -53,7 +53,7 @@ internal object ManifestOriginResolver {
      * provably unchanged and the recursive watcher saw nothing but [OriginIncrementalHint] sources
      * change; every other origin runs the full whole-repository Git reads.
      */
-    @Suppress("CyclomaticComplexMethod")
+    @Suppress("CyclomaticComplexMethod", "LongMethod")
     fun resolveWithState(
         workspace: Path,
         sources: List<IndexedSource>,
@@ -62,10 +62,12 @@ internal object ManifestOriginResolver {
         sourceSnapshot: SourceContentSnapshot? = null,
         captureState: Boolean = true,
         hint: OriginIncrementalHint? = null,
+        stateCache: OriginStateCache? = null,
         progress: ((String) -> Unit)? = null,
         onPhaseForTests: ((originId: String, phase: String, completed: Boolean) -> Unit)? = null,
     ): OriginResolution = withOriginScope {
         val incrementalCount = AtomicInteger()
+        val cachedCount = AtomicInteger()
         val timings = ConcurrentLinkedQueue<String>()
         suspend fun <T> measured(originId: String, phase: String, action: suspend () -> T): T {
             runInterruptible { onPhaseForTests?.invoke(originId, phase, false) }
@@ -79,6 +81,32 @@ internal object ManifestOriginResolver {
                     )
                 runInterruptible { onPhaseForTests?.invoke(originId, phase, true) }
             }
+        }
+        suspend fun cachedOrFullState(
+            cache: OriginStateCache,
+            originId: String,
+            originRoot: Path,
+            externalExpectedRevision: String?,
+        ): OriginGitState {
+            val before = runInterruptible { cache.stamp(originRoot, externalExpectedRevision) }
+            if (before != null && before.reusable) {
+                val cached = runInterruptible {
+                    cache.lookup(originId, originRoot, externalExpectedRevision, before)
+                }
+                if (cached != null && (!captureState || cached.incremental)) {
+                    cachedCount.incrementAndGet()
+                    runInterruptible { progress?.invoke("index origin=$originId git-state=cached") }
+                    return cached
+                }
+            }
+            val state = fullState(workspace, originRoot, externalExpectedRevision, captureState)
+            val after = runInterruptible { cache.stamp(originRoot, externalExpectedRevision) }
+            if (before != null && after != null && before.value == after.value && after.reusable) {
+                runInterruptible {
+                    cache.store(originId, originRoot, externalExpectedRevision, after, state)
+                }
+            }
+            return state
         }
         suspend fun resolveState(
             originId: String,
@@ -97,6 +125,9 @@ internal object ManifestOriginResolver {
                         )
                     }
                     ?.also { incrementalCount.incrementAndGet() }
+                    ?: stateCache?.let { cache ->
+                        cachedOrFullState(cache, originId, originRoot, externalExpectedRevision)
+                    }
                     ?: fullState(workspace, originRoot, externalExpectedRevision, captureState)
             }
         suspend fun withFingerprint(
@@ -216,6 +247,7 @@ internal object ManifestOriginResolver {
                     resolved.associate { (origin, state) -> origin.originId to state }
                 } else emptyMap(),
             incremental = incrementalCount.get(),
+            cached = cachedCount.get(),
         )
     }
 
@@ -281,10 +313,15 @@ internal object ManifestOriginResolver {
         captureState: Boolean,
     ): OriginGitState = coroutineScope {
         val stampBefore = if (captureState) stamp(workspace, originRoot) else null
+        // Always diff against a private index: `git diff` otherwise refreshes the user's index
+        // stat data, which both writes the checkout and defeats cache validation afterwards.
+        val indexGitDir =
+            stampBefore?.gitDir
+                ?: runGit(originRoot, "rev-parse", "--absolute-git-dir")?.trim()?.let(Path::of)
         val diff = async {
             val arguments = listOf("diff", "--no-ext-diff", "--binary", "HEAD", "--", ".")
-            if (stampBefore == null) runGit(originRoot, arguments)
-            else runGitWithIndexCopy(originRoot, stampBefore.gitDir, arguments)
+            if (indexGitDir == null) runGit(originRoot, arguments)
+            else runGitWithIndexCopy(originRoot, indexGitDir, arguments)
         }
         val untracked = async {
             runGit(originRoot, "ls-files", "--others", "--exclude-standard", "-z", "--", ".")

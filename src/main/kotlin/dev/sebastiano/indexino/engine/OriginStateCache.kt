@@ -1,0 +1,511 @@
+package dev.sebastiano.indexino.engine
+
+import java.nio.file.FileVisitResult
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.SimpleFileVisitor
+import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.attribute.FileTime
+import java.security.MessageDigest
+import java.util.HexFormat
+import java.util.concurrent.TimeUnit
+import kotlin.io.path.invariantSeparatorsPathString
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+
+/** A stat-only proof that an origin's Git metadata and complete working tree are unchanged. */
+internal class OriginStateStamp(val value: String, val reusable: Boolean)
+
+/**
+ * Persistent per-origin [OriginGitState] cache.
+ *
+ * An entry is reusable only while `.git/HEAD`, the ref it names, `packed-refs`, the index, the
+ * effective Git configuration and every working-tree file's stat agree with the recorded stamp.
+ * That covers tracked and untracked changes without spawning Git, including changes outside the
+ * indexed source closure. Entries touched inside the filesystem timestamp granularity window are
+ * not stored, so a same-tick edit cannot be mistaken for an unchanged tree.
+ */
+@Suppress("TooManyFunctions")
+internal class OriginStateCache(
+    private val directory: Path,
+    private val cacheRoot: Path? = null,
+    private val racyWindowNanos: Long = RACY_WINDOW_NANOS,
+) {
+    /**
+     * Stat-only evidence for [originRoot]. Null when the repository shape or configuration makes
+     * the working tree undecidable without Git.
+     */
+    fun stamp(originRoot: Path, externalExpectedRevision: String?): OriginStateStamp? {
+        val canonicalRoot = runCatching { originRoot.toRealPath() }.getOrNull() ?: return null
+        val layout = gitLayout(canonicalRoot, externalExpectedRevision) ?: return null
+        val metadata = gitMetadata(layout) ?: return null
+        val worktree = worktreeDigest(canonicalRoot) ?: return null
+        val observedAtNanos = TimeUnit.MILLISECONDS.toNanos(System.currentTimeMillis())
+        val value =
+            digest(
+                listOf(FORMAT_VERSION.toString(), metadata, worktree.digest).joinToString("\u0000")
+            )
+        val reusable =
+            worktree.newestChangeNanos <= observedAtNanos &&
+                observedAtNanos - worktree.newestChangeNanos > racyWindowNanos
+        return OriginStateStamp(value, reusable)
+    }
+
+    fun lookup(
+        originId: String,
+        originRoot: Path,
+        externalExpectedRevision: String?,
+        stamp: OriginStateStamp,
+    ): OriginGitState? {
+        val file = entryFile(originId, originRoot, externalExpectedRevision) ?: return null
+        val entry = readEntry(file) ?: return null
+        val canonicalRoot =
+            runCatching { originRoot.toRealPath().toString() }.getOrNull() ?: return null
+        if (
+            entry.formatVersion != FORMAT_VERSION ||
+                entry.originId != originId ||
+                entry.originRoot != canonicalRoot ||
+                entry.externalExpectedRevision != externalExpectedRevision ||
+                entry.stamp != stamp.value
+        ) {
+            return null
+        }
+        return entry.toState() ?: return null
+    }
+
+    fun store(
+        originId: String,
+        originRoot: Path,
+        externalExpectedRevision: String?,
+        stamp: OriginStateStamp,
+        state: OriginGitState,
+    ) {
+        if (!stamp.reusable) return
+        val file = entryFile(originId, originRoot, externalExpectedRevision) ?: return
+        val canonicalRoot = runCatching { originRoot.toRealPath().toString() }.getOrNull() ?: return
+        val entry =
+            StoredOriginState.from(originId, canonicalRoot, externalExpectedRevision, stamp, state)
+                ?: return
+        runCatching {
+                Files.createDirectories(file.parent)
+                val temporary = Files.createTempFile(file.parent, file.fileName.toString(), ".tmp")
+                try {
+                    Files.writeString(
+                        temporary,
+                        json.encodeToString(StoredOriginState.serializer(), entry),
+                    )
+                    runCatching {
+                            Files.move(
+                                temporary,
+                                file,
+                                StandardCopyOption.ATOMIC_MOVE,
+                                StandardCopyOption.REPLACE_EXISTING,
+                            )
+                        }
+                        .getOrElse {
+                            Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING)
+                        }
+                } finally {
+                    Files.deleteIfExists(temporary)
+                }
+            }
+            .onFailure { /* A cache write is never allowed to fail a refresh. */ }
+    }
+
+    private fun entryFile(
+        originId: String,
+        originRoot: Path,
+        externalExpectedRevision: String?,
+    ): Path? {
+        val canonicalRoot =
+            runCatching { originRoot.toRealPath().toString() }.getOrNull() ?: return null
+        val identity =
+            listOf(originId, canonicalRoot, externalExpectedRevision.orEmpty())
+                .joinToString("\u0000")
+        return directory.resolve(digest(identity) + ".json")
+    }
+
+    private fun readEntry(file: Path): StoredOriginState? =
+        runCatching {
+                json.decodeFromString(StoredOriginState.serializer(), Files.readString(file))
+            }
+            .getOrNull()
+
+    private class GitLayout(
+        val gitDir: Path,
+        val commonDir: Path,
+        val gitFileContent: String?,
+        val externalExpectedRevision: String?,
+    )
+
+    private fun gitLayout(originRoot: Path, externalExpectedRevision: String?): GitLayout? {
+        if (UNSUPPORTED_ENVIRONMENT_VARIABLES.any { System.getenv(it) != null }) return null
+        val dotGit = originRoot.resolve(GIT)
+        return runCatching {
+                when {
+                    Files.isDirectory(dotGit) ->
+                        GitLayout(dotGit, dotGit, null, externalExpectedRevision)
+                    Files.isRegularFile(dotGit) -> {
+                        val content = Files.readString(dotGit).trim()
+                        if (!content.startsWith(GITDIR_PREFIX)) return null
+                        val listed = content.removePrefix(GITDIR_PREFIX).trim()
+                        if (listed.isEmpty()) return null
+                        val gitDirPath = Path.of(listed)
+                        val gitDir =
+                            (if (gitDirPath.isAbsolute) gitDirPath
+                                else originRoot.resolve(gitDirPath))
+                                .normalize()
+                                .toRealPath()
+                        val commonFile = gitDir.resolve("commondir")
+                        if (Files.isRegularFile(commonFile)) {
+                            val common = Files.readString(commonFile).trim()
+                            if (common.isEmpty()) return null
+                            val commonPath = Path.of(common)
+                            GitLayout(
+                                gitDir = gitDir,
+                                commonDir =
+                                    (if (commonPath.isAbsolute) commonPath
+                                        else gitDir.resolve(commonPath))
+                                        .normalize()
+                                        .toRealPath(),
+                                gitFileContent = content,
+                                externalExpectedRevision = externalExpectedRevision,
+                            )
+                        } else {
+                            // A gitlink without a common dir is a submodule. Its owner's HEAD
+                            // decides expectedRevision unless the caller supplied one.
+                            if (externalExpectedRevision == null) null
+                            else GitLayout(gitDir, gitDir, content, externalExpectedRevision)
+                        }
+                    }
+                    else -> null
+                }
+            }
+            .getOrNull()
+    }
+
+    private fun gitMetadata(layout: GitLayout): String? =
+        runCatching {
+                val headText =
+                    Files.readString(layout.gitDir.resolve("HEAD")).trim().ifEmpty {
+                        return null
+                    }
+                val ref =
+                    when {
+                        headText.startsWith(HEAD_REF_PREFIX) ->
+                            headText.removePrefix(HEAD_REF_PREFIX).trim()
+                        DETACHED_HEAD.matches(headText) -> null
+                        else -> return null
+                    }
+                if (ref != null && !isSafeRelativePath(ref)) return null
+                val head = stableContent(layout.gitDir.resolve("HEAD"))
+                val looseRef = ref?.let { stableContent(layout.commonDir.resolve(it)) } ?: "unused"
+                val packedRefs = stableContent(layout.commonDir.resolve("packed-refs"))
+                val index = statOnly(layout.gitDir.resolve("index"))
+                val config = configFingerprint(layout) ?: return null
+                val info =
+                    listOf(
+                            layout.commonDir.resolve("info/exclude"),
+                            layout.commonDir.resolve("info/attributes"),
+                            layout.commonDir.resolve("info/grafts"),
+                            layout.gitDir.resolve("info/sparse-checkout"),
+                            layout.commonDir.resolve("shallow"),
+                        )
+                        .joinToString("\u0000") { stableContent(it) }
+                listOf(
+                        "head=$head",
+                        "ref=$looseRef",
+                        "packed=$packedRefs",
+                        "index=$index",
+                        "config=$config",
+                        "info=$info",
+                        "gitfile=${layout.gitFileContent.orEmpty()}",
+                        "commondir=${stableContent(layout.gitDir.resolve("commondir"))}",
+                    )
+                    .joinToString("\u0000")
+            }
+            .getOrNull()
+
+    private fun configFingerprint(layout: GitLayout): String? {
+        val paths =
+            buildList {
+                    add(layout.commonDir.resolve("config"))
+                    add(layout.gitDir.resolve("config.worktree"))
+                    val global = System.getenv("GIT_CONFIG_GLOBAL")
+                    if (global != null) add(Path.of(global))
+                    else {
+                        add(Path.of(System.getProperty("user.home"), ".gitconfig"))
+                        val xdg = System.getenv("XDG_CONFIG_HOME")?.takeIf(String::isNotBlank)
+                        add(
+                            (xdg?.let(Path::of)
+                                    ?: Path.of(System.getProperty("user.home"), ".config"))
+                                .resolve("git/config")
+                        )
+                    }
+                    if (System.getenv("GIT_CONFIG_NOSYSTEM") != "1") {
+                        val system = System.getenv("GIT_CONFIG_SYSTEM")
+                        if (system != null) add(Path.of(system)) else add(systemConfigPath())
+                    }
+                }
+                .distinct()
+        return runCatching {
+                buildString {
+                    paths.forEach { path ->
+                        append(stableContent(path))
+                        append('\u0000')
+                        if (Files.isRegularFile(path)) {
+                            if (!supportedConfig(Files.readString(path))) return null
+                        }
+                    }
+                }
+            }
+            .getOrNull()
+    }
+
+    private fun supportedConfig(text: String): Boolean {
+        val lower = text.lowercase()
+        return UNSUPPORTED_CONFIG_KEYS.none { lower.contains(it) }
+    }
+
+    private fun systemConfigPath(): Path =
+        if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+            Path.of(System.getenv("PROGRAMDATA").orEmpty(), "Git", "config")
+        } else {
+            Path.of("/etc/gitconfig")
+        }
+
+    private class WorktreeDigest(val digest: String, val newestChangeNanos: Long)
+
+    private fun worktreeDigest(originRoot: Path): WorktreeDigest? {
+        val skip =
+            cacheRoot
+                ?.let { runCatching { it.toRealPath() }.getOrNull() }
+                ?.takeIf { it.startsWith(originRoot) }
+        val lines = mutableListOf<String>()
+        var newest = 0L
+        return runCatching {
+                Files.walkFileTree(
+                    originRoot,
+                    object : SimpleFileVisitor<Path>() {
+                        override fun preVisitDirectory(
+                            directory: Path,
+                            attributes: BasicFileAttributes,
+                        ): FileVisitResult {
+                            if (Thread.currentThread().isInterrupted)
+                                throw InterruptedException("Origin state stamp stopped")
+                            if (directory != originRoot && directory.fileName.toString() == GIT) {
+                                return FileVisitResult.SKIP_SUBTREE
+                            }
+                            if (skip != null && directory == skip) {
+                                return FileVisitResult.SKIP_SUBTREE
+                            }
+                            return FileVisitResult.CONTINUE
+                        }
+
+                        override fun visitFile(
+                            file: Path,
+                            attributes: BasicFileAttributes,
+                        ): FileVisitResult {
+                            if (Thread.currentThread().isInterrupted)
+                                throw InterruptedException("Origin state stamp stopped")
+                            val relative = originRoot.relativize(file).invariantSeparatorsPathString
+                            val change = changeTimeNanos(file, attributes)
+                            // Git's change evidence is modification time; ctime is compared for
+                            // equality but cannot indicate a racy write when it never advances
+                            // (Windows keeps creation time here).
+                            newest =
+                                maxOf(
+                                    newest,
+                                    attributes.lastModifiedTime().to(TimeUnit.NANOSECONDS),
+                                )
+                            val target =
+                                if (attributes.isSymbolicLink) {
+                                    digest(
+                                        runCatching { Files.readSymbolicLink(file).toString() }
+                                            .getOrElse { "unreadable" }
+                                    )
+                                } else ""
+                            lines +=
+                                "$relative\t$change\t" +
+                                    "${attributes.lastModifiedTime().to(TimeUnit.NANOSECONDS)}\t" +
+                                    "${attributes.size()}\t${attributes.fileKey()}\t$target"
+                            return FileVisitResult.CONTINUE
+                        }
+
+                        override fun visitFileFailed(
+                            file: Path,
+                            exception: java.io.IOException,
+                        ): FileVisitResult {
+                            lines +=
+                                "${originRoot.relativize(file).invariantSeparatorsPathString}\tunreadable"
+                            return FileVisitResult.CONTINUE
+                        }
+                    },
+                )
+                WorktreeDigest(digest(lines.sorted().joinToString("\n")), newest)
+            }
+            .getOrNull()
+    }
+
+    private fun stableContent(file: Path): String {
+        if (!Files.isRegularFile(file)) return "absent"
+        val bytes = Files.readAllBytes(file)
+        val attributes = Files.readAttributes(file, BasicFileAttributes::class.java)
+        return "present:${digest(bytes)}:${attributes.size()}:" +
+            "${attributes.lastModifiedTime().to(TimeUnit.NANOSECONDS)}:" +
+            "${changeTimeNanos(file, attributes)}:${attributes.fileKey()}"
+    }
+
+    private fun statOnly(file: Path): String =
+        runCatching {
+                if (!Files.isRegularFile(file)) return "absent"
+                val attributes = Files.readAttributes(file, BasicFileAttributes::class.java)
+                "present:${attributes.size()}:" +
+                    "${attributes.lastModifiedTime().to(TimeUnit.NANOSECONDS)}:" +
+                    "${changeTimeNanos(file, attributes)}:${attributes.fileKey()}"
+            }
+            .getOrElse { "absent" }
+
+    private fun StoredOriginState.toState(): OriginGitState? {
+        val root = runCatching { Path.of(originRoot).toRealPath() }.getOrNull() ?: return null
+        val sectionPaths = diffSections.orEmpty().map { it.path }
+        val statusPaths = trackedStatusEntries.orEmpty().map { it.path }
+        val untrackedPaths = untracked.map { it.path }
+        if ((sectionPaths + statusPaths + untrackedPaths).any { !isSafeRelativePath(it) })
+            return null
+        if (!DETACHED_HEAD.matches(revision.orEmpty()) && revision != null) return null
+        if (
+            !DETACHED_HEAD.matches(resolvedExpectedRevision.orEmpty()) &&
+                resolvedExpectedRevision != null
+        ) {
+            return null
+        }
+        return OriginGitState(
+            originRoot = root,
+            stamp = gitStamp,
+            revision = revision,
+            externalExpectedRevision = externalExpectedRevision,
+            expectedRevision = resolvedExpectedRevision,
+            diff = diff,
+            diffSections = diffSections?.map { OriginGitState.DiffSection(it.path, it.text) },
+            trackedStatus = trackedStatus,
+            trackedStatusEntries =
+                trackedStatusEntries?.map { OriginGitState.StatusEntry(it.path, it.line) },
+            untracked = untracked.map { OriginGitState.UntrackedEntry(it.path, it.hash) },
+        )
+    }
+
+    private fun digest(value: String): String = digest(value.toByteArray())
+
+    private fun digest(bytes: ByteArray): String =
+        HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes))
+
+    private fun changeTimeNanos(file: Path, attributes: BasicFileAttributes): Long =
+        runCatching {
+                (Files.getAttribute(file, "unix:ctime") as FileTime).to(TimeUnit.NANOSECONDS)
+            }
+            .getOrElse { attributes.creationTime().to(TimeUnit.NANOSECONDS) }
+
+    private fun isSafeRelativePath(path: String): Boolean =
+        path.isNotEmpty() &&
+            !path.startsWith('/') &&
+            !path.startsWith('\\') &&
+            '\\' !in path &&
+            path.split('/').none { it == ".." || it.isBlank() }
+
+    @Serializable
+    private data class StoredOriginState(
+        val formatVersion: Int,
+        val originId: String,
+        val originRoot: String,
+        val externalExpectedRevision: String?,
+        val stamp: String,
+        val gitStamp: String?,
+        val revision: String?,
+        val resolvedExpectedRevision: String?,
+        val diff: String?,
+        val diffSections: List<DiffSectionDto>?,
+        val trackedStatus: String?,
+        val trackedStatusEntries: List<StatusEntryDto>?,
+        val untracked: List<UntrackedDto>,
+    ) {
+        companion object {
+            fun from(
+                originId: String,
+                originRoot: String,
+                externalExpectedRevision: String?,
+                stamp: OriginStateStamp,
+                state: OriginGitState,
+            ): StoredOriginState? {
+                val untrackedEntries = state.untracked ?: return null
+                val revision = state.revision ?: return null
+                val diff = state.diff ?: return null
+                return StoredOriginState(
+                    formatVersion = FORMAT_VERSION,
+                    originId = originId,
+                    originRoot = originRoot,
+                    externalExpectedRevision = externalExpectedRevision,
+                    stamp = stamp.value,
+                    gitStamp = state.stamp,
+                    revision = revision,
+                    resolvedExpectedRevision = state.expectedRevision,
+                    diff = diff,
+                    diffSections = state.diffSections?.map { DiffSectionDto(it.path, it.text) },
+                    trackedStatus = state.trackedStatus,
+                    trackedStatusEntries =
+                        state.trackedStatusEntries?.map { StatusEntryDto(it.path, it.line) },
+                    untracked = untrackedEntries.map { UntrackedDto(it.path, it.contentHash) },
+                )
+            }
+        }
+    }
+
+    @Serializable private data class DiffSectionDto(val path: String, val text: String)
+
+    @Serializable private data class StatusEntryDto(val path: String, val line: String)
+
+    @Serializable private data class UntrackedDto(val path: String, val hash: String?)
+
+    companion object {
+        const val RACY_WINDOW_NANOS = 2_000_000_000L
+
+        fun open(
+            directory: Path,
+            cacheRoot: Path? = null,
+            racyWindowNanos: Long = RACY_WINDOW_NANOS,
+        ): OriginStateCache = OriginStateCache(directory, cacheRoot, racyWindowNanos)
+
+        private const val FORMAT_VERSION = 1
+        private const val GIT = ".git"
+        private const val GITDIR_PREFIX = "gitdir:"
+        private const val HEAD_REF_PREFIX = "ref:"
+        private val DETACHED_HEAD = Regex("^[0-9a-f]{40,64}$")
+        private val UNSUPPORTED_ENVIRONMENT_VARIABLES =
+            listOf(
+                "GIT_DIR",
+                "GIT_WORK_TREE",
+                "GIT_INDEX_FILE",
+                "GIT_EXTERNAL_DIFF",
+                "GIT_DIFF_OPTS",
+                "GIT_CONFIG",
+                "GIT_CONFIG_COUNT",
+                "GIT_CONFIG_PARAMETERS",
+            )
+        private val UNSUPPORTED_CONFIG_KEYS =
+            listOf(
+                "include.path",
+                "includeif",
+                "excludesfile",
+                "attributesfile",
+                "bare = true",
+                "bare=true",
+                "worktree =",
+                "worktree=",
+            )
+        private val json = Json {
+            encodeDefaults = true
+            ignoreUnknownKeys = true
+        }
+    }
+}

@@ -38,6 +38,9 @@ internal object InProcessCacheLayout {
     fun workspaceRoot(workspace: Path): Path =
         cacheRoot().resolve("workspaces").resolve(workspaceId(workspace))
 
+    /** Rebuildable refresh accelerators: topology, source hashes and Git origin state. */
+    fun refreshCacheRoot(workspace: Path): Path = workspaceRoot(workspace).resolve("refresh-cache")
+
     fun cacheRoot(): Path {
         val explicit =
             System.getProperty(TEST_CACHE_PROPERTY)?.takeIf(String::isNotBlank)

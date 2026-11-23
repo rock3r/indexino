@@ -102,6 +102,15 @@ parse alone as a completeness gate or execute arbitrary builds to fill the gap.
 Storage uses the same **user-local, out-of-worktree** content-addressed cache and generation manifests
 as Bazel. See [INDEX-STORAGE.md](INDEX-STORAGE.md). No `.indexino/` product cache is created.
 
+Resolved Gradle topology is cached under
+`<cache-root>/workspaces/<workspace-id>/refresh-cache/topology/`, keyed by the selected module,
+`includeDeps`, the JVM and Kotlin versions, the content of settings/build scripts, properties,
+version catalogs and wrapper properties across the workspace and every included-build root, and the
+digest of every file name below those roots. File names participate because a module's sources come
+from directory conventions, so adding or deleting a source changes the result without any script
+edit. An included build's script edit invalidates the main entry as well. A missing or corrupt entry
+falls back to a fresh parse; the cache never executes the target's Gradle build.
+
 `GradleLiteralTopologyTest` contains newly authored asymmetric Kotlin/Groovy settings, nested
 accessors, remapped transitive dependencies, dependency/included-build cycles, root selection,
 resource variants, missing/generated/custom paths, and test exclusions. Assertions compare exact
