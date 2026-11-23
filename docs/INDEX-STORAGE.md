@@ -166,10 +166,13 @@ Unrestricted call queries and opaque enclosing-symbol ID resolution still scan.
 
 The name index is updated in the same transaction as primary records, including replacement,
 deletion and rollback. Xodus contextual transactions let nested store operations participate in
-the enclosing batch. Java analysis batches writes per file/pass and emits declarations only in
-the first pass, then references/calls/resource usages in the second pass. Both Java passes share
-an explicitly closed standard file manager with an empty user classpath. Syntax-only parsing does
-not need host dependencies or auto-starting javac plugins; `-proc:none` alone does not exclude them.
+the enclosing batch. Java analysis partitions sources into bounded multi-file `JavacTask` batches
+parsed on worker threads, with one explicitly closed standard file manager and empty user classpath
+per worker. Each compilation unit is walked once into in-memory declarations and unresolved
+candidates; cross-file symbols resolve against a run-local symbol table, falling back to stored
+symbols for files outside the run. Fact writes are batched per parsed batch. Syntax-only parsing
+does not need host dependencies or auto-starting javac plugins; `-proc:none` alone does not exclude
+them.
 Kotlin also batches fact
 writes per file; it still retains declaration metadata rather than project-wide syntax trees.
 Build contexts lazily index source identities for metadata lookup, avoiding repeated inventory
