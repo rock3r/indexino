@@ -27,6 +27,8 @@ internal data class IndexBuildContext(
     val changedSourceSet: Set<IndexedSource>? = null,
     val deletedSourceSet: Set<IndexedSource>? = null,
     val reindexedSources: Set<IndexedSource> = emptySet(),
+    /** Host hook for bundled Kotlin analyzers that run while a file's syntax tree is live. */
+    val kotlinFileAnalysis: KotlinFileAnalysis? = null,
 ) {
     private val sourcesByIdentity by lazy {
         buildMap {
@@ -91,4 +93,17 @@ internal data class IndexBuildContext(
                 sourceContentOverrides = sourceFiles,
             )
     }
+}
+
+/**
+ * Internal hand-off between the Kotlin parse pool and bundled file analyzers. Implementations run
+ * analyzer work on the parse worker while the [org.jetbrains.kotlin.psi.KtFile] is alive and buffer
+ * their facts so the producer can commit them with its own sorted write batch.
+ */
+internal interface KotlinFileAnalysis {
+    /** Runs after the file's core walk, before the syntax tree can be collected. */
+    fun analyze(source: IndexedSource, sourceText: String, file: org.jetbrains.kotlin.psi.KtFile)
+
+    /** Flushes plugin facts buffered by [analyze] through the host's sorted write path. */
+    fun flush()
 }

@@ -94,6 +94,10 @@ internal class IndexBuildRunner(
     private var latestForkBase: WorktreeForkBase? = null
     private var latestOverlayDeltaPath: Path? = null
     private var latestTombstonePrefixes: List<String> = emptyList()
+    /** Diagnostic count of Kotlin files whose bundled analyzers reused the producer's parse. */
+    internal var latestSharedSyntaxHandoffs: Int = 0
+        private set
+
     private var activeSourceSnapshot: SourceContentSnapshot? = null
     private val refreshCacheRoot: Path =
         refreshCacheRootOverride ?: InProcessCacheLayout.refreshCacheRoot(project)
@@ -158,6 +162,7 @@ internal class IndexBuildRunner(
         latestTopologyResult = null
         latestSourceHashes = emptyMap()
         latestOriginStates = emptyMap()
+        latestSharedSyntaxHandoffs = 0
         reusedFreshIndex = false
         latestForkBase = null
         latestOverlayDeltaPath = null
@@ -738,25 +743,35 @@ internal class IndexBuildRunner(
                             deletedSourceSet = changes.deletedSources,
                             reindexedSources = reindexedSources,
                         )
+                    val fullAnalysisPlugins =
+                        pluginCoordinates
+                            .filter { (id, coordinate) ->
+                                forceFullRebuild || previousPluginCoordinates[id] != coordinate
+                            }
+                            .keys
+                    val pluginRunner = PluginAnalyzerRunner(pluginRegistry)
+                    timedPhase("plugins-prepare") {
+                        pluginRunner.prepare(context, applications.toSet(), fullAnalysisPlugins)
+                    }
+                    val buildContext =
+                        context.copy(kotlinFileAnalysis = pluginRunner.kotlinFileAnalysis())
                     ProducerRegistry.forApplications(applications).forEach { producer ->
                         progress(producer.displayName)
-                        val phaseTotal = producer.progressTotal?.invoke(context)
+                        val phaseTotal = producer.progressTotal?.invoke(buildContext)
                         machineProgress?.phaseStarted(producer.id, phaseTotal)
                         timedPhase("producer:${producer.id}") {
-                            producer.produce(context.copy(activePhase = producer.id), store)
+                            producer.produce(buildContext.copy(activePhase = producer.id), store)
                         }
                         machineProgress?.phaseCompleted(producer.id, phaseTotal)
                     }
                     timedPhase("plugins") {
-                        val fullAnalysisPlugins =
-                            pluginCoordinates
-                                .filter { (id, coordinate) ->
-                                    forceFullRebuild || previousPluginCoordinates[id] != coordinate
-                                }
-                                .keys
-                        PluginAnalyzerRunner(pluginRegistry)
-                            .analyze(context, applications.toSet(), fullAnalysisPlugins)
+                        pluginRunner.analyze(
+                            buildContext,
+                            applications.toSet(),
+                            fullAnalysisPlugins,
+                        )
                     }
+                    latestSharedSyntaxHandoffs = pluginRunner.sharedSyntaxHandoffs
                     val origins = originsForPublication()
                     check(origins.map { it.originId }.sorted() == originIds.sorted()) {
                         "Origin inventory changed during build"

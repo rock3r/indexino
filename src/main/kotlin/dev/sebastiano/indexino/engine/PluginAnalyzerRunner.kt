@@ -3,31 +3,69 @@ package dev.sebastiano.indexino.engine
 import dev.sebastiano.indexino.api.IndexSnapshot
 import dev.sebastiano.indexino.api.SnapshotFreshness
 import dev.sebastiano.indexino.core.key.CodeIndexKey
-import dev.sebastiano.indexino.core.plugin.StorePluginFactSink
 import dev.sebastiano.indexino.core.record.PluginFactRecord
+import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.model.SourceFile
 import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.SourceOriginRevision
 import dev.sebastiano.indexino.model.WorkspaceGenerationId
 import dev.sebastiano.indexino.model.WorkspaceRevision
 import dev.sebastiano.indexino.plugin.api.FileAnalysisContextV1
+import dev.sebastiano.indexino.plugin.api.FileAnalyzerV1
 import dev.sebastiano.indexino.plugin.api.PostProcessContextV1
 import dev.sebastiano.indexino.plugin.api.PostProcessLevelV1
 import dev.sebastiano.indexino.producer.IndexBuildContext
+import dev.sebastiano.indexino.producer.IndexedSource
+import dev.sebastiano.indexino.producer.KotlinFileAnalysis
+import dev.sebastiano.indexino.producer.SortedFactBuffer
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runBlocking
 
+/**
+ * Runs bundled Kotlin file analyzers inside the Kotlin producer's parse workers, while each syntax
+ * tree is still live. Only plugins in [BUNDLED_KOTLIN_PLUGIN_IDS] take this path; every other
+ * analyzer keeps the separate post-producer pass.
+ */
 @OptIn(dev.sebastiano.indexino.model.IndexinoInternalApi::class)
 internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
+    private val eagerAnalyzers = mutableMapOf<String, List<FileAnalyzerV1>>()
+    private val filesToAnalyze = mutableMapOf<String, Set<IndexedSource>>()
+    private val analyzersByPlugin = mutableMapOf<String, List<FileAnalyzerV1>>()
+    private val eagerSources = ConcurrentHashMap.newKeySet<EagerSource>()
+    private val eagerFacts = ArrayDeque<Pair<CodeIndexKey, PluginFactRecord>>()
+    private val eagerFactsLock = Any()
+    private val handoffs = AtomicInteger()
+    private var bufferedFactCount = 0
+    private var peakBufferedFacts = 0
+    private var eagerFactSink: SortedFactBuffer? = null
+    private var store: CodeIndexStore? = null
+    private var prepared = false
+
+    internal val sharedSyntaxHandoffs: Int
+        get() = handoffs.get()
+
+    /** Peak eagerly buffered records; bounded by [EAGER_FACT_CHUNK_ENTRIES]. */
+    internal val peakBufferedFactCount: Int
+        get() = synchronized(eagerFactsLock) { peakBufferedFacts }
+
+    /** Only bundled plugins opt into analysis on the parse worker. */
+    internal fun kotlinFileAnalysis(): KotlinFileAnalysis? =
+        if (eagerAnalyzers.isEmpty()) null else EagerKotlinFileAnalysis()
+
     /**
-     * Mutates build facts; the build owner checkpoints and restores the complete writable store.
+     * Deletes stale plugin facts before producers run. New facts are buffered by the Kotlin
+     * producer and committed through its sorted write batch; the regular plugin pass must not
+     * delete them again.
      */
-    @Suppress("LongMethod")
-    internal fun analyze(
+    internal fun prepare(
         context: IndexBuildContext,
         selectedPluginIds: Set<String>,
         fullAnalysisPlugins: Set<String> = emptySet(),
     ) {
+        if (prepared) return
+        store = context.store
         registry
             .pluginIds()
             .map { it.value }
@@ -42,35 +80,48 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                 }
                 keys.forEach(context.store::delete)
             }
-        val analyzersByPlugin =
+        val selectedAnalyzers =
             registry.fileAnalyzers
                 .filter { it.pluginId.value in selectedPluginIds }
                 .groupBy { it.pluginId.value }
         selectedPluginIds.forEach { pluginId ->
-            val analyzers = analyzersByPlugin[pluginId].orEmpty()
-            val filesToAnalyze =
+            val sources =
                 if (pluginId in fullAnalysisPlugins) context.sources
                 else context.changedSources + context.reindexedSources
-            val affectedSources = filesToAnalyze + context.deletedSources
-            val affectedFiles = affectedSources.mapTo(hashSetOf()) { it.originId to it.path }
-            val keys = mutableListOf<CodeIndexKey>()
-            context.store.forEachWritablePrefix(CodeIndexKey.pluginFactPluginPrefix(pluginId)) {
-                key,
-                record ->
-                if (
-                    record is PluginFactRecord &&
-                        ((record.originId to record.relativeFile) in affectedFiles ||
-                            record.relativeFile == POST_PROCESSOR_FILE)
-                )
-                    keys += key
-                true
+            filesToAnalyze[pluginId] = sources.toSet()
+            val analyzers = selectedAnalyzers[pluginId].orEmpty().map { it.analyzer }
+            analyzersByPlugin[pluginId] = analyzers
+            if (pluginId in BUNDLED_KOTLIN_PLUGIN_IDS && analyzers.isNotEmpty()) {
+                eagerAnalyzers[pluginId] = analyzers
             }
-            keys.forEach(context.store::delete)
+        }
+        deleteAffectedFacts(context, selectedPluginIds)
+        prepared = true
+    }
+
+    /**
+     * Mutates build facts; the build owner checkpoints and restores the complete writable store.
+     */
+    @Suppress("LongMethod")
+    internal fun analyze(
+        context: IndexBuildContext,
+        selectedPluginIds: Set<String>,
+        fullAnalysisPlugins: Set<String> = emptySet(),
+    ) {
+        if (!prepared) prepare(context, selectedPluginIds, fullAnalysisPlugins)
+        flushEagerFacts()
+        val phaseFacts = SortedFactBuffer(context.store, "plugins")
+        selectedPluginIds.forEach { pluginId ->
+            val analyzers = analyzersByPlugin[pluginId].orEmpty()
+            val pending =
+                filesToAnalyze[pluginId].orEmpty().filterNot { source ->
+                    EagerSource(pluginId, source.originId, source.path) in eagerSources
+                }
             try {
-                filesToAnalyze.forEach { source ->
-                    analyzers.forEach { registered ->
+                pending.forEach { source ->
+                    analyzers.forEach { analyzer ->
                         runBlocking {
-                            registered.analyzer.analyze(
+                            analyzer.analyze(
                                 FileAnalysisContextV1(
                                     file =
                                         SourceFile.of(
@@ -80,11 +131,11 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                                         ),
                                     sourceText = context.readSource(source),
                                     facts =
-                                        StorePluginFactSink(
-                                            context.store,
+                                        BufferedPhaseFactSink(
                                             pluginId,
-                                            source.path,
                                             source.originId,
+                                            source.path,
+                                            phaseFacts,
                                         ),
                                     active = {
                                         coroutineContext.ensureActive()
@@ -97,7 +148,7 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                 }
             } finally {
                 analyzers.forEach { analyzer ->
-                    runCatching { (analyzer.analyzer as? AutoCloseable)?.close() }
+                    runCatching { (analyzer as? AutoCloseable)?.close() }
                 }
             }
             registry.postProcessors
@@ -114,11 +165,11 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                                     PostProcessContextV1(
                                         queries = buildQueries,
                                         facts =
-                                            StorePluginFactSink(
-                                                context.store,
+                                            BufferedPhaseFactSink(
                                                 pluginId,
-                                                POST_PROCESSOR_FILE,
                                                 originId,
+                                                POST_PROCESSOR_FILE,
+                                                phaseFacts,
                                             ),
                                         originId = SourceOriginId.of(originId),
                                         active = {
@@ -142,10 +193,11 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                             PostProcessContextV1(
                                 queries = buildQueries,
                                 facts =
-                                    StorePluginFactSink(
-                                        context.store,
+                                    BufferedPhaseFactSink(
                                         pluginId,
+                                        "workspace",
                                         POST_PROCESSOR_FILE,
+                                        phaseFacts,
                                     ),
                                 active = {
                                     coroutineContext.ensureActive()
@@ -156,10 +208,119 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
                     }
                 }
         }
+        phaseFacts.flush()
     }
+
+    private fun deleteAffectedFacts(context: IndexBuildContext, selectedPluginIds: Set<String>) {
+        selectedPluginIds.forEach { pluginId ->
+            val affectedSources = filesToAnalyze[pluginId].orEmpty() + context.deletedSources
+            val affectedFiles = affectedSources.mapTo(hashSetOf()) { it.originId to it.path }
+            val keys = mutableListOf<CodeIndexKey>()
+            context.store.forEachWritablePrefix(CodeIndexKey.pluginFactPluginPrefix(pluginId)) {
+                key,
+                record ->
+                if (
+                    record is PluginFactRecord &&
+                        ((record.originId to record.relativeFile) in affectedFiles ||
+                            record.relativeFile == POST_PROCESSOR_FILE)
+                )
+                    keys += key
+                true
+            }
+            keys.forEach(context.store::delete)
+        }
+    }
+
+    private fun enqueueEagerFacts(entries: List<Pair<CodeIndexKey, PluginFactRecord>>) {
+        synchronized(eagerFactsLock) {
+            entries.forEach { entry ->
+                eagerFacts.addLast(entry)
+                bufferedFactCount += 1
+                if (bufferedFactCount > peakBufferedFacts) peakBufferedFacts = bufferedFactCount
+                if (bufferedFactCount >= EAGER_FACT_CHUNK_ENTRIES) flushEagerFactsLocked()
+            }
+        }
+    }
+
+    private fun flushEagerFactsLocked() {
+        if (eagerFacts.isEmpty()) return
+        val sink =
+            eagerFactSink
+                ?: SortedFactBuffer(
+                        checkNotNull(store) { "Eager plugin facts need a prepared build store" },
+                        "plugins-eager",
+                    )
+                    .also { eagerFactSink = it }
+        while (eagerFacts.isNotEmpty()) {
+            val entry = eagerFacts.removeFirst()
+            sink.put(entry.first, entry.second)
+        }
+        sink.flush()
+        bufferedFactCount = 0
+    }
+
+    private fun flushEagerFacts() {
+        synchronized(eagerFactsLock) { flushEagerFactsLocked() }
+    }
+
+    private fun analyzeEagerly(
+        source: IndexedSource,
+        sourceText: String,
+        file: org.jetbrains.kotlin.psi.KtFile,
+    ) {
+        eagerAnalyzers.forEach { (pluginId, analyzers) ->
+            val key = EagerSource(pluginId, source.originId, source.path)
+            if (key in eagerSources) return@forEach
+            if (source !in filesToAnalyze[pluginId].orEmpty()) return@forEach
+            val sourceFile =
+                SourceFile.of(SourceOriginId.of(source.originId), source.path, source.path)
+            analyzers.forEach { analyzer ->
+                val sink =
+                    BufferedPluginFactSink(pluginId, source.originId, source.path, sourceText, file)
+                runBlocking {
+                    analyzer.analyze(
+                        FileAnalysisContextV1(
+                            file = sourceFile,
+                            sourceText = sourceText,
+                            facts = sink,
+                            active = {
+                                coroutineContext.ensureActive()
+                                !Thread.currentThread().isInterrupted
+                            },
+                        )
+                    )
+                }
+                enqueueEagerFacts(sink.drain())
+                if (sink.tookSharedSyntax) handoffs.incrementAndGet()
+            }
+            eagerSources.add(key)
+        }
+    }
+
+    private inner class EagerKotlinFileAnalysis : KotlinFileAnalysis {
+        override fun analyze(
+            source: IndexedSource,
+            sourceText: String,
+            file: org.jetbrains.kotlin.psi.KtFile,
+        ) {
+            analyzeEagerly(source, sourceText, file)
+        }
+
+        override fun flush() {
+            flushEagerFacts()
+        }
+    }
+
+    private data class EagerSource(val pluginId: String, val originId: String, val path: String)
 
     internal companion object {
         const val POST_PROCESSOR_FILE: String = "__postprocess__"
+
+        /** Bundled plugins whose Kotlin analyzers understand the in-worker syntax handoff. */
+        val BUNDLED_KOTLIN_PLUGIN_IDS: Set<String> = setOf("dev.sebastiano.selection-context")
+
+        /** Matches [SortedFactBuffer]'s default chunk, so eager facts stay heap-bounded. */
+        const val EAGER_FACT_CHUNK_ENTRIES = 4096
     }
 }
 
