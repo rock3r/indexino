@@ -66,6 +66,8 @@ internal class IndexBuildRunner(
     private val storeRootOverride: Path? = null,
     /** Test-only isolation for the rebuildable refresh accelerators. */
     private val refreshCacheRootOverride: Path? = null,
+    /** Test-only ceiling on decoded source text held in heap; production uses the default. */
+    private val sourceRetentionBytes: Long = SourceContentSnapshot.DEFAULT_RETENTION_BYTES,
     private val topologyOverride: TopologyResult? = null,
     private val inheritedSourceHashes: Map<IndexedSource, String> = emptyMap(),
     /** The closure resolved for [topologyOverride]; only valid with that exact topology. */
@@ -92,6 +94,7 @@ internal class IndexBuildRunner(
     private var latestForkBase: WorktreeForkBase? = null
     private var latestOverlayDeltaPath: Path? = null
     private var latestTombstonePrefixes: List<String> = emptyList()
+    private var activeSourceSnapshot: SourceContentSnapshot? = null
     private val refreshCacheRoot: Path =
         refreshCacheRootOverride ?: InProcessCacheLayout.refreshCacheRoot(project)
 
@@ -132,8 +135,21 @@ internal class IndexBuildRunner(
         )
     }
 
+    /**
+     * Owns the captured-source snapshot for the whole build. Every exit — an early reuse return, an
+     * unavailable-origin return, a provenance failure or any other exception — releases the
+     * snapshot and its spill through this single scope.
+     */
+    fun run(): Int =
+        try {
+            runBuild()
+        } finally {
+            activeSourceSnapshot?.close()
+            activeSourceSnapshot = null
+        }
+
     @Suppress("LongMethod", "CyclomaticComplexMethod")
-    fun run(): Int {
+    private fun runBuild(): Int {
         latestChanges = null
         latestManifest = null
         latestSourceFiles = emptyList()
@@ -215,9 +231,11 @@ internal class IndexBuildRunner(
                                 refreshCacheRoot.resolve(SOURCE_HASH_CACHE_FILE)
                             )
                         else null,
+                    retentionBytes = sourceRetentionBytes,
                     spillDirectory = sourceSpillDirectory,
                 )
             }
+        activeSourceSnapshot = sourceSnapshot
         val inheritedCount = sourceSnapshot.inheritedCount()
         progress(
             "index source-capture read=${sources.size - inheritedCount} inherited=$inheritedCount"
@@ -417,8 +435,6 @@ internal class IndexBuildRunner(
             }
         } finally {
             pendingOrigins?.close()
-            // The snapshot is the last consumer's source of captured bytes; release its spill.
-            sourceSnapshot.close()
         }
         machineProgress?.completed("indexed")
         return BuildExitCodes.SUCCESS
