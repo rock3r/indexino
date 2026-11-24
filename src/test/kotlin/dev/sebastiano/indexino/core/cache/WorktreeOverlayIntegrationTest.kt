@@ -146,7 +146,27 @@ class WorktreeOverlayIntegrationTest {
             val forkBytes = workspaceTreeBytes(cacheRoot, forkWorkspaceId)
             val mainBytes = workspaceTreeBytes(cacheRoot, mainWorkspaceId)
             assertTrue(forkBytes <= WorktreeOverlayPolicy.METADATA_BUDGET_BYTES)
-            assertTrue(forkBytes < mainBytes / 4)
+            // Storage format 2 keeps published facts in the shared chunks fanout, so the main
+            // workspace tree no longer carries a materialized Xodus environment for this fork
+            // to avoid copying (#136): both trees are metadata plus #143's refresh caches. The
+            // fork must still hold no index payload of its own — no Xodus writer environment,
+            // no expanded generation directory, no client refs — and stay strictly smaller than
+            // the main tree, which retains its writable staging environment.
+            val forkPayload =
+                Files.walk(cacheRoot.resolve("workspaces").resolve(forkWorkspaceId)).use { paths ->
+                    paths
+                        .filter { path ->
+                            Files.isRegularFile(path) &&
+                                (path.fileName.toString().endsWith(".xd") ||
+                                    path.any { part ->
+                                        part.toString() == "refs" ||
+                                            part.toString() == "materialized"
+                                    })
+                        }
+                        .toList()
+                }
+            assertTrue(forkPayload.isEmpty(), "Fork workspace carries index payload: $forkPayload")
+            assertTrue(forkBytes < mainBytes)
         }
     }
 
