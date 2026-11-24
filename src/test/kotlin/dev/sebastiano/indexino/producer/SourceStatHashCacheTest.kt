@@ -9,6 +9,7 @@ import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.io.TempDir
@@ -158,6 +159,40 @@ class SourceStatHashCacheTest {
 
         file.writeText("changed after capture")
         assertFailsWith<IllegalStateException> { snapshot.content(source) }
+    }
+
+    @Test
+    fun `a stale stat-cache hash discovered on read is evicted and reported separately`() {
+        val root = workspace("invisible-stat")
+        val file = root.resolve("src/A.kt")
+        Files.createDirectories(file.parent)
+        file.writeText("stale")
+        stableMtime(file)
+        val source = IndexedSource.workspace(root, "src/A.kt")
+        val cache = SourceStatHashCache.inMemory(0)
+        val reads = AtomicInteger()
+
+        // Windows exposes no inode change time, so a same-size rewrite that restores the
+        // modification time is invisible to the stat key. Simulate that lie directly: the entry
+        // holds the file's current stat but the hash of content the file no longer has.
+        cache.record(
+            source,
+            SourceStatHashCache.statOf(file)!!,
+            FileHashProducer.contentHash("stale"),
+        )
+
+        val snapshot = capture(listOf(source), cache, reads)
+        assertEquals(0, reads.get(), "The poisoned entry must be served as a cache hit")
+        assertTrue(snapshot.capturedSources.isEmpty())
+
+        file.writeText("rewritten-in-place")
+        val failure = assertFailsWith<StatHashCacheMismatchFailure> { snapshot.content(source) }
+
+        assertEquals(source, failure.source)
+        assertNull(
+            cache.hashIfUnchanged(source, SourceStatHashCache.statOf(file)!!),
+            "The poisoned entry must be evicted when the mismatch is discovered",
+        )
     }
 
     @Test

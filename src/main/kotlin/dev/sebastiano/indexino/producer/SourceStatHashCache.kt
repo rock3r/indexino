@@ -57,6 +57,11 @@ private constructor(
         dirty = true
     }
 
+    /** Drops the recorded hash for [source] so its next lookup forces a read. */
+    fun invalidate(source: IndexedSource) {
+        if (entries.remove(SourceIdentity(source.originId, source.path)) != null) dirty = true
+    }
+
     /** Best-effort atomic persistence. Cache failures never fail a refresh. */
     fun flush() {
         val destination = file ?: return
