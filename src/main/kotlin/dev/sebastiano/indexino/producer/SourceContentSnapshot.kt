@@ -99,18 +99,39 @@ private constructor(
             retentionBytes: Long = DEFAULT_RETENTION_BYTES,
             spillDirectory: Path? = null,
         ): SourceContentSnapshot {
-            if (inheritedHashes.isEmpty() && sources.size >= PARALLEL_CAPTURE_MIN_SOURCES) {
-                return captureParallel(
-                        sources,
-                        hashCache,
-                        readBytes,
-                        retentionBytes,
-                        spillDirectory,
-                    )
-                    .also { hashCache?.flush() }
-            }
-
             val retention = SourceTextRetention(retentionBytes, spillDirectory)
+            return try {
+                val snapshot =
+                    if (inheritedHashes.isEmpty() && sources.size >= PARALLEL_CAPTURE_MIN_SOURCES) {
+                        captureParallel(sources, hashCache, readBytes, retention)
+                    } else {
+                        captureSerial(
+                            sources,
+                            inheritedHashes,
+                            hintedPaths,
+                            hashCache,
+                            readBytes,
+                            retention,
+                        )
+                    }
+                hashCache?.flush()
+                snapshot
+            } catch (@Suppress("TooGenericExceptionCaught") failure: Throwable) {
+                // Capture failed before a snapshot existed to own the spill. The parallel path
+                // has already stopped its workers (its own finally runs before this catch).
+                retention.close()
+                throw failure
+            }
+        }
+
+        private fun captureSerial(
+            sources: List<IndexedSource>,
+            inheritedHashes: Map<IndexedSource, String>,
+            hintedPaths: Set<java.nio.file.Path>,
+            hashCache: SourceStatHashCache?,
+            readBytes: (Path) -> ByteArray,
+            retention: SourceTextRetention,
+        ): SourceContentSnapshot {
             val captured = mutableListOf<IndexedSource>()
             val entries = sources.associateWith { source ->
                 val previous = inheritedHashes[source]
@@ -134,24 +155,25 @@ private constructor(
                                 hashCache.record(source, after, hash)
                             }
                         }
+                        checkNotInterrupted()
                         retention.put(source, bytes)
                         Entry(contentHash = hash)
                     }
                 }
             }
-            return SourceContentSnapshot(entries, captured, retention, readBytes).also {
-                hashCache?.flush()
-            }
+            return SourceContentSnapshot(entries, captured, retention, readBytes)
+        }
+
+        private fun checkNotInterrupted() {
+            if (Thread.currentThread().isInterrupted) throw InterruptedException()
         }
 
         private fun captureParallel(
             sources: List<IndexedSource>,
             hashCache: SourceStatHashCache?,
             readBytes: (Path) -> ByteArray,
-            retentionBytes: Long,
-            spillDirectory: Path?,
+            retention: SourceTextRetention,
         ): SourceContentSnapshot {
-            val retention = SourceTextRetention(retentionBytes, spillDirectory)
             val entries = arrayOfNulls<Entry>(sources.size)
             val captured = BooleanArray(sources.size)
             val next = AtomicInteger()
@@ -182,6 +204,7 @@ private constructor(
                                                 hashCache.record(source, after, hash)
                                             }
                                         }
+                                        checkNotInterrupted()
                                         retention.put(source, bytes)
                                         captured[index] = true
                                         Entry(contentHash = hash)
