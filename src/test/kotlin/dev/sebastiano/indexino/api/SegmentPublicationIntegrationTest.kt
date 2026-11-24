@@ -10,6 +10,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
@@ -184,6 +185,165 @@ class SegmentPublicationIntegrationTest {
                 }
             }
         }
+    }
+
+    @Test
+    fun `legacy overlay generation rebuilds with current facts on the next refresh`() {
+        val workspace = createGitWorkspace()
+        val cache = withCache()
+        val request = RefreshRequest.forScope(IndexScope.gradle(":ui"))
+        Indexino.connectBlocking(workspace).use { index ->
+            runBlocking { index.refresh(request).await() }
+        }
+        // Publish an overlay generation carrying an edit, then simulate the workspace having
+        // been produced by an older build: its current manifest is storage format 1.
+        val source = workspace.resolve("ui/src/main/kotlin/Panel.kt")
+        Files.writeString(source, Files.readString(source) + "\nclass LegacyOverlayEdit {}\n")
+        Indexino.connectBlocking(workspace).use { index ->
+            runBlocking { index.refresh(request).await() }
+        }
+        val workspaceRoot = cache.resolve("workspaces").resolve(workspaceId(workspace))
+        val overlayGeneration = currentGeneration(cache)
+        val manifestPath =
+            workspaceRoot.resolve("generations").resolve(overlayGeneration).resolve("manifest.json")
+        val overlayManifest = Files.readString(manifestPath)
+        assertTrue(
+            overlayManifest.contains("\"representation\":\"overlay\""),
+            "expected an overlay: $overlayManifest",
+        )
+        Files.writeString(
+            manifestPath,
+            overlayManifest.replace("\"storageFormatVersion\":2", "\"storageFormatVersion\":1"),
+        )
+
+        // Sources are unchanged; the legacy generation must not be reused, forked from or
+        // repointed at. The refresh rebuilds and publishes current-format facts.
+        Indexino.connectBlocking(workspace).use { index ->
+            runBlocking { index.refresh(request).await() }
+            runBlocking {
+                index.snapshot().use { snapshot ->
+                    assertEquals(1, symbolCount(snapshot, "LegacyOverlayEdit"))
+                    assertEquals(1, symbolCount(snapshot, "Panel"))
+                }
+            }
+        }
+        val rebuiltManifest =
+            Files.readString(
+                workspaceRoot
+                    .resolve("generations")
+                    .resolve(currentGeneration(cache))
+                    .resolve("manifest.json")
+            )
+        assertTrue(
+            rebuiltManifest.contains("\"storageFormatVersion\":2"),
+            "rebuilt manifest is not segment format",
+        )
+    }
+
+    @Test
+    fun `link generation change repoints the overlay generation without republishing stale facts`() {
+        val root = createTempDirectory("indexino-link-repoint-")
+        tempDirs.add(root)
+        val provider = root.resolve("provider")
+        val consumer = root.resolve("consumer")
+        copyFixture("provider-lib", provider)
+        copyFixture("consumer-app", consumer)
+        initGit(provider)
+        runGit(provider, "tag", "v1.0.0")
+        initGit(consumer)
+        val cache = withCache()
+        val request = RefreshRequest.forScope(IndexScope.gradle(":").includingDependencies())
+        Indexino.connectBlocking(provider).use { index ->
+            runBlocking { index.refresh(request).await() }
+        }
+        writeSourceLinks(consumer, ref = "v1.0.0")
+        Indexino.connectBlocking(consumer).use { index ->
+            runBlocking { index.refresh(request).await() }
+        }
+        val consumerRoot = cache.resolve("workspaces").resolve(workspaceId(consumer))
+        val firstLink = currentLinkGeneration(consumerRoot)
+        assertNotNull(firstLink, "link generation missing after first refresh")
+
+        // Publish an overlay generation: edit a consumer source.
+        val consumerSource = consumer.resolve("src/main/kotlin/com/example/app/ConsumerApp.kt")
+        Files.writeString(
+            consumerSource,
+            Files.readString(consumerSource) + "\nclass LinkOverlayPanel {}\n",
+        )
+        Indexino.connectBlocking(consumer).use { index ->
+            runBlocking { index.refresh(request).await() }
+            runBlocking {
+                index.snapshot().use { snapshot ->
+                    assertEquals(1, symbolCount(snapshot, "LinkOverlayPanel"))
+                }
+            }
+        }
+
+        // Change only the link generation: the refresh must repoint the published generation
+        // instead of republishing the pre-edit staging base.
+        writeSourceLinks(consumer, ref = "v2.0.0")
+        Indexino.connectBlocking(consumer).use { index ->
+            runBlocking { index.refresh(request).await() }
+            val secondLinkValue = currentLinkGeneration(consumerRoot)
+            assertNotNull(secondLinkValue)
+            assertTrue(firstLink != secondLinkValue, "link generation did not change")
+            runBlocking {
+                index.snapshot().use { snapshot ->
+                    assertEquals(1, symbolCount(snapshot, "LinkOverlayPanel"))
+                    assertEquals(secondLinkValue, snapshot.linkGeneration?.value)
+                }
+            }
+        }
+    }
+
+    private fun currentLinkGeneration(workspaceRoot: Path): String? {
+        val generation = Files.readString(workspaceRoot.resolve("current")).trim()
+        val manifest =
+            Files.readString(
+                workspaceRoot.resolve("generations").resolve(generation).resolve("manifest.json")
+            )
+        return Regex("\"linkGeneration\":\"([^\"]+)\"").find(manifest)?.groupValues?.get(1)
+    }
+
+    private fun writeSourceLinks(consumer: Path, ref: String) {
+        val configDir = consumer.resolve(".indexino")
+        Files.createDirectories(configDir)
+        Files.writeString(
+            configDir.resolve("source-links.toml"),
+            """
+            [[sourceLink]]
+            component = "com.example:lib:1.0.0"
+            binarySha256 = "sha256:provider-lib-1.0.0"
+            checkout = "../provider"
+            linkedWorkspace = "../provider"
+            ref = "$ref"
+            sourceRoots = ["src/main/kotlin"]
+            """
+                .trimIndent(),
+        )
+    }
+
+    private fun copyFixture(name: String, destination: Path) {
+        val fixtureRoot = Path("src/test/resources/fixtures/source-link/$name")
+        Files.walk(fixtureRoot).use { paths ->
+            paths.forEach { path ->
+                val target = destination.resolve(fixtureRoot.relativize(path))
+                if (Files.isDirectory(path)) {
+                    Files.createDirectories(target)
+                } else {
+                    Files.createDirectories(target.parent)
+                    Files.copy(path, target)
+                }
+            }
+        }
+    }
+
+    private fun initGit(workspace: Path) {
+        runGit(workspace, "init")
+        runGit(workspace, "config", "user.email", "test@example.com")
+        runGit(workspace, "config", "user.name", "Test User")
+        runGit(workspace, "add", ".")
+        runGit(workspace, "commit", "-m", "fixture")
     }
 
     private fun withCache(): Path {

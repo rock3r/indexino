@@ -982,9 +982,12 @@ private constructor(
         val manifests = WorkspaceGenerationManifestStore(cacheRoot, workspaceId)
         val previous = manifests.readGeneration(generation.value)
         if (
-            canRepointToPublishedManifest(previous, compatibilityManifest, linkGeneration) &&
-                previous != null &&
-                hasReachablePacks(cacheRoot, workspaceId, previous)
+            canRepointToPublishedManifest(
+                previous,
+                compatibilityManifest,
+                linkGeneration,
+                requireSameLinkGeneration = true,
+            ) && previous != null && hasReachablePacks(cacheRoot, workspaceId, previous)
         ) {
             // Reverting to known bytes must repoint at the old immutable generation. Replacing its
             // manifest with an overlay based on itself would create a recursive snapshot.
@@ -998,7 +1001,12 @@ private constructor(
         }
         val current = manifests.current()
         if (
-            canRepointToPublishedManifest(current, compatibilityManifest, linkGeneration) &&
+            canRepointToPublishedManifest(
+                current,
+                compatibilityManifest,
+                linkGeneration,
+                requireSameLinkGeneration = false,
+            ) &&
                 current?.generation != generation.value &&
                 current != null &&
                 hasReachablePacks(cacheRoot, workspaceId, current)
@@ -1074,16 +1082,19 @@ private constructor(
 
     /**
      * An unchanged build can repoint at an already published generation only when it carries the
-     * same compatibility manifest, current schema and current storage format.
+     * same compatibility manifest and the current schema and storage formats. Reverting to a
+     * byte-identical generation also requires the same link generation (the previous manifest is
+     * republished verbatim); a changed link generation repoints through the copy branch below.
      */
     private fun canRepointToPublishedManifest(
         manifest: WorkspaceGenerationManifest?,
         compatibilityManifest: IndexManifest,
         linkGeneration: String?,
+        requireSameLinkGeneration: Boolean,
     ): Boolean =
         manifest?.compatibilityManifest?.copy(builtAt = compatibilityManifest.builtAt) ==
             compatibilityManifest &&
-            manifest.linkGeneration == linkGeneration &&
+            (!requireSameLinkGeneration || manifest.linkGeneration == linkGeneration) &&
             manifest.basicFactSchemaVersion == BASIC_FACT_SCHEMA_VERSION &&
             manifest.storageFormatVersion == WorktreeOverlayPolicy.CURRENT_STORAGE_FORMAT
 

@@ -145,24 +145,22 @@ private constructor(private val files: List<MappedSegmentFile>, private val onCl
         action: (CodeIndexKey, SymbolRecord) -> Boolean,
     ): Boolean {
         var keepGoing = true
-        table.cursor(SegmentKeys.utf8(name)).asSequence().forEach { entry ->
-            val term = termOf(entry.keyBytes) ?: return@forEach
-            val termMatches = if (prefix) term.startsWith(name) else term == name
-            if (!termMatches) return@forEach
-            val primaryKey = primaryKeyOf(entry.keyBytes) ?: return@forEach
-            if (newerFileContains(primaryKey, rank)) return@forEach
-            val record = resolveEntry(primaryKey, rank) ?: return@forEach
-            val symbol = record as? SymbolRecord ?: return@forEach
-            // Emit each symbol once: only through its smallest matching term, like the Xodus
-            // derived index.
-            val canonical =
-                (sequenceOf(symbol.name, symbol.fqn) + symbol.aliases.asSequence())
-                    .filter { if (prefix) it.startsWith(name) else it == name }
-                    .minOrNull()
-            if (term == canonical) {
-                keepGoing = action(CodeIndexKey.parse(primaryKey), symbol)
-                if (!keepGoing) return@forEach
+        scanNameTerms(table.cursor(SegmentKeys.utf8(name)), name, prefix) { term, primaryKey ->
+            if (newerFileContains(primaryKey, rank)) return@scanNameTerms true
+            val record = resolveEntry(primaryKey, rank)
+            val symbol = record as? SymbolRecord
+            if (symbol != null) {
+                // Emit each symbol once: only through its smallest matching term, like the Xodus
+                // derived index.
+                val canonical =
+                    (sequenceOf(symbol.name, symbol.fqn) + symbol.aliases.asSequence())
+                        .filter { if (prefix) it.startsWith(name) else it == name }
+                        .minOrNull()
+                if (term == canonical) {
+                    keepGoing = action(CodeIndexKey.parse(primaryKey), symbol)
+                }
             }
+            keepGoing
         }
         return keepGoing
     }
@@ -203,14 +201,12 @@ private constructor(private val files: List<MappedSegmentFile>, private val onCl
                 continue
             }
             var keepGoing = true
-            val termBytes = SegmentKeys.utf8(term)
-            table.cursor(compositeStart(term)).asSequence().forEach { entry ->
-                if (!hasCompositeTerm(entry.keyBytes, termBytes)) return@forEach
-                val primaryKey = primaryKeyOf(entry.keyBytes) ?: return@forEach
-                if (newerFileContains(primaryKey, rank)) return@forEach
-                val record = resolveEntry(primaryKey, rank) ?: return@forEach
+            scanCompositeTerm(table.cursor(compositeStart(term)), SegmentKeys.utf8(term)) {
+                primaryKey ->
+                if (newerFileContains(primaryKey, rank)) return@scanCompositeTerm true
+                val record = resolveEntry(primaryKey, rank) ?: return@scanCompositeTerm true
                 keepGoing = action(CodeIndexKey.parse(primaryKey), record)
-                if (!keepGoing) return@forEach
+                keepGoing
             }
             if (!keepGoing) return
         }
@@ -298,33 +294,6 @@ private constructor(private val files: List<MappedSegmentFile>, private val onCl
         private const val SYMBOL_PREFIX = "sym:"
         private const val CALL_PREFIX = "call:"
         private val SYMBOL_PREFIX_BYTES = SegmentKeys.utf8(SYMBOL_PREFIX)
-        private const val SEPARATOR: Byte = 0x00
-
-        private fun compositeStart(term: String): ByteArray = SegmentFormat.compositeKey(term, "")
-
-        private fun hasCompositeTerm(bytes: ByteArray, termBytes: ByteArray): Boolean =
-            bytes.size > termBytes.size &&
-                bytes.startsWith(termBytes) &&
-                bytes[termBytes.size] == SEPARATOR
-
-        private fun termOf(bytes: ByteArray): String? {
-            val index = bytes.indexOf(SEPARATOR)
-            if (index < 0) return null
-            return SegmentKeys.decode(bytes.copyOfRange(0, index))
-        }
-
-        private fun primaryKeyOf(bytes: ByteArray): String? {
-            val index = bytes.indexOf(SEPARATOR)
-            if (index < 0 || index + 1 >= bytes.size) return null
-            return SegmentKeys.decode(bytes.copyOfRange(index + 1, bytes.size))
-        }
-
-        private fun ByteArray.indexOf(byte: Byte): Int {
-            for (index in indices) {
-                if (this[index] == byte) return index
-            }
-            return -1
-        }
 
         /**
          * Streams a store into a fresh immutable segment file — the publication conversion path.
@@ -358,6 +327,9 @@ private constructor(private val files: List<MappedSegmentFile>, private val onCl
                     val shadowed =
                         tombstoneIndex < tombstones.size && tombstones[tombstoneIndex] == key.value
                     if (shadowed) {
+                        // A tombstone for an existing source key must replace it in the segment;
+                        // skipping both would resurrect the older value in a layered read.
+                        writer.appendTombstone(CodeIndexKey.parse(tombstones[tombstoneIndex]))
                         tombstoneIndex++
                     } else {
                         writer.append(key, record)
@@ -394,3 +366,71 @@ private fun ByteArray.startsWith(prefix: ByteArray): Boolean {
     }
     return true
 }
+
+private fun String.termMatches(name: String, prefix: Boolean): Boolean =
+    if (prefix) startsWith(name) else this == name
+
+/**
+ * Visits `(term, primaryKey)` pairs of a symbol-name table whose term matches [name], in table
+ * order. Terminates as soon as a term leaves the matching range or [visit] returns false.
+ */
+internal inline fun scanNameTerms(
+    cursor: SegmentTableCursor,
+    name: String,
+    prefix: Boolean,
+    visit: (term: String, primaryKey: String) -> Boolean,
+) {
+    while (true) {
+        val entry = cursor.next() ?: return
+        val term = termOf(entry.keyBytes)
+        val primaryKey = term?.let { primaryKeyOf(entry.keyBytes) }
+        if (term == null || primaryKey == null) continue
+        // Terms are sorted, so the first one outside the matching range ends the scan.
+        if (!term.termMatches(name, prefix)) return
+        if (!visit(term, primaryKey)) return
+    }
+}
+
+/**
+ * Visits primary keys of a derived file table whose composite key carries [termBytes]. Terminates
+ * as soon as a key leaves the term's range or [visit] returns false.
+ */
+internal inline fun scanCompositeTerm(
+    cursor: SegmentTableCursor,
+    termBytes: ByteArray,
+    visit: (primaryKey: String) -> Boolean,
+) {
+    while (true) {
+        val entry = cursor.next() ?: return
+        // Composite keys are sorted, so the first key outside the term's range ends the scan.
+        if (!hasCompositeTerm(entry.keyBytes, termBytes)) return
+        val primaryKey = primaryKeyOf(entry.keyBytes) ?: continue
+        if (!visit(primaryKey)) return
+    }
+}
+
+private fun termOf(bytes: ByteArray): String? {
+    val index = bytes.indexOf(SEPARATOR)
+    if (index < 0) return null
+    return SegmentKeys.decode(bytes.copyOfRange(0, index))
+}
+
+private fun primaryKeyOf(bytes: ByteArray): String? {
+    val index = bytes.indexOf(SEPARATOR)
+    if (index < 0 || index + 1 >= bytes.size) return null
+    return SegmentKeys.decode(bytes.copyOfRange(index + 1, bytes.size))
+}
+
+private fun compositeStart(term: String): ByteArray = SegmentFormat.compositeKey(term, "")
+
+private fun hasCompositeTerm(bytes: ByteArray, termBytes: ByteArray): Boolean =
+    bytes.size > termBytes.size && bytes.startsWith(termBytes) && bytes[termBytes.size] == SEPARATOR
+
+private fun ByteArray.indexOf(byte: Byte): Int {
+    for (index in indices) {
+        if (this[index] == byte) return index
+    }
+    return -1
+}
+
+private const val SEPARATOR: Byte = 0x00

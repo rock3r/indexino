@@ -7,6 +7,7 @@ import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.cache.WorktreeForkBase
 import dev.sebastiano.indexino.core.cache.WorktreeForkCompatibility
+import dev.sebastiano.indexino.core.cache.WorktreeOverlayPolicy
 import dev.sebastiano.indexino.core.cache.WorktreeOverlayStoreOpener
 import dev.sebastiano.indexino.core.git.GitHeadResolver
 import dev.sebastiano.indexino.core.key.CodeIndexKey
@@ -226,13 +227,13 @@ internal class IndexBuildRunner(
         BuildStoreCheckpoint.requireRecovered(manifestPath)
         val previewHash = timedPhase("source-preview") { previewHash(sources, sourceSnapshot) }
         val existingManifest = manifestPath.takeIf { it.exists() }?.let(ManifestIO::read)
-        val publishedManifest =
+        val publishedGeneration =
             WorkspaceGenerationManifestStore(
                     InProcessCacheLayout.cacheRoot(),
                     InProcessCacheLayout.workspaceId(project),
                 )
                 .current()
-                ?.compatibilityManifest
+        val publishedManifest = publishedGeneration?.compatibilityManifest
         val sourceOriginIds = sources.map { it.originId }.distinct().sorted()
         val sourceRoots = sources.mapTo(linkedSetOf()) { it.originRoot }
         // A full capture can build alongside provenance after all its source bytes are pinned.
@@ -306,12 +307,17 @@ internal class IndexBuildRunner(
                 origins = origins.orEmpty(),
                 resolvedTopologyDigest = topologyResult.resolvedTopologyDigest,
             )
+        val canReuseFreshIndex =
+            storeRootOverride != InProcessCacheLayout.writerRoot(project) ||
+                (publishedGeneration?.storageFormatVersion ==
+                    WorktreeOverlayPolicy.CURRENT_STORAGE_FORMAT &&
+                    existingManifest != null &&
+                    publishedManifest?.copy(builtAt = existingManifest.builtAt) == existingManifest)
         if (
             !overlapOrigins &&
                 existingManifest != null &&
                 ManifestFreshness.isFresh(existingManifest, criteria) &&
-                (storeRootOverride != InProcessCacheLayout.writerRoot(project) ||
-                    publishedManifest?.copy(builtAt = existingManifest.builtAt) == existingManifest)
+                canReuseFreshIndex
         ) {
             latestManifest = existingManifest
             reusedFreshIndex = true
@@ -390,6 +396,9 @@ internal class IndexBuildRunner(
                         (existingManifest ?: forkBase?.baseManifest)?.pluginCoordinates.orEmpty(),
                     forceFullRebuild =
                         (existingManifest == null && forkBase == null) ||
+                            (publishedGeneration != null &&
+                                publishedGeneration.storageFormatVersion !=
+                                    WorktreeOverlayPolicy.CURRENT_STORAGE_FORMAT) ||
                             (existingManifest != null &&
                                 forkBase == null &&
                                 storeRootOverride == InProcessCacheLayout.writerRoot(project) &&
@@ -594,12 +603,13 @@ internal class IndexBuildRunner(
             overlayDeltaPath.parent.toFile().deleteRecursively()
             forkBase.previousOverlayPackKey?.let { packKey ->
                 timedPhase("overlay-restore") {
-                    val packs = ContentAddressedPackCache(InProcessCacheLayout.cacheRoot())
-                    if (packs.isSegmentPack(packKey)) {
-                        restoreOverlayDeltaFromSegment(packs.packPath(packKey), overlayDeltaPath)
-                    } else {
-                        packs.materializeDirectory(packKey, overlayDeltaPath)
-                    }
+                    // Overlay packs are always current-format segment files: legacy
+                    // storage-format generations are discarded on upgrade and never forked from.
+                    restoreOverlayDeltaFromSegment(
+                        ContentAddressedPackCache(InProcessCacheLayout.cacheRoot())
+                            .packPath(packKey),
+                        overlayDeltaPath,
+                    )
                 }
             }
         }

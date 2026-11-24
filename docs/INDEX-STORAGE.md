@@ -66,8 +66,10 @@ Two pack storage formats share the `chunks/` fanout:
 
 - **Storage format 1 (legacy):** ZIP archives of expanded Xodus environments. Readers unpacked
   them into `generations/<id>/materialized/` and `overlay-delta/` trees plus per-client
-  `refs/<client-id>/…` copies. The current reader rejects format-1 generation manifests, so an
-  upgraded cache rebuilds its first refresh instead of migrating packs.
+  `refs/<client-id>/…` copies. **Old caches are discarded on upgrade**: there is no migration
+  and no converter. The current reader rejects format-1 generation manifests, never restores,
+  repoints at or forks from them, and forces a full cold rebuild so the next refresh publishes
+  the workspace in format 2.
 - **Storage format 2 (current):** one raw immutable segment file per pack, mapped directly.
   `generations/<id>/` holds only the manifest; no `materialized/`, `overlay-delta/` or `refs/`
   directory is ever written for a format-2 generation.

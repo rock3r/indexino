@@ -13,7 +13,10 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class SegmentCodeIndexStoreTest {
     private lateinit var tempDir: Path
@@ -141,6 +144,27 @@ class SegmentCodeIndexStoreTest {
                     listOf(shared, other).map { it.value },
                     keys(store, "Shared", exact = true),
                 )
+            }
+        }
+    }
+
+    @Test
+    fun `writeStoreToFile replaces an equal source key with its tombstone`() {
+        openXodus("source").use { source ->
+            val doomed = CodeIndexKey.sym("com.example.Doomed")
+            val kept = CodeIndexKey.sym("com.example.Kept")
+            source.put(doomed, MetaIndexerVersionRecord("doomed"))
+            source.put(kept, MetaIndexerVersionRecord("kept"))
+            val path = tempDir.resolve("tombstone-equal.segment")
+            SegmentCodeIndexStore.writeStoreToFile(source, path, listOf(doomed))
+            MappedSegmentFile.open(path).use { file ->
+                val tombstone = file.primaryTable.get(doomed.value)
+                assertNotNull(tombstone)
+                assertTrue(tombstone.tombstone, "Equal source key must become a tombstone entry")
+                assertNull(tombstone.value)
+                val survivor = file.primaryTable.get(kept.value)
+                assertNotNull(survivor)
+                assertFalse(survivor.tombstone)
             }
         }
     }
