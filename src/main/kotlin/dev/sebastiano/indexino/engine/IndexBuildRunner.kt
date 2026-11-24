@@ -7,13 +7,18 @@ import dev.sebastiano.indexino.core.cache.ContentAddressedPackCache
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
 import dev.sebastiano.indexino.core.cache.WorktreeForkBase
 import dev.sebastiano.indexino.core.cache.WorktreeForkCompatibility
+import dev.sebastiano.indexino.core.cache.WorktreeOverlayPolicy
 import dev.sebastiano.indexino.core.cache.WorktreeOverlayStoreOpener
 import dev.sebastiano.indexino.core.git.GitHeadResolver
+import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.manifest.IndexManifest
 import dev.sebastiano.indexino.core.manifest.IndexManifestOrigin
 import dev.sebastiano.indexino.core.manifest.ManifestFreshness
 import dev.sebastiano.indexino.core.manifest.ManifestIO
 import dev.sebastiano.indexino.core.path.IndexPathResolver
+import dev.sebastiano.indexino.core.record.CodeIndexRecord
+import dev.sebastiano.indexino.core.segment.MappedSegmentFile
+import dev.sebastiano.indexino.core.segment.SegmentCodeIndexStore
 import dev.sebastiano.indexino.core.store.WorktreeOverlayIndexStore
 import dev.sebastiano.indexino.core.xodus.XodusCodeIndexStore
 import dev.sebastiano.indexino.model.PluginId
@@ -222,13 +227,13 @@ internal class IndexBuildRunner(
         BuildStoreCheckpoint.requireRecovered(manifestPath)
         val previewHash = timedPhase("source-preview") { previewHash(sources, sourceSnapshot) }
         val existingManifest = manifestPath.takeIf { it.exists() }?.let(ManifestIO::read)
-        val publishedManifest =
+        val publishedGeneration =
             WorkspaceGenerationManifestStore(
                     InProcessCacheLayout.cacheRoot(),
                     InProcessCacheLayout.workspaceId(project),
                 )
                 .current()
-                ?.compatibilityManifest
+        val publishedManifest = publishedGeneration?.compatibilityManifest
         val sourceOriginIds = sources.map { it.originId }.distinct().sorted()
         val sourceRoots = sources.mapTo(linkedSetOf()) { it.originRoot }
         // A full capture can build alongside provenance after all its source bytes are pinned.
@@ -302,12 +307,17 @@ internal class IndexBuildRunner(
                 origins = origins.orEmpty(),
                 resolvedTopologyDigest = topologyResult.resolvedTopologyDigest,
             )
+        val canReuseFreshIndex =
+            storeRootOverride != InProcessCacheLayout.writerRoot(project) ||
+                (publishedGeneration?.storageFormatVersion ==
+                    WorktreeOverlayPolicy.CURRENT_STORAGE_FORMAT &&
+                    existingManifest != null &&
+                    publishedManifest?.copy(builtAt = existingManifest.builtAt) == existingManifest)
         if (
             !overlapOrigins &&
                 existingManifest != null &&
                 ManifestFreshness.isFresh(existingManifest, criteria) &&
-                (storeRootOverride != InProcessCacheLayout.writerRoot(project) ||
-                    publishedManifest?.copy(builtAt = existingManifest.builtAt) == existingManifest)
+                canReuseFreshIndex
         ) {
             latestManifest = existingManifest
             reusedFreshIndex = true
@@ -386,6 +396,9 @@ internal class IndexBuildRunner(
                         (existingManifest ?: forkBase?.baseManifest)?.pluginCoordinates.orEmpty(),
                     forceFullRebuild =
                         (existingManifest == null && forkBase == null) ||
+                            (publishedGeneration != null &&
+                                publishedGeneration.storageFormatVersion !=
+                                    WorktreeOverlayPolicy.CURRENT_STORAGE_FORMAT) ||
                             (existingManifest != null &&
                                 forkBase == null &&
                                 storeRootOverride == InProcessCacheLayout.writerRoot(project) &&
@@ -534,6 +547,35 @@ internal class IndexBuildRunner(
             }
     }
 
+    /**
+     * Rehydrates a published segment-format overlay delta into the fresh writable staging
+     * environment the incremental writer mutates. Records stream in key order; Xodus rebuilds its
+     * derived indexes through the writes.
+     */
+    private fun restoreOverlayDeltaFromSegment(packPath: Path, deltaPath: Path) {
+        MappedSegmentFile.open(packPath).use { mapped ->
+            SegmentCodeIndexStore.open(listOf(mapped)).use { source ->
+                XodusCodeIndexStore.open(deltaPath, readOnly = false).use { target ->
+                    val batch =
+                        ArrayList<Pair<CodeIndexKey, CodeIndexRecord>>(OVERLAY_RESTORE_BATCH_SIZE)
+                    fun flush() {
+                        if (batch.isEmpty()) return
+                        target.transaction {
+                            batch.forEach { (key, record) -> target.put(key, record) }
+                        }
+                        batch.clear()
+                    }
+                    source.forEachPrefix("") { key, record ->
+                        batch += key to record
+                        if (batch.size >= OVERLAY_RESTORE_BATCH_SIZE) flush()
+                        true
+                    }
+                    flush()
+                }
+            }
+        }
+    }
+
     @Suppress("LongMethod")
     private fun buildStore(
         resolver: IndexPathResolver,
@@ -561,8 +603,13 @@ internal class IndexBuildRunner(
             overlayDeltaPath.parent.toFile().deleteRecursively()
             forkBase.previousOverlayPackKey?.let { packKey ->
                 timedPhase("overlay-restore") {
-                    ContentAddressedPackCache(InProcessCacheLayout.cacheRoot())
-                        .materializeDirectory(packKey, overlayDeltaPath)
+                    // Overlay packs are always current-format segment files: legacy
+                    // storage-format generations are discarded on upgrade and never forked from.
+                    restoreOverlayDeltaFromSegment(
+                        ContentAddressedPackCache(InProcessCacheLayout.cacheRoot())
+                            .packPath(packKey),
+                        overlayDeltaPath,
+                    )
                 }
             }
         }
@@ -812,6 +859,7 @@ internal class IndexBuildRunner(
 
     private companion object {
         const val SOURCE_HASH_PREVIEW_PHASE = "source-hash-preview"
+        const val OVERLAY_RESTORE_BATCH_SIZE = 256
         const val TOPOLOGY_CACHE_DIRECTORY = "topology"
         const val SOURCE_HASH_CACHE_FILE = "source-hashes"
         const val ORIGIN_STATE_CACHE_DIRECTORY = "origin-states"

@@ -108,6 +108,7 @@ class WorktreeForkCompatibilityTest {
                     packKeys = listOf("ab".repeat(32)),
                     compatibilityManifest = compatibility,
                     representation = WorktreeOverlayPolicy.REPRESENTATION_MATERIALIZED,
+                    storageFormatVersion = WorktreeOverlayPolicy.CURRENT_STORAGE_FORMAT,
                 )
             )
 
@@ -272,6 +273,7 @@ class WorktreeForkCompatibilityTest {
                     packKeys = listOf("ab".repeat(32)),
                     compatibilityManifest = compatibility,
                     representation = WorktreeOverlayPolicy.REPRESENTATION_MATERIALIZED,
+                    storageFormatVersion = WorktreeOverlayPolicy.CURRENT_STORAGE_FORMAT,
                 )
             )
         WorkspaceGenerationManifestStore(cacheRoot, forkId)
@@ -289,6 +291,7 @@ class WorktreeForkCompatibilityTest {
                     baseWorkspaceId = mainId,
                     baseGeneration = "gen-materialized",
                     overlayChainDepth = 2,
+                    storageFormatVersion = WorktreeOverlayPolicy.CURRENT_STORAGE_FORMAT,
                 )
             )
 

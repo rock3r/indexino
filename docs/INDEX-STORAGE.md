@@ -42,13 +42,10 @@ worktree for product storage.
   chunks/<ab>/<cd>/<content-key>       # immutable packs (two-level fanout)
   origins/<origin-cache-id>/inventory
   workspaces/<workspace-id>/
-    generations/<generation>/manifest
-    generations/<generation>/materialized/  # one expanded, immutable Xodus base
-    generations/<generation>/overlay-delta/ # shared small overlay when present
+    generations/<generation>/manifest   # storage format 2: the manifest is all a generation owns
     staging/in-process-writer/              # mutable incremental writer
     staging/<refresh-id>/manifest
     current                            # atomic pointer
-    refs/<client-id>/<generation>/overlay-delta/ # private overlay when present
     source-links/registry.json           # dependency-to-source link registry snapshot
     source-links/generations/<link-generation>/snapshot.json
     change-journal
@@ -65,15 +62,65 @@ worktree for product storage.
   runtime/<workspace-id>.lease.json
 ```
 
+Two pack storage formats share the `chunks/` fanout:
+
+- **Storage format 1 (legacy):** ZIP archives of expanded Xodus environments. Readers unpacked
+  them into `generations/<id>/materialized/` and `overlay-delta/` trees plus per-client
+  `refs/<client-id>/…` copies. **Old caches are discarded on upgrade**: there is no migration
+  and no converter. The current reader rejects format-1 generation manifests, never restores,
+  repoints at or forks from them, and forces a full cold rebuild so the next refresh publishes
+  the workspace in format 2.
+- **Storage format 2 (current):** one raw immutable segment file per pack, mapped directly.
+  `generations/<id>/` holds only the manifest; no `materialized/`, `overlay-delta/` or `refs/`
+  directory is ever written for a format-2 generation.
+
 ### What a chunk is
 
 A **chunk** is an immutable content-addressed **pack** of related analysis facts for one
 analysis-key + content-key, stored as a file under the fanout directory—not one Xodus environment
-per source file. Xodus (or equivalent) may hold generation-local indexes that **reference** chunk
-IDs. Put-if-absent installs packs; readers open by content key.
+per source file. Format-2 packs are single immutable **segment files**; Xodus remains the mutable
+incremental writer that may hold generation-local staging state referencing chunk IDs.
+Put-if-absent installs packs; readers open by content key.
 
 Plugin facts are the same mechanism under plugin analysis identity (see plugin SPI in the design
 doc). Payload values use the durable `PluginFactValue` model in `indexino-model`.
+
+### Segment files (storage format 2)
+
+A segment file is a self-contained immutable sorted table set:
+
+```
+[header 32 B][primary table: data blocks | block index | bloom][derived tables …][directory][trailer 32 B]
+```
+
+- Keys are UTF-8 `CodeIndexKey` strings in **unsigned lexicographic byte order** (the same order
+  Xodus `StringBinding` persists); values are the unchanged JSON-encoded `CodeIndexRecord` bytes.
+- Data entries are prefix-compressed against the previous key of their block; each block index
+  entry stores the full first key, so any block decodes without prior context. The primary table
+  carries a bloom filter (8 bits per entry, 4 probes) for point lookups.
+- Derived tables `symnames`, `symfiles` and `callfiles` mirror the Xodus `SymbolNames`,
+  `SymbolFiles` and `CallFiles` indexes as composite keys (`term + 0x00 + primary key`).
+- **Tombstones** are entries with a zero-length value and a flag bit; a tombstone in a newer
+  segment shadows the same key in older segments. Overlay publication currently emits none
+  (deletions are physical in the staging delta), but the format and merged readers honor them.
+- The trailer stores a CRC-32 over the file prefix; mapped opens verify it eagerly up to 64 MiB —
+  larger packs rely on their content-addressed names, which hash a segment-format marker plus the
+  file bytes so ZIP and segment packs can never collide on a key.
+- Writers stream one sequential pass over **strictly increasing** keys — the natural fast path for
+  pre-sorted bulk input — and finish with one `force`. Publication converts a completed staging
+  environment by reopening it read-only for exactly that sorted pass.
+
+Readers map packs with `FileChannel.map` into one shared `Arena` per canonical pack path,
+reference-counted by live snapshot pins (`SharedSegmentStore`), mirroring the Xodus
+`SharedReadOnlyStore` discipline. Query-time store composition is unchanged from the outside:
+base packs plus overlay delta packs merge under `WorktreeOverlayIndexStore` with manifest
+tombstone prefixes, preserving `BasicFactQueries`, `PluginFactViewV1` and pagination semantics.
+
+**Windows specifics:** the JDK opens mapped files with `FILE_SHARE_DELETE`, so deleting or
+renaming a pack through the cache namespace can succeed while mappings remain live; pinned
+readers keep serving until the last release (regression-tested on Windows). Cross-process GC can
+therefore unlink packs without waiting for other processes' pins, exactly as it already treats
+open Xodus log handles in legacy generations.
 
 ### Workspace identity
 
@@ -476,30 +523,21 @@ or a power-loss guarantee. Preserve incomplete or failed checkpoints for investi
 only the checkpoint can expose partially restored staging as valid. Published generation manifests
 and immutable packs are not rewritten by this rollback.
 
-All clients and compatible forks read the same expanded, immutable Xodus base under
-`generations/<generation-id>/materialized/`. They open it through a read-only Xodus provider
-that bypasses the default exclusive writer lock and rejects every log mutation, including recovery
-attempts; an incomplete or damaged base fails closed rather than being repaired in place.
-The completed pack remains available for reconstruction. A client materializes only an overlay
-delta, if present, under its private `refs/<client-id>/<generation-id>/overlay-delta/` path.
-Simultaneous snapshots in one JVM share a reference-counted environment per canonical directory;
-separate processes have independent Xodus RAM caches and query the same immutable base files.
-Opening and closing an environment is serialized per store directory, so a slow Xodus cleaner
-during snapshot close cannot block a refresh opening an unrelated base or delta store.
-Read-only snapshot environments disable Xodus garbage collection: they cannot reclaim log files,
-but its utilization scan can otherwise delay close. Writable staging keeps garbage collection.
-Publication and snapshot restoration may compete to materialize the same immutable destination.
-If another complete directory wins the rename, its copy is reused and the losing staging directory
-is removed. Only a missing destination is reconstructed: an existing non-directory fails closed
-without replacing it (including on platforms where atomic rename can replace a regular file).
-A move failure without a directory at the destination still propagates.
-Closing one snapshot does not close another snapshot's environment. Snapshot pins retain private
-overlay refs until close; client close never deletes a shared base that another process or fork may
-read. Current `cache gc` reclaims obsolete expanded generations and abandoned private refs only
-when no client is active. Old reconstructible writer staging is also retired, but a retained
-rollback checkpoint is never removed. ZIP compression still serves transport and pack
-reachability, not random-access queries. There is no runtime
-`legacy-store` layout. Do **not**
+All clients and compatible forks read the same immutable **segment packs** published under the
+content-addressed `chunks/` fanout — mapped directly via `FileChannel.map` with no expanded copy.
+A damaged or truncated pack fails closed at open (magic, version, bounds and — up to 64 MiB —
+CRC checks); the content-addressed name plus the retained staging environment allow
+reconstruction. Simultaneous snapshots in one JVM share a reference-counted mapping per canonical
+pack path (`SharedSegmentStore`); separate processes map the same immutable file independently.
+Closing one snapshot does not unmap another snapshot's view; client close never deletes a shared
+pack that another process or fork may read. Current `cache gc` reclaims obsolete packs by
+manifest reachability and age exactly as before; its expanded-store reclamation now only ever
+applies to legacy format-1 generations, because format-2 generations write no `materialized/`,
+`overlay-delta/` or client `refs/` directories. Old reconstructible writer staging is still
+retired, but a retained rollback checkpoint is never removed. On Windows the JDK opens mapped
+files with `FILE_SHARE_DELETE`, so pack unlinks are not blocked by other processes' live
+mappings; pinned readers keep serving a deleted pack until their last release. There is no
+runtime `legacy-store` layout. Do **not**
 extend `<project>/.indexino/index/<commit>/`; new features must assume user-local composite storage.
 
 ## Deprecated / rejected paths

@@ -29,6 +29,10 @@ internal object WorktreeForkCompatibility {
         val compatibility = current.compatibilityManifest ?: return null
         if (!isForkCompatibleBase(compatibility, criteria)) return null
         if (current.basicFactSchemaVersion != criteria.basicFactSchemaVersion) return null
+        // Legacy storage-format generations are discarded on upgrade: they are never forked
+        // from, so the workspace performs a full rebuild in the current format instead.
+        if (current.storageFormatVersion != WorktreeOverlayPolicy.CURRENT_STORAGE_FORMAT)
+            return null
         val baseId =
             if (current.representation == WorktreeOverlayPolicy.REPRESENTATION_OVERLAY) {
                 current.baseWorkspaceId ?: return null
@@ -128,6 +132,9 @@ internal object WorktreeForkCompatibility {
         val compatibility = published.compatibilityManifest ?: return null
         if (!isForkCompatibleBase(compatibility, criteria)) return null
         if (published.basicFactSchemaVersion != criteria.basicFactSchemaVersion) return null
+        // Legacy storage-format generations are discarded on upgrade; never fork from them.
+        if (published.storageFormatVersion != WorktreeOverlayPolicy.CURRENT_STORAGE_FORMAT)
+            return null
         return ForkCandidate(candidate, published, basePath)
     }
 
