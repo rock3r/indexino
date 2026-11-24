@@ -32,6 +32,7 @@ import dev.sebastiano.indexino.producer.SourceChangeDetector
 import dev.sebastiano.indexino.producer.SourceChangeSet
 import dev.sebastiano.indexino.producer.SourceContentSnapshot
 import dev.sebastiano.indexino.producer.SourceStatHashCache
+import dev.sebastiano.indexino.producer.StatHashCacheMismatchFailure
 import dev.sebastiano.indexino.producer.xml.ResourceMetadata
 import dev.sebastiano.indexino.topology.ExternalSourceMount
 import dev.sebastiano.indexino.topology.SourceOriginResolver
@@ -99,6 +100,8 @@ internal class IndexBuildRunner(
         private set
 
     private var activeSourceSnapshot: SourceContentSnapshot? = null
+    /** Opened once per run and reused across stat-hash recovery restarts of [runBuild]. */
+    private var statHashCache: SourceStatHashCache? = null
     private val refreshCacheRoot: Path =
         refreshCacheRootOverride ?: InProcessCacheLayout.refreshCacheRoot(project)
 
@@ -146,11 +149,35 @@ internal class IndexBuildRunner(
      */
     fun run(): Int =
         try {
-            runBuild()
+            runWithStatHashRecovery()
         } finally {
             activeSourceSnapshot?.close()
             activeSourceSnapshot = null
         }
+
+    /**
+     * Restarts the build when a re-read exposes a stale stat-hash cache entry. Windows exposes no
+     * inode change time, so a same-size rewrite that restores the modification time can keep a
+     * poisoned entry trusted; the snapshot invalidates that entry on discovery and the restart
+     * re-captures with the file's real bytes, converging to the same result as an honest miss.
+     */
+    private fun runWithStatHashRecovery(): Int {
+        var attempts = 0
+        while (true) {
+            try {
+                return runBuild()
+            } catch (failure: StatHashCacheMismatchFailure) {
+                activeSourceSnapshot?.close()
+                activeSourceSnapshot = null
+                statHashCache?.flush()
+                if (++attempts >= STAT_HASH_RECOVERY_ATTEMPTS) throw failure
+                progress(
+                    "index stat-hash-cache mismatch on ${failure.source.path}; " +
+                        "retrying with a fresh capture"
+                )
+            }
+        }
+    }
 
     @Suppress("LongMethod", "CyclomaticComplexMethod")
     private fun runBuild(): Int {
@@ -231,11 +258,7 @@ internal class IndexBuildRunner(
                     inheritedSourceHashes,
                     hintedPaths,
                     hashCache =
-                        if (inheritedSourceHashes.isEmpty())
-                            SourceStatHashCache.open(
-                                refreshCacheRoot.resolve(SOURCE_HASH_CACHE_FILE)
-                            )
-                        else null,
+                        if (inheritedSourceHashes.isEmpty()) statHashCacheForCapture() else null,
                     retentionBytes = sourceRetentionBytes,
                     spillDirectory = sourceSpillDirectory,
                 )
@@ -494,6 +517,12 @@ internal class IndexBuildRunner(
         progress("index phase=$phase state=completed durationMillis=$elapsedMillis")
         return result
     }
+
+    private fun statHashCacheForCapture(): SourceStatHashCache =
+        statHashCache
+            ?: SourceStatHashCache.open(refreshCacheRoot.resolve(SOURCE_HASH_CACHE_FILE)).also {
+                statHashCache = it
+            }
 
     private fun previewHash(
         sources: List<IndexedSource>,
@@ -901,6 +930,9 @@ internal class IndexBuildRunner(
         const val SOURCE_HASH_CACHE_FILE = "source-hashes"
         const val ORIGIN_STATE_CACHE_DIRECTORY = "origin-states"
         const val SOURCE_SPILL_DIRECTORY = "source-spill"
+
+        /** Captures and producer passes allowed before a stale stat-hash entry fails the build. */
+        const val STAT_HASH_RECOVERY_ATTEMPTS = 3
     }
 }
 

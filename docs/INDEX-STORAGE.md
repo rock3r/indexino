@@ -284,7 +284,9 @@ the user's source for bytes it already hashed. The snapshot deletes its spill wh
 releases it; a failed build's file is scrubbed by the next capture. Only entries that were never
 captured (inherited hashes and hash-cache hits) are re-read, and a change since capture fails that
 refresh for full reconciliation, so an analysis pass can never publish facts beside a hash from
-different bytes.
+different bytes. A re-read that disproves a hash-cache entry instead of an inherited hash evicts
+the poisoned entry and restarts the build on a fresh capture (bounded attempts), converging to the
+same result as an honest cache miss.
 
 ### Refresh accelerators
 
@@ -359,7 +361,9 @@ restores the modification time. Java NIO exposes no change time on Windows, so t
 size, last-write time, creation time and file identity; the timestamp-granularity window plus Git
 index/source hashes are the remaining guarantees. A same-size rewrite that also restores the
 modification time is not distinguishable on Windows by stat alone; such a rewrite can keep a stale
-hash until another metadata field changes.
+hash until another metadata field changes. When a re-read disproves such an entry, the entry is
+evicted and the build restarts with a fresh capture, so one poisoned entry can no longer fail
+every later refresh.
 
 ### Reclamation
 

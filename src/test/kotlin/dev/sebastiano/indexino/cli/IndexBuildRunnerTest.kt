@@ -9,8 +9,10 @@ import dev.sebastiano.indexino.engine.BuildStoreCheckpoint
 import dev.sebastiano.indexino.engine.IndexBuildExecution
 import dev.sebastiano.indexino.engine.IndexBuildRunner
 import dev.sebastiano.indexino.engine.ManifestOriginResolver
+import dev.sebastiano.indexino.producer.FileHashProducer
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.JsonlIndexBuildProgressReporter
+import dev.sebastiano.indexino.producer.SourceStatHashCache
 import dev.sebastiano.indexino.topology.BuildSystem
 import dev.sebastiano.indexino.topology.SourceOriginResolver
 import dev.sebastiano.indexino.topology.TopologyRequest
@@ -1332,6 +1334,79 @@ class IndexBuildRunnerTest {
         assertTrue(
             openSpillDescriptors.isEmpty(),
             "Spill channel still open: $openSpillDescriptors",
+        )
+    }
+
+    @Test
+    fun `stat-hash mismatch restarts the build with a fresh capture`() {
+        val workspace = tempDir.resolve("stale-stat-hash")
+        Files.createDirectories(workspace.resolve("app/src/main/kotlin/com/example"))
+        Files.writeString(
+            workspace.resolve("settings.gradle.kts"),
+            "rootProject.name = \"stale\"\ninclude(\":app\")\n",
+        )
+        Files.writeString(workspace.resolve("app/build.gradle.kts"), "plugins {}\n")
+        val source = workspace.resolve("app/src/main/kotlin/com/example/App.kt")
+        Files.writeString(source, "package com.example\nclass App { val current = 1 }\n")
+        git(workspace, "init")
+        git(workspace, "config", "user.email", "test@example.invalid")
+        git(workspace, "config", "user.name", "Indexino Test")
+        git(workspace, "add", ".")
+        git(workspace, "commit", "-m", "stale stat hash")
+        stableMtimes(workspace)
+        val refreshCache = tempDir.resolve("refresh-stale")
+        val storeRoot = tempDir.resolve("store-stale")
+        val indexedSource =
+            IndexedSource.workspace(workspace, "app/src/main/kotlin/com/example/App.kt")
+        val progress = mutableListOf<String>()
+
+        fun run(): IndexBuildExecution =
+            IndexBuildRunner(
+                    project = workspace,
+                    topologyRequest =
+                        TopologyRequest(buildSystem = BuildSystem.GRADLE, gradleModule = ":app"),
+                    applications = emptyList(),
+                    bazelQueryExecutor = null,
+                    bazelProcessRunner = null,
+                    progress = { message -> if (message.startsWith("index ")) progress += message },
+                    machineProgress = null,
+                    storeRootOverride = storeRoot,
+                    refreshCacheRootOverride = refreshCache,
+                )
+                .runDetailed()
+
+        val first = run()
+        assertEquals(CliExitCodes.SUCCESS, first.exitCode)
+        val currentHash =
+            FileHashProducer.contentHash("package com.example\nclass App { val current = 1 }\n")
+
+        // Simulate a stat key that cannot see a rewrite (Windows has no inode change time): the
+        // persisted entry keeps the file's current stat but the hash of content the file no longer
+        // has. The store holds the current content, so change detection reprocesses the source and
+        // the analyzer read exposes the lie.
+        val cacheFile = refreshCache.resolve("source-hashes")
+        val poison = SourceStatHashCache.open(cacheFile, 0)
+        poison.record(
+            indexedSource,
+            SourceStatHashCache.statOf(source)!!,
+            FileHashProducer.contentHash("package com.example\nclass App\n"),
+        )
+        poison.flush()
+
+        progress.clear()
+        val retried = run()
+
+        assertEquals(CliExitCodes.SUCCESS, retried.exitCode)
+        assertContains(
+            progress,
+            "index stat-hash-cache mismatch on " +
+                "app/src/main/kotlin/com/example/App.kt; retrying with a fresh capture",
+        )
+        val healed = SourceStatHashCache.open(cacheFile, 0)
+        assertEquals(
+            currentHash,
+            healed.hashIfUnchanged(indexedSource, SourceStatHashCache.statOf(source)!!),
+            "The retried capture must re-record the true hash",
         )
     }
 

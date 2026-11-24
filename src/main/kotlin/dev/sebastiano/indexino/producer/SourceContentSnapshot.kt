@@ -30,6 +30,8 @@ private constructor(
     val capturedSources: List<IndexedSource>,
     private val retention: SourceTextRetention,
     private val readBytes: (Path) -> ByteArray,
+    private val statHashCache: SourceStatHashCache?,
+    private val statCacheSourced: Set<IndexedSource>,
 ) : AutoCloseable {
     internal class Entry(val contentHash: String)
 
@@ -71,7 +73,16 @@ private constructor(
                     failure,
                 )
             }
-        check(FileHashProducer.contentHash(bytes) == entry.contentHash) {
+        val actualHash = FileHashProducer.contentHash(bytes)
+        if (actualHash != entry.contentHash && source in statCacheSourced) {
+            // A stat-cache entry claimed the file was unchanged since its hash was recorded, but
+            // Windows exposes no inode change time, so a same-size rewrite that restores the
+            // modification time can keep a poisoned entry trusted. Drop the entry and report the
+            // lie so the build restarts on a capture that reads the real bytes.
+            statHashCache?.invalidate(source)
+            throw StatHashCacheMismatchFailure(source)
+        }
+        check(actualHash == entry.contentHash) {
             "Inherited source changed during analysis: ${source.originId}:${source.path}"
         }
         return bytes
@@ -133,6 +144,7 @@ private constructor(
             retention: SourceTextRetention,
         ): SourceContentSnapshot {
             val captured = mutableListOf<IndexedSource>()
+            val statCacheSourced = mutableSetOf<IndexedSource>()
             val entries = sources.associateWith { source ->
                 val previous = inheritedHashes[source]
                 if (
@@ -144,6 +156,7 @@ private constructor(
                     val stat = hashCache?.stat(source)
                     val cached = stat?.let { hashCache.hashIfUnchanged(source, it) }
                     if (cached != null) {
+                        statCacheSourced += source
                         Entry(contentHash = cached)
                     } else {
                         captured += source
@@ -161,7 +174,14 @@ private constructor(
                     }
                 }
             }
-            return SourceContentSnapshot(entries, captured, retention, readBytes)
+            return SourceContentSnapshot(
+                entries,
+                captured,
+                retention,
+                readBytes,
+                hashCache,
+                statCacheSourced,
+            )
         }
 
         private fun checkNotInterrupted() {
@@ -176,6 +196,7 @@ private constructor(
         ): SourceContentSnapshot {
             val entries = arrayOfNulls<Entry>(sources.size)
             val captured = BooleanArray(sources.size)
+            val statSourced = BooleanArray(sources.size)
             val next = AtomicInteger()
             val executor = Executors.newFixedThreadPool(CAPTURE_WORKERS)
             val completed = ExecutorCompletionService<Unit>(executor)
@@ -193,6 +214,7 @@ private constructor(
                                 val cached = stat?.let { hashCache.hashIfUnchanged(source, it) }
                                 entries[index] =
                                     if (cached != null) {
+                                        statSourced[index] = true
                                         Entry(contentHash = cached)
                                     } else {
                                         val bytes =
@@ -233,6 +255,8 @@ private constructor(
                 sources.filterIndexed { index, _ -> captured[index] },
                 retention,
                 readBytes,
+                hashCache,
+                sources.filterIndexed { index, _ -> statSourced[index] }.toSet(),
             )
         }
     }
