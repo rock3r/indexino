@@ -66,6 +66,8 @@ internal class IndexBuildRunner(
     private val storeRootOverride: Path? = null,
     /** Test-only isolation for the rebuildable refresh accelerators. */
     private val refreshCacheRootOverride: Path? = null,
+    /** Test-only ceiling on decoded source text held in heap; production uses the default. */
+    private val sourceRetentionBytes: Long = SourceContentSnapshot.DEFAULT_RETENTION_BYTES,
     private val topologyOverride: TopologyResult? = null,
     private val inheritedSourceHashes: Map<IndexedSource, String> = emptyMap(),
     /** The closure resolved for [topologyOverride]; only valid with that exact topology. */
@@ -92,6 +94,7 @@ internal class IndexBuildRunner(
     private var latestForkBase: WorktreeForkBase? = null
     private var latestOverlayDeltaPath: Path? = null
     private var latestTombstonePrefixes: List<String> = emptyList()
+    private var activeSourceSnapshot: SourceContentSnapshot? = null
     private val refreshCacheRoot: Path =
         refreshCacheRootOverride ?: InProcessCacheLayout.refreshCacheRoot(project)
 
@@ -132,8 +135,21 @@ internal class IndexBuildRunner(
         )
     }
 
+    /**
+     * Owns the captured-source snapshot for the whole build. Every exit — an early reuse return, an
+     * unavailable-origin return, a provenance failure or any other exception — releases the
+     * snapshot and its spill through this single scope.
+     */
+    fun run(): Int =
+        try {
+            runBuild()
+        } finally {
+            activeSourceSnapshot?.close()
+            activeSourceSnapshot = null
+        }
+
     @Suppress("LongMethod", "CyclomaticComplexMethod")
-    fun run(): Int {
+    private fun runBuild(): Int {
         latestChanges = null
         latestManifest = null
         latestSourceFiles = emptyList()
@@ -200,8 +216,11 @@ internal class IndexBuildRunner(
             timedPhase("watcher-registration") { register(sources, latestTopologyRoots) }
         }
         beforeSourceCapture?.invoke(sources)
+        val sourceSpillDirectory = refreshCacheRoot.resolve(SOURCE_SPILL_DIRECTORY)
         val sourceSnapshot =
             timedPhase("source-capture") {
+                // A build that failed before releasing its spill leaves it for this scrub.
+                sourceSpillDirectory.toFile().deleteRecursively()
                 SourceContentSnapshot.capture(
                     sources,
                     inheritedSourceHashes,
@@ -212,8 +231,11 @@ internal class IndexBuildRunner(
                                 refreshCacheRoot.resolve(SOURCE_HASH_CACHE_FILE)
                             )
                         else null,
+                    retentionBytes = sourceRetentionBytes,
+                    spillDirectory = sourceSpillDirectory,
                 )
             }
+        activeSourceSnapshot = sourceSnapshot
         val inheritedCount = sourceSnapshot.inheritedCount()
         progress(
             "index source-capture read=${sources.size - inheritedCount} inherited=$inheritedCount"
@@ -863,6 +885,7 @@ internal class IndexBuildRunner(
         const val TOPOLOGY_CACHE_DIRECTORY = "topology"
         const val SOURCE_HASH_CACHE_FILE = "source-hashes"
         const val ORIGIN_STATE_CACHE_DIRECTORY = "origin-states"
+        const val SOURCE_SPILL_DIRECTORY = "source-spill"
     }
 }
 

@@ -1,8 +1,10 @@
 package dev.sebastiano.indexino.core.xodus
 
 import dev.sebastiano.indexino.core.key.CodeIndexKey
+import dev.sebastiano.indexino.core.key.CodeIndexKeyOrder
 import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.CodeIndexRecordCodec
+import dev.sebastiano.indexino.core.record.FileHashRecord
 import dev.sebastiano.indexino.core.record.MetaIndexerVersionRecord
 import dev.sebastiano.indexino.core.record.PluginFactRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
@@ -100,6 +102,34 @@ class XodusCodeIndexStoreTest {
         assertEquals(listOf(key1, key2), scanned.map { it.first })
         assertEquals("Earlier", (scanned[0].second as PluginFactRecord).encodedValue)
         assertEquals("Later", (scanned[1].second as PluginFactRecord).encodedValue)
+    }
+
+    @Test
+    fun `sorted writes follow the modified UTF-8 key order Xodus persists`() {
+        // Xodus encodes each UTF-16 unit separately (CESU-8) plus a 0x00 terminator, so a
+        // supplementary-plane character (ED ...) sorts before U+E000..U+FFFF (EE..EF). Code-point
+        // order would put it last and hand putRight a key below the store maximum.
+        val plain = CodeIndexKey.file("x-plain.kt", "h1")
+        val fullwidth = CodeIndexKey.file("x-\uFF5E.kt", "h2")
+        val emoji = CodeIndexKey.file("x-\uD83D\uDE00.kt", "h3")
+        val records =
+            mapOf(
+                plain to FileHashRecord("x-plain.kt", "h1"),
+                fullwidth to FileHashRecord("x-\uFF5E.kt", "h2"),
+                emoji to FileHashRecord("x-\uD83D\uDE00.kt", "h3"),
+            )
+
+        store.putSorted(
+            records.entries
+                .map { (key, record) -> key to record }
+                .sortedWith(compareBy(CodeIndexKeyOrder) { entry -> entry.first })
+        )
+
+        assertEquals(
+            listOf(plain.value, emoji.value, fullwidth.value),
+            store.prefixScan("file:x-").map { it.first.value }.toList(),
+        )
+        records.forEach { (key, record) -> assertEquals(record, store.get(key)) }
     }
 
     @Test

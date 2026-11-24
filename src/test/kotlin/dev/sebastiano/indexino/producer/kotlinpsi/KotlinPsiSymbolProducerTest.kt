@@ -97,24 +97,20 @@ class KotlinPsiSymbolProducerTest {
 
     @Test
     fun `batches Kotlin writes per emit batch while preserving forward calls`() {
-        var depth = 0
         var unbatched = 0
         var batches = 0
+        var batchedEntries = 0
         val tracked =
             object : CodeIndexStore by store {
                 override fun put(key: CodeIndexKey, record: CodeIndexRecord) {
-                    if (depth == 0) unbatched++
+                    unbatched++
                     store.put(key, record)
                 }
 
-                override fun <T> transaction(block: () -> T): T = store.transaction {
+                override fun putSorted(entries: List<Pair<CodeIndexKey, CodeIndexRecord>>) {
                     batches++
-                    depth++
-                    try {
-                        block()
-                    } finally {
-                        depth--
-                    }
+                    batchedEntries += entries.size
+                    store.putSorted(entries)
                 }
             }
         KotlinPsiSymbolProducer()
@@ -133,8 +129,9 @@ class KotlinPsiSymbolProducerTest {
             store.prefixScan("call:").map { it.second }.filterIsInstance<CallSiteRecord>().single()
         assertEquals(listOf("sample.target"), call.candidateSymbolFqns)
         assertEquals("expected", call.arguments.single().resolvedName)
-        assertEquals(0, unbatched, "Every fact write must join an emit batch transaction")
-        assertEquals(1, batches, "Two files fit in one bounded emit batch")
+        assertEquals(0, unbatched, "Every fact write must go through the bulk boundary")
+        assertEquals(1, batches, "Two files fit in one bounded bulk chunk")
+        assertTrue(batchedEntries >= 4, "Bulk chunk carried $batchedEntries facts")
     }
 
     @Test
@@ -142,9 +139,13 @@ class KotlinPsiSymbolProducerTest {
         var batches = 0
         val tracked =
             object : CodeIndexStore by store {
-                override fun <T> transaction(block: () -> T): T = store.transaction {
+                override fun putSorted(entries: List<Pair<CodeIndexKey, CodeIndexRecord>>) {
                     batches++
-                    block()
+                    store.putSorted(entries)
+                }
+
+                override fun put(key: CodeIndexKey, record: CodeIndexRecord) {
+                    error("Unbatched Kotlin fact write: ${key.value}")
                 }
             }
         val sources =
@@ -159,7 +160,7 @@ class KotlinPsiSymbolProducerTest {
                 IndexBuildContext.forInlineSources(tracked, "batched-kotlin-large", sources),
                 tracked,
             )
-        assertEquals(3, batches, "Capped batches keep transactions bounded per emit batch")
+        assertEquals(1, batches, "One bounded bulk chunk covers this changed source set")
     }
 
     @Test

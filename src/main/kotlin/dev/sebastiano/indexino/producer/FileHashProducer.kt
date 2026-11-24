@@ -33,10 +33,11 @@ internal class FileHashProducer : IndexProducer {
             true
         }
         removedKeys.forEach(store::delete)
+        val facts = SortedFactBuffer(store, displayName)
         files.forEachIndexed { index, source ->
             context.reportFileProgress(index + 1, files.size, source)
             val hash = context.sourceHash(source)
-            store.put(
+            facts.put(
                 CodeIndexKey.file("${source.originId}:${source.path}", hash),
                 FileHashRecord(
                     relativePath = source.path,
@@ -46,6 +47,7 @@ internal class FileHashProducer : IndexProducer {
                 ),
             )
         }
+        facts.flush()
     }
 
     companion object {

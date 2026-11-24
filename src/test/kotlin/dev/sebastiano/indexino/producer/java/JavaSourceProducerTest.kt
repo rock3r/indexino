@@ -90,24 +90,21 @@ class JavaSourceProducerTest {
     @Test
     fun `writes Java facts once in file batches while preserving forward parameter names`() {
         withStore { delegate ->
-            var depth = 0
             var unbatched = 0
             val writes = mutableMapOf<CodeIndexKey, Int>()
+            var batches = 0
             val store =
                 object : CodeIndexStore by delegate {
                     override fun put(key: CodeIndexKey, record: CodeIndexRecord) {
-                        if (depth == 0) unbatched++
+                        unbatched++
                         writes[key] = (writes[key] ?: 0) + 1
                         delegate.put(key, record)
                     }
 
-                    override fun <T> transaction(block: () -> T): T = delegate.transaction {
-                        depth++
-                        try {
-                            block()
-                        } finally {
-                            depth--
-                        }
+                    override fun putSorted(entries: List<Pair<CodeIndexKey, CodeIndexRecord>>) {
+                        batches++
+                        entries.forEach { (key, _) -> writes[key] = (writes[key] ?: 0) + 1 }
+                        delegate.putSorted(entries)
                     }
                 }
             JavaSourceProducer()
@@ -131,7 +128,9 @@ class JavaSourceProducerTest {
                     .single()
             assertEquals(listOf("Target#take"), call.candidateSymbolFqns)
             assertEquals("expected", call.arguments.single().resolvedName)
-            assertEquals(0 to 1, unbatched to writes.values.max())
+            assertEquals(0, unbatched, "Every fact write must go through the bulk boundary")
+            assertEquals(1, batches, "Two files fit in one bounded bulk chunk")
+            assertEquals(1, writes.values.max())
         }
     }
 

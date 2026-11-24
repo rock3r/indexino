@@ -6,9 +6,11 @@ import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
 import dev.sebastiano.indexino.core.record.ResourceUsageRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
+import dev.sebastiano.indexino.producer.FactSink
 import dev.sebastiano.indexino.producer.IndexBuildContext
 import dev.sebastiano.indexino.producer.IndexProducer
 import dev.sebastiano.indexino.producer.IndexedSource
+import dev.sebastiano.indexino.producer.SortedFactBuffer
 import dev.sebastiano.indexino.producer.SourceRecordCleanup
 import java.io.StringReader
 import javax.xml.stream.XMLInputFactory
@@ -29,6 +31,7 @@ internal class XmlResourceProducer : IndexProducer {
     override fun produce(context: IndexBuildContext, store: CodeIndexStore) {
         SourceRecordCleanup.deleteXmlOriginRecords(store, affectedResourceSources(context).toSet())
         val xmlFiles = resourceFilesToProcess(context)
+        val facts = SortedFactBuffer(store, displayName)
         xmlFiles.forEachIndexed { index, indexedSource ->
             context.reportFileProgress(index + 1, xmlFiles.size, indexedSource)
             val source =
@@ -37,8 +40,9 @@ internal class XmlResourceProducer : IndexProducer {
                 } else {
                     ""
                 }
-            parse(indexedSource, source, store, context)
+            parse(indexedSource, source, facts, context)
         }
+        facts.flush()
     }
 
     private fun affectedResourceSources(context: IndexBuildContext): List<IndexedSource> =
@@ -68,7 +72,7 @@ internal class XmlResourceProducer : IndexProducer {
     private fun parse(
         indexedSource: IndexedSource,
         source: String,
-        store: CodeIndexStore,
+        sink: FactSink,
         context: IndexBuildContext,
     ) {
         val relativePath = indexedSource.path
@@ -77,7 +81,7 @@ internal class XmlResourceProducer : IndexProducer {
         val pathResource = ResourceMetadata.resourceFromPath(relativePath)
         if (pathResource != null && pathResource.type != "values") {
             putResource(
-                store,
+                sink,
                 indexedSource,
                 pathResource.type,
                 pathResource.name,
@@ -110,7 +114,7 @@ internal class XmlResourceProducer : IndexProducer {
                             )
                         declareStyleableName =
                             indexStartElement(
-                                store = store,
+                                sink = sink,
                                 indexedSource = indexedSource,
                                 source = source,
                                 reader = reader,
@@ -134,14 +138,14 @@ internal class XmlResourceProducer : IndexProducer {
                 }
             }
             reader.close()
-            indexTextReferences(store, indexedSource, source, sourcePositions, packageName)
+            indexTextReferences(sink, indexedSource, source, sourcePositions, packageName)
         } catch (exception: XMLStreamException) {
             throw IllegalArgumentException("$relativePath: ${exception.message}", exception)
         }
     }
 
     private fun indexStartElement(
-        store: CodeIndexStore,
+        sink: FactSink,
         indexedSource: IndexedSource,
         source: String,
         reader: XMLStreamReader,
@@ -166,7 +170,7 @@ internal class XmlResourceProducer : IndexProducer {
                         activeDeclareStyleable = it.name
                     }
                     putResource(
-                        store,
+                        sink,
                         indexedSource,
                         it.type,
                         it.name,
@@ -183,7 +187,7 @@ internal class XmlResourceProducer : IndexProducer {
                 activeDeclareStyleable != null
         ) {
             putNestedStyleableAttribute(
-                store,
+                sink,
                 indexedSource,
                 activeDeclareStyleable,
                 reader,
@@ -203,7 +207,7 @@ internal class XmlResourceProducer : IndexProducer {
             val decodedValue = decodeXml(rawValue, sourcePositions.isXml11)
             val valuePosition = sourcePositions.at(rawAttribute.valueStart)
             indexStyleParent(
-                store,
+                sink,
                 indexedSource,
                 reader.getAttributeLocalName(attributeIndex),
                 decodedValue.value,
@@ -213,7 +217,7 @@ internal class XmlResourceProducer : IndexProducer {
                 packageName,
             )
             indexRawValue(
-                store,
+                sink,
                 indexedSource,
                 rawValue,
                 sourcePositions,
@@ -225,7 +229,7 @@ internal class XmlResourceProducer : IndexProducer {
     }
 
     private fun putNestedStyleableAttribute(
-        store: CodeIndexStore,
+        sink: FactSink,
         indexedSource: IndexedSource,
         declareStyleableName: String,
         reader: XMLStreamReader,
@@ -238,7 +242,7 @@ internal class XmlResourceProducer : IndexProducer {
             reader.getAttributeValue(null, "name")?.takeIf(String::isNotBlank) ?: return
         if (':' !in attributeName) {
             putResource(
-                store,
+                sink,
                 indexedSource,
                 "attr",
                 attributeName,
@@ -249,7 +253,7 @@ internal class XmlResourceProducer : IndexProducer {
             )
         }
         putResource(
-            store,
+            sink,
             indexedSource,
             "styleable",
             "${declareStyleableName}_${attributeName.replace(':', '_')}",
@@ -261,7 +265,7 @@ internal class XmlResourceProducer : IndexProducer {
     }
 
     private fun indexRawValue(
-        store: CodeIndexStore,
+        sink: FactSink,
         indexedSource: IndexedSource,
         rawValue: String,
         sourcePositions: XmlSourcePositions,
@@ -273,12 +277,12 @@ internal class XmlResourceProducer : IndexProducer {
             val rawMatchOffset = decodedValue.rawOffsets[match.range.first]
             val absoluteOffset = valueOffset + rawMatchOffset
             val position = sourcePositions.at(absoluteOffset)
-            indexMatch(store, indexedSource, match, position, absoluteOffset, resolvedPackageName)
+            indexMatch(sink, indexedSource, match, position, absoluteOffset, resolvedPackageName)
         }
     }
 
     private fun indexLiteralValue(
-        store: CodeIndexStore,
+        sink: FactSink,
         indexedSource: IndexedSource,
         value: String,
         sourcePositions: XmlSourcePositions,
@@ -288,7 +292,7 @@ internal class XmlResourceProducer : IndexProducer {
         RESOURCE_REFERENCE.findAll(value).forEach { match ->
             val absoluteOffset = valueOffset + match.range.first
             indexMatch(
-                store,
+                sink,
                 indexedSource,
                 match,
                 sourcePositions.at(absoluteOffset),
@@ -299,7 +303,7 @@ internal class XmlResourceProducer : IndexProducer {
     }
 
     private fun indexMatch(
-        store: CodeIndexStore,
+        sink: FactSink,
         indexedSource: IndexedSource,
         match: MatchResult,
         position: SourcePosition,
@@ -312,7 +316,7 @@ internal class XmlResourceProducer : IndexProducer {
         val name = match.groupValues[RESOURCE_NAME_GROUP]
         if (createsId && packageName == null && type == "id") {
             putResource(
-                store,
+                sink,
                 indexedSource,
                 type,
                 name,
@@ -323,7 +327,7 @@ internal class XmlResourceProducer : IndexProducer {
             )
         } else {
             val target = resourceFqn(packageName, type, name)
-            store.put(
+            sink.put(
                 CodeIndexKey.ref(
                     target,
                     indexedSource.originId,
@@ -344,7 +348,7 @@ internal class XmlResourceProducer : IndexProducer {
                     candidateSymbolFqns = listOf(target),
                 ),
             )
-            store.put(
+            sink.put(
                 CodeIndexKey.resourceUsage(
                     packageName = packageName ?: resolvedPackageName,
                     type = type,
@@ -370,7 +374,7 @@ internal class XmlResourceProducer : IndexProducer {
     }
 
     private fun indexTextReferences(
-        store: CodeIndexStore,
+        sink: FactSink,
         indexedSource: IndexedSource,
         source: String,
         sourcePositions: XmlSourcePositions,
@@ -382,7 +386,7 @@ internal class XmlResourceProducer : IndexProducer {
                 source.indexOf('<', textStart).let { if (it >= 0) it else source.length }
             if (markupStart > textStart) {
                 indexRawValue(
-                    store,
+                    sink,
                     indexedSource,
                     source.substring(textStart, markupStart),
                     sourcePositions,
@@ -398,7 +402,7 @@ internal class XmlResourceProducer : IndexProducer {
                         if (it >= 0) it else source.length
                     }
                 indexLiteralValue(
-                    store,
+                    sink,
                     indexedSource,
                     source.substring(contentStart, contentEnd),
                     sourcePositions,
@@ -415,7 +419,7 @@ internal class XmlResourceProducer : IndexProducer {
     }
 
     private fun indexStyleParent(
-        store: CodeIndexStore,
+        sink: FactSink,
         indexedSource: IndexedSource,
         attributeName: String?,
         value: String,
@@ -438,7 +442,7 @@ internal class XmlResourceProducer : IndexProducer {
             }
         val styleName = value.substringAfter(':').substringAfter('/')
         val target = resourceFqn(stylePackage, "style", styleName)
-        store.put(
+        sink.put(
             CodeIndexKey.ref(target, indexedSource.originId, indexedSource.path, line, column),
             ReferenceRecord(
                 symbolFqn = target,
@@ -453,7 +457,7 @@ internal class XmlResourceProducer : IndexProducer {
                 candidateSymbolFqns = listOf(target),
             ),
         )
-        store.put(
+        sink.put(
             CodeIndexKey.resourceUsage(
                 packageName = stylePackage ?: resolvedPackageName,
                 type = "style",
@@ -478,7 +482,7 @@ internal class XmlResourceProducer : IndexProducer {
     }
 
     private fun putResource(
-        store: CodeIndexStore,
+        sink: FactSink,
         indexedSource: IndexedSource,
         type: String,
         name: String,
@@ -489,7 +493,7 @@ internal class XmlResourceProducer : IndexProducer {
     ) {
         val fqn = resourceFqn(type, name)
         val qualifiers = ResourceMetadata.resourceFromPath(indexedSource.path)?.qualifiers.orEmpty()
-        store.put(
+        sink.put(
             CodeIndexKey.resourceDefinition(
                 packageName = packageName,
                 type = type,
@@ -512,7 +516,7 @@ internal class XmlResourceProducer : IndexProducer {
                 originId = indexedSource.originId,
             ),
         )
-        store.put(
+        sink.put(
             CodeIndexKey.resource(
                 type,
                 name,
