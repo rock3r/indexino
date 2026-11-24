@@ -200,8 +200,11 @@ internal class IndexBuildRunner(
             timedPhase("watcher-registration") { register(sources, latestTopologyRoots) }
         }
         beforeSourceCapture?.invoke(sources)
+        val sourceSpillDirectory = refreshCacheRoot.resolve(SOURCE_SPILL_DIRECTORY)
         val sourceSnapshot =
             timedPhase("source-capture") {
+                // A build that failed before releasing its spill leaves it for this scrub.
+                sourceSpillDirectory.toFile().deleteRecursively()
                 SourceContentSnapshot.capture(
                     sources,
                     inheritedSourceHashes,
@@ -212,6 +215,7 @@ internal class IndexBuildRunner(
                                 refreshCacheRoot.resolve(SOURCE_HASH_CACHE_FILE)
                             )
                         else null,
+                    spillDirectory = sourceSpillDirectory,
                 )
             }
         val inheritedCount = sourceSnapshot.inheritedCount()
@@ -413,6 +417,8 @@ internal class IndexBuildRunner(
             }
         } finally {
             pendingOrigins?.close()
+            // The snapshot is the last consumer's source of captured bytes; release its spill.
+            sourceSnapshot.close()
         }
         machineProgress?.completed("indexed")
         return BuildExitCodes.SUCCESS
@@ -863,6 +869,7 @@ internal class IndexBuildRunner(
         const val TOPOLOGY_CACHE_DIRECTORY = "topology"
         const val SOURCE_HASH_CACHE_FILE = "source-hashes"
         const val ORIGIN_STATE_CACHE_DIRECTORY = "origin-states"
+        const val SOURCE_SPILL_DIRECTORY = "source-spill"
     }
 }
 

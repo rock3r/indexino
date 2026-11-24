@@ -7,9 +7,11 @@ import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.store.hasSymbol
 import dev.sebastiano.indexino.parse.KotlinPsiParserPool
+import dev.sebastiano.indexino.producer.FactSink
 import dev.sebastiano.indexino.producer.IndexBuildContext
 import dev.sebastiano.indexino.producer.IndexProducer
 import dev.sebastiano.indexino.producer.IndexedSource
+import dev.sebastiano.indexino.producer.SortedFactBuffer
 import dev.sebastiano.indexino.producer.SourceRecordCleanup
 import dev.sebastiano.indexino.producer.xml.ResourceMetadata
 import java.util.concurrent.TimeUnit
@@ -86,28 +88,26 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                 mergeStoredSymbols,
             )
         timedPhase(context, "kotlin-fact-write") {
+            val facts = SortedFactBuffer(store, displayName)
             var processed = 0
-            parsed.chunked(EMIT_BATCH_SIZE).forEach { batch ->
+            parsed.forEach { file ->
                 if (Thread.currentThread().isInterrupted) {
                     throw InterruptedException("Kotlin indexing interrupted")
                 }
-                store.transaction {
-                    batch.forEach { file ->
-                        processed += 1
-                        context.reportFileProgress(processed, parsed.size, file.source)
-                        emit(file, symbols, store)
-                    }
-                }
+                processed += 1
+                context.reportFileProgress(processed, parsed.size, file.source)
+                emit(file, symbols, facts)
             }
+            facts.flush()
         }
     }
 
-    private fun emit(file: KotlinParsedFile, symbols: KotlinProjectSymbols, store: CodeIndexStore) {
+    private fun emit(file: KotlinParsedFile, symbols: KotlinProjectSymbols, sink: FactSink) {
         val originId = file.source.originId
         val relativePath = file.source.path
         val facts = file.facts
         facts.symbols.forEach { symbol ->
-            store.put(
+            sink.put(
                 CodeIndexKey.symbolDefinition(
                     symbol.fqn,
                     originId,
@@ -121,7 +121,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
         facts.calls.forEach { draft ->
             val target = draft.target?.let { resolution -> resolveCall(resolution, symbols) }
             if (target != null) {
-                store.put(
+                sink.put(
                     CodeIndexKey.ref(
                         target.symbolFqn,
                         originId,
@@ -162,7 +162,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                             ?.fqn
                     }
                 }
-            store.put(
+            sink.put(
                 CodeIndexKey.call(draft.identity),
                 CallSiteRecord(
                     identity = draft.identity,
@@ -186,7 +186,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
             )
         }
         facts.memberReferences.forEach { reference ->
-            store.put(
+            sink.put(
                 CodeIndexKey.ref(
                     reference.symbolFqn,
                     originId,
@@ -197,8 +197,8 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                 reference,
             )
         }
-        facts.qualifiedResourceUsages.forEach { usage -> store.put(resourceUsageKey(usage), usage) }
-        facts.staticResourceUsages.forEach { usage -> store.put(resourceUsageKey(usage), usage) }
+        facts.qualifiedResourceUsages.forEach { usage -> sink.put(resourceUsageKey(usage), usage) }
+        facts.staticResourceUsages.forEach { usage -> sink.put(resourceUsageKey(usage), usage) }
     }
 
     private fun resolveCall(
@@ -373,6 +373,5 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
 
     private companion object {
         const val LANGUAGE = "kotlin"
-        const val EMIT_BATCH_SIZE = 64
     }
 }

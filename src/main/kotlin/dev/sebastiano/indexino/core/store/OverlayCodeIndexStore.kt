@@ -18,6 +18,10 @@ internal class OverlayCodeIndexStore(
         delta.put(key, record)
     }
 
+    override fun putSorted(entries: List<Pair<CodeIndexKey, CodeIndexRecord>>) {
+        delta.putSorted(entries)
+    }
+
     override fun delete(key: CodeIndexKey) {
         delta.delete(key)
     }

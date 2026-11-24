@@ -8,9 +8,11 @@ import dev.sebastiano.indexino.core.record.ResourceUsageRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.store.hasSymbol
+import dev.sebastiano.indexino.producer.FactSink
 import dev.sebastiano.indexino.producer.IndexBuildContext
 import dev.sebastiano.indexino.producer.IndexProducer
 import dev.sebastiano.indexino.producer.IndexedSource
+import dev.sebastiano.indexino.producer.SortedFactBuffer
 import dev.sebastiano.indexino.producer.SourceRecordCleanup
 import dev.sebastiano.indexino.producer.xml.ResourceMetadata
 
@@ -69,32 +71,30 @@ internal class JavaSourceProducer : IndexProducer {
                 mergeStoredSymbols,
             )
         val resourceDefinitions = JavaResourceDefinitionLookup(store)
+        val facts = SortedFactBuffer(store, displayName)
         var processed = 0
-        parsed.chunked(EMIT_BATCH_SIZE).forEach { batch ->
+        parsed.forEach { file ->
             if (Thread.currentThread().isInterrupted) {
                 throw InterruptedException("Java indexing interrupted")
             }
-            store.transaction {
-                batch.forEach { file ->
-                    processed += 1
-                    context.reportFileProgress(processed, parsed.size, file.source)
-                    emit(file, symbols, resourceDefinitions, store)
-                }
-            }
+            processed += 1
+            context.reportFileProgress(processed, parsed.size, file.source)
+            emit(file, symbols, resourceDefinitions, facts)
         }
+        facts.flush()
     }
 
     private fun emit(
         file: JavaParsedFile,
         symbols: JavaProjectSymbols,
         resourceDefinitions: JavaResourceDefinitionLookup,
-        store: CodeIndexStore,
+        sink: FactSink,
     ) {
         val originId = file.source.originId
         val relativePath = file.source.path
         val facts = file.facts
         facts.symbols.forEach { symbol ->
-            store.put(
+            sink.put(
                 CodeIndexKey.symbolDefinition(
                     symbol.fqn,
                     originId,
@@ -107,7 +107,7 @@ internal class JavaSourceProducer : IndexProducer {
         }
         facts.references.forEach { draft ->
             val target = draft.target.resolve(symbols::hasSymbol)
-            store.put(
+            sink.put(
                 CodeIndexKey.ref(
                     target.symbolFqn,
                     originId,
@@ -138,7 +138,7 @@ internal class JavaSourceProducer : IndexProducer {
                         symbols.parameterNames(resolved.symbolFqn, draft.arguments.size, originId)
                     }
                     .orEmpty()
-            store.put(
+            sink.put(
                 CodeIndexKey.call(draft.identity),
                 CallSiteRecord(
                     identity = draft.identity,
@@ -166,7 +166,7 @@ internal class JavaSourceProducer : IndexProducer {
         facts.resourceUsages.forEach { draft ->
             if (!draft.requireDefinition || resourceDefinitions.has(draft.record)) {
                 val record = draft.record
-                store.put(
+                sink.put(
                     CodeIndexKey.resourceUsage(
                         packageName = record.packageName,
                         type = record.type,
@@ -279,6 +279,5 @@ internal class JavaSourceProducer : IndexProducer {
 
     private companion object {
         const val LANGUAGE = "java"
-        const val EMIT_BATCH_SIZE = 64
     }
 }
