@@ -910,10 +910,11 @@ class InProcessIndexinoTest {
                     progress.contains("index phase=source-resolution state=started"),
                     "$progress",
                 )
+                // The stale in-memory capture is gone, so the edited file must be re-read. The
+                // other sources may still be inherited through the stat-verified source-hash
+                // cache, whose reuse proves content identity rather than capture freshness.
                 assertTrue(
-                    progress.any {
-                        it.matches(Regex("index source-capture read=[1-9]\\d* inherited=0"))
-                    },
+                    progress.any { it.matches(Regex("index source-capture read=[1-9]\\d*.*")) },
                     "$progress",
                 )
                 runSuspend { first.snapshot(FreshnessPolicy.AWAIT_CURRENT) }

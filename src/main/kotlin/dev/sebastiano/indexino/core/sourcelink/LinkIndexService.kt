@@ -2,6 +2,7 @@ package dev.sebastiano.indexino.core.sourcelink
 
 import dev.sebastiano.indexino.api.InProcessCacheLayout
 import dev.sebastiano.indexino.core.cache.WorkspaceGenerationManifestStore
+import dev.sebastiano.indexino.core.git.GitProcessOutput
 import dev.sebastiano.indexino.model.ArtifactDigest
 import dev.sebastiano.indexino.model.IndexinoInternalApi
 import dev.sebastiano.indexino.model.LinkGenerationId
@@ -226,13 +227,10 @@ internal class LinkIndexService(private val cacheRoot: Path, private val consume
     }
 
     private fun isDirty(checkoutRoot: Path): Boolean {
-        val process =
-            ProcessBuilder("git", "-C", checkoutRoot.toString(), "status", "--porcelain")
-                .redirectErrorStream(true)
-                .start()
-        val output = process.inputStream.bufferedReader().readText()
-        process.waitFor()
-        return output.isNotBlank()
+        val output = GitProcessOutput.readStdout(checkoutRoot, listOf("status", "--porcelain"))
+        // A failed command keeps the checkout dirty, matching the previous merged-stream
+        // behavior where Git's error text made the output non-blank.
+        return output == null || output.isNotBlank()
     }
 
     private fun gitHeadOrNull(checkoutRoot: Path): String? {
@@ -242,16 +240,8 @@ internal class LinkIndexService(private val cacheRoot: Path, private val consume
         ) {
             return null
         }
-        return runCatching {
-                ProcessBuilder("git", "-C", checkoutRoot.toString(), "rev-parse", "HEAD")
-                    .redirectErrorStream(true)
-                    .start()
-                    .inputStream
-                    .bufferedReader()
-                    .readText()
-                    .trim()
-            }
-            .getOrNull()
+        return GitProcessOutput.readStdout(checkoutRoot, listOf("rev-parse", "HEAD"))
+            ?.trim()
             ?.takeIf(String::isNotBlank)
     }
 }

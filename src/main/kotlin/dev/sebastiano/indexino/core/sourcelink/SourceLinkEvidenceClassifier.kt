@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.core.sourcelink
 
+import dev.sebastiano.indexino.core.git.GitProcessOutput
 import dev.sebastiano.indexino.model.ArtifactDigest
 import dev.sebastiano.indexino.model.ResolvedComponentIdentity
 import dev.sebastiano.indexino.model.SourceLinkCheckout
@@ -132,12 +133,8 @@ internal object SourceLinkEvidenceClassifier {
     private fun gitHeadOrNull(directory: Path): String? =
         runCatching { gitRevParse(directory, "HEAD") }.getOrNull()
 
-    private fun gitRevParse(directory: Path, ref: String): String? {
-        val process =
-            ProcessBuilder("git", "-C", directory.toString(), "rev-parse", ref)
-                .redirectErrorStream(true)
-                .start()
-        if (process.waitFor() != 0) return null
-        return process.inputStream.bufferedReader().readText().trim().takeIf(String::isNotBlank)
-    }
+    private fun gitRevParse(directory: Path, ref: String): String? =
+        GitProcessOutput.readStdout(directory, listOf("rev-parse", ref))
+            ?.trim()
+            ?.takeIf(String::isNotBlank)
 }

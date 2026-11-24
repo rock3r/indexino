@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.topology
 
+import dev.sebastiano.indexino.core.git.GitProcessOutput
 import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
@@ -114,38 +115,17 @@ internal object SourceOriginResolver {
                 .take(EXTERNAL_ORIGIN_HASH_LENGTH)
     }
 
-    private fun gitRemoteUrl(root: Path): String? {
-        val process =
-            runCatching {
-                    ProcessBuilder("git", "-C", root.toString(), "remote", "get-url", "origin")
-                        .redirectErrorStream(true)
-                        .start()
-                }
-                .getOrNull() ?: return null
-        val output = process.inputStream.bufferedReader().readText().trim()
-        return output.takeIf { process.waitFor() == 0 && it.isNotBlank() }
-    }
+    private fun gitRemoteUrl(root: Path): String? =
+        GitProcessOutput.readStdout(root, listOf("remote", "get-url", "origin"))
+            ?.trim()
+            ?.takeIf(String::isNotBlank)
 
-    private fun findGitRoot(directory: Path): Path? {
-        val process =
-            runCatching {
-                    ProcessBuilder(
-                            "git",
-                            "-C",
-                            directory.toString(),
-                            "rev-parse",
-                            "--show-toplevel",
-                        )
-                        .redirectErrorStream(true)
-                        .start()
-                }
-                .getOrNull() ?: return null
-        val output = process.inputStream.bufferedReader().readText().trim()
-        return output
-            .takeIf { process.waitFor() == 0 && it.isNotBlank() }
+    private fun findGitRoot(directory: Path): Path? =
+        GitProcessOutput.readStdout(directory, listOf("rev-parse", "--show-toplevel"))
+            ?.trim()
+            ?.takeIf(String::isNotBlank)
             ?.let(Path::of)
             ?.toRealPath()
-    }
 
     private fun originId(workspace: Path, originRoot: Path): String =
         if (originRoot == workspace) WORKSPACE_ORIGIN_ID

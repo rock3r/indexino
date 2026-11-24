@@ -1,5 +1,6 @@
 package dev.sebastiano.indexino.core.cache
 
+import dev.sebastiano.indexino.core.git.GitProcessOutput
 import dev.sebastiano.indexino.core.manifest.IndexManifest
 import dev.sebastiano.indexino.core.manifest.ManifestFreshnessCriteria
 import java.nio.file.Files
@@ -154,16 +155,9 @@ internal object WorktreeForkCompatibility {
 internal object GitWorktreeLayout {
     fun commonDir(project: Path): String? {
         if (!Files.exists(project.resolve(".git"))) return null
-        val process =
-            try {
-                ProcessBuilder("git", "-C", project.toString(), "rev-parse", "--git-common-dir")
-                    .redirectErrorStream(true)
-                    .start()
-            } catch (_: java.io.IOException) {
-                return null
-            }
-        val output = process.inputStream.bufferedReader().readText().trim()
-        if (process.waitFor() != 0 || output.isBlank()) return null
+        val output =
+            GitProcessOutput.readStdout(project, listOf("rev-parse", "--git-common-dir"))?.trim()
+        if (output.isNullOrBlank()) return null
         val resolved =
             Path.of(output).let { parsed ->
                 if (parsed.isAbsolute) parsed else project.resolve(parsed)
