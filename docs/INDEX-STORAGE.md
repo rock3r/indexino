@@ -49,6 +49,10 @@ worktree for product storage.
     source-links/registry.json           # dependency-to-source link registry snapshot
     source-links/generations/<link-generation>/snapshot.json
     change-journal
+    refresh-cache/                     # rebuildable refresh accelerators
+      topology/<request-key>.json
+      source-hashes
+      origin-states/<origin-key>.json
     legacy-store/                      # historical bridge; absent from the current layout
       index/<commit>/                  # mutable incremental writer
       clients/<client-id>/generations/<generation-id>/store/ # per-client immutable snapshot copy
@@ -211,12 +215,18 @@ Unrestricted call queries and opaque enclosing-symbol ID resolution still scan.
 
 The name index is updated in the same transaction as primary records, including replacement,
 deletion and rollback. Xodus contextual transactions let nested store operations participate in
-the enclosing batch. Java analysis batches writes per file/pass and emits declarations only in
-the first pass, then references/calls/resource usages in the second pass. Both Java passes share
-an explicitly closed standard file manager with an empty user classpath. Syntax-only parsing does
-not need host dependencies or auto-starting javac plugins; `-proc:none` alone does not exclude them.
-Kotlin also batches fact
-writes per file; it still retains declaration metadata rather than project-wide syntax trees.
+the enclosing batch. Java analysis partitions sources into bounded multi-file `JavacTask` batches
+parsed on worker threads, with one explicitly closed standard file manager and empty user classpath
+per worker. Each compilation unit is walked once into in-memory declarations and unresolved
+candidates; cross-file symbols resolve against a run-local symbol table, falling back to stored
+symbols for files outside the run. Fact writes are batched per parsed batch. Syntax-only parsing
+does not need host dependencies or auto-starting javac plugins; `-proc:none` alone does not exclude
+them.
+Kotlin parses every source once on a bounded worker pool. Each worker gets its own PSI factory from
+one shared `KotlinCoreEnvironment`; the walk returns detached declaration and unresolved
+call/reference/resource records (~1–2 KB per file), so no project-wide syntax trees stay in heap.
+Cross-file candidates resolve against a run-local symbol table with memoized stored-symbol
+fallbacks, and fact writes use bounded multi-file transactions.
 Build contexts lazily index source identities for metadata lookup, avoiding repeated inventory
 scans while keeping origin-specific captured-source reads and unindexed-file fallback unchanged.
 
@@ -256,6 +266,81 @@ their results in source order; each hash comes from the captured bytes. On failu
 interrupts sibling readers and waits for them to exit before the refresh retires. A filesystem read
 that does not respond to interruption can therefore delay error reporting, as it can in a serial
 capture. Watcher-hinted captures retain their sequential inheritance path.
+
+### Refresh accelerators
+
+`workspaces/<workspace-id>/refresh-cache/` holds three rebuildable caches used by manual and CLI
+refreshes. They are accelerators, never fact sources: every entry is validated against current
+filesystem and Git state before use, a missing or corrupt entry falls back to the full path, and
+removing the workspace directory (or `cache forget` / `daemon stop --purge`) discards them.
+
+- **`topology/<request-key>.json`** — the complete `TopologyResult` for one build system, scope and
+  `includeDeps` value, including `codeSourceFiles` roles and external included-build mount
+  metadata. Validation recomputes the content digest of build-definition files and the digest of
+  every file name below the workspace (and included-build roots). Bazel inputs are
+  `BUILD`/`BUILD.bazel`, `*.bzl`, `MODULE.bazel` and its lock, every `*.MODULE.bazel` include
+  segment, `WORKSPACE`/`WORKSPACE.bazel` and locks, `WORKSPACE.bzlmod`, `REPO.bazel`,
+  `.bazelignore`, `.bazelproject` and `.bazelrc*`. Gradle inputs are every `*.gradle`/`*.gradle.kts`
+  script, every `*.versions.toml` catalog, `gradle.properties`, wrapper properties, and the
+  included-build roots. The key also contains the Bazel client version (`.bazelversion`, the
+  launcher identity and `bazel --version`), the JVM version and the Kotlin version. The file-name
+  inventory is required because BUILD globs and Gradle source roots change when files are added or
+  removed without a build-file edit. Gradle output directories are skipped only outside `src`, so a
+  package directory named `build` (or `out`, `target`, `node_modules`) remains covered. A fresh
+  result is stored only when both digests are identical before and after discovery, so an edit
+  racing a query cannot be recorded as the state that produced the older answer. Included-build
+  roots are fingerprinted before and after discovery as well, so a source added to a mount during
+  discovery is not paired with an older source list. Injected query executors, `repo` topology, a
+  Bazel `build-parse` fallback while the Bazel client is healthy, an unknown `codeSourceFiles`
+  classification, and a dependency-inclusive request served by a target-only fallback bypass the
+  cache. A workspace containing a symlinked directory also bypasses the cache, because Bazel globs
+  follow directory links the inventory cannot certify; root-level `bazel-*` convenience links are
+  recorded by target and remain cacheable because they point at build outputs.
+- **`source-hashes`** — append-safe text index from `(originId, origin-path)` to
+  `(size, mtimeNs, ctimeNs, fileKey) -> sha256`. A hit skips the file read; any metadata change
+  re-reads and re-hashes. Entries observed within a two-second timestamp-granularity window are
+  not trusted, so a same-tick edit cannot reuse a stale hash. Writes are atomic and best-effort.
+- **`origin-states/<origin-key>.json`** — one origin's `OriginGitState` (revision, diff sections,
+  tracked status and untracked hashes), reused while `.git/HEAD`, the ref it names,
+  `packed-refs`, the index, effective Git configuration/info files and every working-tree file stat
+  are unchanged. That proof covers tracked and untracked changes outside the indexed closure
+  without spawning `git`. Linked worktrees are supported through their `.git` file and
+  `commondir`; a parent with submodules also fingerprints each submodule's HEAD, refs, packed-refs
+  and index under `.git/modules`, so a gitlink advance invalidates the parent state. Submodules
+  used as their own origin require a caller-provided expected revision. The stamp includes the
+  effective global ignore and attributes files: `core.excludesFile`/`core.attributesFile` when
+  configured, otherwise `$XDG_CONFIG_HOME/git/ignore` and `git/attributes` (falling back to
+  `~/.config/git/...`). Configurations whose output depends on files the stamp cannot observe
+  (dotted or section-form `include`/`includeIf`, `core.bare`/`core.worktree`, textconv, ambiguous
+  quoted values) and Git environment overrides disable reuse instead of guessing.
+
+Git inputs that can change effective output without touching HEAD, the index or worktree files:
+
+| Input | Handling |
+|-------|----------|
+| HEAD, resolved ref, packed-refs, index | content/stat in the stamp |
+| repo/global/system config, `config.worktree` | content/stat in the stamp; `~/.gitconfig` overrides XDG |
+| effective global ignore/attributes | content in the stamp, resolved with Git precedence |
+| `info/exclude`, `info/attributes`, `info/grafts`, `info/sparse-checkout`, `shallow` | content in the stamp |
+| loose `refs/replace/*` | content in the stamp; packed replacement refs are covered by `packed-refs` |
+| `objects/info/alternates` | reuse declined |
+| `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_NAMESPACE`, `GIT_SUPER_PREFIX` | reuse declined |
+| `GIT_REPLACE_REF_BASE`, `GIT_NO_REPLACE_OBJECTS`, `GIT_SHALLOW_FILE`, `GIT_GRAFT_FILE`, `GIT_ATTR_NOSYSTEM`, `GIT_ATTR_SOURCE`, pathspec env | reuse declined |
+| `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_NOSYSTEM`, `XDG_CONFIG_HOME`, `HOME` | the resolved config/ignore files are stamped |
+| worktree files, symlink targets, nested submodule metadata | stamped |
+| config includes, `bare`/`worktree` layout, textconv, ambiguous values | reuse declined |
+
+A live daemon watcher still supplies changed paths for hinted refreshes and inherits unchanged
+source hashes from the published generation; these caches serve cold starts, explicit refreshes,
+and watcher overflow or coverage loss. Source content hashes and publication checks still decide
+whether a generation can be reused or published.
+
+Platform note: Unix uses inode change time (`unix:ctime`) to detect a metadata rewrite that
+restores the modification time. Java NIO exposes no change time on Windows, so the Windows key is
+size, last-write time, creation time and file identity; the timestamp-granularity window plus Git
+index/source hashes are the remaining guarantees. A same-size rewrite that also restores the
+modification time is not distinguishable on Windows by stat alone; such a rewrite can keep a stale
+hash until another metadata field changes.
 
 ### Reclamation
 
@@ -319,7 +404,8 @@ before running this collector against their cache.
 ## Current implementation layout
 
 Refresh writes mutable incremental output only beneath
-`workspaces/<workspace-id>/staging/in-process-writer/`. On a completed refresh, indexino installs an
+`workspaces/<workspace-id>/staging/in-process-writer/`; rebuildable refresh accelerators live
+separately under `refresh-cache/` and never hold published facts. On a completed refresh, indexino installs an
 immutable content-addressed pack in `chunks/<ab>/<cd>/<content-key>`, writes a generation manifest
 under `workspaces/<workspace-id>/generations/<generation-id>/manifest.json`, then atomically updates
 that workspace's `current` pointer. The manifest records the basic-fact schema coordinate, ordered
@@ -394,12 +480,14 @@ missing or source-less origins, and incompatible generations retain sequential p
 before any reuse decision.
 The Kotlin producer skips PSI environment initialization when no Kotlin source needs analysis, after
 performing any required cleanup for deleted Kotlin sources. Its diagnostic `kotlin-cleanup` phase
-measures writable-store record removal; `kotlin-parser` encloses parser initialization, both passes,
-and disposal. Within it, `kotlin-parser-setup` measures PSI environment construction,
-`kotlin-declarations` measures the first parse and symbol collection, and `kotlin-fact-write`
-measures the second parse and transactional fact writes. These durations are nested, not additive;
-the remaining `kotlin-parser` time includes project-symbol assembly and PSI disposal.
-The CLI no longer materializes a merged project-local store after publication. Cumulative delta
+measures writable-store record removal; `kotlin-parser` encloses parser initialization, the single
+parse pass, resolution, fact writes, and disposal. Within it, `kotlin-parser-setup` measures the
+shared PSI environment and worker factories, `kotlin-declarations` measures the parallel parse and
+single walk per file, and `kotlin-fact-write` measures in-memory candidate resolution and bounded
+transactional fact writes. There is no declaration-only parse followed by a fact-write reparse.
+These durations are nested, not additive; the remaining `kotlin-parser` time includes project-symbol
+assembly and PSI disposal. The CLI no longer materializes a merged project-local store after
+publication. Cumulative delta
 materialization and the remaining whole-scope costs still need measurement and reduction before
 promising subsecond updates for large Bazel workspaces.
 

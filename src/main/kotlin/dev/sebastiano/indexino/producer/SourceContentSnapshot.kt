@@ -62,10 +62,12 @@ private constructor(
             sources: List<IndexedSource>,
             inheritedHashes: Map<IndexedSource, String> = emptyMap(),
             hintedPaths: Set<java.nio.file.Path> = emptySet(),
+            hashCache: SourceStatHashCache? = null,
             readBytes: (Path) -> ByteArray = Files::readAllBytes,
         ): SourceContentSnapshot {
-            if (inheritedHashes.isEmpty() && sources.size >= PARALLEL_CAPTURE_MIN_SOURCES)
-                return captureParallel(sources, readBytes)
+            if (inheritedHashes.isEmpty() && sources.size >= PARALLEL_CAPTURE_MIN_SOURCES) {
+                return captureParallel(sources, hashCache, readBytes).also { hashCache?.flush() }
+            }
 
             val captured = mutableListOf<IndexedSource>()
             val entries = sources.associateWith { source ->
@@ -76,16 +78,30 @@ private constructor(
                 )
                     Entry(bytes = null, contentHash = previous)
                 else {
-                    captured += source
-                    val bytes = readBytes(source.originRoot.resolve(source.path))
-                    Entry(bytes = bytes, contentHash = FileHashProducer.contentHash(bytes))
+                    val stat = hashCache?.stat(source)
+                    val cached = stat?.let { hashCache.hashIfUnchanged(source, it) }
+                    if (cached != null) {
+                        Entry(bytes = null, contentHash = cached)
+                    } else {
+                        captured += source
+                        val bytes = readBytes(source.originRoot.resolve(source.path))
+                        val hash = FileHashProducer.contentHash(bytes)
+                        if (stat != null) {
+                            val after = hashCache.stat(source)
+                            if (after != null && stat.sameMetadata(after)) {
+                                hashCache.record(source, after, hash)
+                            }
+                        }
+                        Entry(bytes = bytes, contentHash = hash)
+                    }
                 }
             }
-            return SourceContentSnapshot(entries, captured)
+            return SourceContentSnapshot(entries, captured).also { hashCache?.flush() }
         }
 
         private fun captureParallel(
             sources: List<IndexedSource>,
+            hashCache: SourceStatHashCache?,
             readBytes: (Path) -> ByteArray,
         ): SourceContentSnapshot {
             val entries = arrayOfNulls<Entry>(sources.size)
@@ -102,12 +118,23 @@ private constructor(
                                 val index = next.getAndIncrement()
                                 if (index >= sources.size) break
                                 val source = sources[index]
-                                val bytes = readBytes(source.originRoot.resolve(source.path))
+                                val stat = hashCache?.stat(source)
+                                val cached = stat?.let { hashCache.hashIfUnchanged(source, it) }
                                 entries[index] =
-                                    Entry(
-                                        bytes = bytes,
-                                        contentHash = FileHashProducer.contentHash(bytes),
-                                    )
+                                    if (cached != null) {
+                                        Entry(bytes = null, contentHash = cached)
+                                    } else {
+                                        val bytes =
+                                            readBytes(source.originRoot.resolve(source.path))
+                                        val hash = FileHashProducer.contentHash(bytes)
+                                        if (stat != null) {
+                                            val after = hashCache.stat(source)
+                                            if (after != null && stat.sameMetadata(after)) {
+                                                hashCache.record(source, after, hash)
+                                            }
+                                        }
+                                        Entry(bytes = bytes, contentHash = hash)
+                                    }
                             }
                         }
                     )
@@ -127,7 +154,10 @@ private constructor(
             sources.forEachIndexed { index, source ->
                 ordered[source] = checkNotNull(entries[index])
             }
-            return SourceContentSnapshot(ordered, sources.toList())
+            return SourceContentSnapshot(
+                ordered,
+                ordered.filterValues { it.bytes != null }.keys.toList(),
+            )
         }
     }
 }

@@ -8,10 +8,7 @@ import com.sun.source.tree.MethodTree
 import com.sun.source.tree.Tree
 import com.sun.source.tree.VariableTree
 import com.sun.source.util.TreePath
-import dev.sebastiano.indexino.core.key.CodeIndexKey
-import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
 import dev.sebastiano.indexino.core.record.ResourceUsageRecord
-import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.producer.xml.ResourceMetadata
 
 internal class JavaResourceUsageIndexer(
@@ -19,12 +16,12 @@ internal class JavaResourceUsageIndexer(
     private val relativePath: String,
     private val defaultResourcePackage: String?,
     private val packageName: String,
-    private val store: CodeIndexStore,
     private val imports: Map<String, String>,
     private val staticImports: Map<String, String>,
     private val staticWildcardImports: List<String>,
     private val variableScopes: ArrayDeque<MutableMap<String, String>>,
     private val positionOf: (Tree) -> SourcePosition,
+    private val onUsage: (ResourceUsageRecord, requireDefinition: Boolean) -> Unit,
 ) {
     fun indexStaticResourceUsage(node: IdentifierTree, path: TreePath) {
         val parent = path.parentPath?.leaf
@@ -64,16 +61,7 @@ internal class JavaResourceUsageIndexer(
         val type = segments[rIndex + 1]
         val name = segments[rIndex + 2]
         val start = positionOf(node)
-        store.put(
-            CodeIndexKey.resourceUsage(
-                packageName = resourcePackage,
-                type = type,
-                name = name,
-                originId = originId,
-                relativeFile = relativePath,
-                line = start.line,
-                column = start.column,
-            ),
+        onUsage(
             ResourceUsageRecord(
                 packageName = resourcePackage,
                 type = type,
@@ -85,6 +73,7 @@ internal class JavaResourceUsageIndexer(
                 language = LANGUAGE,
                 originId = originId,
             ),
+            false,
         )
     }
 
@@ -123,17 +112,7 @@ internal class JavaResourceUsageIndexer(
         val resourcePackage = owner.substringBefore(marker)
         val type = owner.substringAfter(marker)
         if ('.' in type || type !in ResourceMetadata.RESOURCE_TYPES) return
-        if (requireDefinition && !hasResourceDefinition(resourcePackage, type, name)) return
-        store.put(
-            CodeIndexKey.resourceUsage(
-                packageName = resourcePackage,
-                type = type,
-                name = name,
-                originId = originId,
-                relativeFile = relativePath,
-                line = start.line,
-                column = start.column,
-            ),
+        onUsage(
             ResourceUsageRecord(
                 packageName = resourcePackage,
                 type = type,
@@ -145,27 +124,8 @@ internal class JavaResourceUsageIndexer(
                 language = LANGUAGE,
                 originId = originId,
             ),
+            requireDefinition,
         )
-    }
-
-    private fun hasResourceDefinition(
-        resourcePackage: String,
-        type: String,
-        name: String,
-    ): Boolean {
-        var found = false
-        store.forEachPrefix("resdef:$resourcePackage:$type:$name:") { _, record ->
-            if (
-                record is ResourceDefinitionRecord &&
-                    record.packageName == resourcePackage &&
-                    record.type == type &&
-                    record.name == name
-            ) {
-                found = true
-            }
-            !found
-        }
-        return found
     }
 
     private fun memberSelectSegments(tree: Tree): List<String>? =

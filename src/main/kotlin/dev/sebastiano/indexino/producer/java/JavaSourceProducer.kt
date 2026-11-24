@@ -1,30 +1,10 @@
 package dev.sebastiano.indexino.producer.java
 
-import com.sun.source.tree.BlockTree
-import com.sun.source.tree.CatchTree
-import com.sun.source.tree.ClassTree
-import com.sun.source.tree.CompilationUnitTree
-import com.sun.source.tree.EnhancedForLoopTree
-import com.sun.source.tree.ExpressionTree
-import com.sun.source.tree.ForLoopTree
-import com.sun.source.tree.IdentifierTree
-import com.sun.source.tree.ImportTree
-import com.sun.source.tree.LambdaExpressionTree
-import com.sun.source.tree.MemberSelectTree
-import com.sun.source.tree.MethodInvocationTree
-import com.sun.source.tree.MethodTree
-import com.sun.source.tree.NewClassTree
-import com.sun.source.tree.Tree
-import com.sun.source.tree.TryTree
-import com.sun.source.tree.VariableTree
-import com.sun.source.util.JavacTask
-import com.sun.source.util.TreePathScanner
-import com.sun.source.util.TreeScanner
-import com.sun.source.util.Trees
 import dev.sebastiano.indexino.core.key.CodeIndexKey
-import dev.sebastiano.indexino.core.record.CallArgumentRecord
 import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.ReferenceRecord
+import dev.sebastiano.indexino.core.record.ResourceDefinitionRecord
+import dev.sebastiano.indexino.core.record.ResourceUsageRecord
 import dev.sebastiano.indexino.core.record.SymbolRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.core.store.hasSymbol
@@ -33,14 +13,6 @@ import dev.sebastiano.indexino.producer.IndexProducer
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.SourceRecordCleanup
 import dev.sebastiano.indexino.producer.xml.ResourceMetadata
-import java.net.URI
-import javax.tools.Diagnostic
-import javax.tools.DiagnosticCollector
-import javax.tools.JavaFileObject
-import javax.tools.SimpleJavaFileObject
-import javax.tools.StandardJavaFileManager
-import javax.tools.StandardLocation
-import javax.tools.ToolProvider
 
 internal class JavaSourceProducer : IndexProducer {
     override val id: String = "java-source"
@@ -64,22 +36,148 @@ internal class JavaSourceProducer : IndexProducer {
             affectedSources.toSet(),
         )
         val javaFiles = sourceFilesToProcess(context)
-        // Seed declarations before resolving calls to files later in source order. Each pass
-        // emits only its own facts, with one transaction per file rather than per record.
-        val compiler =
-            checkNotNull(ToolProvider.getSystemJavaCompiler()) { "JDK compiler is unavailable" }
-        compiler.getStandardFileManager(null, null, null).use { fileManager ->
-            fileManager.setLocationFromPaths(StandardLocation.CLASS_PATH, emptyList())
-            javaFiles.forEach { source ->
-                store.transaction {
-                    parse(source, context.readSource(source), store, context, true, fileManager)
+        if (javaFiles.isEmpty()) return
+        // Parse every file once, in parallel bounded batches. The scanner keeps declaration
+        // metadata and unresolved candidates; no source text is reparsed for a second pass.
+        val parsed =
+            JavaSourceParser()
+                .parse(
+                    javaFiles.map { source ->
+                        JavaParseInput(
+                            source = source,
+                            defaultResourcePackage =
+                                ResourceMetadata.resourcePackage(context, source),
+                        ) {
+                            context.readSource(source)
+                        }
+                    }
+                )
+                .flatMap { batch -> batch.files }
+        check(parsed.size == javaFiles.size) { "Java parse result count changed" }
+        check(parsed.map { file -> file.source } == javaFiles) { "Java parse result order changed" }
+
+        val processedSources =
+            javaFiles.mapTo(HashSet()) { source -> source.originId to source.path }
+        val mergeStoredSymbols =
+            context.sources.any { source ->
+                source.isCode && (source.originId to source.path) !in processedSources
+            }
+        val symbols =
+            JavaProjectSymbols(
+                parsed.flatMap { file -> file.facts.symbols },
+                store,
+                mergeStoredSymbols,
+            )
+        val resourceDefinitions = JavaResourceDefinitionLookup(store)
+        var processed = 0
+        parsed.chunked(EMIT_BATCH_SIZE).forEach { batch ->
+            if (Thread.currentThread().isInterrupted) {
+                throw InterruptedException("Java indexing interrupted")
+            }
+            store.transaction {
+                batch.forEach { file ->
+                    processed += 1
+                    context.reportFileProgress(processed, parsed.size, file.source)
+                    emit(file, symbols, resourceDefinitions, store)
                 }
             }
-            javaFiles.forEachIndexed { index, source ->
-                context.reportFileProgress(index + 1, javaFiles.size, source)
-                store.transaction {
-                    parse(source, context.readSource(source), store, context, false, fileManager)
-                }
+        }
+    }
+
+    private fun emit(
+        file: JavaParsedFile,
+        symbols: JavaProjectSymbols,
+        resourceDefinitions: JavaResourceDefinitionLookup,
+        store: CodeIndexStore,
+    ) {
+        val originId = file.source.originId
+        val relativePath = file.source.path
+        val facts = file.facts
+        facts.symbols.forEach { symbol ->
+            store.put(
+                CodeIndexKey.symbolDefinition(
+                    symbol.fqn,
+                    originId,
+                    relativePath,
+                    symbol.line,
+                    symbol.column,
+                ),
+                symbol,
+            )
+        }
+        facts.references.forEach { draft ->
+            val target = draft.target.resolve(symbols::hasSymbol)
+            store.put(
+                CodeIndexKey.ref(
+                    target.symbolFqn,
+                    originId,
+                    relativePath,
+                    draft.line,
+                    draft.column,
+                ),
+                ReferenceRecord(
+                    symbolFqn = target.symbolFqn,
+                    relativeFile = relativePath,
+                    originId = originId,
+                    line = draft.line,
+                    column = draft.column,
+                    context = draft.context,
+                    language = LANGUAGE,
+                    referencedName = target.name,
+                    qualifier = target.qualifier,
+                    candidateSymbolFqns = target.candidates,
+                    arity = draft.arity,
+                ),
+            )
+        }
+        facts.calls.forEach { draft ->
+            val target = draft.target?.resolve(symbols::hasSymbol)
+            val parameterNames =
+                target
+                    ?.let { resolved ->
+                        symbols.parameterNames(resolved.symbolFqn, draft.arguments.size, originId)
+                    }
+                    .orEmpty()
+            store.put(
+                CodeIndexKey.call(draft.identity),
+                CallSiteRecord(
+                    identity = draft.identity,
+                    calleeName = target?.name ?: draft.fallbackName,
+                    candidateSymbolFqns = target?.candidates.orEmpty(),
+                    receiver = target?.qualifier,
+                    enclosingSymbolFqn = draft.enclosingSymbolFqn,
+                    parentCallIdentity = draft.parentCallIdentity,
+                    relativeFile = relativePath,
+                    originId = originId,
+                    startLine = draft.startLine,
+                    startColumn = draft.startColumn,
+                    startOffset = draft.startOffset,
+                    endLine = draft.endLine,
+                    endColumn = draft.endColumn,
+                    endOffset = draft.endOffset,
+                    arguments =
+                        draft.arguments.mapIndexed { index, argument ->
+                            argument.copy(resolvedName = parameterNames.getOrNull(index))
+                        },
+                    confidence = if (target == null) "UNRESOLVED" else "HEURISTIC",
+                ),
+            )
+        }
+        facts.resourceUsages.forEach { draft ->
+            if (!draft.requireDefinition || resourceDefinitions.has(draft.record)) {
+                val record = draft.record
+                store.put(
+                    CodeIndexKey.resourceUsage(
+                        packageName = record.packageName,
+                        type = record.type,
+                        name = record.name,
+                        originId = record.originId,
+                        relativeFile = record.relativeFile,
+                        line = record.line,
+                        column = record.column,
+                    ),
+                    record,
+                )
             }
         }
     }
@@ -108,660 +206,79 @@ internal class JavaSourceProducer : IndexProducer {
         }
     }
 
-    private fun parse(
-        indexedSource: IndexedSource,
-        source: String,
-        store: CodeIndexStore,
-        context: IndexBuildContext,
-        declarationsOnly: Boolean,
-        fileManager: StandardJavaFileManager,
-    ) {
-        val relativePath = indexedSource.path
-        val compiler =
-            checkNotNull(ToolProvider.getSystemJavaCompiler()) { "JDK compiler is unavailable" }
-        val diagnostics = DiagnosticCollector<JavaFileObject>()
-        val sourceFile = StringJavaFileObject(relativePath, source)
-        val task =
-            compiler.getTask(
-                null,
-                fileManager,
-                diagnostics,
-                listOf("-proc:none"),
-                null,
-                listOf(sourceFile),
-            ) as JavacTask
-        val unit = task.parse().single()
-        val error = diagnostics.diagnostics.firstOrNull { it.kind == Diagnostic.Kind.ERROR }
-        check(error == null) { "$relativePath:${error?.lineNumber}: ${error?.getMessage(null)}" }
-        JavaRecordScanner(
-                indexedSource.originId,
-                relativePath,
-                ResourceMetadata.resourcePackage(context, indexedSource),
-                unit,
-                Trees.instance(task),
-                store,
-                declarationsOnly,
-            )
-            .scan(unit, Unit)
-    }
-
-    private class StringJavaFileObject(path: String, private val source: String) :
-        SimpleJavaFileObject(
-            URI.create("string:///" + path.replace(' ', '_')),
-            JavaFileObject.Kind.SOURCE,
-        ) {
-        override fun getCharContent(ignoreEncodingErrors: Boolean): CharSequence = source
-    }
-
-    @Suppress("TooManyFunctions")
-    private class JavaRecordScanner(
-        private val originId: String,
-        private val relativePath: String,
-        private val defaultResourcePackage: String?,
-        private val unit: CompilationUnitTree,
-        private val trees: Trees,
+    /**
+     * Cross-file lookups for the current run stay in memory. Targets absent from the run-local
+     * table fall back to stored symbols. When any code source is unprocessed, stored declarations
+     * for the same FQN also remain candidates (the symbol namespace is shared across language
+     * producers); merge them before applying caller-origin preference so an incremental result
+     * matches a full rebuild.
+     */
+    private class JavaProjectSymbols(
+        currentRunSymbols: List<SymbolRecord>,
         private val store: CodeIndexStore,
-        private val declarationsOnly: Boolean,
-    ) : TreePathScanner<Unit, Unit>() {
-        private val packageName = unit.packageName?.toString().orEmpty()
-        private val imports = mutableMapOf<String, String>()
-        private val staticImports = mutableMapOf<String, String>()
-        private val staticWildcardImports = mutableListOf<String>()
-        private val classOwners = ArrayDeque<String>()
-        private val classMethodNames = ArrayDeque<Set<String>>()
-        private val classFieldTypes = ArrayDeque<Map<String, String>>()
-        private val classNestedTypes = ArrayDeque<Map<String, String>>()
-        private val classSuperTypes = ArrayDeque<String>()
-        private val variableScopes = ArrayDeque<MutableMap<String, String>>()
-        private val methodOwners = ArrayDeque<String>()
-        private val resourceUsageIndexer =
-            JavaResourceUsageIndexer(
-                originId = originId,
-                relativePath = relativePath,
-                defaultResourcePackage = defaultResourcePackage,
-                packageName = packageName,
-                store = store,
-                imports = imports,
-                staticImports = staticImports,
-                staticWildcardImports = staticWildcardImports,
-                variableScopes = variableScopes,
-                positionOf = { tree ->
-                    val start = position(tree)
-                    JavaResourceUsageIndexer.SourcePosition(start.line, start.column, start.offset)
-                },
-            )
+        private val mergeStoredSymbols: Boolean,
+    ) {
+        private val byFqn = currentRunSymbols.groupBy { symbol -> symbol.fqn }
+        private val storedByFqn = mutableMapOf<String, List<SymbolRecord>>()
+        private val presenceByFqn = mutableMapOf<String, Boolean>()
 
-        override fun visitImport(node: ImportTree, data: Unit?) {
-            val imported = node.qualifiedIdentifier.toString()
-            val target =
-                if (node.isStatic && !imported.endsWith(".*")) {
-                    "${imported.substringBeforeLast('.')}#${imported.substringAfterLast('.')}"
-                } else {
-                    imported
-                }
-            if (node.isStatic && imported.endsWith(".*")) {
-                staticWildcardImports += imported.removeSuffix(".*")
-            } else if (node.isStatic) {
-                staticImports[imported.substringAfterLast('.')] = imported.substringBeforeLast('.')
-            } else if (!imported.endsWith(".*")) {
-                imports[imported.substringAfterLast('.')] = imported
-            }
-            reference(target, imported.substringAfterLast('.'), null, node, "import")
-            super.visitImport(node, data)
-        }
-
-        override fun visitMemberSelect(node: MemberSelectTree, data: Unit?) {
-            val parent = currentPath.parentPath?.leaf
-            if (!declarationsOnly && (parent !is MemberSelectTree || parent.expression != node)) {
-                resourceUsageIndexer.indexResourceUsage(node, currentPath)
-            }
-            super.visitMemberSelect(node, data)
-        }
-
-        override fun visitIdentifier(node: IdentifierTree, data: Unit?) {
-            if (!declarationsOnly) resourceUsageIndexer.indexStaticResourceUsage(node, currentPath)
-            super.visitIdentifier(node, data)
-        }
-
-        override fun visitClass(node: ClassTree, data: Unit?) {
-            val name = node.simpleName.toString()
-            val owner = classOwners.lastOrNull()
-            val fqn =
-                if (name.isBlank()) {
-                    val position = position(node)
-                    val anonymousName = "<anonymous@${position.line}:${position.column}>"
-                    owner?.let { "$it.$anonymousName" } ?: qualify(anonymousName)
-                } else {
-                    owner?.let { "$it.$name" } ?: qualify(name)
-                }
-            if (name.isNotBlank()) {
-                symbol(fqn, name, classKind(node.kind), node, ownerFqn = owner)
-                if (
-                    node.kind == Tree.Kind.CLASS &&
-                        node.members.none { it is MethodTree && it.name.contentEquals("<init>") }
-                ) {
-                    symbol(
-                        fqn = "$fqn#<init>",
-                        name = name,
-                        kind = "constructor",
-                        tree = node,
-                        ownerFqn = fqn,
-                        arity = 0,
-                    )
-                }
-            }
-            classOwners.addLast(fqn)
-            classMethodNames.addLast(
-                node.members
-                    .filterIsInstance<MethodTree>()
-                    .map { it.name.toString() }
-                    .filterNot { it == "<init>" }
-                    .toSet()
-            )
-            val fields =
-                node.members
-                    .filterIsInstance<VariableTree>()
-                    .mapNotNull { field ->
-                        field.type?.toString()?.let { field.name.toString() to it }
-                    }
-                    .toMap()
-            val nestedTypes =
-                node.members
-                    .filterIsInstance<ClassTree>()
-                    .mapNotNull { nested ->
-                        nested.simpleName.toString().takeIf(String::isNotBlank)?.let {
-                            it to "$fqn.$it"
-                        }
-                    }
-                    .toMap()
-            classFieldTypes.addLast(fields)
-            classNestedTypes.addLast(nestedTypes)
-            classSuperTypes.addLast(node.extendsClause?.toString()?.let(::qualifyType).orEmpty())
-            variableScopes.addLast(fields.toMutableMap())
-            try {
-                super.visitClass(node, data)
-            } finally {
-                variableScopes.removeLast()
-                classSuperTypes.removeLast()
-                classNestedTypes.removeLast()
-                classFieldTypes.removeLast()
-                classMethodNames.removeLast()
-                classOwners.removeLast()
-            }
-        }
-
-        override fun visitMethod(node: MethodTree, data: Unit?) {
-            val owner = classOwners.lastOrNull() ?: return super.visitMethod(node, data)
-            val constructor = node.name.contentEquals("<init>")
-            val name = if (constructor) owner.substringAfterLast('.') else node.name.toString()
-            val fqn = if (constructor) "$owner#<init>" else "$owner#$name"
-            val signature =
-                node.parameters.joinToString(prefix = "(", postfix = ")") { it.type.toString() }
-            symbol(
-                fqn = fqn,
-                name = name,
-                kind = if (constructor) "constructor" else "method",
-                tree = node,
-                ownerFqn = owner,
-                signature = signature,
-                arity = node.parameters.size,
-                parameterNames = node.parameters.map { it.name.toString() },
-                isVararg = node.parameters.lastOrNull()?.toString()?.contains("...") == true,
-            )
-            variableScopes.addLast(mutableMapOf())
-            node.parameters.forEach {
-                variableScopes.last()[it.name.toString()] = it.type.toString()
-            }
-            methodOwners.addLast(fqn)
-            try {
-                super.visitMethod(node, data)
-            } finally {
-                methodOwners.removeLast()
-                variableScopes.removeLast()
-            }
-        }
-
-        override fun visitVariable(node: VariableTree, data: Unit?) {
-            val declaredType = node.type?.toString()
-            val resolvedType =
-                if (declaredType.isNullOrBlank() || declaredType == "var") {
-                    (node.initializer as? NewClassTree)?.identifier?.toString()
-                } else {
-                    declaredType
-                }
-            resolvedType?.let { type ->
-                variableScopes.lastOrNull()?.put(node.name.toString(), type)
-            }
-            if (currentPath.parentPath?.leaf is ClassTree) {
-                val owner = classOwners.lastOrNull()
-                if (owner != null) {
-                    symbol("$owner#${node.name}", node.name.toString(), "field", node, owner)
-                }
-            }
-            super.visitVariable(node, data)
-        }
-
-        override fun visitBlock(node: BlockTree, data: Unit?) {
-            variableScopes.addLast(mutableMapOf())
-            try {
-                super.visitBlock(node, data)
-            } finally {
-                variableScopes.removeLast()
-            }
-        }
-
-        override fun visitTry(node: TryTree, data: Unit?) {
-            variableScopes.addLast(mutableMapOf())
-            try {
-                node.resources.forEach { scan(it, data) }
-                scan(node.block, data)
-            } finally {
-                variableScopes.removeLast()
-            }
-            node.catches.forEach { scan(it, data) }
-            scan(node.finallyBlock, data)
-        }
-
-        override fun scan(tree: Tree?, data: Unit?) {
-            val transientScope =
-                tree is ForLoopTree ||
-                    tree is EnhancedForLoopTree ||
-                    tree is LambdaExpressionTree ||
-                    tree is CatchTree
-            if (transientScope) {
-                variableScopes.addLast(mutableMapOf())
-            }
-            try {
-                super.scan(tree, data)
-            } finally {
-                if (transientScope) {
-                    variableScopes.removeLast()
-                }
-            }
-        }
-
-        override fun visitMethodInvocation(node: MethodInvocationTree, data: Unit?) {
-            if (declarationsOnly) return super.visitMethodInvocation(node, data)
-            val target = resolveInvocation(node.methodSelect)
-            if (target != null) {
-                reference(
-                    target = target.symbolFqn,
-                    name = target.name,
-                    qualifier = target.qualifier,
-                    tree = node,
-                    context = "call",
-                    arity = node.arguments.size,
-                    candidates = target.candidates,
-                )
-            }
-            call(node, node.arguments, target, node.methodSelect.toString().substringAfterLast('.'))
-            super.visitMethodInvocation(node, data)
-        }
-
-        override fun visitNewClass(node: NewClassTree, data: Unit?) {
-            if (declarationsOnly) return super.visitNewClass(node, data)
-            val owner = qualifyConstructorType(node.identifier.toString())
-            val target =
-                InvocationTarget(
-                    "$owner#<init>",
-                    node.identifier.toString().substringAfterLast('.'),
-                    null,
-                    listOf("$owner#<init>"),
-                )
-            reference(
-                target = target.symbolFqn,
-                name = target.name,
-                qualifier = null,
-                tree = node,
-                context = "call",
-                arity = node.arguments.size,
-                candidates = target.candidates,
-            )
-            call(node, node.arguments, target, target.name)
-            super.visitNewClass(node, data)
-        }
-
-        private fun call(
-            node: Tree,
-            arguments: List<ExpressionTree>,
-            target: InvocationTarget?,
-            fallbackName: String,
-        ) {
-            val start = position(node)
-            val end = endPosition(node)
-            val identity = callIdentity(start)
-            val parameterNames =
-                target?.let { storedParameterNames(it.symbolFqn, arguments.size) }.orEmpty()
-            val parent =
-                generateSequence(currentPath.parentPath) { it.parentPath }
-                    .map { it.leaf }
-                    .firstOrNull { it is MethodInvocationTree || it is NewClassTree }
-                    ?.let { parentNode -> callIdentity(position(parentNode)) }
-            store.put(
-                CodeIndexKey.call(identity),
-                CallSiteRecord(
-                    identity = identity,
-                    calleeName = target?.name ?: fallbackName,
-                    candidateSymbolFqns = target?.candidates.orEmpty(),
-                    receiver = target?.qualifier,
-                    enclosingSymbolFqn = methodOwners.lastOrNull(),
-                    parentCallIdentity = parent,
-                    relativeFile = relativePath,
-                    originId = originId,
-                    startLine = start.line,
-                    startColumn = start.column,
-                    startOffset = start.offset,
-                    endLine = end.line,
-                    endColumn = end.column,
-                    endOffset = end.offset,
-                    arguments =
-                        arguments.mapIndexed { index, argument ->
-                            val argumentStart = position(argument)
-                            val argumentEnd = endPosition(argument)
-                            CallArgumentRecord(
-                                position = index,
-                                kind = if (argument is LambdaExpressionTree) "LAMBDA" else "VALUE",
-                                resolvedName = parameterNames.getOrNull(index),
-                                startLine = argumentStart.line,
-                                startColumn = argumentStart.column,
-                                startOffset = argumentStart.offset,
-                                endLine = argumentEnd.line,
-                                endColumn = argumentEnd.column,
-                                endOffset = argumentEnd.offset,
-                                nestedCallIdentities = nestedCallIdentities(argument),
-                            )
-                        },
-                    confidence = if (target == null) "UNRESOLVED" else "HEURISTIC",
-                ),
-            )
-        }
-
-        private fun nestedCallIdentities(argument: Tree): List<String> {
-            val identities = mutableListOf<String>()
-            object : TreeScanner<Unit, Unit>() {
-                    override fun visitMethodInvocation(node: MethodInvocationTree, data: Unit?) {
-                        identities += callIdentity(position(node))
-                        return super.visitMethodInvocation(node, data)
-                    }
-
-                    override fun visitNewClass(node: NewClassTree, data: Unit?) {
-                        identities += callIdentity(position(node))
-                        return super.visitNewClass(node, data)
-                    }
-                }
-                .scan(argument, Unit)
-            return identities
-        }
-
-        private fun storedParameterNames(fqn: String, argumentCount: Int): List<String> {
-            val candidates = mutableListOf<SymbolRecord>()
-            store.forEachPrefix("sym:$fqn:") { _, record ->
-                if (record is SymbolRecord && record.fqn == fqn && record.arity == argumentCount) {
-                    candidates += record
-                }
-                true
-            }
-            return (candidates.singleOrNull { it.originId == originId }
+        fun parameterNames(fqn: String, argumentCount: Int, originId: String): List<String> {
+            val currentRun = byFqn[fqn].orEmpty()
+            val candidates =
+                (if (mergeStoredSymbols || currentRun.isEmpty()) {
+                        currentRun + storedSymbols(fqn)
+                    } else {
+                        currentRun
+                    })
+                    .distinct()
+                    .filter { symbol -> symbol.arity == argumentCount }
+            return (candidates.singleOrNull { symbol -> symbol.originId == originId }
                     ?: candidates.singleOrNull())
                 ?.parameterNames
                 .orEmpty()
         }
 
-        private fun resolveInvocation(select: Tree): InvocationTarget? =
-            when (select) {
-                is IdentifierTree -> {
-                    val name = select.name.toString()
-                    val classOwner = classOwners.lastOrNull() ?: return null
-                    val localOwner =
-                        classOwners
-                            .zip(classMethodNames)
-                            .toList()
-                            .asReversed()
-                            .firstOrNull { name in it.second }
-                            ?.first
-                    val explicitStaticOwner = staticImports[name]
-                    when {
-                        localOwner != null -> invocationTarget(localOwner, name, null)
-                        explicitStaticOwner != null ->
-                            invocationTarget(explicitStaticOwner, name, null)
-                        staticWildcardImports.isNotEmpty() ->
-                            invocationTarget(
-                                staticWildcardImports.first(),
-                                name,
-                                null,
-                                staticWildcardImports,
-                            )
-                        else -> {
-                            val superOwner =
-                                classSuperTypes.lastOrNull()?.takeIf(String::isNotBlank)
-                            val inheritedTarget = superOwner?.let { "$it#$name" }
-                            if (inheritedTarget != null && store.hasSymbol(inheritedTarget)) {
-                                invocationTarget(superOwner, name, null)
-                            } else {
-                                invocationTarget(
-                                    classOwner,
-                                    name,
-                                    null,
-                                    listOfNotNull(classOwner, superOwner),
-                                )
-                            }
-                        }
-                    }
+        fun hasSymbol(fqn: String): Boolean =
+            byFqn.containsKey(fqn) || presenceByFqn.getOrPut(fqn) { store.hasSymbol(fqn) }
+
+        private fun storedSymbols(fqn: String): List<SymbolRecord> =
+            storedByFqn.getOrPut(fqn) {
+                val matches = mutableListOf<SymbolRecord>()
+                store.forEachSymbolMatching(fqn, prefix = false) { _, record ->
+                    if (record.fqn == fqn) matches += record
+                    true
                 }
-                is MemberSelectTree -> {
-                    val name = select.identifier.toString()
-                    val receiverType = resolveReceiverType(select.expression) ?: return null
-                    invocationTarget(receiverType, name, select.expression.toString())
-                }
-                else -> null
+                matches
             }
+    }
 
-        private fun resolveReceiverType(receiver: Tree): String? =
-            when (receiver) {
-                is IdentifierTree -> {
-                    val name = receiver.name.toString()
-                    if (name == "this") {
-                        classOwners.lastOrNull()
-                    } else if (name == "super") {
-                        classSuperTypes.lastOrNull()?.takeIf(String::isNotBlank)
-                    } else {
-                        variableScopes
-                            .reversed()
-                            .firstNotNullOfOrNull { it[name] }
-                            ?.let(::qualifyType) ?: qualifyType(name)
+    private class JavaResourceDefinitionLookup(private val store: CodeIndexStore) {
+        private val cache = mutableMapOf<String, Boolean>()
+
+        fun has(usage: ResourceUsageRecord): Boolean {
+            val packageName = usage.packageName.orEmpty()
+            val key = "$packageName:${usage.type}:${usage.name}"
+            val prefix = "resdef:$packageName:${usage.type}:${usage.name}:"
+            return cache.getOrPut(key) {
+                var found = false
+                store.forEachPrefix(prefix) { _, record ->
+                    if (
+                        record is ResourceDefinitionRecord &&
+                            record.packageName == usage.packageName &&
+                            record.type == usage.type &&
+                            record.name == usage.name
+                    ) {
+                        found = true
                     }
+                    !found
                 }
-                is NewClassTree -> qualifyType(receiver.identifier.toString())
-                is MemberSelectTree -> {
-                    val selfReceiver = receiver.expression as? IdentifierTree
-                    if (selfReceiver?.name?.toString() == "this") {
-                        val fieldName = receiver.identifier.toString()
-                        classFieldTypes.lastOrNull()?.get(fieldName)?.let(::qualifyType)
-                    } else if (selfReceiver?.name?.toString() == "super") {
-                        null
-                    } else {
-                        qualifyType(receiver.toString())
-                    }
-                }
-                else -> null
-            }
-
-        private fun qualifyConstructorType(raw: String): String {
-            val type = raw.substringBefore('<').removeSuffix("[]").trim()
-            val outer = type.substringBefore('.')
-            return if ('.' in type && outer.firstOrNull()?.isUpperCase() == true) {
-                val suffix = type.removePrefix(outer)
-                (imports[outer]
-                    ?: classNestedTypes.reversed().firstNotNullOfOrNull { it[outer] }
-                    ?: qualify(outer)) + suffix
-            } else {
-                qualifyType(type)
+                found
             }
         }
-
-        private fun qualifyType(raw: String): String {
-            val type = raw.substringBefore('<').removeSuffix("[]").trim()
-            imports[type]?.let {
-                return it
-            }
-            if ('.' in type) {
-                return type
-            }
-            return classNestedTypes.reversed().firstNotNullOfOrNull { it[type] } ?: qualify(type)
-        }
-
-        private val qualify: (String) -> String = { name ->
-            if (packageName.isBlank()) name else "$packageName.$name"
-        }
-
-        private fun invocationTarget(
-            owner: String,
-            name: String,
-            qualifier: String?,
-            candidateOwners: List<String> = listOf(owner),
-        ): InvocationTarget {
-            val direct = "$owner#$name"
-            val propertyName = javaBeanPropertyName(name)
-            return InvocationTarget(
-                direct,
-                name,
-                qualifier,
-                candidateOwners
-                    .flatMap { candidateOwner ->
-                        listOfNotNull(
-                            "$candidateOwner#$name",
-                            propertyName?.let { "$candidateOwner#$it" },
-                        )
-                    }
-                    .distinct(),
-            )
-        }
-
-        private fun symbol(
-            fqn: String,
-            name: String,
-            kind: String,
-            tree: Tree,
-            ownerFqn: String? = null,
-            signature: String? = null,
-            arity: Int? = null,
-            parameterNames: List<String> = emptyList(),
-            isVararg: Boolean = false,
-        ) {
-            if (!declarationsOnly) return
-            val position = position(tree)
-            store.put(
-                CodeIndexKey.symbolDefinition(
-                    fqn,
-                    originId,
-                    relativePath,
-                    position.line,
-                    position.column,
-                ),
-                SymbolRecord(
-                    fqn = fqn,
-                    relativeFile = relativePath,
-                    originId = originId,
-                    line = position.line,
-                    column = position.column,
-                    kind = kind,
-                    name = name,
-                    language = LANGUAGE,
-                    ownerFqn = ownerFqn,
-                    signature = signature,
-                    arity = arity,
-                    parameterNames = parameterNames,
-                    isVararg = isVararg,
-                ),
-            )
-        }
-
-        private fun reference(
-            target: String,
-            name: String,
-            qualifier: String?,
-            tree: Tree,
-            context: String,
-            arity: Int? = null,
-            candidates: List<String> = listOf(target),
-        ) {
-            if (declarationsOnly) return
-            val position = position(tree)
-            store.put(
-                CodeIndexKey.ref(target, originId, relativePath, position.line, position.column),
-                ReferenceRecord(
-                    symbolFqn = target,
-                    relativeFile = relativePath,
-                    originId = originId,
-                    line = position.line,
-                    column = position.column,
-                    context = context,
-                    language = LANGUAGE,
-                    referencedName = name,
-                    qualifier = qualifier,
-                    candidateSymbolFqns = candidates,
-                    arity = arity,
-                ),
-            )
-        }
-
-        private fun position(tree: Tree): SourcePosition =
-            sourcePosition(trees.sourcePositions.getStartPosition(unit, tree))
-
-        private fun endPosition(tree: Tree): SourcePosition =
-            sourcePosition(
-                (trees.sourcePositions.getEndPosition(unit, tree) - 1).coerceAtLeast(
-                    trees.sourcePositions.getStartPosition(unit, tree)
-                )
-            )
-
-        private fun sourcePosition(offset: Long): SourcePosition {
-            if (offset < 0) return SourcePosition(1, 1, 0)
-            return SourcePosition(
-                unit.lineMap.getLineNumber(offset).toInt(),
-                unit.lineMap.getColumnNumber(offset).toInt(),
-                offset.toInt(),
-            )
-        }
-
-        private fun callIdentity(position: SourcePosition): String =
-            "$originId:$relativePath:${position.offset}"
-
-        private data class SourcePosition(val line: Int, val column: Int, val offset: Int)
-
-        private data class InvocationTarget(
-            val symbolFqn: String,
-            val name: String,
-            val qualifier: String?,
-            val candidates: List<String>,
-        )
     }
 
     private companion object {
         const val LANGUAGE = "java"
+        const val EMIT_BATCH_SIZE = 64
     }
 }
-
-private fun javaBeanPropertyName(name: String): String? {
-    val stem =
-        when {
-            name.startsWith("get") && name.length > GETTER_PREFIX_LENGTH -> name.removePrefix("get")
-            name.startsWith("set") && name.length > SETTER_PREFIX_LENGTH -> name.removePrefix("set")
-            name.startsWith("is") && name.length > BOOLEAN_PREFIX_LENGTH -> name.removePrefix("is")
-            else -> return null
-        }
-    return stem.replaceFirstChar { it.lowercaseChar() }
-}
-
-private const val GETTER_PREFIX_LENGTH = 3
-private const val SETTER_PREFIX_LENGTH = 3
-private const val BOOLEAN_PREFIX_LENGTH = 2
-
-private fun classKind(kind: Tree.Kind): String =
-    when (kind) {
-        Tree.Kind.INTERFACE -> "interface"
-        Tree.Kind.ENUM -> "enum"
-        Tree.Kind.RECORD -> "record"
-        Tree.Kind.ANNOTATION_TYPE -> "annotation"
-        else -> "class"
-    }

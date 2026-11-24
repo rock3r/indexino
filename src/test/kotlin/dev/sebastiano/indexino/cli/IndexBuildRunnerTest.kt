@@ -1184,6 +1184,91 @@ class IndexBuildRunnerTest {
         assertEquals(indexedCommit, execution.manifest?.commit)
     }
 
+    @Test
+    fun `unchanged refresh reuses topology source hashes and origin state`() {
+        val workspace = tempDir.resolve("cached-refresh")
+        Files.createDirectories(workspace.resolve("app/src/main/kotlin/com/example"))
+        Files.writeString(
+            workspace.resolve("settings.gradle.kts"),
+            "rootProject.name = \"cached\"\ninclude(\":app\")\n",
+        )
+        Files.writeString(workspace.resolve("app/build.gradle.kts"), "plugins {}\n")
+        val source = workspace.resolve("app/src/main/kotlin/com/example/App.kt")
+        Files.writeString(source, "package com.example\nclass App\n")
+        git(workspace, "init")
+        git(workspace, "config", "user.email", "test@example.invalid")
+        git(workspace, "config", "user.name", "Indexino Test")
+        git(workspace, "add", ".")
+        git(workspace, "commit", "-m", "cached refresh")
+        stableMtimes(workspace)
+        val refreshCache = tempDir.resolve("refresh-cache")
+        val storeRoot = tempDir.resolve("cached-store")
+        val progress = mutableListOf<String>()
+
+        fun run(): IndexBuildExecution =
+            IndexBuildRunner(
+                    project = workspace,
+                    topologyRequest =
+                        TopologyRequest(buildSystem = BuildSystem.GRADLE, gradleModule = ":app"),
+                    applications = emptyList(),
+                    bazelQueryExecutor = null,
+                    bazelProcessRunner = null,
+                    progress = { message -> if (message.startsWith("index ")) progress += message },
+                    machineProgress = null,
+                    storeRootOverride = storeRoot,
+                    refreshCacheRootOverride = refreshCache,
+                )
+                .runDetailed()
+
+        val first = run()
+        assertEquals(CliExitCodes.SUCCESS, first.exitCode)
+        // App.kt plus the module's build script, which Gradle metadata tracking captures.
+        assertEquals(2, first.manifest?.sourceFileCount)
+        progress.clear()
+
+        val unchanged = run()
+        assertEquals(CliExitCodes.SUCCESS, unchanged.exitCode)
+        assertTrue(unchanged.reusedFreshIndex)
+        assertEquals(first.manifest, unchanged.manifest)
+        assertContains(progress, "index topology=cached build-inputs-unchanged")
+        assertContains(progress, "index source-capture read=0 inherited=2")
+        assertTrue(progress.any { it.contains("git-state=cached") }, "$progress")
+
+        Files.writeString(workspace.resolve("app/build.gradle.kts"), "plugins {}\n// edited\n")
+        progress.clear()
+        val buildEdit = run()
+        assertEquals(CliExitCodes.SUCCESS, buildEdit.exitCode)
+        assertTrue(progress.none { it.contains("topology=cached") }, "$progress")
+        assertContains(progress, "index source-capture read=1 inherited=1")
+        assertEquals(2, buildEdit.manifest?.sourceFileCount)
+        assertTrue(first.manifest?.sourcesContentHash != buildEdit.manifest?.sourcesContentHash)
+
+        Files.writeString(source, "package com.example\nclass App { val edited = 1 }\n")
+        progress.clear()
+        val sourceEdit = run()
+        assertEquals(CliExitCodes.SUCCESS, sourceEdit.exitCode)
+        // Source content does not invalidate topology; only build-definition inputs do.
+        assertContains(progress, "index topology=cached build-inputs-unchanged")
+        assertTrue(
+            buildEdit.manifest?.sourcesContentHash != sourceEdit.manifest?.sourcesContentHash
+        )
+
+        val added = workspace.resolve("app/src/main/kotlin/com/example/Added.kt")
+        Files.writeString(added, "package com.example\nclass Added\n")
+        progress.clear()
+        val addedSource = run()
+        assertEquals(CliExitCodes.SUCCESS, addedSource.exitCode)
+        assertTrue(progress.none { it.contains("topology=cached") }, "$progress")
+        assertEquals(3, addedSource.manifest?.sourceFileCount)
+    }
+
+    private fun stableMtimes(root: Path) {
+        val past = java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis() - 60_000)
+        Files.walk(root).use { paths ->
+            paths.filter { Files.isRegularFile(it) }.forEach { Files.setLastModifiedTime(it, past) }
+        }
+    }
+
     private fun copyFixture(source: Path, destination: Path) {
         Files.walk(source).use { paths ->
             paths.forEach { path ->

@@ -401,11 +401,10 @@ class ManifestOriginResolverTest {
             } finally {
                 release.countDown()
             }
-        // On Windows, 300 non-Git roots completed in 61 seconds: each still probes Git state.
-        val completionSeconds =
-            if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) 120L
-            else 30L
-        val completed = runCatching { result.get(completionSeconds, TimeUnit.SECONDS) }
+        // Completion launches Git probes for all 300 roots, even though none is a repository.
+        // Keep a deadlock watchdog, not a host-speed assertion: macOS can also exceed 30 seconds.
+        // The separate one-second blocked window above still checks the four-worker limit.
+        val completed = runCatching { result.get(120, TimeUnit.SECONDS) }
         admission.getOrThrow()
         assertEquals(300, completed.getOrThrow().origins.size)
     }

@@ -190,6 +190,8 @@ internal class OriginResolution(
     val states: Map<String, OriginGitState>,
     /** Origins updated from [OriginIncrementalHint.previous] without whole-repository Git walks. */
     val incremental: Int,
+    /** Origins restored from [OriginStateCache] without spawning Git. */
+    val cached: Int = 0,
 )
 
 /**
