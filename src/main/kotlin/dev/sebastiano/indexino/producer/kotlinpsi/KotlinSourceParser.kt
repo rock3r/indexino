@@ -147,6 +147,7 @@ internal class KotlinSourceParser {
     fun parse(
         inputs: List<KotlinParseInput>,
         parsers: KotlinPsiParserPool,
+        onParsed: ((KotlinParseInput, String, KtFile) -> Unit)? = null,
     ): List<KotlinParsedFile> {
         if (inputs.isEmpty()) return emptyList()
 
@@ -175,6 +176,7 @@ internal class KotlinSourceParser {
                             failures,
                             nextFile,
                             stopped,
+                            onParsed,
                         )
                     }
                 )
@@ -204,6 +206,7 @@ internal class KotlinSourceParser {
         failures: Array<Throwable?>,
         nextFile: AtomicInteger,
         stopped: AtomicBoolean,
+        onParsed: ((KotlinParseInput, String, KtFile) -> Unit)?,
     ) {
         while (true) {
             if (Thread.currentThread().isInterrupted) {
@@ -214,7 +217,8 @@ internal class KotlinSourceParser {
             if (index >= inputs.size) return
             try {
                 val input = inputs[index]
-                val file = parsers.parseFile(worker, input.source.path, input.readSource())
+                val sourceText = input.readSource()
+                val file = parsers.parseFile(worker, input.source.path, sourceText)
                 val facts =
                     KotlinFileScanner(
                             originId = input.source.originId,
@@ -223,6 +227,7 @@ internal class KotlinSourceParser {
                             file = file,
                         )
                         .scan()
+                onParsed?.invoke(input, sourceText, file)
                 results[index] = KotlinParsedFile(input.source, facts, Thread.currentThread().name)
             } catch (@Suppress("TooGenericExceptionCaught") failure: Throwable) {
                 failures[index] = failure

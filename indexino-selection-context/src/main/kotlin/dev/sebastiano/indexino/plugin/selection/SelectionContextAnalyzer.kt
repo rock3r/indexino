@@ -14,14 +14,17 @@ import org.jetbrains.kotlin.psi.KtNamedFunction
 import org.jetbrains.kotlin.psi.KtSimpleNameExpression
 
 @OptIn(dev.sebastiano.indexino.model.IndexinoInternalApi::class)
-internal class SelectionContextAnalyzer(private val walker: SelectionWalker = SelectionWalker()) :
-    FileAnalyzerV1, AutoCloseable {
+internal class SelectionContextAnalyzer(
+    private val walker: SelectionWalker = SelectionWalker(),
+    private val parserFactory: () -> KotlinPsiParser = ::KotlinPsiParser,
+) : FileAnalyzerV1, AutoCloseable {
     override val id: String = "selection-context"
     private var parser: KotlinPsiParser? = null
+    private val parserLock = Any()
 
     override suspend fun analyze(context: FileAnalysisContextV1) {
         if (!context.file.path.endsWith(".kt")) return
-        val file = parser().parseFile(context.file.path, context.sourceText)
+        val file = sharedSyntax(context) ?: parseFallback(context)
         for (call in enumerateComposableCallSites(file)) {
             context.ensureActive()
             val result = walker.analyzeCallSite(call, context.file.path)
@@ -48,11 +51,35 @@ internal class SelectionContextAnalyzer(private val walker: SelectionWalker = Se
     }
 
     override fun close() {
-        parser?.close()
-        parser = null
+        synchronized(parserLock) {
+            parser?.close()
+            parser = null
+        }
     }
 
-    private fun parser(): KotlinPsiParser = parser ?: KotlinPsiParser().also { parser = it }
+    /**
+     * Concurrent eager calls never reach the parser; a fallback parse (third-party host or bridge
+     * miss) is serialized so one analyzer instance stays safe on parse workers.
+     */
+    private fun parseFallback(context: FileAnalysisContextV1): KtFile =
+        synchronized(parserLock) { parser().parseFile(context.file.path, context.sourceText) }
+
+    private fun parser(): KotlinPsiParser = parser ?: parserFactory().also { parser = it }
+
+    /**
+     * Bundled in-process hosts hand the live syntax tree through a fact sink that also implements
+     * [Function1]. The host counterpart is `BufferedPluginFactSink` in `indexino`'s engine, which
+     * is only passed to
+     * [dev.sebastiano.indexino.engine.PluginAnalyzerRunner.BUNDLED_KOTLIN_PLUGIN_IDS] analyzers.
+     * Returning null (third-party hosts, a text mismatch, or a different sink) keeps the standalone
+     * parser path. No PSI type crosses the public plugin API.
+     */
+    private fun sharedSyntax(context: FileAnalysisContextV1): KtFile? {
+        val sink = context.facts as? Function1<*, *> ?: return null
+        @Suppress("UNCHECKED_CAST")
+        val provided = (sink as Function1<String, Any?>).invoke(context.sourceText)
+        return provided as? KtFile
+    }
 
     private fun enumerateComposableCallSites(file: KtFile): List<KtCallExpression> {
         val scNames = SelectionWalker.DEFAULT_SELECTION_CONTAINER_NAMES

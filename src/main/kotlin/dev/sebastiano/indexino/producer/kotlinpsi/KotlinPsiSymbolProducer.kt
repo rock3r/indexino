@@ -59,7 +59,9 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                 }
                 val parsed =
                     timedPhase(context, "kotlin-declarations") {
-                        KotlinSourceParser().parse(inputs, pool)
+                        KotlinSourceParser().parse(inputs, pool) { input, sourceText, file ->
+                            context.kotlinFileAnalysis?.analyze(input.source, sourceText, file)
+                        }
                     }
                 check(parsed.size == inputs.size) { "Kotlin parse result count changed" }
                 check(parsed.map { file -> file.source } == ktFiles) {
@@ -98,6 +100,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                 context.reportFileProgress(processed, parsed.size, file.source)
                 emit(file, symbols, facts)
             }
+            context.kotlinFileAnalysis?.flush()
             facts.flush()
         }
     }

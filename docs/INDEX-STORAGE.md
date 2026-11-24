@@ -232,6 +232,12 @@ one shared `KotlinCoreEnvironment`; the walk returns detached declaration and un
 call/reference/resource records (~1–2 KB per file), so no project-wide syntax trees stay in heap.
 Cross-file candidates resolve against a run-local symbol table with memoized stored-symbol
 fallbacks, and fact writes use the same bounded key-sorted chunks.
+Bundled Kotlin file analyzers (currently `selection-context`) run on those same parse workers while
+each `KtFile` is still alive, so the plugin does not parse the file a second time. The host passes
+the live tree through an internal fact-sink convention, never through the public plugin ABI; the
+analyzer's facts are buffered in bounded per-file chunks and committed through the same sorted write
+path, flushing after at most 4096 records. Every other analyzer keeps the separate post-producer
+pass.
 Build contexts lazily index source identities for metadata lookup, avoiding repeated inventory
 scans while keeping origin-specific captured-source reads and unindexed-file fallback unchanged.
 
@@ -451,7 +457,8 @@ sources; metadata-dependent resource and code files are reprocessed when module 
 resources change. An overlay tombstones their inherited facts and rewrites their file hashes even
 when their content is unchanged, so old package identities cannot survive a namespace edit. Selected
 file analyzers reprocess these sources too, retaining plugin findings hidden by the tombstone.
-Post-processors still recompute their declared scope. Physical cleanup scans the delta for
+Bundled Kotlin analyzers reprocess them inside the producer's parse pass; third-party analyzers and
+all post-processors still run in the plugin phase. Post-processors still recompute their declared scope. Physical cleanup scans the delta for
 invalidated records rather than streaming the inherited base.
 
 This is an incremental **fact-storage and source-capture** path, not a subsecond whole-workspace
@@ -491,13 +498,19 @@ store and manifest. This also applies to an explicit full refresh only after it 
 discovered source bytes; it does not overlap Git-state reads with source capture. Unchanged sources,
 missing or source-less origins, and incompatible generations retain sequential provenance checks
 before any reuse decision.
+Plugin-fact cleanup for selected and unselected plugins runs once in `plugins-prepare`, before any
+producer mutates the store; bundled Kotlin analyzers then buffer facts during the producer's parse
+pass rather than rereading the file. The `plugins` phase runs the remaining analyzers and the
+post-processors.
 The Kotlin producer skips PSI environment initialization when no Kotlin source needs analysis, after
 performing any required cleanup for deleted Kotlin sources. Its diagnostic `kotlin-cleanup` phase
 measures writable-store record removal; `kotlin-parser` encloses parser initialization, the single
-parse pass, resolution, fact writes, and disposal. Within it, `kotlin-parser-setup` measures the
-shared PSI environment and worker factories, `kotlin-declarations` measures the parallel parse and
-single walk per file, and `kotlin-fact-write` measures in-memory candidate resolution and bounded
-transactional fact writes. There is no declaration-only parse followed by a fact-write reparse.
+parse pass, bundled analyzer work, resolution, fact writes, and disposal. Within it,
+`kotlin-parser-setup` measures the shared PSI environment and worker factories,
+`kotlin-declarations` measures the parallel parse, single walk, and eager analyzer calls per file,
+and `kotlin-fact-write` measures in-memory candidate resolution and bounded transactional fact
+writes. There is no declaration-only parse followed by a fact-write reparse, and bundled Kotlin
+analyzers do not parse the same file again.
 These durations are nested, not additive; the remaining `kotlin-parser` time includes project-symbol
 assembly and PSI disposal. The CLI no longer materializes a merged project-local store after
 publication. Cumulative delta

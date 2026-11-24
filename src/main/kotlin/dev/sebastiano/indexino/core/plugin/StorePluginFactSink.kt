@@ -1,7 +1,5 @@
 package dev.sebastiano.indexino.core.plugin
 
-import dev.sebastiano.indexino.core.key.CodeIndexKey
-import dev.sebastiano.indexino.core.record.PluginFactRecord
 import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.model.PluginFactValue
 import dev.sebastiano.indexino.model.SourceRange
@@ -18,36 +16,7 @@ internal class StorePluginFactSink(
     }
 
     override suspend fun putAt(key: String, range: SourceRange?, value: PluginFactValue) {
-        require(value.depth() <= PluginFactValue.MAX_DEPTH) {
-            "Plugin fact nesting exceeds maximum depth of ${PluginFactValue.MAX_DEPTH}"
-        }
-        store.put(
-            if (originId == "workspace") {
-                CodeIndexKey.pluginFact(pluginId, relativeFile, key)
-            } else {
-                CodeIndexKey.pluginFact(pluginId, originId, relativeFile, key)
-            },
-            PluginFactRecord(
-                pluginId = pluginId,
-                relativeFile = relativeFile,
-                factKey = key,
-                rangeStartLine = range?.start?.line,
-                rangeStartColumn = range?.start?.column,
-                rangeStartOffset = range?.start?.offset,
-                rangeEndLine = range?.end?.line,
-                rangeEndColumn = range?.end?.column,
-                rangeEndOffset = range?.end?.offset,
-                encodedValue = PluginFactValueCodec.encode(value),
-                originId = originId,
-            ),
-        )
+        val (factKey, record) = pluginFactEntry(pluginId, originId, relativeFile, key, range, value)
+        store.put(factKey, record)
     }
-
-    private fun PluginFactValue.depth(): Int =
-        when (this) {
-            is PluginFactValue.Struct -> 1 + fields.values.maxOfOrNull { it.depth() }.orEmpty()
-            else -> 1
-        }
-
-    private fun Int?.orEmpty(): Int = this ?: 0
 }

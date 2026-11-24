@@ -316,8 +316,12 @@ the refresh terminal still waits for worker cleanup.
 
 ## selection-context
 
-Lexical PSI walk at index time → plugin-namespaced facts. Queries use checks / typed wrappers, not
-source tree walks. The `indexino-selection-context` artifact contains this plugin.
+Lexical PSI walk at index time → plugin-namespaced facts. The bundled analyzer runs inside the
+Kotlin producer's parse workers while each `KtFile` is live, so it reuses the core parse instead of
+creating a second syntax tree; the live tree is handed over through an internal fact-sink convention,
+not the public plugin ABI. Third-party analyzers keep the separate post-producer pass. Queries use
+checks / typed wrappers, not source tree walks. The `indexino-selection-context` artifact contains
+this plugin.
 
 ## Topology
 
