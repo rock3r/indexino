@@ -100,7 +100,7 @@ internal class KotlinPsiSymbolProducer : IndexProducer {
                 context.reportFileProgress(processed, parsed.size, file.source)
                 emit(file, symbols, facts)
             }
-            context.kotlinFileAnalysis?.writeBufferedFacts(facts)
+            context.kotlinFileAnalysis?.flush()
             facts.flush()
         }
     }

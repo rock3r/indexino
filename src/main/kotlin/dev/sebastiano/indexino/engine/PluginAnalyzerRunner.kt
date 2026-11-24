@@ -4,6 +4,7 @@ import dev.sebastiano.indexino.api.IndexSnapshot
 import dev.sebastiano.indexino.api.SnapshotFreshness
 import dev.sebastiano.indexino.core.key.CodeIndexKey
 import dev.sebastiano.indexino.core.record.PluginFactRecord
+import dev.sebastiano.indexino.core.store.CodeIndexStore
 import dev.sebastiano.indexino.model.SourceFile
 import dev.sebastiano.indexino.model.SourceOriginId
 import dev.sebastiano.indexino.model.SourceOriginRevision
@@ -13,13 +14,11 @@ import dev.sebastiano.indexino.plugin.api.FileAnalysisContextV1
 import dev.sebastiano.indexino.plugin.api.FileAnalyzerV1
 import dev.sebastiano.indexino.plugin.api.PostProcessContextV1
 import dev.sebastiano.indexino.plugin.api.PostProcessLevelV1
-import dev.sebastiano.indexino.producer.FactSink
 import dev.sebastiano.indexino.producer.IndexBuildContext
 import dev.sebastiano.indexino.producer.IndexedSource
 import dev.sebastiano.indexino.producer.KotlinFileAnalysis
 import dev.sebastiano.indexino.producer.SortedFactBuffer
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runBlocking
@@ -35,13 +34,21 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
     private val filesToAnalyze = mutableMapOf<String, Set<IndexedSource>>()
     private val analyzersByPlugin = mutableMapOf<String, List<FileAnalyzerV1>>()
     private val eagerSources = ConcurrentHashMap.newKeySet<EagerSource>()
-    private val bufferedFacts = ConcurrentLinkedQueue<Pair<CodeIndexKey, PluginFactRecord>>()
+    private val eagerFacts = ArrayDeque<Pair<CodeIndexKey, PluginFactRecord>>()
+    private val eagerFactsLock = Any()
     private val handoffs = AtomicInteger()
-    private val eagerLock = Any()
+    private var bufferedFactCount = 0
+    private var peakBufferedFacts = 0
+    private var eagerFactSink: SortedFactBuffer? = null
+    private var store: CodeIndexStore? = null
     private var prepared = false
 
     internal val sharedSyntaxHandoffs: Int
         get() = handoffs.get()
+
+    /** Peak eagerly buffered records; bounded by [EAGER_FACT_CHUNK_ENTRIES]. */
+    internal val peakBufferedFactCount: Int
+        get() = synchronized(eagerFactsLock) { peakBufferedFacts }
 
     /** Only bundled plugins opt into analysis on the parse worker. */
     internal fun kotlinFileAnalysis(): KotlinFileAnalysis? =
@@ -58,6 +65,7 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
         fullAnalysisPlugins: Set<String> = emptySet(),
     ) {
         if (prepared) return
+        store = context.store
         registry
             .pluginIds()
             .map { it.value }
@@ -101,7 +109,7 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
         fullAnalysisPlugins: Set<String> = emptySet(),
     ) {
         if (!prepared) prepare(context, selectedPluginIds, fullAnalysisPlugins)
-        flushBufferedFacts(context)
+        flushEagerFacts()
         val phaseFacts = SortedFactBuffer(context.store, "plugins")
         selectedPluginIds.forEach { pluginId ->
             val analyzers = analyzersByPlugin[pluginId].orEmpty()
@@ -223,14 +231,36 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
         }
     }
 
-    private fun flushBufferedFacts(context: IndexBuildContext) {
-        if (bufferedFacts.isEmpty()) return
-        val facts = SortedFactBuffer(context.store, "plugins")
-        while (true) {
-            val entry = bufferedFacts.poll() ?: break
-            facts.put(entry.first, entry.second)
+    private fun enqueueEagerFacts(entries: List<Pair<CodeIndexKey, PluginFactRecord>>) {
+        synchronized(eagerFactsLock) {
+            entries.forEach { entry ->
+                eagerFacts.addLast(entry)
+                bufferedFactCount += 1
+                if (bufferedFactCount > peakBufferedFacts) peakBufferedFacts = bufferedFactCount
+                if (bufferedFactCount >= EAGER_FACT_CHUNK_ENTRIES) flushEagerFactsLocked()
+            }
         }
-        facts.flush()
+    }
+
+    private fun flushEagerFactsLocked() {
+        if (eagerFacts.isEmpty()) return
+        val sink =
+            eagerFactSink
+                ?: SortedFactBuffer(
+                        checkNotNull(store) { "Eager plugin facts need a prepared build store" },
+                        "plugins-eager",
+                    )
+                    .also { eagerFactSink = it }
+        while (eagerFacts.isNotEmpty()) {
+            val entry = eagerFacts.removeFirst()
+            sink.put(entry.first, entry.second)
+        }
+        sink.flush()
+        bufferedFactCount = 0
+    }
+
+    private fun flushEagerFacts() {
+        synchronized(eagerFactsLock) { flushEagerFactsLocked() }
     }
 
     private fun analyzeEagerly(
@@ -247,22 +277,20 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
             analyzers.forEach { analyzer ->
                 val sink =
                     BufferedPluginFactSink(pluginId, source.originId, source.path, sourceText, file)
-                synchronized(eagerLock) {
-                    runBlocking {
-                        analyzer.analyze(
-                            FileAnalysisContextV1(
-                                file = sourceFile,
-                                sourceText = sourceText,
-                                facts = sink,
-                                active = {
-                                    coroutineContext.ensureActive()
-                                    !Thread.currentThread().isInterrupted
-                                },
-                            )
+                runBlocking {
+                    analyzer.analyze(
+                        FileAnalysisContextV1(
+                            file = sourceFile,
+                            sourceText = sourceText,
+                            facts = sink,
+                            active = {
+                                coroutineContext.ensureActive()
+                                !Thread.currentThread().isInterrupted
+                            },
                         )
-                    }
+                    )
                 }
-                bufferedFacts.addAll(sink.drain())
+                enqueueEagerFacts(sink.drain())
                 if (sink.tookSharedSyntax) handoffs.incrementAndGet()
             }
             eagerSources.add(key)
@@ -278,11 +306,8 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
             analyzeEagerly(source, sourceText, file)
         }
 
-        override fun writeBufferedFacts(sink: FactSink) {
-            while (true) {
-                val entry = bufferedFacts.poll() ?: return
-                sink.put(entry.first, entry.second)
-            }
+        override fun flush() {
+            flushEagerFacts()
         }
     }
 
@@ -293,6 +318,9 @@ internal class PluginAnalyzerRunner(private val registry: PluginRegistry) {
 
         /** Bundled plugins whose Kotlin analyzers understand the in-worker syntax handoff. */
         val BUNDLED_KOTLIN_PLUGIN_IDS: Set<String> = setOf("dev.sebastiano.selection-context")
+
+        /** Matches [SortedFactBuffer]'s default chunk, so eager facts stay heap-bounded. */
+        const val EAGER_FACT_CHUNK_ENTRIES = 4096
     }
 }
 

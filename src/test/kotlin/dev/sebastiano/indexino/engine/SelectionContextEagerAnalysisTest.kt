@@ -18,6 +18,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 @OptIn(IndexinoInternalApi::class)
 class SelectionContextEagerAnalysisTest {
@@ -85,6 +86,63 @@ class SelectionContextEagerAnalysisTest {
     }
 
     @Test
+    fun `eager plugin facts stay bounded by the sorted buffer chunk`() {
+        val root = createTempDirectory("eager-bounded-")
+        try {
+            XodusCodeIndexStore.open(root.resolve("store")).use { store ->
+                val pluginId = PluginId.of(BUNDLED_PLUGIN)
+                val factsPerFile = 50
+                val fileCount = 120
+                val analyzer =
+                    object : FileAnalyzerV1 {
+                        override val id: String = "bounded"
+
+                        override suspend fun analyze(context: FileAnalysisContextV1) {
+                            if (!context.file.path.endsWith(".kt")) return
+                            repeat(factsPerFile) { index ->
+                                context.facts.put(
+                                    "fact$index",
+                                    PluginFactValue.Text.of(context.file.path),
+                                )
+                            }
+                        }
+                    }
+                val registry =
+                    PluginRegistry(
+                        descriptors = emptyMap(),
+                        fileAnalyzers =
+                            listOf(PluginRegistry.RegisteredFileAnalyzer(pluginId, analyzer)),
+                        postProcessors = emptyList(),
+                        checks = emptyList(),
+                    )
+                val runner = PluginAnalyzerRunner(registry)
+                val sources =
+                    (0 until fileCount).associate { index ->
+                        "src/main/kotlin/fixture/Bounded$index.kt" to
+                            "package fixture\nclass Bounded$index"
+                    }
+                val context = IndexBuildContext.forInlineSources(store, "bounded", sources)
+                runner.prepare(context, setOf(pluginId.value))
+                val hook = assertNotNull(runner.kotlinFileAnalysis())
+
+                KotlinPsiSymbolProducer().produce(context.copy(kotlinFileAnalysis = hook), store)
+
+                assertEquals(
+                    fileCount * factsPerFile,
+                    pluginFacts(store, pluginId).size,
+                    "all buffered facts must reach the store",
+                )
+                assertTrue(
+                    runner.peakBufferedFactCount <= 4096,
+                    "eager facts must stay bounded, peak=${runner.peakBufferedFactCount}",
+                )
+            }
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `eager analyzer failure aborts without committing buffered facts`() {
         val root = createTempDirectory("eager-failure-")
         try {
@@ -134,11 +192,15 @@ class SelectionContextEagerAnalysisTest {
             XodusCodeIndexStore.open(root.resolve("store")).use { store ->
                 val pluginId = PluginId.of("dev.example.third")
                 val calls = AtomicInteger()
+                val thirdPartySinkIsFunction = AtomicInteger()
                 val analyzer =
                     object : FileAnalyzerV1 {
                         override val id: String = "third"
 
                         override suspend fun analyze(context: FileAnalysisContextV1) {
+                            if (context.facts is Function1<*, *>) {
+                                thirdPartySinkIsFunction.incrementAndGet()
+                            }
                             if (!context.file.path.endsWith(".kt")) return
                             calls.incrementAndGet()
                             context.facts.put("third", PluginFactValue.Text.of(context.file.path))
@@ -162,6 +224,11 @@ class SelectionContextEagerAnalysisTest {
 
                 runner.analyze(context, setOf(pluginId.value))
                 assertEquals(KOTLIN_FILES, calls.get())
+                assertEquals(
+                    0,
+                    thirdPartySinkIsFunction.get(),
+                    "third-party analyzers must not receive the live-syntax sink",
+                )
                 assertEquals(KOTLIN_FILES, pluginFacts(store, pluginId).size)
             }
         } finally {

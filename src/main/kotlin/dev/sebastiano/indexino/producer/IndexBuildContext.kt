@@ -104,6 +104,6 @@ internal interface KotlinFileAnalysis {
     /** Runs after the file's core walk, before the syntax tree can be collected. */
     fun analyze(source: IndexedSource, sourceText: String, file: org.jetbrains.kotlin.psi.KtFile)
 
-    /** Emits plugin facts buffered by [analyze] into the producer's fact sink. */
-    fun writeBufferedFacts(sink: FactSink)
+    /** Flushes plugin facts buffered by [analyze] through the host's sorted write path. */
+    fun flush()
 }

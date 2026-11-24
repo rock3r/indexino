@@ -235,8 +235,9 @@ fallbacks, and fact writes use the same bounded key-sorted chunks.
 Bundled Kotlin file analyzers (currently `selection-context`) run on those same parse workers while
 each `KtFile` is still alive, so the plugin does not parse the file a second time. The host passes
 the live tree through an internal fact-sink convention, never through the public plugin ABI; the
-analyzer's facts are buffered per file and committed with the producer's sorted chunks. Every other
-analyzer keeps the separate post-producer pass.
+analyzer's facts are buffered in bounded per-file chunks and committed through the same sorted write
+path, flushing after at most 4096 records. Every other analyzer keeps the separate post-producer
+pass.
 Build contexts lazily index source identities for metadata lookup, avoiding repeated inventory
 scans while keeping origin-specific captured-source reads and unindexed-file fallback unchanged.
 

@@ -11,8 +11,12 @@ import org.jetbrains.kotlin.psi.KtFile
 /**
  * Buffers plugin facts produced on a Kotlin parse worker. The same object is the [Function1] the
  * bundled analyzer uses to take the live [KtFile]: an analyzer that understands this internal
- * convention asks the sink for the syntax tree of [sourceText] instead of reparsing. The public
- * plugin SPI still exposes only [PluginFactSinkV1].
+ * convention asks the sink for the syntax tree of [sourceText] instead of reparsing.
+ *
+ * Host side of the handshake: the counterpart is `SelectionContextAnalyzer.sharedSyntax` in
+ * `indexino-selection-context`. Only [PluginAnalyzerRunner.BUNDLED_KOTLIN_PLUGIN_IDS] receive this
+ * sink; third-party analyzers get [BufferedPhaseFactSink], which is not a [Function1]. The public
+ * plugin SPI still exposes only [PluginFactSinkV1], so no PSI type crosses the ABI.
  */
 internal class BufferedPluginFactSink(
     private val pluginId: String,
