@@ -7,18 +7,9 @@ import java.util.HexFormat
 internal object GitHeadResolver {
     const val FILESYSTEM_REVISION_PREFIX: String = "filesystem-"
 
-    fun resolve(workspaceRoot: Path): String {
-        val process =
-            try {
-                ProcessBuilder("git", "-C", workspaceRoot.toString(), "rev-parse", "HEAD")
-                    .redirectErrorStream(true)
-                    .start()
-            } catch (_: java.io.IOException) {
-                return filesystemRevision(workspaceRoot)
-            }
-        val output = process.inputStream.bufferedReader().readText().trim()
-        return if (process.waitFor() == 0) output else filesystemRevision(workspaceRoot)
-    }
+    fun resolve(workspaceRoot: Path): String =
+        GitProcessOutput.readStdout(workspaceRoot, listOf("rev-parse", "HEAD"))?.trim()
+            ?: filesystemRevision(workspaceRoot)
 
     fun isFilesystemRevision(value: String): Boolean = value.startsWith(FILESYSTEM_REVISION_PREFIX)
 
