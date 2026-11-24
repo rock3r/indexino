@@ -54,6 +54,25 @@ class OriginStateCacheTest {
     }
 
     @Test
+    fun `autocrlf conversion warnings do not defeat origin reuse`() {
+        // Git for Windows defaults core.autocrlf=true system-wide. Its diff/status commands then
+        // print "LF will be replaced by CRLF" warnings on stderr; a resolver that merges stderr
+        // into the parsed output stores a state whose diff sections cannot be parsed, so the
+        // origin-state cache never reuses it.
+        val workspace = committedWorkspace()
+        git(workspace, "config", "core.autocrlf", "true")
+        val sources = sources(workspace)
+
+        val first = resolve(workspace, sources, newCache())
+        val second = resolve(workspace, sources, newCache())
+
+        assertEquals(0, first.cached)
+        assertEquals(1, second.cached)
+        assertEquals(first.origins, second.origins)
+        assertTrue(second.states.values.single().incremental, "state is not incremental")
+    }
+
+    @Test
     fun `an untracked file added outside the source closure invalidates the cache`() {
         val workspace = committedWorkspace()
         val sources = sources(workspace)
@@ -168,9 +187,15 @@ class OriginStateCacheTest {
     fun `a configured global excludes file invalidates origin reuse`() {
         val workspace = committedWorkspace()
         val excludes = tempDir.resolve("global-excludes")
-        excludes.writeText("notes.txt\n")
+        Files.writeString(excludes, "notes.txt\n")
         val config = workspace.resolve(".git/config")
-        config.writeText(config.readText() + "\n[core]\n\texcludesFile = $excludes\n")
+        // Git config rejects Windows backslash escapes in values; forward slashes work on
+        // every platform.
+        val excludesPath = excludes.toString().replace('\\', '/')
+        Files.writeString(
+            config,
+            Files.readString(config) + "\n[core]\n\texcludesFile = $excludesPath\n",
+        )
         Files.writeString(workspace.resolve("notes.txt"), "untracked\n")
         ageWorkspace(workspace)
         val sources = sources(workspace)

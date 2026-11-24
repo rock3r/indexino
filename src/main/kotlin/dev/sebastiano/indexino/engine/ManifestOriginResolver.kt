@@ -612,7 +612,11 @@ internal object ManifestOriginResolver {
                 process =
                     try {
                         ProcessBuilder(listOf("git", "-C", originRoot.toString()) + arguments)
-                            .redirectErrorStream(true)
+                            // Stderr stays out of the parsed output: Git prints warnings such as
+                            // "LF will be replaced by CRLF" (core.autocrlf, Git for Windows'
+                            // system default) on stderr with a zero exit code, and merged streams
+                            // corrupt the diff/status parsers and the Git state stamps.
+                            .redirectError(ProcessBuilder.Redirect.DISCARD)
                             .redirectOutput(output.toFile())
                             .apply {
                                 environment()["GIT_OPTIONAL_LOCKS"] = "0"
