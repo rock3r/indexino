@@ -45,6 +45,11 @@ internal class WorktreeOverlayIndexStore(
         delta.put(key, record)
     }
 
+    override fun putSorted(entries: List<Pair<CodeIndexKey, CodeIndexRecord>>) {
+        requireNotNull(delta) { "Cannot write to a read-only overlay view" }
+        delta.putSorted(entries)
+    }
+
     override fun delete(key: CodeIndexKey) {
         requireNotNull(delta) { "Cannot delete in a read-only overlay view" }
         delta.delete(key)

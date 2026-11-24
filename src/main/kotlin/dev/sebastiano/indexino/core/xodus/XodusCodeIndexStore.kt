@@ -1,6 +1,7 @@
 package dev.sebastiano.indexino.core.xodus
 
 import dev.sebastiano.indexino.core.key.CodeIndexKey
+import dev.sebastiano.indexino.core.key.CodeIndexKeyOrder
 import dev.sebastiano.indexino.core.record.CallSiteRecord
 import dev.sebastiano.indexino.core.record.CodeIndexRecord
 import dev.sebastiano.indexino.core.record.CodeIndexRecordCodec
@@ -18,6 +19,7 @@ import jetbrains.exodus.env.StoreConfig
 import jetbrains.exodus.env.TransactionalComputable
 import kotlin.io.path.createDirectories
 
+@Suppress("TooManyFunctions") // Implements the full CodeIndexStore contract plus sorted writes.
 internal class XodusCodeIndexStore
 private constructor(
     private val environment: Environment,
@@ -32,6 +34,12 @@ private constructor(
         private const val SYMBOL_FILE_INDEX_STORE_NAME = "SymbolFiles"
         private const val CALL_INDEX_STORE_NAME = "CallFiles"
         private const val LOCK_TIMEOUT_MILLIS = 30_000L
+        private val DERIVED_ROW_ORDER: Comparator<Pair<String, String>> =
+            Comparator { left, right ->
+                val byTerm = CodeIndexKeyOrder.comparePersisted(left.first, right.first)
+                if (byTerm != 0) byTerm
+                else CodeIndexKeyOrder.comparePersisted(left.second, right.second)
+            }
 
         fun open(
             path: Path,
@@ -217,6 +225,79 @@ private constructor(
                         StringBinding.stringToEntry(key.value),
                     )
             }
+        }
+    }
+
+    /**
+     * One transaction per sorted chunk. Keys above the store's current last key append through
+     * `putRight`, skipping the B-tree search and taking the right-edge split path a fresh
+     * generation gets; keys at or below it take the regular overwrite path that also maintains the
+     * derived indexes. Derived rows are collected and inserted in key order for the same reason.
+     */
+    override fun putSorted(entries: List<Pair<CodeIndexKey, CodeIndexRecord>>) {
+        if (entries.isEmpty()) return
+        check(!readOnly) { "Store is read-only" }
+        environment.executeInTransaction { txn ->
+            val primary = store(txn)
+            var lastKey = lastKeyValue(primary, txn)
+            val symbolNames = mutableListOf<Pair<String, String>>()
+            val symbolFiles = mutableListOf<Pair<String, String>>()
+            val callFiles = mutableListOf<Pair<String, String>>()
+            entries.forEach { (key, record) ->
+                val previousKey = lastKey
+                val appends =
+                    previousKey == null ||
+                        CodeIndexKeyOrder.comparePersisted(key.value, previousKey) > 0
+                if (!appends) {
+                    removeExistingSymbolEntries(primary, txn, key)
+                    removeExistingCallEntry(primary, txn, key)
+                }
+                val rawKey = StringBinding.stringToEntry(key.value)
+                val value = ArrayByteIterable(CodeIndexRecordCodec.encode(record))
+                if (appends) {
+                    primary.putRight(txn, rawKey, value)
+                } else {
+                    primary.put(txn, rawKey, value)
+                }
+                if (previousKey == null || appends) {
+                    lastKey = key.value
+                }
+                if (record is SymbolRecord && key.value.startsWith("sym:")) {
+                    symbolTerms(record).forEach { term -> symbolNames += term to key.value }
+                    symbolFiles += fileTerm(record.originId, record.relativeFile) to key.value
+                }
+                if (record is CallSiteRecord && key.value.startsWith("call:")) {
+                    callFiles += fileTerm(record.originId, record.relativeFile) to key.value
+                }
+            }
+            writeDerivedRows(index(txn, SYMBOL_INDEX_STORE_NAME), txn, symbolNames)
+            writeDerivedRows(index(txn, SYMBOL_FILE_INDEX_STORE_NAME), txn, symbolFiles)
+            writeDerivedRows(index(txn, CALL_INDEX_STORE_NAME), txn, callFiles)
+        }
+    }
+
+    private fun writeDerivedRows(
+        index: Store,
+        txn: jetbrains.exodus.env.Transaction,
+        rows: MutableList<Pair<String, String>>,
+    ) {
+        if (rows.isEmpty()) return
+        rows.sortWith(DERIVED_ROW_ORDER)
+        rows.forEach { (term, primaryKey) ->
+            index.put(
+                txn,
+                StringBinding.stringToEntry(term),
+                StringBinding.stringToEntry(primaryKey),
+            )
+        }
+    }
+
+    private fun lastKeyValue(primary: Store, txn: jetbrains.exodus.env.Transaction): String? {
+        val cursor = primary.openCursor(txn)
+        try {
+            return if (cursor.getLast()) StringBinding.entryToString(cursor.key) else null
+        } finally {
+            cursor.close()
         }
     }
 

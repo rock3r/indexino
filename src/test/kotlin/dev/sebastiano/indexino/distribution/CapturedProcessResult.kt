@@ -7,7 +7,12 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
-internal data class CapturedProcessResult(val exitCode: Int, val stdout: String, val stderr: String)
+internal data class CapturedProcessResult(
+    val exitCode: Int,
+    val stdout: String,
+    val stderr: String,
+    val completionElapsedNanos: Long,
+)
 
 internal fun runCapturedProcess(
     workingDirectory: Path,
@@ -39,6 +44,8 @@ internal fun runCapturedProcess(
                     "stderr:\n$startupError"
             )
         }
+        // Boundary JVM startup has its own deadline, separate from command completion/capture.
+        val completionStartedAt = System.nanoTime()
         if (!process.waitFor(timeout, timeoutUnit)) {
             val terminated =
                 terminateProcessTree(process, terminationTimeout, terminationTimeoutUnit)
@@ -50,6 +57,7 @@ internal fun runCapturedProcess(
             process.exitValue(),
             String(Files.readAllBytes(stdout), Charsets.UTF_8),
             String(Files.readAllBytes(stderr), Charsets.UTF_8),
+            System.nanoTime() - completionStartedAt,
         )
     } finally {
         deleteCaptureFile(stdout)

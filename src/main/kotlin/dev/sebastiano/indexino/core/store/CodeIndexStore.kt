@@ -10,6 +10,17 @@ internal interface CodeIndexStore : AutoCloseable {
 
     fun put(key: CodeIndexKey, record: CodeIndexRecord)
 
+    /**
+     * Persists a batch of facts in one coarse transaction. Entries must be strictly increasing in
+     * [dev.sebastiano.indexino.core.key.CodeIndexKeyOrder] with no duplicate keys: producers
+     * resolve last-wins duplication before batching. The default keeps per-record semantics; stores
+     * that can append sorted input override it.
+     */
+    fun putSorted(entries: List<Pair<CodeIndexKey, CodeIndexRecord>>) {
+        if (entries.isEmpty()) return
+        transaction { entries.forEach { (key, record) -> put(key, record) } }
+    }
+
     fun delete(key: CodeIndexKey)
 
     fun prefixScan(prefix: String): Sequence<Pair<CodeIndexKey, CodeIndexRecord>>

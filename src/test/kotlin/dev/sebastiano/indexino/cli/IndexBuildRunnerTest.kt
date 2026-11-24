@@ -31,9 +31,15 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.io.TempDir
 
 class IndexBuildRunnerTest {
+    private companion object {
+        /** Forces eviction (and therefore a spill) for any fixture source. */
+        const val SPILL_RETENTION_BYTES = 16L
+    }
+
     // One fixture covers rollback, publication ordering, and fresh fallback.
     @Test
     @Suppress("LongMethod")
@@ -1260,6 +1266,73 @@ class IndexBuildRunnerTest {
         assertEquals(CliExitCodes.SUCCESS, addedSource.exitCode)
         assertTrue(progress.none { it.contains("topology=cached") }, "$progress")
         assertEquals(3, addedSource.manifest?.sourceFileCount)
+    }
+
+    @Test
+    fun `fresh-index early return closes a spilled source capture`(@TempDir tempDir: Path) {
+        val workspace = Files.createDirectories(tempDir.resolve("spill-workspace")).toRealPath()
+        val source = workspace.resolve("src/main/java/Panel.java")
+        Files.createDirectories(source.parent)
+        source.writeText("class Panel { int size() { return 1; } }")
+        git(workspace, "init")
+        git(workspace, "config", "user.email", "test@example.invalid")
+        git(workspace, "config", "user.name", "Indexino Test")
+        git(workspace, "add", ".")
+        git(workspace, "commit", "-m", "spill fixture")
+        val storeRoot = tempDir.resolve("spill-store")
+        val topology =
+            TopologyResult(
+                sourceFiles = listOf("src/main/java/Panel.java"),
+                topology = "bazel-query",
+                includeDeps = false,
+                scope = "//:main",
+            )
+        fun runner(refreshCache: Path) =
+            IndexBuildRunner(
+                project = workspace,
+                topologyRequest =
+                    TopologyRequest(buildSystem = BuildSystem.BAZEL, bazelTarget = "//:main"),
+                applications = emptyList(),
+                bazelQueryExecutor = null,
+                bazelProcessRunner = null,
+                progress = {},
+                machineProgress = null,
+                storeRootOverride = storeRoot,
+                refreshCacheRootOverride = refreshCache,
+                topologyOverride = topology,
+                sourceRetentionBytes = SPILL_RETENTION_BYTES,
+            )
+
+        val first = runner(tempDir.resolve("refresh-first")).runDetailed()
+        assertEquals(CliExitCodes.SUCCESS, first.exitCode)
+
+        // A fresh accelerator root forces a byte read, so this capture spills.
+        val refreshCache = tempDir.resolve("refresh-fresh-index")
+        val second = runner(refreshCache).runDetailed()
+
+        assertEquals(CliExitCodes.SUCCESS, second.exitCode)
+        assertTrue(second.reusedFreshIndex, "Expected the fresh-index early return")
+        val spillDirectory = refreshCache.resolve("source-spill")
+        val spillFiles =
+            if (Files.isDirectory(spillDirectory)) {
+                Files.list(spillDirectory).use { files -> files.toList() }
+            } else emptyList()
+        assertTrue(spillFiles.isEmpty(), "Early return left spill files: $spillFiles")
+        assumeTrue(Files.isDirectory(Path.of("/proc/self/fd")))
+        val openSpillDescriptors =
+            Files.list(Path.of("/proc/self/fd")).use { descriptors ->
+                descriptors
+                    .filter { descriptor ->
+                        runCatching { Files.readSymbolicLink(descriptor).toString() }
+                            .getOrNull()
+                            ?.contains(spillDirectory.fileName.toString()) == true
+                    }
+                    .toList()
+            }
+        assertTrue(
+            openSpillDescriptors.isEmpty(),
+            "Spill channel still open: $openSpillDescriptors",
+        )
     }
 
     private fun stableMtimes(root: Path) {

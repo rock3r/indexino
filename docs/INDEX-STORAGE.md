@@ -53,6 +53,7 @@ worktree for product storage.
       topology/<request-key>.json
       source-hashes
       origin-states/<origin-key>.json
+      source-spill/                    # build-scoped captured-source spill; deleted per build
     legacy-store/                      # historical bridge; absent from the current layout
       index/<commit>/                  # mutable incremental writer
       clients/<client-id>/generations/<generation-id>/store/ # per-client immutable snapshot copy
@@ -221,14 +222,16 @@ the enclosing batch. Java analysis partitions sources into bounded multi-file `J
 parsed on worker threads, with one explicitly closed standard file manager and empty user classpath
 per worker. Each compilation unit is walked once into in-memory declarations and unresolved
 candidates; cross-file symbols resolve against a run-local symbol table, falling back to stored
-symbols for files outside the run. Fact writes are batched per parsed batch. Syntax-only parsing
+symbols for files outside the run. Fact writes leave each producer as bounded key-sorted chunks;
+each chunk is one coarse staging transaction that appends through the store's sorted fast path, so
+a cold build does not copy B-tree pages per file. Syntax-only parsing
 does not need host dependencies or auto-starting javac plugins; `-proc:none` alone does not exclude
 them.
 Kotlin parses every source once on a bounded worker pool. Each worker gets its own PSI factory from
 one shared `KotlinCoreEnvironment`; the walk returns detached declaration and unresolved
 call/reference/resource records (~1–2 KB per file), so no project-wide syntax trees stay in heap.
 Cross-file candidates resolve against a run-local symbol table with memoized stored-symbol
-fallbacks, and fact writes use bounded multi-file transactions.
+fallbacks, and fact writes use the same bounded key-sorted chunks.
 Build contexts lazily index source identities for metadata lookup, avoiding repeated inventory
 scans while keeping origin-specific captured-source reads and unindexed-file fallback unchanged.
 
@@ -268,6 +271,14 @@ their results in source order; each hash comes from the captured bytes. On failu
 interrupts sibling readers and waits for them to exit before the refresh retires. A filesystem read
 that does not respond to interruption can therefore delay error reporting, as it can in a serial
 capture. Watcher-hinted captures retain their sequential inheritance path.
+Decoded source text stays in a bounded access-ordered window (64 MiB by default) instead of being
+pinned for the whole build. Text that leaves the window is appended to one build-scoped spill file
+under `refresh-cache/source-spill/` and served back exactly as captured, so analysis never re-reads
+the user's source for bytes it already hashed. The snapshot deletes its spill when the build
+releases it; a failed build's file is scrubbed by the next capture. Only entries that were never
+captured (inherited hashes and hash-cache hits) are re-read, and a change since capture fails that
+refresh for full reconciliation, so an analysis pass can never publish facts beside a hash from
+different bytes.
 
 ### Refresh accelerators
 
