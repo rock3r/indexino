@@ -107,7 +107,10 @@ verifier. A descendant that inherits stdout or stderr cannot keep a completed la
 command starts only after a helper establishes a new POSIX session/process group or a Windows Job
 Object with kill-on-close semantics. Timed-out launchers and their Git/topology descendants are
 therefore terminated through a kernel-owned boundary, including children created concurrently with
-timeout handling. The matching-host verifier is deliberately never up-to-date or restored from build cache,
+timeout handling. Boundary readiness has a separate 10-second deadline. The descendant-held-output
+test measures command completion and reading both capture files only after readiness, retaining its
+2-second POSIX / 8-second Windows bound independently of boundary JVM startup.
+The matching-host verifier is deliberately never up-to-date or restored from build cache,
 and clears its report directory without following symlinks before every execution so failed runs
 cannot upload stale diagnostics. It also writes a report-only benchmark with five
 interleaved production-AOT and `AOTMode=off` launches, median wall/user time, and ZIP/runtime/JAR/AOT

@@ -102,19 +102,27 @@ class NativeCompatibilityTest {
                     childPidFile.toString(),
                 )
             }
-        val startedAt = System.nanoTime()
         var child: ProcessHandle? = null
 
         try {
-            val result = runCommand(tempDir, 10L, TimeUnit.SECONDS, *command)
-            assertEquals(0, result.exitCode, result.diagnostic())
+            val result =
+                runCapturedProcess(
+                    tempDir,
+                    command.toList(),
+                    timeout = 10L,
+                    timeoutUnit = TimeUnit.SECONDS,
+                    terminationTimeout = PROCESS_TERMINATION_GRACE_SECONDS,
+                    terminationTimeoutUnit = TimeUnit.SECONDS,
+                )
+            assertEquals(0, result.exitCode, result.toString())
             assertTrue(Files.isRegularFile(childPidFile), "Output-holder PID was not recorded")
             child = ProcessHandle.of(childPidFile.readText().trim().toLong()).orElse(null)
             assertTrue(
-                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt) <
+                TimeUnit.NANOSECONDS.toMillis(result.completionElapsedNanos) <
                     if (requiredProperty("indexino.nativeTarget") == WINDOWS_X64) 8_000L
                     else 2_000L,
-                "Output capture waited for a descendant-held stream",
+                "Output capture waited for a descendant-held stream: " +
+                    "${TimeUnit.NANOSECONDS.toMillis(result.completionElapsedNanos)} ms after readiness",
             )
         } finally {
             child?.destroyForcibly()
