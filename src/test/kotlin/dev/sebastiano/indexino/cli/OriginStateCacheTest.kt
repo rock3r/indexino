@@ -602,6 +602,8 @@ class OriginStateCacheTest {
                     workspace.toString(),
                     "-c",
                     "commit.gpgsign=false",
+                    "-c",
+                    "maintenance.auto=false",
                     *arguments,
                 )
                 .redirectErrorStream(true)
