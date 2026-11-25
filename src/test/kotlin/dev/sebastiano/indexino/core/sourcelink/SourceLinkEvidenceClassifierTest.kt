@@ -194,7 +194,7 @@ class SourceLinkEvidenceClassifierTest {
         runGit(directory, "config", "user.email", "test@indexino.invalid")
         runGit(directory, "config", "user.name", "Indexino Test")
         runGit(directory, "add", ".")
-        runGit(directory, "commit", "-m", "init")
+        runGit(directory, "-c", "commit.gpgsign=false", "commit", "-m", "init")
     }
 
     private fun runGit(directory: Path, vararg args: String) {

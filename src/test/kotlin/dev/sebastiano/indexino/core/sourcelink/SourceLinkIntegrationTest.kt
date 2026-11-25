@@ -289,7 +289,14 @@ class SourceLinkIntegrationTest {
                 .toFile()
                 .appendText("\nfun extraFeature() = Unit")
             runGit(providerWorkspace, "add", ".")
-            runGit(providerWorkspace, "commit", "-m", "provider change")
+            runGit(
+                providerWorkspace,
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-m",
+                "provider change",
+            )
 
             Indexino.connectBlocking(providerWorkspace).use { provider ->
                 runBlocking { provider.refresh(request).await() }
@@ -510,7 +517,7 @@ class SourceLinkIntegrationTest {
         runGit(directory, "config", "user.email", "test@indexino.invalid")
         runGit(directory, "config", "user.name", "Indexino Test")
         runGit(directory, "add", ".")
-        runGit(directory, "commit", "-m", "init")
+        runGit(directory, "-c", "commit.gpgsign=false", "commit", "-m", "init")
     }
 
     private fun runGit(directory: Path, vararg args: String) {

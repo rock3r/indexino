@@ -10,12 +10,21 @@
    markdown `selectable = true` when configured.
 4. Run `./gradlew test` before considering a change complete.
 
+Synthetic fixture commits must use command-local `git -c commit.gpgsign=false commit` so a
+developer's signing configuration cannot prompt or hang a headless test. Do not disable signing
+globally or through process-wide `GIT_CONFIG_COUNT`: origin-cache tests intentionally reject that
+blanket override. Real repository commits retain the developer's signing policy.
+
 Watcher tests must select the coverage they assert: force native startup failure when checking
 per-directory fallback keys. A live recursive watcher intentionally needs only the workspace root
 for unseen sources; the native-coverage test checks that path separately, including coverage loss.
 The 300-origin admission test checks the four-worker limit while fingerprints are blocked, then
 uses a separate 120-second completion watchdog on every platform. Completion includes real Git
 process launches and is not a 30-second performance contract for non-Windows hosts.
+
+Origin-state cache fixtures use command-local `-c maintenance.auto=false` so a synthetic commit's
+detached maintenance cannot race the subsequent timestamp aging of `.git` files. This does not
+change repository or user Git configuration, production Git invocations, or explicit `pack-refs`.
 
 Distribution and publication contracts use dedicated tagged test tasks and are excluded from the
 ordinary unit-test task:

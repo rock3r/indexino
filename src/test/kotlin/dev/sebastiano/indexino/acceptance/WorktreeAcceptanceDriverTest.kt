@@ -162,7 +162,11 @@ internal class WorktreeAcceptanceDriverTest {
     }
 
     private fun git(workspace: Path, vararg args: String): String {
-        val process = ProcessBuilder(listOf("git", "-C", workspace.toString()) + args).start()
+        val process =
+            ProcessBuilder(
+                    listOf("git", "-C", workspace.toString(), "-c", "commit.gpgsign=false") + args
+                )
+                .start()
         val output = process.inputStream.bufferedReader().readText()
         val error = process.errorStream.bufferedReader().readText()
         check(process.waitFor() == 0) { error }
