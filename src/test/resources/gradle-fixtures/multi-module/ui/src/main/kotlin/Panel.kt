@@ -12,3 +12,5 @@ fun Panel() {
 fun ActionButton() {}
 
 fun SelectionContainer(content: @Composable () -> Unit) {}
+
+val panelLabel = R.string.panel_label

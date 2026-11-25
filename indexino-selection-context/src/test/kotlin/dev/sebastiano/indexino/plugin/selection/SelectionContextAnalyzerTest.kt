@@ -52,6 +52,63 @@ class SelectionContextAnalyzerTest {
     }
 
     @Test
+    fun `emits a structured fact for a CRLF composable source with original-file positions`() =
+        runBlocking {
+            // core.autocrlf=true checkouts carry CRLF bytes; write them explicitly so the fixture
+            // is identical on every platform. Strip any carriage the compiler left in the literal
+            // first, so the source text is CRLF exactly once per line.
+            val source =
+                """
+                @Composable
+                fun Sample() {
+                    SelectionContainer {
+                        Button(onClick = {}) {}
+                    }
+                }
+                """
+                    .trimIndent()
+                    .replace("\r", "")
+                    .replace("\n", "\r\n")
+            val facts = mutableMapOf<String, PluginFactValue>()
+            val ranges = mutableMapOf<String, dev.sebastiano.indexino.model.SourceRange?>()
+            SelectionContextAnalyzer()
+                .analyze(
+                    FileAnalysisContextV1(
+                        file = SourceFile.of(SourceOriginId.of("test"), "Crlf.kt", "Crlf.kt"),
+                        sourceText = source,
+                        facts =
+                            object : PluginFactSinkV1 {
+                                override suspend fun put(key: String, value: PluginFactValue) {
+                                    facts[key] = value
+                                }
+
+                                override suspend fun putAt(
+                                    key: String,
+                                    range: dev.sebastiano.indexino.model.SourceRange?,
+                                    value: PluginFactValue,
+                                ) {
+                                    facts[key] = value
+                                    ranges[key] = range
+                                }
+                            },
+                        active = { true },
+                    )
+                )
+            val fact =
+                assertNotNull(facts.entries.firstOrNull { it.key.startsWith("selection-site:") })
+            val fields = (fact.value as PluginFactValue.Struct).fields
+            assertEquals(PluginFactValue.Text.of("Button"), fields["callee"])
+            val range = assertNotNull(ranges[fact.key])
+            val callStart = source.indexOf("Button(")
+            assertEquals(4, range.start.line)
+            assertEquals(
+                callStart - source.lastIndexOf('\n', callStart - 1) - 1 + 1,
+                range.start.column,
+            )
+            assertEquals(callStart, range.start.offset)
+        }
+
+    @Test
     fun `uses host supplied syntax without creating a parser`() = runBlocking {
         val source =
             """

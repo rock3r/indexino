@@ -218,13 +218,17 @@ internal class KotlinSourceParser {
             try {
                 val input = inputs[index]
                 val sourceText = input.readSource()
-                val file = parsers.parseFile(worker, input.source.path, sourceText)
+                // The PSI parses \n-only text: annotations detach when carriage reaches it and the
+                // documents behind line lookups reject \r. Records carry original-file offsets.
+                val normalized = NormalizedSourceText(sourceText)
+                val file = parsers.parseFile(worker, input.source.path, normalized.text)
                 val facts =
                     KotlinFileScanner(
                             originId = input.source.originId,
                             relativePath = input.source.path,
                             defaultResourcePackage = input.defaultResourcePackage,
                             file = file,
+                            offsets = normalized,
                         )
                         .scan()
                 onParsed?.invoke(input, sourceText, file)
@@ -254,6 +258,7 @@ private class KotlinFileScanner(
     private val relativePath: String,
     private val defaultResourcePackage: String?,
     private val file: KtFile,
+    private val offsets: NormalizedSourceText,
 ) : KtTreeVisitorVoid() {
     private val imports: Map<String, String> =
         file.importDirectives
@@ -266,7 +271,7 @@ private class KotlinFileScanner(
                 }
             }
             .toMap()
-    private val names = KotlinSourceNames(file, imports)
+    private val names = KotlinSourceNames(file, imports, offsets)
     private val classSymbols = mutableListOf<SymbolRecord>()
     private val constructorPropertySymbols = mutableListOf<SymbolRecord>()
     private val functionSymbols = mutableListOf<SymbolRecord>()
@@ -475,7 +480,7 @@ private class KotlinFileScanner(
                 parentCallIdentity = parentCalls.lastOrNull()?.let(::callIdentity),
                 startLine = line,
                 startColumn = column,
-                startOffset = call.textRange.startOffset,
+                startOffset = offsets.toOriginalOffset(call.textRange.startOffset),
                 endLine = call.endLineNumber(),
                 endColumn = call.endColumnNumber(),
                 endOffset = call.inclusiveEndOffset(),
@@ -668,7 +673,7 @@ private class KotlinFileScanner(
                 relativeFile = relativePath,
                 line = selector.lineNumber(),
                 column = selector.columnNumber(),
-                offset = selector.textOffset,
+                offset = offsets.toOriginalOffset(selector.textOffset),
                 language = LANGUAGE,
                 originId = originId,
             )
@@ -701,7 +706,7 @@ private class KotlinFileScanner(
                 relativeFile = relativePath,
                 line = expression.lineNumber(),
                 column = expression.columnNumber(),
-                offset = expression.textOffset,
+                offset = offsets.toOriginalOffset(expression.textOffset),
                 language = LANGUAGE,
                 originId = originId,
             )
@@ -824,7 +829,7 @@ private class KotlinFileScanner(
             kind = kind,
             startLine = lineNumber(),
             startColumn = columnNumber(),
-            startOffset = textRange.startOffset,
+            startOffset = offsets.toOriginalOffset(textRange.startOffset),
             endLine = endLineNumber(),
             endColumn = endColumnNumber(),
             endOffset = inclusiveEndOffset(),
@@ -833,7 +838,11 @@ private class KotlinFileScanner(
         )
 
     private fun callIdentity(call: KtCallExpression): String =
-        "$originId:$relativePath:${call.textRange.startOffset}"
+        "$originId:$relativePath:${offsets.toOriginalOffset(call.textRange.startOffset)}"
+
+    /** Inclusive end offset in the original file's bytes. */
+    private fun KtElement.inclusiveEndOffset(): Int =
+        offsets.toOriginalOffset((textRange.endOffset - 1).coerceAtLeast(textRange.startOffset))
 
     private data class ResourceAccessor(val index: Int, val compose: Boolean)
 
@@ -850,6 +859,7 @@ private class KotlinFileScanner(
 private class KotlinSourceNames(
     private val file: KtFile,
     private val imports: Map<String, String> = emptyMap(),
+    private val offsets: NormalizedSourceText,
 ) {
     fun resolveCallReceiverType(useSite: KtElement, name: String): String? {
         var scope = useSite.parent
@@ -979,7 +989,7 @@ private class KotlinSourceNames(
         val names = mutableListOf<String>()
         var current: KtClassOrObject? = declaration
         while (current != null) {
-            names += current.name ?: "<anonymous@${current.textOffset}>"
+            names += current.name ?: "<anonymous@${offsets.toOriginalOffset(current.textOffset)}>"
             current = classOwner(current)
         }
         return qualify(names.asReversed().joinToString("."))
@@ -1089,9 +1099,6 @@ private fun KtElement.columnNumber(): Int {
     val line = document.getLineNumber(offset)
     return offset - document.getLineStartOffset(line) + 1
 }
-
-private fun KtElement.inclusiveEndOffset(): Int =
-    (textRange.endOffset - 1).coerceAtLeast(textRange.startOffset)
 
 private fun KtElement.endLineNumber(): Int {
     val document = containingFile.viewProvider.document ?: return lineNumber()

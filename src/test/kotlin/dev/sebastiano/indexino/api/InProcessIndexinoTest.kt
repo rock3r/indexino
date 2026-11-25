@@ -5,6 +5,7 @@ import dev.sebastiano.indexino.engine.NativeWorkspaceWatcher
 import dev.sebastiano.indexino.engine.RuntimeSession
 import dev.sebastiano.indexino.engine.RuntimeSnapshotDispatcher
 import dev.sebastiano.indexino.engine.RuntimeSnapshotProtocol
+import dev.sebastiano.indexino.model.CallQuery
 import dev.sebastiano.indexino.model.PluginId
 import dev.sebastiano.indexino.model.QueryOptions
 import dev.sebastiano.indexino.model.ReferenceQuery
@@ -74,6 +75,70 @@ class InProcessIndexinoTest {
                         assertEquals(1, symbolCount(snapshot, "ActionButton"))
                         assertEquals(1, symbolCount(snapshot, "coreUtil"))
                         assertEquals(0, symbolCount(snapshot, "RootPanel"))
+                    }
+            }
+        } finally {
+            if (prior == null) System.clearProperty("indexino.cache.dir")
+            else System.setProperty("indexino.cache.dir", prior)
+        }
+    }
+
+    @Test
+    fun `indexes a CRLF Kotlin source with original-file positions`() {
+        val workspace = createGitWorkspace().toRealPath()
+        val source = workspace.resolve("ui/src/main/kotlin/Panel.kt")
+        // A core.autocrlf=true checkout stores CRLF bytes on disk; write them explicitly so the
+        // fixture is identical on every platform. The fixture itself may already carry CRLF when
+        // this repository was checked out that way, so normalize to LF before converting.
+        val crlf = Files.readString(source).replace("\r", "").replace("\n", "\r\n")
+        Files.writeString(source, crlf, Charsets.UTF_8)
+        val cache = createTempDirectory("indexino-crlf-cache-")
+        tempDirs.add(cache)
+        val prior = System.getProperty("indexino.cache.dir")
+        System.setProperty("indexino.cache.dir", cache.toString())
+        try {
+            Indexino.connectBlocking(workspace).use { index ->
+                runSuspend {
+                    index.refresh(RefreshRequest.forScope(IndexScope.gradle(":ui"))).await()
+                }
+                runSuspend { index.snapshot() }
+                    .use { snapshot ->
+                        assertEquals(1, symbolCount(snapshot, "Panel"))
+                        assertEquals(1, symbolCount(snapshot, "ActionButton"))
+                        val call =
+                            runSuspend {
+                                    snapshot.findCalls(
+                                        CallQuery.to("ActionButton"),
+                                        QueryOptions.page(10),
+                                    )
+                                }
+                                .items
+                                .single()
+                        val callStart = crlf.indexOf("ActionButton()")
+                        val callEnd = callStart + "ActionButton()".length - 1
+                        assertEquals(crlf.lineForOffset(callStart), call.range.start.line)
+                        assertEquals(crlf.columnForOffset(callStart), call.range.start.column)
+                        assertEquals(callStart, call.range.start.offset)
+                        assertEquals(crlf.lineForOffset(callEnd), call.range.end.line)
+                        assertEquals(crlf.columnForOffset(callEnd), call.range.end.column)
+                        assertEquals(callEnd, call.range.end.offset)
+                        val usage =
+                            runSuspend {
+                                    snapshot.findResourceUsages(
+                                        ResourceQuery.of(
+                                            packageName = null,
+                                            type = "string",
+                                            name = "panel_label",
+                                        ),
+                                        QueryOptions.page(10),
+                                    )
+                                }
+                                .items
+                                .single()
+                        val usageStart = crlf.indexOf("panel_label")
+                        assertEquals(crlf.lineForOffset(usageStart), usage.location.line)
+                        assertEquals(crlf.columnForOffset(usageStart), usage.location.column)
+                        assertEquals(usageStart, usage.location.offset)
                     }
             }
         } finally {
@@ -2570,6 +2635,44 @@ class InProcessIndexinoTest {
         runSuspend { snapshot.findSymbols(SymbolQuery.named(name), QueryOptions.page(limit = 10)) }
             .items
             .size
+
+    private fun String.lineForOffset(offset: Int): Int {
+        var line = 1
+        var index = 0
+        while (index < offset) {
+            when (this[index]) {
+                '\r' -> {
+                    line++
+                    index += if (index + 1 < length && this[index + 1] == '\n') 2 else 1
+                }
+                '\n' -> {
+                    line++
+                    index++
+                }
+                else -> index++
+            }
+        }
+        return line
+    }
+
+    private fun String.columnForOffset(offset: Int): Int {
+        var lineStart = 0
+        var index = 0
+        while (index < offset) {
+            when (this[index]) {
+                '\r' -> {
+                    index += if (index + 1 < length && this[index + 1] == '\n') 2 else 1
+                    lineStart = index
+                }
+                '\n' -> {
+                    index++
+                    lineStart = index
+                }
+                else -> index++
+            }
+        }
+        return offset - lineStart + 1
+    }
 
     private fun <T> runSuspend(block: suspend () -> T): T = runBlocking { block() }
 }

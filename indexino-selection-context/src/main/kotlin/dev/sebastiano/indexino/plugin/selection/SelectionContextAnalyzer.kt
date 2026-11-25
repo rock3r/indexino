@@ -24,7 +24,10 @@ internal class SelectionContextAnalyzer(
 
     override suspend fun analyze(context: FileAnalysisContextV1) {
         if (!context.file.path.endsWith(".kt")) return
-        val file = sharedSyntax(context) ?: parseFallback(context)
+        // The PSI parses \n-only text (annotations detach when carriage reaches it and documents
+        // reject \r), while reported positions address the original file bytes.
+        val normalized = NormalizedSourceText(context.sourceText)
+        val file = sharedSyntax(context) ?: parseFallback(context.file.path, normalized.text)
         for (call in enumerateComposableCallSites(file)) {
             context.ensureActive()
             val result = walker.analyzeCallSite(call, context.file.path)
@@ -32,7 +35,7 @@ internal class SelectionContextAnalyzer(
             val column = call.columnNumber()
             context.facts.putAt(
                 key = "selection-site:$line:$column",
-                range = call.toSourceRange(context, line, column),
+                range = call.toSourceRange(context, line, column, normalized),
                 value =
                     PluginFactValue.Struct.of(
                         mapOf(
@@ -61,8 +64,8 @@ internal class SelectionContextAnalyzer(
      * Concurrent eager calls never reach the parser; a fallback parse (third-party host or bridge
      * miss) is serialized so one analyzer instance stays safe on parse workers.
      */
-    private fun parseFallback(context: FileAnalysisContextV1): KtFile =
-        synchronized(parserLock) { parser().parseFile(context.file.path, context.sourceText) }
+    private fun parseFallback(name: String, normalizedText: String): KtFile =
+        synchronized(parserLock) { parser().parseFile(name, normalizedText) }
 
     private fun parser(): KotlinPsiParser = parser ?: parserFactory().also { parser = it }
 
@@ -156,13 +159,24 @@ internal class SelectionContextAnalyzer(
         context: FileAnalysisContextV1,
         startLine: Int,
         startColumn: Int,
+        normalized: NormalizedSourceText,
     ): SourceRange {
         val document = containingFile.viewProvider.document!!
         val endLine = document.getLineNumber(textRange.endOffset) + 1
         val endColumn = textRange.endOffset - document.getLineStartOffset(endLine - 1) + 1
         return SourceRange.of(
-            SourceLocation.of(context.file, startLine, startColumn, textRange.startOffset),
-            SourceLocation.of(context.file, endLine, endColumn, textRange.endOffset),
+            SourceLocation.of(
+                context.file,
+                startLine,
+                startColumn,
+                normalized.toOriginalOffset(textRange.startOffset),
+            ),
+            SourceLocation.of(
+                context.file,
+                endLine,
+                endColumn,
+                normalized.toOriginalOffset(textRange.endOffset),
+            ),
         )
     }
 }
