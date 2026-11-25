@@ -88,8 +88,9 @@ class InProcessIndexinoTest {
         val workspace = createGitWorkspace().toRealPath()
         val source = workspace.resolve("ui/src/main/kotlin/Panel.kt")
         // A core.autocrlf=true checkout stores CRLF bytes on disk; write them explicitly so the
-        // fixture is identical on every platform.
-        val crlf = Files.readString(source).replace("\n", "\r\n")
+        // fixture is identical on every platform. The fixture itself may already carry CRLF when
+        // this repository was checked out that way, so normalize to LF before converting.
+        val crlf = Files.readString(source).replace("\r", "").replace("\n", "\r\n")
         Files.writeString(source, crlf, Charsets.UTF_8)
         val cache = createTempDirectory("indexino-crlf-cache-")
         tempDirs.add(cache)
@@ -2618,12 +2619,43 @@ class InProcessIndexinoTest {
             .items
             .size
 
-    private fun String.lineForOffset(offset: Int): Int =
-        substring(0, offset).count { it == '\n' } + 1
+    private fun String.lineForOffset(offset: Int): Int {
+        var line = 1
+        var index = 0
+        while (index < offset) {
+            when (this[index]) {
+                '\r' -> {
+                    line++
+                    index += if (index + 1 < length && this[index + 1] == '\n') 2 else 1
+                }
+                '\n' -> {
+                    line++
+                    index++
+                }
+                else -> index++
+            }
+        }
+        return line
+    }
 
-    private fun String.columnForOffset(offset: Int): Int =
-        offset -
-            (lastIndexOf('\n', (offset - 1).coerceAtLeast(0)).takeIf { it >= 0 }?.plus(1) ?: 0) + 1
+    private fun String.columnForOffset(offset: Int): Int {
+        var lineStart = 0
+        var index = 0
+        while (index < offset) {
+            when (this[index]) {
+                '\r' -> {
+                    index += if (index + 1 < length && this[index + 1] == '\n') 2 else 1
+                    lineStart = index
+                }
+                '\n' -> {
+                    index++
+                    lineStart = index
+                }
+                else -> index++
+            }
+        }
+        return offset - lineStart + 1
+    }
 
     private fun <T> runSuspend(block: suspend () -> T): T = runBlocking { block() }
 }

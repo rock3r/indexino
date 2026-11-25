@@ -55,7 +55,8 @@ class SelectionContextAnalyzerTest {
     fun `emits a structured fact for a CRLF composable source with original-file positions`() =
         runBlocking {
             // core.autocrlf=true checkouts carry CRLF bytes; write them explicitly so the fixture
-            // is identical on every platform.
+            // is identical on every platform. Strip any carriage the compiler left in the literal
+            // first, so the source text is CRLF exactly once per line.
             val source =
                 """
                 @Composable
@@ -66,6 +67,7 @@ class SelectionContextAnalyzerTest {
                 }
                 """
                     .trimIndent()
+                    .replace("\r", "")
                     .replace("\n", "\r\n")
             val facts = mutableMapOf<String, PluginFactValue>()
             val ranges = mutableMapOf<String, dev.sebastiano.indexino.model.SourceRange?>()
