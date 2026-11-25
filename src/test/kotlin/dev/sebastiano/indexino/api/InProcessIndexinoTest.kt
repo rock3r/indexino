@@ -122,6 +122,23 @@ class InProcessIndexinoTest {
                         assertEquals(crlf.lineForOffset(callEnd), call.range.end.line)
                         assertEquals(crlf.columnForOffset(callEnd), call.range.end.column)
                         assertEquals(callEnd, call.range.end.offset)
+                        val usage =
+                            runSuspend {
+                                    snapshot.findResourceUsages(
+                                        ResourceQuery.of(
+                                            packageName = null,
+                                            type = "string",
+                                            name = "panel_label",
+                                        ),
+                                        QueryOptions.page(10),
+                                    )
+                                }
+                                .items
+                                .single()
+                        val usageStart = crlf.indexOf("panel_label")
+                        assertEquals(crlf.lineForOffset(usageStart), usage.location.line)
+                        assertEquals(crlf.columnForOffset(usageStart), usage.location.column)
+                        assertEquals(usageStart, usage.location.offset)
                     }
             }
         } finally {

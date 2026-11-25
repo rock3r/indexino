@@ -271,7 +271,7 @@ private class KotlinFileScanner(
                 }
             }
             .toMap()
-    private val names = KotlinSourceNames(file, imports)
+    private val names = KotlinSourceNames(file, imports, offsets)
     private val classSymbols = mutableListOf<SymbolRecord>()
     private val constructorPropertySymbols = mutableListOf<SymbolRecord>()
     private val functionSymbols = mutableListOf<SymbolRecord>()
@@ -673,7 +673,7 @@ private class KotlinFileScanner(
                 relativeFile = relativePath,
                 line = selector.lineNumber(),
                 column = selector.columnNumber(),
-                offset = selector.textOffset,
+                offset = offsets.toOriginalOffset(selector.textOffset),
                 language = LANGUAGE,
                 originId = originId,
             )
@@ -706,7 +706,7 @@ private class KotlinFileScanner(
                 relativeFile = relativePath,
                 line = expression.lineNumber(),
                 column = expression.columnNumber(),
-                offset = expression.textOffset,
+                offset = offsets.toOriginalOffset(expression.textOffset),
                 language = LANGUAGE,
                 originId = originId,
             )
@@ -859,6 +859,7 @@ private class KotlinFileScanner(
 private class KotlinSourceNames(
     private val file: KtFile,
     private val imports: Map<String, String> = emptyMap(),
+    private val offsets: NormalizedSourceText,
 ) {
     fun resolveCallReceiverType(useSite: KtElement, name: String): String? {
         var scope = useSite.parent
@@ -988,7 +989,7 @@ private class KotlinSourceNames(
         val names = mutableListOf<String>()
         var current: KtClassOrObject? = declaration
         while (current != null) {
-            names += current.name ?: "<anonymous@${current.textOffset}>"
+            names += current.name ?: "<anonymous@${offsets.toOriginalOffset(current.textOffset)}>"
             current = classOwner(current)
         }
         return qualify(names.asReversed().joinToString("."))
