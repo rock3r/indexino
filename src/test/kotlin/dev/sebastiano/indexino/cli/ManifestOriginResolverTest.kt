@@ -428,7 +428,7 @@ class ManifestOriginResolverTest {
                 },
             )
         }
-        assertFailsWith<ExecutionException> { result.get(10, TimeUnit.SECONDS) }
+        assertFailsWith<ExecutionException> { result.get(40, TimeUnit.SECONDS) }
         assertChildrenExited(pids)
     }
 
@@ -459,18 +459,21 @@ class ManifestOriginResolverTest {
                     // The refresh worker reports the stop only after its bridge has joined cleanup.
                 }
             }
-        awaitChildren(pids, count = 4)
-        assertEquals(
-            4L,
-            Files.list(pids).use { paths ->
-                paths.filter { it.fileName.toString().startsWith("child-") }.count()
-            },
-        )
-        operation.stop()
-        assertTrue(
-            operation.terminalEvent.get(10, TimeUnit.SECONDS)
-                is dev.sebastiano.indexino.api.RefreshStopped
-        )
+        try {
+            awaitChildren(pids, count = 4)
+            assertEquals(
+                4L,
+                Files.list(pids).use { paths ->
+                    paths.filter { it.fileName.toString().startsWith("child-") }.count()
+                },
+            )
+        } finally {
+            operation.stop()
+            assertTrue(
+                operation.terminalEvent.get(10, TimeUnit.SECONDS)
+                    is dev.sebastiano.indexino.api.RefreshStopped
+            )
+        }
         assertChildrenExited(pids)
     }
 
@@ -482,8 +485,11 @@ class ManifestOriginResolverTest {
         val hook = tempDir.resolve("fsmonitor-${workspace.fileName}")
         Files.writeString(
             hook,
-            "#!/bin/sh\necho $$ > '$pids/hook-'$$\necho ${'$'}PPID > '$pids/git-'$$\n" +
-                "sleep 60 &\necho $! > '$pids/child-'$$\nwait\n",
+            "#!/bin/sh\nparent=${'$'}PPID\necho $$ > '$pids/hook-'$$\n" +
+                // An orphaned retry may already belong to init, which is not a fixture process.
+                "if [ ${'$'}parent -gt 1 ]; then echo ${'$'}parent > '$pids/git-'$$; fi\n" +
+                // A nonzero hook exit makes Git retry fsmonitor protocol 1 after protocol 2.
+                "sleep 60 &\necho $! > '$pids/child-'$$\nwait $!\n",
         )
         check(hook.toFile().setExecutable(true))
         git(workspace, "config", "core.fsmonitor", hook.toString())
@@ -491,7 +497,7 @@ class ManifestOriginResolverTest {
     }
 
     private fun awaitChildren(pids: Path, count: Long = 1) {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
         while (System.nanoTime() < deadline) {
             if (
                 Files.list(pids).use { paths ->

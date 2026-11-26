@@ -124,6 +124,7 @@ class NativeDistributionTest {
         if (target != WINDOWS_X64) {
             val entries = readZipCentralDirectory(archive).associateBy(ZipEntryMetadata::name)
             assertEquals(POSIX_EXECUTABLE_MODE, entries.getValue(launcherEntry(target)).unixMode)
+            assertEquals(POSIX_EXECUTABLE_MODE, entries.getValue(runtimeJavaEntry(target)).unixMode)
             assertEquals(POSIX_DIRECTORY_MODE, entries.getValue("indexino/runtime/").unixMode)
             assertEquals(
                 POSIX_EXECUTABLE_MODE,
@@ -253,6 +254,10 @@ class NativeDistributionTest {
             val processHelper = installation.resolve("runtime/lib/jspawnhelper")
             assertTrue(Files.isExecutable(launcher), "Launcher is not executable: $launcher")
             assertTrue(
+                Files.isExecutable(installation.resolve(runtimeJavaRelativePath(target))),
+                "Extension worker java launcher is not executable after standard extraction",
+            )
+            assertTrue(
                 Files.isExecutable(processHelper),
                 "jspawnhelper is not executable: $processHelper",
             )
@@ -261,6 +266,72 @@ class NativeDistributionTest {
         val help = runLauncher(launcher, tempDir.resolve("caller").createDirectories(), "--help")
         assertEquals(0, help.exitCode, help.diagnostic())
         assertContains(help.stdout, "Usage: indexino")
+        if (target == MACOS_ARM64) {
+            val java = installation.resolve(runtimeJavaRelativePath(target))
+            val signature =
+                runCommand(
+                    installation,
+                    "/usr/bin/codesign",
+                    "--verify",
+                    "--strict",
+                    java.toString(),
+                )
+            assertEquals(0, signature.exitCode, signature.diagnostic())
+            val entitlements =
+                runCommand(
+                    installation,
+                    "/usr/bin/codesign",
+                    "--display",
+                    "--entitlements",
+                    ":-",
+                    java.toString(),
+                )
+            assertEquals(0, entitlements.exitCode, entitlements.diagnostic())
+            assertContains(
+                entitlements.stdout + entitlements.stderr,
+                "com.apple.security.cs.allow-jit",
+            )
+        }
+    }
+
+    @Test
+    fun `extracted distribution runs extension checks using its packaged java`() {
+        val target = requiredProperty("indexino.nativeTarget")
+        val installation = extractArchive(requiredFile("indexino.nativeArchive"), target, "worker")
+        val launcher = installation.resolve(launcherRelativePath(target))
+        val caller = tempDir.resolve("worker-caller").createDirectories()
+        val workspace = createFixtureWorkspace("worker-fixture")
+        assertIndexLifecycle(launcher, caller, workspace)
+        val arguments =
+            arrayOf(
+                "query",
+                "--project",
+                workspace.toString(),
+                "--application",
+                "dev.sebastiano.selection-context",
+                "--preset",
+                "interactive-in-selection",
+                "--plugin",
+                requiredFile("indexino.selectionPluginJar").toString(),
+                "--format",
+                "jsonl",
+            )
+        val query = runLauncher(launcher, caller, *arguments)
+        assertEquals(0, query.exitCode, query.diagnostic())
+        assertContains(query.stdout, "\"callee\":\"ActionButton\"")
+
+        // Without the packaged JVM, the same dynamic check must not silently run in-process
+        // or use the test host's JDK instead.
+        val java = installation.resolve(runtimeJavaRelativePath(target))
+        val hiddenJava = java.resolveSibling("java.hidden")
+        Files.move(java, hiddenJava)
+        try {
+            val missingJava = runLauncher(launcher, caller, *arguments)
+            assertTrue(missingJava.exitCode != 0, missingJava.diagnostic())
+            assertFalse(missingJava.stdout.contains("\"callee\":\"ActionButton\""))
+        } finally {
+            Files.move(hiddenJava, java)
+        }
     }
 
     @Test
@@ -912,10 +983,17 @@ class NativeDistributionTest {
                 """
                 package sample
 
+                /** Renders [Content] and documents its [render] member. */
                 class Renderer {
+                    /** @return the rendered result; see [Renderer] */
                     fun render() = Unit
                 }
 
+                /**
+                 * Calls [Renderer.render].
+                 * @param renderer the [Renderer] to invoke
+                 * @see Content
+                 */
                 fun callRenderer(renderer: Renderer) {
                     renderer.render()
                 }

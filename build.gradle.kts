@@ -491,7 +491,9 @@ construo {
             roastSha256.set(nativeDistributionPin("linuxX64.roastSha256"))
             packagingToolJdk.set(Target.PackagingToolJdk.TARGET_JDK)
             archiveFile.set(
-                layout.buildDirectory.file("distributions/indexino-$version-linux-x64.zip")
+                layout.buildDirectory.file(
+                    "native-distributions/raw/indexino-$version-linux-x64.zip"
+                )
             )
             val aotTraining =
                 registerAotTraining(
@@ -603,6 +605,36 @@ tasks.withType<PackageTask>().configureEach {
     inputs.property("normalizedCliJarSha256", normalizedCliJarSha256)
 }
 
+val finalizedLinuxX64Archive by
+    tasks.registering(org.gradle.api.tasks.bundling.Zip::class) {
+        group = "distribution"
+        description = "Finalize the Linux x64 ZIP with executable runtime launchers"
+        from(
+            tasks
+                .named<PackageTask>("packageLinuxX64")
+                .flatMap { it.archiveFile }
+                .map { zipTree(it) }
+        )
+        archiveFileName.set("indexino-$version-linux-x64.zip")
+        destinationDirectory.set(layout.buildDirectory.dir("distributions"))
+        isReproducibleFileOrder = true
+        isPreserveFileTimestamps = true
+        dirPermissions { unix("rwxr-xr-x") }
+        filePermissions { unix("rw-r--r--") }
+        filesMatching(
+            listOf(
+                "indexino/indexino",
+                "indexino/runtime/bin/java",
+                "**/jspawnhelper*",
+                "**/jexec*",
+            )
+        ) {
+            permissions { unix("rwxr-xr-x") }
+        }
+    }
+
+tasks.named<PackageTask>("packageLinuxX64") { finalizedBy(finalizedLinuxX64Archive) }
+
 val finalizedMacArm64Archive by
     tasks.registering(MacDittoArchive::class) {
         group = "distribution"
@@ -630,10 +662,7 @@ fun registerNativeDistributionChecksum(taskSuffix: String, archive: Provider<Reg
         )
     }
 
-registerNativeDistributionChecksum(
-    "LinuxX64",
-    tasks.named<PackageTask>("packageLinuxX64").flatMap { it.archiveFile },
-)
+registerNativeDistributionChecksum("LinuxX64", finalizedLinuxX64Archive.flatMap { it.archiveFile })
 
 registerNativeDistributionChecksum(
     "MacArm64",
@@ -712,7 +741,7 @@ publishing {
                 val dependency = dependencyNodes.item(index) as Element
                 val artifactId =
                     dependency.getElementsByTagName("artifactId").item(0)?.textContent.orEmpty()
-                if (artifactId in setOf("clikt-jvm", "jna", "slf4j-nop")) {
+                if (artifactId in setOf("clikt-jvm", "slf4j-nop")) {
                     dependency.parentNode.removeChild(dependency)
                 }
             }
@@ -923,10 +952,10 @@ fun registerNativeDistributionVerification(
         testClassesDirs = sourceSets.test.get().output.classesDirs
         classpath = sourceSets.test.get().runtimeClasspath
         val defaultArchive =
-            if (taskSuffix == "MacArm64") {
-                finalizedMacArm64Archive.flatMap(MacDittoArchive::getOutputArchive)
-            } else {
-                tasks.named<PackageTask>("package$taskSuffix").flatMap { it.archiveFile }
+            when (taskSuffix) {
+                "MacArm64" -> finalizedMacArm64Archive.flatMap(MacDittoArchive::getOutputArchive)
+                "LinuxX64" -> finalizedLinuxX64Archive.flatMap { it.archiveFile }
+                else -> tasks.named<PackageTask>("package$taskSuffix").flatMap { it.archiveFile }
             }
         val verificationArchiveEnvironment =
             when (taskSuffix) {
@@ -953,6 +982,8 @@ fun registerNativeDistributionVerification(
         val thinApplicationJar = tasks.jar.flatMap { it.archiveFile }
         val unshrunkApplicationJar = tasks.shadowJar.flatMap { it.archiveFile }
         val r8ApplicationJar = shrunkCliJar.flatMap { it.archiveFile }
+        val selectionPluginJar =
+            project(":indexino-selection-context").tasks.jar.flatMap { it.archiveFile }
         val thinRuntimeClasspath = files(thinApplicationJar, runtimeClasspathConfiguration)
         val executableExtension = if (artifactSuffix == "windows-x64") ".exe" else ""
         inputs.file(archive).withPropertyName("nativeArchive")
@@ -962,6 +993,7 @@ fun registerNativeDistributionVerification(
         inputs.files(runtimeClasspathConfiguration).withPropertyName("thinRuntimeDependencies")
         inputs.file(unshrunkApplicationJar).withPropertyName("unshrunkApplicationJar")
         inputs.file(r8ApplicationJar).withPropertyName("r8ApplicationJar")
+        inputs.file(selectionPluginJar).withPropertyName("selectionPluginJar")
         outputs.dir(verificationReportDirectory).withPropertyName("verificationReports")
         outputs.upToDateWhen { false }
         outputs.doNotCacheIf("Verification depends on matching-host native behavior") { true }
@@ -1014,6 +1046,7 @@ fun registerNativeDistributionVerification(
         systemProperty("indexino.aotCache", aotCache.get().asFile.absolutePath)
         systemProperty("indexino.unshrunkJar", unshrunkApplicationJar.get().asFile.absolutePath)
         systemProperty("indexino.r8Jar", r8ApplicationJar.get().asFile.absolutePath)
+        systemProperty("indexino.selectionPluginJar", selectionPluginJar.get().asFile.absolutePath)
         systemProperty("indexino.version", version.toString())
         systemProperty(
             "indexino.verificationReportDirectory",

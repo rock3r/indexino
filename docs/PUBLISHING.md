@@ -48,7 +48,8 @@ artifacts are `indexino-model`, `indexino`, `indexino-plugin-api`,
 
 The library POM must **not** expose Clikt. Coroutines are an `api` dependency of the client because
 `suspend`/`Flow` appear in signatures. Xodus, the Kotlin compiler embeddable, and serialization
-remain implementation dependencies of the engine/client JAR.
+remain implementation dependencies of the engine/client JAR. JNA is also a required runtime
+dependency for Unix Git process-group cleanup and must not be stripped from the thin POM.
 
 ## Local verification
 

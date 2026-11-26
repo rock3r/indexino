@@ -254,6 +254,77 @@ class ConstruoContractTest {
     }
 
     @Test
+    fun `linux package lifecycle makes restored java executable before checksumming`() {
+        val input = projectDirectory.resolve("input").createDirectories()
+        input.resolve("runtime/lib/server").createDirectories()
+        input.resolve("indexino").writeText("launcher")
+        input.resolve("runtime/lib/jspawnhelper").writeText("helper")
+        input.resolve("runtime/lib/server/classes.jsa").writeText("cache")
+        input.resolve("indexino-cli.jar").writeText("application")
+        val java = projectDirectory.resolve("java")
+        java.writeText("target java")
+        val initScript = projectDirectory.resolve("linux-package.gradle")
+        val fixturePath = projectDirectory.toFile().invariantSeparatorsPath
+        initScript.writeText(
+            """
+            gradle.projectsEvaluated {
+                def root = gradle.rootProject
+                root.tasks.matching { it.name == 'packageLinuxX64' }.configureEach {
+                    setDependsOn([])
+                    from.set(root.layout.projectDirectory.dir('$fixturePath/input'))
+                    executable.set(root.layout.projectDirectory.file('$fixturePath/input/indexino'))
+                    archiveFile.set(root.layout.projectDirectory.file('$fixturePath/raw.zip'))
+                    packageFiles.set(['runtime/bin/java': root.layout.projectDirectory.file('$fixturePath/java')])
+                }
+                root.tasks.withType(org.gradle.api.tasks.bundling.Zip).matching {
+                    it.name == 'finalizedLinuxX64Archive'
+                }.configureEach {
+                    destinationDirectory.set(root.layout.projectDirectory.dir('$fixturePath/final'))
+                }
+                root.tasks.matching { it.name == 'sha256NativeDistributionLinuxX64' }.configureEach {
+                    outputFile.set(root.layout.projectDirectory.file('$fixturePath/archive.sha256'))
+                    doLast { println('CONTRACT_ARCHIVE=' + inputFile.get().asFile.absolutePath) }
+                }
+            }
+            """
+                .trimIndent()
+        )
+        val result =
+            GradleRunner.create()
+                .withProjectDir(Path.of(requiredProperty("indexino.projectDirectory")).toFile())
+                .withTestKitDir(Path.of(requiredProperty("indexino.gradleUserHome")).toFile())
+                .withArguments(
+                    "--offline",
+                    "--init-script",
+                    initScript.toString(),
+                    "--exclude-task=shrunkCliJar",
+                    "sha256NativeDistributionLinuxX64",
+                )
+                .build()
+        val archive =
+            Path.of(
+                result.output
+                    .lineSequence()
+                    .single { it.startsWith("CONTRACT_ARCHIVE=") }
+                    .removePrefix("CONTRACT_ARCHIVE=")
+            )
+        val entries = readZipCentralDirectory(archive).associateBy(ZipEntryMetadata::name)
+        assertEquals(493, entries.getValue("indexino/runtime/bin/java").unixMode)
+        assertEquals(493, entries.getValue("indexino/indexino").unixMode)
+        assertEquals(493, entries.getValue("indexino/runtime/lib/jspawnhelper").unixMode)
+        assertEquals(420, entries.getValue("indexino/indexino-cli.jar").unixMode)
+        assertEquals(420, entries.getValue("indexino/runtime/lib/server/classes.jsa").unixMode)
+        ZipFile(archive.toFile()).use { zip ->
+            assertEquals(
+                "target java",
+                zip.getInputStream(zip.getEntry("indexino/runtime/bin/java")).bufferedReader().use {
+                    it.readText()
+                },
+            )
+        }
+    }
+
+    @Test
     fun `configured checksum fails closed before extraction`() {
         val pluginVersion = requiredProperty("indexino.construoVersion")
         val archive = "not a JDK archive".toByteArray()

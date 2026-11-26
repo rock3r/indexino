@@ -79,7 +79,7 @@ class MavenLocalPublicationContractTest {
         assertTrue(pomText.contains("<artifactId>indexino-model</artifactId>"))
         assertTrue(pomText.contains("<version>$version</version>"))
         assertTrue(!pomText.contains("<artifactId>clikt-jvm</artifactId>"))
-        assertTrue(!pomText.contains("<artifactId>jna</artifactId>"))
+        assertContains(pomText, "<artifactId>jna</artifactId>")
         assertTrue(!pomText.contains("<artifactId>slf4j-nop</artifactId>"))
     }
 

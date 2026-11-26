@@ -27,6 +27,7 @@
 # Keep rules on one line because Shadow's R8 merger deduplicates repeated lines, including braces.
 -keepclassmembers class org.jetbrains.kotlin.psi.** { public <init>(org.jetbrains.kotlin.com.intellij.lang.ASTNode); }
 -keepclassmembers class org.jetbrains.kotlin.psi.** { public <init>(org.jetbrains.kotlin.psi.stubs.**); }
+-keepclassmembers class org.jetbrains.kotlin.kdoc.psi.** { public <init>(org.jetbrains.kotlin.com.intellij.lang.ASTNode); }
 
 # Shadow 9.6 discovers these dependency rules automatically, but its rule merger currently makes
 # their multiline blocks invalid. The shrunk archive excludes the embedded copies and keeps their

@@ -33,6 +33,14 @@ internal fun runCapturedProcess(
                 .directory(workingDirectory.toFile())
                 .redirectOutput(stdout.toFile())
                 .redirectError(stderr.toFile())
+        listOf(
+                "INDEXINO_EXTENSION_JAVA",
+                "INDEXINO_EXTENSION_WORKER_CLASSPATH",
+                "JAVA_TOOL_OPTIONS",
+                "_JAVA_OPTIONS",
+                "JDK_JAVA_OPTIONS",
+            )
+            .forEach { processBuilder.environment().remove(it) }
         processBuilder.environment().putAll(environment)
         val process = processBuilder.start()
         if (!awaitBoundaryReady(process, boundaryReady)) {
