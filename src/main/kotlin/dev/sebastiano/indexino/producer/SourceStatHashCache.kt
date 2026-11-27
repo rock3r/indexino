@@ -11,9 +11,9 @@ import java.util.concurrent.TimeUnit
  * Persistent `(originId, path, filesystem stat) -> content hash` index for source capture.
  *
  * A hit proves the file's size, modification time, change time and file identity are unchanged
- * since the recorded hash. A stat change always forces a re-read and re-hash. Entries observed
- * within the filesystem timestamp granularity window are never trusted, so a same-tick edit cannot
- * reuse a stale hash.
+ * since the recorded hash. A stat change always forces a re-read and re-hash. Both modification and
+ * change time must predate the recorded observation by the timestamp granularity window; restoring
+ * an old modification time must not hide a same-tick change-time collision.
  */
 internal class SourceStatHashCache
 private constructor(
@@ -118,7 +118,8 @@ private constructor(
     }
 
     private fun Entry.isTrusted(): Boolean =
-        stat.observedAtNanos - stat.modifiedNanos > racyWindowNanos
+        stat.observedAtNanos - stat.modifiedNanos > racyWindowNanos &&
+            stat.observedAtNanos - stat.changedNanos > racyWindowNanos
 
     private fun load() {
         val source = file ?: return
