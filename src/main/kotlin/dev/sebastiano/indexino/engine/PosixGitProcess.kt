@@ -9,6 +9,8 @@ import com.sun.jna.Pointer
 import com.sun.jna.StringArray
 import com.sun.jna.ptr.IntByReference
 import java.io.IOException
+import java.nio.file.DirectoryIteratorException
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
@@ -29,7 +31,7 @@ internal class PosixGitProcess private constructor(private val pid: Int) : AutoC
         }
 
     override fun close() {
-        var interrupted = Thread.interrupted()
+        val interrupted = Thread.interrupted()
         try {
             // waitid(WNOWAIT) reserves the leader's PID until this signal, preventing group-ID
             // reuse. The kernel boundary also includes hooks forked during cancellation.
@@ -49,7 +51,17 @@ internal class PosixGitProcess private constructor(private val pid: Int) : AutoC
                 if (reaped == -1 && Native.getLastError() != EINTR) throw nativeFailure("waitpid")
             } while (reaped == -1)
             check(reaped == pid) { "Git process $pid survived group signal (errno $signalError)" }
-            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(REAP_SECONDS)
+            awaitGroupExit(signalError == null && Platform.isLinux())
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt()
+        }
+    }
+
+    private fun awaitGroupExit(inspectLinux: Boolean) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(REAP_SECONDS)
+        var deadGroup: Map<Path, String>? = null
+        var interrupted = false
+        try {
             while (true) {
                 if (libc.kill(-pid, 0) != 0) {
                     when (Native.getLastError()) {
@@ -57,6 +69,11 @@ internal class PosixGitProcess private constructor(private val pid: Int) : AutoC
                         EPERM -> Unit // Darwin's orphan zombies still await init's reaper.
                         else -> throw nativeFailure("check Git process group")
                     }
+                }
+                if (inspectLinux) {
+                    val observed = linuxDeadGroupSnapshot()
+                    if (observed != null && observed == deadGroup) return
+                    deadGroup = observed
                 }
                 check(System.nanoTime() < deadline) { "Git process group $pid survived cleanup" }
                 try {
@@ -68,6 +85,53 @@ internal class PosixGitProcess private constructor(private val pid: Int) : AutoC
         } finally {
             if (interrupted) Thread.currentThread().interrupt()
         }
+    }
+
+    // A non-reaping adopter can retain killed helpers indefinitely. Group existence alone is
+    // not execution liveness. Require stable, nonempty evidence; any incomplete scan is unknown.
+    private fun linuxDeadGroupSnapshot(): Map<Path, String>? {
+        val members = mutableMapOf<Path, String>()
+        try {
+            // A procfs inherited from an outer PID namespace cannot certify this group's IDs.
+            val self =
+                Files.readString(Path.of("/proc/self/stat")).substringBefore(' ').toLongOrNull()
+            // hidepid can omit processes entirely rather than producing an unreadable entry.
+            if (
+                self != ProcessHandle.current().pid() ||
+                    Files.readString(Path.of("/proc/mounts")).contains("hidepid=")
+            )
+                return null
+            Files.newDirectoryStream(Path.of("/proc")) { process ->
+                    process.fileName.toString().all { it in '0'..'9' }
+                }
+                .use { processes ->
+                    for (process in processes) {
+                        val name = process.fileName.toString()
+                        val stat = Files.readString(process.resolve("stat"))
+                        val fields = stat.substringAfterLast(") ", "").split(' ')
+                        // stat fields 3 (state), 5 (pgrp), 20 (threads), 22 (starttime).
+                        if (
+                            !stat.startsWith("$name (") ||
+                                fields.getOrNull(PROC_START_TIME)?.toLongOrNull() == null
+                        )
+                            return null
+                        val group = fields[2].toIntOrNull() ?: return null
+                        if (group == pid) {
+                            // A zombie thread-group leader may still have live sibling threads.
+                            if (fields[0] !in DEAD_STATES || fields[PROC_THREADS] != "1")
+                                return null
+                            members[process] = stat
+                        }
+                    }
+                }
+        } catch (_: IOException) {
+            return null
+        } catch (_: DirectoryIteratorException) {
+            return null
+        } catch (_: SecurityException) {
+            return null
+        }
+        return members.takeIf { it.isNotEmpty() }
     }
 
     companion object {
@@ -196,6 +260,9 @@ internal class PosixGitProcess private constructor(private val pid: Int) : AutoC
         private const val ESRCH = 3
         private const val POLL_MILLIS = 25L
         private const val REAP_SECONDS = 5L
+        private const val PROC_THREADS = 17
+        private const val PROC_START_TIME = 19
+        private val DEAD_STATES = setOf("Z", "X")
         private val libc: LibC by lazy { Native.load(Platform.C_LIBRARY_NAME, LibC::class.java) }
     }
 

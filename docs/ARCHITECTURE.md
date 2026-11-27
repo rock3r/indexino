@@ -290,7 +290,11 @@ discarded on both launch paths so Git warnings cannot corrupt parsed output. Fai
 reads; interruption cancels the resolution and waits for its children.
 On 64-bit macOS and Linux with close-from spawn support, Git starts atomically in an owned POSIX
 process group, without inheriting the JVM's non-stdio descriptors. Cleanup kills the entire group,
-reaps Git, and confirms the group has exited before returning the permit. The leader remains
+reaps Git, and confirms no group member can execute before returning the permit. On Linux, an
+external adopter need not promptly reap dead helpers: after a successful group signal, two matching,
+complete `/proc` snapshots of a nonempty group containing only zombie/dead single-threaded members
+also establish completion. Unreadable, restricted, malformed, changing, or live-member observations retain the
+existing bounded wait; this does not change Darwin's cleanup behavior. The leader remains
 unreaped until the group signal so its group ID cannot be reused. This boundary includes an
 fsmonitor protocol-fallback hook forked during cancellation, unlike a descendant snapshot. Other
 platforms retain ProcessBuilder and deepest-first observed-descendant cleanup. Git hooks are trusted

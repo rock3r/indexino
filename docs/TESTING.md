@@ -26,6 +26,15 @@ Origin-state cache fixtures use command-local `-c maintenance.auto=false` so a s
 detached maintenance cannot race the subsequent timestamp aging of `.git` files. This does not
 change repository or user Git configuration, production Git invocations, or explicit `pack-refs`.
 
+`PosixGitProcessTest` runs real Git/fsmonitor hooks on supported Linux hosts with Python 3. A
+disposable external subreaper controls orphan reaping without changing the test JVM's process
+policy. It covers a successful command with a non-reaping adopter, a normally reaping control,
+and cancellation while a live hook forks helpers. Independent assertions distinguish zombie-only
+group existence from execution liveness, require Git's leader to be reaped, and verify interruption
+preservation. The adopter kills/reaps its own children with a separate bounded cleanup even when
+the probe fails. Other hosts or missing Python 3 skip these Linux-only regressions explicitly.
+Run just this root-project suite with `./gradlew :test --tests '*PosixGitProcessTest'`.
+
 Distribution and publication contracts use dedicated tagged test tasks and are excluded from the
 ordinary unit-test task:
 
