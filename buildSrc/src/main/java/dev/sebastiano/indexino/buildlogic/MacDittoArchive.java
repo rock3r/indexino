@@ -96,6 +96,10 @@ public abstract class MacDittoArchive extends DefaultTask {
                 throw new GradleException("Could not restore the exact macOS AOT cache");
             }
 
+            Files.setPosixFilePermissions(
+                    installation.resolve("runtime/bin/java"),
+                    PosixFilePermissions.fromString("rwxr-xr-x"));
+
             Files.createDirectories(output.getParent());
             Files.deleteIfExists(output);
             execOperations.exec(

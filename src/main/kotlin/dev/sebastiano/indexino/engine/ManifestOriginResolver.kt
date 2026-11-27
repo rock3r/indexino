@@ -608,21 +608,31 @@ internal object ManifestOriginResolver {
             var process: Process? = null
             val descendants = linkedSetOf<ProcessHandle>()
             try {
+                val builder =
+                    ProcessBuilder(listOf("git", "-C", originRoot.toString()) + arguments)
+                        // Warnings on stderr must not corrupt parsed diff/status output.
+                        .redirectError(ProcessBuilder.Redirect.DISCARD)
+                        .redirectOutput(output.toFile())
+                        .apply {
+                            environment()["GIT_OPTIONAL_LOCKS"] = "0"
+                            indexFile?.let { environment()["GIT_INDEX_FILE"] = it.toString() }
+                        }
+                if (PosixGitProcess.isSupported) {
+                    val child =
+                        try {
+                            PosixGitProcess.start(builder.command(), output, builder.environment())
+                        } catch (_: java.io.IOException) {
+                            return@runInterruptible null
+                        }
+                    return@runInterruptible child.use {
+                        val exitCode = it.awaitExit()
+                        Files.readAllBytes(output).toString(Charsets.UTF_8).takeIf { exitCode == 0 }
+                    }
+                }
                 // Only a start failure is an unavailable Git command, never cancellation.
                 process =
                     try {
-                        ProcessBuilder(listOf("git", "-C", originRoot.toString()) + arguments)
-                            // Stderr stays out of the parsed output: Git prints warnings such as
-                            // "LF will be replaced by CRLF" (core.autocrlf, Git for Windows'
-                            // system default) on stderr with a zero exit code, and merged streams
-                            // corrupt the diff/status parsers and the Git state stamps.
-                            .redirectError(ProcessBuilder.Redirect.DISCARD)
-                            .redirectOutput(output.toFile())
-                            .apply {
-                                environment()["GIT_OPTIONAL_LOCKS"] = "0"
-                                indexFile?.let { environment()["GIT_INDEX_FILE"] = it.toString() }
-                            }
-                            .start()
+                        builder.start()
                     } catch (_: java.io.IOException) {
                         return@runInterruptible null
                     }

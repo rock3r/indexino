@@ -105,9 +105,10 @@ outlive individual clients. Cache GC currently
 reclaims unreachable packs for obsolete generations and retires old
 reconstructible writer staging. It preserves staging with an unfinished rollback checkpoint.
 
-The thin `indexino` POM deliberately omits CLI-only Clikt, JNA, and `slf4j-nop`; Gradle Module
+The thin `indexino` POM deliberately omits CLI-only Clikt and `slf4j-nop`; Gradle Module
 Metadata is disabled for that artifact so Gradle consumers resolve the filtered POM rather than an
-unfiltered `.module` graph. The fat CLI distribution still contains its runtime dependencies.
+unfiltered `.module` graph. JNA remains a runtime dependency for the engine's Unix Git process-group
+cleanup. The fat CLI distribution still contains its runtime dependencies.
 
 The signed Central release includes `indexino-bom`, `indexino-model`, `indexino`,
 `indexino-plugin-api`, `indexino-selection-context`, and `indexino-compose-decoration`.
@@ -284,11 +285,21 @@ Source-bearing origins are admitted by four workers pulling from the inventory, 
 future per root. Nested Git reads are coroutine children with suspending joins, so waiting parents
 do not occupy a fixed worker pool. One shared four-permit semaphore covers every origin Git
 command (including revision and submodule helpers), from process start through confirmed exit and
-cleanup. Output is merged into a temporary file rather than drained through an interrupt-insensitive
-pipe. Failure cancels sibling reads; interruption cancels the resolution and waits for its children.
-Cleanup terminates observed descendants deepest-first while their parents can still reap them,
-then terminates and reaps Git before returning the permit. Git hooks are trusted local code;
-deliberately daemonized descendants that escape observation are not an OS-sandbox guarantee.
+cleanup. Stdout goes to a temporary file rather than an interrupt-insensitive pipe; stderr is
+discarded on both launch paths so Git warnings cannot corrupt parsed output. Failure cancels sibling
+reads; interruption cancels the resolution and waits for its children.
+On 64-bit macOS and Linux with close-from spawn support, Git starts atomically in an owned POSIX
+process group, without inheriting the JVM's non-stdio descriptors. Cleanup kills the entire group,
+reaps Git, and confirms no group member can execute before returning the permit. On Linux, an
+external adopter need not promptly reap dead helpers: after a successful group signal, two matching,
+complete `/proc` snapshots of a nonempty group containing only zombie/dead single-threaded members
+also establish completion. Unreadable, restricted, malformed, changing, or live-member observations retain the
+existing bounded wait; this does not change Darwin's cleanup behavior. The leader remains
+unreaped until the group signal so its group ID cannot be reused. This boundary includes an
+fsmonitor protocol-fallback hook forked during cancellation, unlike a descendant snapshot. Other
+platforms retain ProcessBuilder and deepest-first observed-descendant cleanup. Git hooks are trusted
+local code; a deliberately daemonized hook that changes its process group escapes this boundary,
+which is not an OS sandbox.
 On a watcher-hinted changed-source refresh, or a changed full-source capture, with the same
 topology, origin inventory, applications, and current published generation, the store builds from
 the already captured sources while origin provenance resolves. Full capture still reads every
@@ -373,7 +384,9 @@ Each native target uses checked-in JBR and Roast digests. Construo verifies thos
 extraction, runs `jlink`, `jdeps`, and `javap` from the matching target JBRSDK 25, and emits one
 target-specific archive. The shipped jlink image omits the standalone `java` launcher from the
 default Roast runtime layout, but native ZIPs restore `runtime/bin/java` (or `java.exe`) from the
-target JDK so the extension worker sidecar can spawn without an external JVM install.
+target JDK so the extension worker sidecar can spawn without an external JVM install. Both Unix
+archives finalize the restored launcher to executable mode `0755`; Construo's `packageFiles`
+overlay alone assigns ordinary-file mode `0644`.
 
 Roast embeds HotSpot in the launcher process. The packaged launcher sets an Indexino-specific VM
 property; only that marked Windows entry point installs a Win32 `SetConsoleCtrlHandler` callback
@@ -383,15 +396,21 @@ launches retain the JVM's normal interrupt and shutdown-hook behavior.
 
 The macOS archive has one Indexino-owned downstream finalization step. It extracts Construo's raw
 ZIP with `ditto`, replaces the staged application JAR and AOT cache with the exact task inputs,
-normalizes the cache to ordinary-file mode `0644`, and re-archives with `ditto --norsrc`. This
-preserves the normalized JAR filesystem mtime when users extract with macOS `ditto`, prevents a
-restrictive builder umask from leaking into the archive, and prevents AppleDouble entries. The
+normalizes the cache to ordinary-file mode `0644` and `runtime/bin/java` to `0755`, and re-archives
+with `ditto --norsrc`. This preserves the normalized JAR filesystem mtime when users extract with
+macOS `ditto`, prevents a restrictive builder umask from leaking into the archive, and prevents
+AppleDouble entries. The
 finalizer does not mutate Construo tasks or their inputs and is intentionally neither cacheable nor
 up-to-date because the JAR mtime and current task-owned AOT cache are part of the output contract.
 Its expanded staging tree is removed after both successful and failed finalization. The public
 `packageMacArm64` lifecycle
 finalizes the raw Construo output before it completes; downstream checksum and upload tasks must
 consume only the finalized archive.
+
+The Linux public `packageLinuxX64` lifecycle likewise finalizes Construo's raw ZIP before returning.
+A downstream ZIP task preserves entry timestamps and content while assigning `0755` to directories,
+the Roast launcher, the restored Java launcher, and the runtime process helpers; other files use
+`0644`. Linux verification and checksums consume this finalized ZIP, not the raw Construo output.
 
 Each `trainAot<Target>` task treats the final jlink image and normalized JAR as immutable inputs. It
 copies them into a task-private flat Roast staging root, restores only the matching target JDK

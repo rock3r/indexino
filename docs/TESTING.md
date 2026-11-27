@@ -26,6 +26,15 @@ Origin-state cache fixtures use command-local `-c maintenance.auto=false` so a s
 detached maintenance cannot race the subsequent timestamp aging of `.git` files. This does not
 change repository or user Git configuration, production Git invocations, or explicit `pack-refs`.
 
+`PosixGitProcessTest` runs real Git/fsmonitor hooks on supported Linux hosts with Python 3. A
+disposable external subreaper controls orphan reaping without changing the test JVM's process
+policy. It covers a successful command with a non-reaping adopter, a normally reaping control,
+and cancellation while a live hook forks helpers. Independent assertions distinguish zombie-only
+group existence from execution liveness, require Git's leader to be reaped, and verify interruption
+preservation. The adopter kills/reaps its own children with a separate bounded cleanup even when
+the probe fails. Other hosts or missing Python 3 skip these Linux-only regressions explicitly.
+Run just this root-project suite with `./gradlew :test --tests '*PosixGitProcessTest'`.
+
 Distribution and publication contracts use dedicated tagged test tasks and are excluded from the
 ordinary unit-test task:
 
@@ -57,6 +66,8 @@ Never update Metalava dumps merely to make CI green. Move a reviewed dump only t
 `verifyShrunkCli` runs only CLI behavior through `shrunkCliJar`; the unshrunk JAR is retained as a
 size baseline and diagnostic fallback. The fixture must exercise Kotlin, Java, Android XML, Xodus,
 selection-context, status/freshness, deterministic symbol/reference queries, and resource lookup.
+Kotlin fixtures in shrunk/native verification and AOT training include KDoc links and tags to
+exercise the reflectively constructed `org.jetbrains.kotlin.kdoc.psi` nodes, not only ordinary PSI.
 It also pins the validated Shadow release. Shadow 9.6 discovers dependency-supplied R8 rules, but
 its rule merger deduplicates repeated lines and therefore corrupts multiline rule blocks that share
 closing braces. The shrunk JAR excludes those embedded resources and supplies vetted one-line
@@ -65,7 +76,9 @@ runtime rules in `gradle/r8/shrunk-cli.pro`; keep the full workload green when c
 `verifyConstruoContract` runs a Gradle TestKit consumer against the pinned Construo release. It
 checks provider-inferred overlays and preparation tasks, per-target archive outputs and target-JDK
 tool selection, raw macOS layout, Windows console options, checksum rejection, Unix ZIP modes, and
-the deterministic metadata of the non-cacheable normalized application JAR. A TestKit regression
+the deterministic metadata of the non-cacheable normalized application JAR. The Linux checksum
+lifecycle is also exercised with a synthetic raw package to catch a non-executable Java overlay
+without requiring Linux execution on the test host. A TestKit regression
 starts from a restrictive input mode, perturbs only the output's mtime, and proves a second
 invocation repairs both `0644` POSIX permissions and the timestamp instead of reporting
 `UP-TO-DATE`; warm-cache checksum tests drive extraction tasks and prove rejection happens first.
@@ -95,6 +108,13 @@ real console `CTRL_C_EVENT`. These tasks must run on matching native hosts; cros
 substitute for launcher verification.
 The handler is enabled only by the packaged Roast VM marker; unit coverage proves direct JVM
 launches do not install the halt-based callback and locks the marked-launch ordering/event mapping.
+
+Unix archives must store `runtime/bin/java` as `0755`, and standard extraction must leave it
+executable without a permission repair. An explicitly loaded plugin must return findings through
+the extracted distribution's worker; hiding the packaged Java launcher must make that check fail.
+The verifier clears inherited extension-JVM overrides and JVM option variables so a host JDK cannot
+mask a broken install. On macOS it also verifies the restored launcher's code signature and JIT
+entitlement.
 
 The same task verifies AOT semantically through copied launcher configurations. Strict mode must
 load the target-default cache before and after relocation and must fail for missing, corrupt, or
@@ -128,7 +148,8 @@ cache sizes to `build/reports/native-distributions/<target>/`.
 On macOS the public `packageMacArm64` lifecycle includes `finalizedMacArm64Archive`, which round-trips
 through native `ditto` and overlays the exact normalized JAR and current AOT cache. The staged cache
 is normalized to ordinary-file mode `0644`, including when its source was created under a restrictive
-umask. Verification consumes that final output, and future checksum/upload tasks must do the same.
+umask, while the restored Java launcher is made executable (`0755`). Verification consumes that
+final output, and future checksum/upload tasks must do the same.
 Standard extraction must recover the exact even-second JAR mtime; this is deliberately tested after
 extraction rather than inferred from Java's interpretation of ZIP extra fields.
 
