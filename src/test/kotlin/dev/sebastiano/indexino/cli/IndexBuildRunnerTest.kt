@@ -1208,7 +1208,7 @@ class IndexBuildRunnerTest {
         git(workspace, "config", "user.name", "Indexino Test")
         git(workspace, "add", ".")
         git(workspace, "commit", "-m", "cached refresh")
-        stableMtimes(workspace)
+        stableTimestamps(workspace)
         val refreshCache = tempDir.resolve("refresh-cache")
         val storeRoot = tempDir.resolve("cached-store")
         val progress = mutableListOf<String>()
@@ -1353,7 +1353,7 @@ class IndexBuildRunnerTest {
         git(workspace, "config", "user.name", "Indexino Test")
         git(workspace, "add", ".")
         git(workspace, "commit", "-m", "stale stat hash")
-        stableMtimes(workspace)
+        stableTimestamps(workspace)
         val refreshCache = tempDir.resolve("refresh-stale")
         val storeRoot = tempDir.resolve("store-stale")
         val indexedSource =
@@ -1410,11 +1410,26 @@ class IndexBuildRunnerTest {
         )
     }
 
-    private fun stableMtimes(root: Path) {
+    private fun stableTimestamps(root: Path) {
         val past = java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis() - 60_000)
+        var latestChangeNanos = 0L
         Files.walk(root).use { paths ->
-            paths.filter { Files.isRegularFile(it) }.forEach { Files.setLastModifiedTime(it, past) }
+            paths
+                .filter { Files.isRegularFile(it) }
+                .forEach {
+                    Files.setLastModifiedTime(it, past)
+                    latestChangeNanos =
+                        maxOf(
+                            latestChangeNanos,
+                            checkNotNull(SourceStatHashCache.statOf(it)).changedNanos,
+                        )
+                }
         }
+        // POSIX ctime cannot be backdated. The first observation must already be outside the
+        // two-second trust window; merely waiting after recording would not make an entry safe.
+        val readyAtMillis = TimeUnit.NANOSECONDS.toMillis(latestChangeNanos) + 2_001
+        val remainingMillis = readyAtMillis - System.currentTimeMillis()
+        if (remainingMillis > 0) Thread.sleep(remainingMillis)
     }
 
     private fun copyFixture(source: Path, destination: Path) {

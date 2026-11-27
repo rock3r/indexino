@@ -324,8 +324,14 @@ removing the workspace directory (or `cache forget` / `daemon stop --purge`) dis
   recorded by target and remain cacheable because they point at build outputs.
 - **`source-hashes`** — append-safe text index from `(originId, origin-path)` to
   `(size, mtimeNs, ctimeNs, fileKey) -> sha256`. A hit skips the file read; any metadata change
-  re-reads and re-hashes. Entries observed within a two-second timestamp-granularity window are
-  not trusted, so a same-tick edit cannot reuse a stale hash. Writes are atomic and best-effort.
+  re-reads and re-hashes. Both mtime and ctime must be more than two seconds older than the
+  entry's recorded observation. A same-size rewrite can restore mtime while ctime collides within
+  one filesystem tick, so an old mtime alone is insufficient. Recent entries remain untrusted
+  after reopen or the passage of time; a later capture must re-read and record their bytes outside
+  that window before reuse. Stable older entries retain read-free reuse, including across reopen.
+  This conservatively adds source reads shortly after edits or metadata changes, not analyzer
+  work for unchanged content. The existing cache format is retained; older entries undergo the
+  same stricter validation. Writes are atomic and best-effort.
 - **`origin-states/<origin-key>.json`** — one origin's `OriginGitState` (revision, diff sections,
   tracked status and untracked hashes), reused while `.git/HEAD`, the ref it names,
   `packed-refs`, the index, effective Git configuration/info files and every working-tree file stat

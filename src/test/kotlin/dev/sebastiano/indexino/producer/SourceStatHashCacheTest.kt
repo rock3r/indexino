@@ -3,6 +3,7 @@ package dev.sebastiano.indexino.producer
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.FileTime
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.io.path.createDirectories
 import kotlin.io.path.writeText
@@ -24,7 +25,7 @@ class SourceStatHashCacheTest {
             listOf("src/A.kt", "src/B.kt", "res/strings.xml").map { path ->
                 Files.createDirectories(root.resolve(path).parent)
                 root.resolve(path).writeText("content of $path")
-                stableMtime(root.resolve(path))
+                stableTimestamps(root.resolve(path))
                 IndexedSource.workspace(root, path)
             }
         val cacheFile = tempDir.resolve("source-hashes")
@@ -48,7 +49,7 @@ class SourceStatHashCacheTest {
                 val path = "src/F$index.kt"
                 Files.createDirectories(root.resolve(path).parent)
                 root.resolve(path).writeText("before-$index")
-                stableMtime(root.resolve(path))
+                stableTimestamps(root.resolve(path))
                 IndexedSource.workspace(root, path)
             }
         val cacheFile = tempDir.resolve("source-hashes")
@@ -56,7 +57,7 @@ class SourceStatHashCacheTest {
         val first = capture(sources, SourceStatHashCache.open(cacheFile, 0), reads)
 
         root.resolve("src/F1.kt").writeText("after-1")
-        stableMtime(root.resolve("src/F1.kt"))
+        stableTimestamps(root.resolve("src/F1.kt"))
 
         val second = capture(sources, SourceStatHashCache.open(cacheFile, 0), reads)
         assertEquals(4, reads.get(), "Only the edited file should be read")
@@ -72,7 +73,7 @@ class SourceStatHashCacheTest {
         val file = root.resolve("src/A.kt")
         Files.createDirectories(file.parent)
         file.writeText("same bytes")
-        stableMtime(file)
+        stableTimestamps(file)
         val source = IndexedSource.workspace(root, "src/A.kt")
         val cacheFile = tempDir.resolve("source-hashes")
         val reads = AtomicInteger()
@@ -97,14 +98,97 @@ class SourceStatHashCacheTest {
         val source = IndexedSource.workspace(root, "src/A.kt")
         val cacheFile = tempDir.resolve("source-hashes")
         val reads = AtomicInteger()
-        val first = capture(listOf(source), SourceStatHashCache.open(cacheFile, 0), reads)
+        val first = capture(listOf(source), SourceStatHashCache.open(cacheFile), reads)
 
         file.writeText("bbbb")
         Files.setLastModifiedTime(file, original)
 
-        val second = capture(listOf(source), SourceStatHashCache.open(cacheFile, 0), reads)
+        val second = capture(listOf(source), SourceStatHashCache.open(cacheFile), reads)
         assertEquals(2, reads.get())
         assertTrue(first.contentHash(source) != second.contentHash(source))
+    }
+
+    @Test
+    fun `a restored mtime with a colliding recent ctime cannot reuse a stale hash after reopen`() {
+        assumeFalse(System.getProperty("os.name").startsWith("Windows", ignoreCase = true))
+        val root = workspace("ctime-collision")
+        val file = root.resolve("src/A.kt")
+        Files.createDirectories(file.parent)
+        val original = FileTime.fromMillis(System.currentTimeMillis() - 60_000)
+        file.writeText("aaaa")
+        Files.setLastModifiedTime(file, original)
+        file.writeText("bbbb")
+        Files.setLastModifiedTime(file, original)
+        val source = IndexedSource.workspace(root, "src/A.kt")
+        val current = SourceStatHashCache.statOf(file)!!
+        // Reproduce the observed collision deterministically: the old hash was recorded with
+        // exactly the new bytes' stat, within the ctime tick. No dependence on host tick timing.
+        val recorded =
+            SourceStatHashCache.SourceStat(
+                current.size,
+                current.modifiedNanos,
+                current.changedNanos,
+                current.fileKey,
+                observedAtNanos = current.changedNanos + 1,
+            )
+        val cacheFile = tempDir.resolve("source-hashes")
+        val cache = SourceStatHashCache.open(cacheFile)
+        cache.record(source, recorded, FileHashProducer.contentHash("aaaa"))
+        assertNull(cache.hashIfUnchanged(source, current))
+        cache.flush()
+        val reopened = SourceStatHashCache.open(cacheFile)
+        assertNull(reopened.hashIfUnchanged(source, current))
+
+        val reads = AtomicInteger()
+        capture(listOf(source), reopened, reads).use { snapshot ->
+            assertEquals(1, reads.get())
+            assertEquals(listOf(source), snapshot.capturedSources)
+            assertEquals(FileHashProducer.contentHash("bbbb"), snapshot.contentHash(source))
+        }
+    }
+
+    @Test
+    fun `both timestamps must predate observation by more than the racy window even after reopen`() {
+        val source = IndexedSource.workspace(workspace("timestamp-boundary"), "src/A.kt")
+        val observed = 100_000_000_000L
+        val window = 2_000_000_000L
+        val hash = FileHashProducer.contentHash("aaaa")
+        // Include future, equal, recent and exact-boundary timestamps, then a safe control.
+        for (age in listOf(-1L, 0L, 1L, window - 1, window, window + 1)) {
+            for (changeIsNewer in listOf(false, true)) {
+                val stat =
+                    SourceStatHashCache.SourceStat(
+                        size = 4,
+                        modifiedNanos = observed - if (changeIsNewer) 60_000_000_000L else age,
+                        changedNanos = observed - if (changeIsNewer) age else 60_000_000_000L,
+                        fileKey = "device:inode",
+                        observedAtNanos = observed,
+                    )
+                val later =
+                    SourceStatHashCache.SourceStat(
+                        stat.size,
+                        stat.modifiedNanos,
+                        stat.changedNanos,
+                        stat.fileKey,
+                        observedAtNanos = observed + 60_000_000_000L,
+                    )
+                val cacheFile = tempDir.resolve("hashes-$age-$changeIsNewer")
+                val cache = SourceStatHashCache.open(cacheFile)
+                cache.record(source, stat, hash)
+                val expected = if (age == window + 1) hash else null
+                assertEquals(
+                    expected,
+                    cache.hashIfUnchanged(source, later),
+                    "age=$age ctime=$changeIsNewer",
+                )
+                cache.flush()
+                assertEquals(
+                    expected,
+                    SourceStatHashCache.open(cacheFile).hashIfUnchanged(source, later),
+                    "reopened age=$age ctime=$changeIsNewer",
+                )
+            }
+        }
     }
 
     @Test
@@ -130,7 +214,7 @@ class SourceStatHashCacheTest {
         val file = root.resolve("src/A.kt")
         Files.createDirectories(file.parent)
         file.writeText("content")
-        stableMtime(file)
+        stableTimestamps(file)
         val source = IndexedSource.workspace(root, "src/A.kt")
         val cacheFile = tempDir.resolve("source-hashes")
         cacheFile.writeText("not a cache\n\u0000garbage\n")
@@ -147,7 +231,7 @@ class SourceStatHashCacheTest {
         val file = root.resolve("src/A.kt")
         Files.createDirectories(file.parent)
         file.writeText("before")
-        stableMtime(file)
+        stableTimestamps(file)
         val source = IndexedSource.workspace(root, "src/A.kt")
         val cacheFile = tempDir.resolve("source-hashes")
         capture(listOf(source), SourceStatHashCache.open(cacheFile, 0), AtomicInteger())
@@ -167,7 +251,7 @@ class SourceStatHashCacheTest {
         val file = root.resolve("src/A.kt")
         Files.createDirectories(file.parent)
         file.writeText("stale")
-        stableMtime(file)
+        stableTimestamps(file)
         val source = IndexedSource.workspace(root, "src/A.kt")
         val cache = SourceStatHashCache.inMemory(0)
         val reads = AtomicInteger()
@@ -203,7 +287,7 @@ class SourceStatHashCacheTest {
                 val path = "src/F$index.kt"
                 Files.createDirectories(root.resolve(path).parent)
                 root.resolve(path).writeText("parallel-$index")
-                stableMtime(root.resolve(path))
+                stableTimestamps(root.resolve(path))
                 IndexedSource.workspace(root, path)
             }
         val cacheFile = tempDir.resolve("source-hashes")
@@ -220,8 +304,14 @@ class SourceStatHashCacheTest {
     private fun workspace(name: String): Path =
         Files.createDirectories(tempDir.resolve(name)).toRealPath()
 
-    private fun stableMtime(file: Path) {
+    private fun stableTimestamps(file: Path) {
         Files.setLastModifiedTime(file, FileTime.fromMillis(System.currentTimeMillis() - 60_000))
+        // POSIX ctime cannot be backdated and can be newer than the millisecond observation clock.
+        // Age it before recording: waiting afterward cannot make an unsafe entry trusted.
+        val changedNanos = checkNotNull(SourceStatHashCache.statOf(file)).changedNanos
+        while (TimeUnit.MILLISECONDS.toNanos(System.currentTimeMillis()) <= changedNanos) {
+            Thread.sleep(1)
+        }
     }
 
     private fun capture(
